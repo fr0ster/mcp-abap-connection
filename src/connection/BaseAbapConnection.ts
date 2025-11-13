@@ -271,9 +271,9 @@ export abstract class BaseAbapConnection implements AbapConnection {
     // Add cookies LAST (MUST NOT be overridden by custom headers)
     if (this.cookies) {
       requestHeaders["Cookie"] = this.cookies;
-      console.log(`[DEBUG] BaseAbapConnection - Adding cookies to request (first 100 chars): ${this.cookies.substring(0, 100)}...`);
+      this.logger.debug(`[DEBUG] BaseAbapConnection - Adding cookies to request (first 100 chars): ${this.cookies.substring(0, 100)}...`);
     } else {
-      console.log(`[DEBUG] BaseAbapConnection - NO COOKIES available for this request to ${requestUrl}`);
+      this.logger.debug(`[DEBUG] BaseAbapConnection - NO COOKIES available for this request to ${requestUrl}`);
     }
 
     if ((normalizedMethod === "POST" || normalizedMethod === "PUT") && data) {
@@ -436,7 +436,7 @@ export abstract class BaseAbapConnection implements AbapConnection {
     }
 
     this.cookies = combined;
-    console.log(
+    this.logger.debug(
       `[DEBUG] BaseAbapConnection - Updated cookies from response (first 100 chars): ${this.cookies.substring(0, 100)}...`
     );
   }
@@ -473,12 +473,12 @@ export abstract class BaseAbapConnection implements AbapConnection {
     // If we already have a CSRF token, reuse it to keep the same SAP session
     // SAP ties the lock handle to the HTTP session (SAP_SESSIONID cookie)
     if (this.csrfToken) {
-      console.log(`[DEBUG] BaseAbapConnection - Reusing existing CSRF token to maintain session`);
+      this.logger.debug(`[DEBUG] BaseAbapConnection - Reusing existing CSRF token to maintain session`);
       return;
     }
 
     try {
-      console.log(`[DEBUG] BaseAbapConnection - Fetching NEW CSRF token (will create new SAP session)`);
+      this.logger.debug(`[DEBUG] BaseAbapConnection - Fetching NEW CSRF token (will create new SAP session)`);
       this.csrfToken = await this.fetchCsrfToken(requestUrl);
     } catch (error) {
       const errorMsg =
@@ -544,7 +544,7 @@ export abstract class BaseAbapConnection implements AbapConnection {
         if (response.headers["set-cookie"]) {
           this.updateCookiesFromResponse(response.headers);
           if (this.cookies) {
-            console.log(`[DEBUG] BaseAbapConnection - Cookies received from CSRF response (first 100 chars): ${this.cookies.substring(0, 100)}...`);
+            this.logger.debug(`[DEBUG] BaseAbapConnection - Cookies received from CSRF response (first 100 chars): ${this.cookies.substring(0, 100)}...`);
             if (this.logger.csrfToken) {
               this.logger.csrfToken("success", "Cookies extracted from response", {
                 cookieLength: this.cookies.length
