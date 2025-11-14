@@ -172,6 +172,40 @@ export abstract class BaseAbapConnection implements AbapConnection {
   }
 
   /**
+   * Get current session state
+   * Returns cookies, CSRF token, and cookie store for manual persistence
+   * @returns Current session state or null if no session data
+   */
+  getSessionState(): SessionState | null {
+    if (!this.cookies && !this.csrfToken) {
+      return null;
+    }
+
+    return {
+      cookies: this.cookies,
+      csrfToken: this.csrfToken,
+      cookieStore: Object.fromEntries(this.cookieStore)
+    };
+  }
+
+  /**
+   * Set session state manually
+   * Allows user to restore session from custom storage (e.g., database, Redis)
+   * @param state - Session state with cookies, CSRF token, and cookie store
+   */
+  setSessionState(state: SessionState): void {
+    this.cookies = state.cookies || null;
+    this.csrfToken = state.csrfToken || null;
+    this.cookieStore = new Map(Object.entries(state.cookieStore || {}));
+    
+    this.logger.debug("Session state set manually", {
+      hasCookies: !!this.cookies,
+      hasCsrfToken: !!this.csrfToken,
+      cookieCount: this.cookieStore.size
+    });
+  }
+
+  /**
    * Clear session state from storage
    */
   async clearSessionState(): Promise<void> {
