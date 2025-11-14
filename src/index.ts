@@ -9,6 +9,9 @@ export type { AbapRequestOptions } from "./connection/AbapConnection.js";
 export type { AbapConnection } from "./connection/AbapConnection.js";
 export type { ILogger, SessionState, ISessionStorage } from "./logger.js";
 
+// Session storage implementations
+export { FileSessionStorage, type FileSessionStorageOptions } from "./utils/FileSessionStorage.js";
+
 // Connection classes
 export { BaseAbapConnection } from "./connection/BaseAbapConnection.js";
 export { OnPremAbapConnection } from "./connection/OnPremAbapConnection.js";
