@@ -285,6 +285,11 @@ function createAbapConnection(
 - Node.js >= 18.0.0
 - Access to SAP ABAP system (on-premise or BTP)
 
+## Documentation
+
+- [Custom Session Storage](./CUSTOM_SESSION_STORAGE.md) - How to implement custom session persistence (database, Redis, etc.)
+- [Examples](./examples/README.md) - Working code examples
+
 ## License
 
 MIT
