@@ -197,7 +197,7 @@ export abstract class BaseAbapConnection implements AbapConnection {
     this.cookies = state.cookies || null;
     this.csrfToken = state.csrfToken || null;
     this.cookieStore = new Map(Object.entries(state.cookieStore || {}));
-    
+
     this.logger.debug("Session state set manually", {
       hasCookies: !!this.cookies,
       hasCsrfToken: !!this.csrfToken,
@@ -275,13 +275,66 @@ export abstract class BaseAbapConnection implements AbapConnection {
     return headers;
   }
 
+  /**
+   * Connect to SAP system and initialize session (get CSRF token and cookies)
+   * This should be called explicitly before making the first request to ensure
+   * proper authentication and session initialization.
+   *
+   * If connection fails, it logs a warning but doesn't throw an error.
+   * The retry logic in makeAdtRequest will handle CSRF token errors automatically.
+   */
+  async connect(): Promise<void> {
+    const baseUrl = await this.getBaseUrl();
+    const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;
+
+    this.logger.debug(`[DEBUG] BaseAbapConnection - Connecting to SAP system: ${discoveryUrl}`);
+
+    try {
+      // Try to get CSRF token (this will also get cookies)
+      this.csrfToken = await this.fetchCsrfToken(discoveryUrl, 3, 1000);
+
+      // Save session state after successful connection
+      await this.saveSessionState();
+
+      this.logger.info("Successfully connected to SAP system", {
+        hasCsrfToken: !!this.csrfToken,
+        hasCookies: !!this.cookies,
+        cookieLength: this.cookies?.length || 0
+      });
+    } catch (error) {
+      // Don't throw error - just log warning
+      // The retry logic in makeAdtRequest will handle CSRF token errors automatically
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`[WARN] BaseAbapConnection - Could not connect to SAP system upfront: ${errorMsg}. Will retry on first request.`);
+
+      // Still try to extract cookies from error response if available
+      if (error instanceof AxiosError && error.response?.headers) {
+        this.updateCookiesFromResponse(error.response.headers);
+        if (this.cookies) {
+          this.logger.debug(`[DEBUG] BaseAbapConnection - Cookies extracted from error response during connect (first 100 chars): ${this.cookies.substring(0, 100)}...`);
+          await this.saveSessionState();
+        }
+      }
+    }
+  }
+
   async makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse> {
     const { url, method, timeout, data, params, headers: customHeaders } = options;
     const normalizedMethod = method.toUpperCase();
     const requestUrl = this.normalizeRequestUrl(url);
 
+    // Try to ensure CSRF token is available for POST/PUT/DELETE, but don't fail if it can't be fetched
+    // The retry logic will handle CSRF token errors automatically
     if (normalizedMethod === "POST" || normalizedMethod === "PUT" || normalizedMethod === "DELETE") {
-      await this.ensureFreshCsrfToken(requestUrl);
+      if (!this.csrfToken) {
+        try {
+          await this.ensureFreshCsrfToken(requestUrl);
+        } catch (error) {
+          // If CSRF token can't be fetched upfront, continue anyway
+          // The retry logic will handle CSRF token errors automatically
+          this.logger.debug(`[DEBUG] BaseAbapConnection - Could not fetch CSRF token upfront, will retry on error: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
     }
 
     // Start with default Accept header
@@ -385,6 +438,7 @@ export abstract class BaseAbapConnection implements AbapConnection {
 
       this.logger.error(errorDetails.message, errorDetails);
 
+      // Retry logic for CSRF token errors (403 with CSRF message)
       if (this.shouldRetryCsrf(error)) {
         if (this.logger.csrfToken) {
           this.logger.csrfToken(
@@ -412,6 +466,52 @@ export abstract class BaseAbapConnection implements AbapConnection {
         await this.saveSessionState();
 
         return retryResponse;
+      }
+
+      // Retry logic for 401 errors on GET requests (authentication issue - need cookies)
+      // Don't retry if JWT expired - it won't help
+      if (
+        error instanceof AxiosError &&
+        error.response?.status === 401 &&
+        normalizedMethod === "GET" &&
+        !this.isJwtExpiredError(error)
+      ) {
+        // If we already have cookies from error response, retry immediately
+        if (this.cookies) {
+          this.logger.debug(`[DEBUG] BaseAbapConnection - 401 on GET request, retrying with cookies from error response`);
+          requestHeaders["Cookie"] = this.cookies;
+
+          const retryResponse = await this.getAxiosInstance()(requestConfig);
+          this.updateCookiesFromResponse(retryResponse.headers);
+          await this.saveSessionState();
+
+          return retryResponse;
+        }
+
+        // If no cookies, try to get them via CSRF token fetch
+        this.logger.debug(`[DEBUG] BaseAbapConnection - 401 on GET request, attempting to get cookies via CSRF token fetch`);
+        try {
+          // Try to get CSRF token (this will also get cookies)
+          this.csrfToken = await this.fetchCsrfToken(requestUrl, 3, 1000);
+          if (this.cookies) {
+            requestHeaders["Cookie"] = this.cookies;
+            this.logger.debug(`[DEBUG] BaseAbapConnection - Retrying GET request with cookies from CSRF fetch`);
+
+            const retryResponse = await this.getAxiosInstance()(requestConfig);
+            this.updateCookiesFromResponse(retryResponse.headers);
+            await this.saveSessionState();
+
+            return retryResponse;
+          }
+        } catch (csrfError) {
+          this.logger.debug(`[DEBUG] BaseAbapConnection - Failed to get CSRF token for 401 retry: ${csrfError instanceof Error ? csrfError.message : String(csrfError)}`);
+          // Fall through to throw original error
+        }
+      }
+
+      // If JWT expired, throw a more specific error
+      if (error instanceof AxiosError && error.response?.status === 401 && this.isJwtExpiredError(error)) {
+        throw new Error("JWT token has expired. Please refresh your authentication token.");
       }
 
       throw error;
@@ -518,10 +618,50 @@ export abstract class BaseAbapConnection implements AbapConnection {
       const errorMsg =
         "CSRF token is required for POST/PUT requests but could not be fetched";
 
-      this.logger.error(errorMsg, {
+      // Log detailed error information
+      const errorDetails = error instanceof Error ? error.message : String(error);
+      const axiosError = error as any;
+      const authHeaders = await this.getAuthHeaders();
+
+      // Check if this is a JWT expiration issue (401 with auth-related response)
+      const isJwtExpired = this.isJwtExpiredError(axiosError);
+
+      const errorContext: {
+        type: string;
+        cause: string;
+        status?: number;
+        statusText?: string;
+        hasCookies: boolean;
+        hasAuthHeaders: boolean;
+        isJwtExpired: boolean;
+        responseData?: string;
+      } = {
         type: "CSRF_FETCH_ERROR",
-        cause: error instanceof Error ? error.message : String(error)
-      });
+        cause: errorDetails,
+        status: axiosError?.response?.status,
+        statusText: axiosError?.response?.statusText,
+        hasCookies: !!this.cookies,
+        hasAuthHeaders: !!authHeaders.Authorization,
+        isJwtExpired: isJwtExpired
+      };
+
+      if (axiosError?.response?.data) {
+        errorContext.responseData = typeof axiosError.response.data === 'string'
+          ? axiosError.response.data.substring(0, 200)
+          : JSON.stringify(axiosError.response.data).substring(0, 200);
+      }
+
+      this.logger.error(errorMsg, errorContext);
+
+      // If JWT expired, throw a more specific error
+      if (isJwtExpired) {
+        throw new Error("JWT token has expired. Please refresh your authentication token.");
+      }
+
+      // If we have cookies from error response, log it
+      if (this.cookies) {
+        this.logger.debug(`[DEBUG] BaseAbapConnection - Cookies available after CSRF fetch error: ${this.cookies.substring(0, 100)}...`);
+      }
 
       throw new Error(errorMsg);
     }
@@ -546,14 +686,29 @@ export abstract class BaseAbapConnection implements AbapConnection {
           this.logger.csrfToken("retry", `Retry attempt ${attempt}/${retryCount} for CSRF token`);
         }
 
+        const authHeaders = await this.getAuthHeaders();
+        const headers: Record<string, string> = {
+          ...authHeaders,
+          "x-csrf-token": "fetch",
+          Accept: "application/atomsvc+xml"
+        };
+
+        // Always add cookies if available - they are needed for session continuity
+        // Even on first attempt, if we have cookies from previous session or error response, use them
+        if (this.cookies) {
+          headers["Cookie"] = this.cookies;
+          this.logger.debug(`[DEBUG] BaseAbapConnection - Adding cookies to CSRF token request (attempt ${attempt + 1}, first 100 chars): ${this.cookies.substring(0, 100)}...`);
+        } else {
+          this.logger.debug(`[DEBUG] BaseAbapConnection - No cookies available for CSRF token request (will get fresh cookies from response)`);
+        }
+
+        // Log request details for debugging (only if debug logging is enabled)
+        this.logger.debug(`[DEBUG] CSRF Token Request: url=${csrfUrl}, method=GET, hasAuth=${!!authHeaders.Authorization}, hasClient=${!!authHeaders["X-SAP-Client"]}, hasCookies=${!!headers["Cookie"]}, attempt=${attempt + 1}`);
+
         const response = await this.getAxiosInstance()({
           method: "GET",
           url: csrfUrl,
-          headers: {
-            ...(await this.getAuthHeaders()),
-            "x-csrf-token": "fetch",
-            Accept: "application/atomsvc+xml"
-          },
+          headers,
           timeout: getTimeout("csrf")
         });
 
@@ -596,6 +751,18 @@ export abstract class BaseAbapConnection implements AbapConnection {
         return token;
       } catch (error) {
         if (error instanceof AxiosError) {
+          // Always try to extract cookies from error response, even on 401
+          // This ensures cookies are available for subsequent requests
+          if (error.response?.headers) {
+            this.updateCookiesFromResponse(error.response.headers);
+            if (this.cookies) {
+              this.logger.debug("Cookies extracted from error response", {
+                status: error.response.status,
+                cookieLength: this.cookies.length
+              });
+            }
+          }
+
           if (this.logger.csrfToken) {
             this.logger.csrfToken("error", `CSRF token error: ${error.message}`, {
               url: csrfUrl,
@@ -659,6 +826,12 @@ export abstract class BaseAbapConnection implements AbapConnection {
           continue;
         }
 
+        // Preserve original error information, especially AxiosError with response
+        if (error instanceof AxiosError && error.response) {
+          // Re-throw the original AxiosError to preserve response information
+          throw error;
+        }
+
         throw new Error(
           `Failed to fetch CSRF token after ${retryCount + 1} attempts: ${
             error instanceof Error ? error.message : String(error)
@@ -670,6 +843,55 @@ export abstract class BaseAbapConnection implements AbapConnection {
     throw new Error("CSRF token fetch failed unexpectedly");
   }
 
+  /**
+   * Check if 401 error is due to expired JWT token
+   * Distinguishes between JWT expiration (auth failure) and cookie issues (session failure)
+   */
+  private isJwtExpiredError(error: any): boolean {
+    if (!error?.response || error.response.status !== 401) {
+      return false;
+    }
+
+    const responseData = error.response.data;
+    if (!responseData) {
+      return false;
+    }
+
+    const responseText = typeof responseData === "string"
+      ? responseData.toLowerCase()
+      : JSON.stringify(responseData).toLowerCase();
+
+    // Check for JWT/token expiration indicators
+    // SAP typically returns HTML with "Anmeldung fehlgeschlagen" (Login failed) for expired tokens
+    // or JSON with "unauthorized" / "invalid_token" / "expired" messages
+    const jwtExpirationIndicators = [
+      "anmeldung fehlgeschlagen",  // German: Login failed
+      "unauthorized",
+      "invalid_token",
+      "token expired",
+      "expired",
+      "authentication failed",
+      "401 nicht autorisiert"  // German: 401 Unauthorized
+    ];
+
+    // If we have cookies but still get 401, it's likely JWT expiration
+    // If we don't have cookies, it could be either JWT or cookie issue
+    const hasCookies = !!this.cookies;
+
+    // If response contains JWT expiration indicators, it's definitely JWT expiration
+    if (jwtExpirationIndicators.some(indicator => responseText.includes(indicator))) {
+      return true;
+    }
+
+    // If we have cookies and get 401, it's more likely JWT expiration than cookie issue
+    // (cookies would typically result in different error or work)
+    if (hasCookies && this.config.authType === "jwt") {
+      return true;
+    }
+
+    return false;
+  }
+
   private shouldRetryCsrf(error: unknown): boolean {
     if (!(error instanceof AxiosError)) {
       return false;
@@ -678,9 +900,21 @@ export abstract class BaseAbapConnection implements AbapConnection {
     const responseData = error.response?.data;
     const responseText = typeof responseData === "string" ? responseData : JSON.stringify(responseData || "");
 
+    // Don't retry if JWT expired - it won't help
+    if (this.isJwtExpiredError(error)) {
+      return false;
+    }
+
+    // Retry on 403 with CSRF message, or if response mentions CSRF token
+    // Also retry on 401 for POST/PUT/DELETE if we don't have CSRF token yet (might need to get cookies first)
+    const method = error.config?.method?.toUpperCase();
+    const isPostPutDelete = method && ["POST", "PUT", "DELETE"].includes(method);
+    const needsCsrfToken = !!isPostPutDelete && !this.csrfToken;
+
     return (
       (!!error.response && error.response.status === 403 && responseText.includes("CSRF")) ||
-      responseText.includes("CSRF token")
+      responseText.includes("CSRF token") ||
+      (needsCsrfToken && error.response?.status === 401 && !this.isJwtExpiredError(error))
     );
   }
 }

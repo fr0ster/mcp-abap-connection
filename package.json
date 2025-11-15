@@ -33,7 +33,9 @@
     "directory": "packages/connection"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "build:fast": "tsc -p tsconfig.json",
     "test": "jest",
     "prepublishOnly": "npm run build"
   },

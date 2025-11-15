@@ -15,6 +15,7 @@ export interface AbapConnection {
   getBaseUrl(): Promise<string>;
   getAuthHeaders(): Promise<Record<string, string>>;
   makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
+  connect(): Promise<void>;
   reset(): void;
 }
 

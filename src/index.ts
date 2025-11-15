@@ -6,7 +6,7 @@ export type {
 export type { AbapRequestOptions } from "./connection/AbapConnection.js";
 
 // Interfaces
-export type { AbapConnection } from "./connection/AbapConnection.js";
+export { type AbapConnection } from "./connection/AbapConnection.js";
 export type { ILogger, SessionState, ISessionStorage } from "./logger.js";
 
 // Session storage implementations
@@ -21,7 +21,7 @@ export { CloudAbapConnection } from "./connection/CloudAbapConnection.js";
 export { createAbapConnection } from "./connection/connectionFactory.js";
 
 // Config utilities
-export { sapConfigSignature } from "./config/sapConfig.js";
+export { sapConfigSignature, getConfigFromEnv } from "./config/sapConfig.js";
 
 // Timeouts
 export { getTimeout, getTimeoutConfig, type TimeoutConfig } from "./utils/timeouts.js";
