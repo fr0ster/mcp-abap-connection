@@ -7,6 +7,10 @@ export interface SapConfig {
   username?: string;
   password?: string;
   jwtToken?: string;
+  refreshToken?: string;
+  uaaUrl?: string; // UAA URL for token refresh (optional, can be extracted from service key)
+  uaaClientId?: string; // UAA client ID for token refresh (optional)
+  uaaClientSecret?: string; // UAA client secret for token refresh (optional)
 }
 
 /**
@@ -44,6 +48,18 @@ export function getConfigFromEnv(): SapConfig {
       throw new Error('Missing SAP_JWT_TOKEN for JWT authentication');
     }
     config.jwtToken = jwtToken;
+    // Refresh token is optional but recommended for automatic token renewal
+    const refreshToken = process.env.SAP_REFRESH_TOKEN;
+    if (refreshToken) {
+      config.refreshToken = refreshToken;
+    }
+    // UAA credentials for token refresh (optional but recommended)
+    const uaaUrl = process.env.SAP_UAA_URL || process.env.UAA_URL;
+    const uaaClientId = process.env.SAP_UAA_CLIENT_ID || process.env.UAA_CLIENT_ID;
+    const uaaClientSecret = process.env.SAP_UAA_CLIENT_SECRET || process.env.UAA_CLIENT_SECRET;
+    if (uaaUrl) config.uaaUrl = uaaUrl;
+    if (uaaClientId) config.uaaClientId = uaaClientId;
+    if (uaaClientSecret) config.uaaClientSecret = uaaClientSecret;
   } else {
     const username = process.env.SAP_USERNAME;
     const password = process.env.SAP_PASSWORD;
@@ -64,7 +80,8 @@ export function sapConfigSignature(config: SapConfig): string {
     authType: config.authType,
     username: config.username ?? null,
     password: config.password ? "set" : null,
-    jwtToken: config.jwtToken ? "set" : null
+    jwtToken: config.jwtToken ? "set" : null,
+    refreshToken: config.refreshToken ? "set" : null
   });
 }
 

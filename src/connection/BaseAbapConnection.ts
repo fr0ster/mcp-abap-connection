@@ -17,7 +17,7 @@ export abstract class BaseAbapConnection implements AbapConnection {
 
   protected constructor(
     private readonly config: SapConfig,
-    private readonly logger: ILogger,
+    protected readonly logger: ILogger,
     sessionStorage?: ISessionStorage,
     sessionId?: string
   ) {
@@ -509,9 +509,41 @@ export abstract class BaseAbapConnection implements AbapConnection {
         }
       }
 
-      // If JWT expired, throw a more specific error
+      // If JWT expired, try to refresh token if possible
       if (error instanceof AxiosError && error.response?.status === 401 && this.isJwtExpiredError(error)) {
-        throw new Error("JWT token has expired. Please refresh your authentication token.");
+        // Check if token refresh is possible (CloudAbapConnection has this method)
+        const cloudConnection = this as any;
+        if (typeof cloudConnection.canRefreshToken === 'function' && cloudConnection.canRefreshToken()) {
+          try {
+            this.logger.info("JWT token expired, attempting automatic refresh...");
+            await cloudConnection.refreshToken();
+
+            // Retry the request with new token
+            this.logger.debug("Retrying request with refreshed token...");
+            const authHeaders = await this.getAuthHeaders();
+            requestConfig.headers = {
+              ...requestConfig.headers,
+              ...authHeaders,
+            };
+
+            // Clear cookies to force new session
+            if (this.cookies) {
+              requestConfig.headers["Cookie"] = this.cookies;
+            }
+
+            const retryResponse = await this.getAxiosInstance()(requestConfig);
+            this.updateCookiesFromResponse(retryResponse.headers);
+            await this.saveSessionState();
+
+            this.logger.info("Request succeeded after token refresh");
+            return retryResponse;
+          } catch (refreshError: any) {
+            this.logger.error(`Token refresh failed: ${refreshError.message}`);
+            throw new Error("JWT token has expired and refresh failed. Please re-authenticate.");
+          }
+        } else {
+          throw new Error("JWT token has expired. Please refresh your authentication token.");
+        }
       }
 
       throw error;

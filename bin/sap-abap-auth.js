@@ -70,6 +70,10 @@ function updateEnvFile(updates, envFilePath) {
         "TLS_REJECT_UNAUTHORIZED",
         "SAP_AUTH_TYPE",
         "SAP_JWT_TOKEN",
+        "SAP_REFRESH_TOKEN",
+        "SAP_UAA_URL",
+        "SAP_UAA_CLIENT_ID",
+        "SAP_UAA_CLIENT_SECRET",
       ];
       jwtAllowed.forEach((key) => {
         if (updates[key]) lines.push(`${key}=${updates[key]}`);
@@ -125,7 +129,7 @@ function getJwtAuthorizationUrl(serviceKey, port = 3001) {
  * @param {Object} serviceKey SAP BTP service key object
  * @param {string} browser Browser to open
  * @param {string} flow Flow type: jwt (OAuth2)
- * @returns {Promise<string>} Promise that resolves to the token
+ * @returns {Promise<{accessToken: string, refreshToken?: string}>} Promise that resolves to tokens
  */
 async function startAuthServer(serviceKey, browser = undefined, flow = "jwt") {
   return new Promise((resolve, reject) => {
@@ -211,11 +215,11 @@ async function startAuthServer(serviceKey, browser = undefined, flow = "jwt") {
 </body>
 </html>`);
         try {
-          const token = await exchangeCodeForToken(serviceKey, code);
+          const tokens = await exchangeCodeForToken(serviceKey, code);
           server.close(() => {
             console.log("Authentication server stopped");
           });
-          resolve(token);
+          resolve(tokens);
         } catch (error) {
           reject(error);
         }
@@ -260,10 +264,10 @@ async function startAuthServer(serviceKey, browser = undefined, flow = "jwt") {
 }
 
 /**
- * Exchanges the authorization code for a token
+ * Exchanges the authorization code for tokens
  * @param {Object} serviceKey SAP BTP service key object
  * @param {string} code Authorization code
- * @returns {Promise<string>} Promise that resolves to the token
+ * @returns {Promise<{accessToken: string, refreshToken?: string}>} Promise that resolves to tokens
  */
 async function exchangeCodeForToken(serviceKey, code) {
   try {
@@ -292,7 +296,10 @@ async function exchangeCodeForToken(serviceKey, code) {
 
     if (response.data && response.data.access_token) {
       console.log("OAuth token received successfully.");
-      return response.data.access_token;
+      return {
+        accessToken: response.data.access_token,
+        refreshToken: response.data.refresh_token
+      };
     } else {
       throw new Error("Response does not contain access_token");
     }
@@ -305,6 +312,58 @@ async function exchangeCodeForToken(serviceKey, code) {
       );
     } else {
       console.error(`Error obtaining OAuth token: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Refreshes the access token using refresh token
+ * @param {Object} serviceKey SAP BTP service key object
+ * @param {string} refreshToken Refresh token
+ * @returns {Promise<{accessToken: string, refreshToken?: string}>} Promise that resolves to new tokens
+ */
+async function refreshJwtToken(serviceKey, refreshToken) {
+  try {
+    const { url, clientid, clientsecret } = serviceKey.uaa;
+    const tokenUrl = `${url}/oauth/token`;
+
+    const params = new URLSearchParams();
+    params.append("grant_type", "refresh_token");
+    params.append("refresh_token", refreshToken);
+
+    const authString = Buffer.from(`${clientid}:${clientsecret}`).toString(
+      "base64"
+    );
+
+    const response = await axios({
+      method: "post",
+      url: tokenUrl,
+      headers: {
+        Authorization: `Basic ${authString}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      data: params.toString(),
+    });
+
+    if (response.data && response.data.access_token) {
+      console.log("Access token refreshed successfully.");
+      return {
+        accessToken: response.data.access_token,
+        refreshToken: response.data.refresh_token || refreshToken // Use new refresh token if provided, otherwise keep old one
+      };
+    } else {
+      throw new Error("Response does not contain access_token");
+    }
+  } catch (error) {
+    if (error.response) {
+      console.error(
+        `API error (${error.response.status}): ${JSON.stringify(
+          error.response.data
+        )}`
+      );
+    } else {
+      console.error(`Error refreshing OAuth token: ${error.message}`);
     }
     throw error;
   }
@@ -361,8 +420,8 @@ async function main() {
           process.exit(1);
         }
         // Start the server for JWT authentication
-        const token = await startAuthServer(serviceKey, options.browser, "jwt");
-        if (!token) {
+        const tokens = await startAuthServer(serviceKey, options.browser, "jwt");
+        if (!tokens || !tokens.accessToken) {
           console.error("JWT token was not obtained. Authentication failed.");
           process.exit(1);
         }
@@ -371,8 +430,22 @@ async function main() {
           SAP_URL: abapUrl,
           TLS_REJECT_UNAUTHORIZED: "0",
           SAP_AUTH_TYPE: "jwt",
-          SAP_JWT_TOKEN: token,
+          SAP_JWT_TOKEN: tokens.accessToken,
         };
+        // Add refresh token if available
+        if (tokens.refreshToken) {
+          envUpdates.SAP_REFRESH_TOKEN = tokens.refreshToken;
+        }
+        // Add UAA credentials for token refresh
+        if (serviceKey.uaa?.url) {
+          envUpdates.SAP_UAA_URL = serviceKey.uaa.url;
+        }
+        if (serviceKey.uaa?.clientid) {
+          envUpdates.SAP_UAA_CLIENT_ID = serviceKey.uaa.clientid;
+        }
+        if (serviceKey.uaa?.clientsecret) {
+          envUpdates.SAP_UAA_CLIENT_SECRET = serviceKey.uaa.clientsecret;
+        }
         // Optional: client
         const abapClient =
           serviceKey.client || serviceKey.abap?.client || serviceKey.sap_client;
@@ -385,7 +458,7 @@ async function main() {
         } else if (serviceKey.abap && serviceKey.abap.language) {
           envUpdates.SAP_LANGUAGE = serviceKey.abap.language;
         }
-        
+
         // Use custom output path if provided
         const envFilePath = getEnvFilePath(options.output);
         updateEnvFile(envUpdates, envFilePath);
