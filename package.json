@@ -34,7 +34,7 @@
   },
   "scripts": {
     "clean": "rm -rf dist tsconfig.tsbuildinfo",
-    "build": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run clean --silent && tsc -p tsconfig.json",
     "build:fast": "tsc -p tsconfig.json",
     "test": "jest",
     "prepublishOnly": "npm run build"
@@ -46,7 +46,7 @@
     "axios": "^1.11.0",
     "commander": "^14.0.2",
     "express": "^5.1.0",
-    "open": "^10.2.0"
+    "open": "^11.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.2.1",
