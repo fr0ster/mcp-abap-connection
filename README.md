@@ -2,10 +2,19 @@
 
 ABAP connection layer for MCP ABAP ADT server. Provides a unified interface for connecting to SAP ABAP systems via ADT (ABAP Development Tools) protocol, supporting both on-premise (Basic Auth) and cloud (JWT/OAuth2) authentication methods.
 
+## Documentation
+
+- 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
+- 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🧪 **[Testing Guide](./docs/AUTO_REFRESH_TESTING.md)** - Auto-refresh testing and troubleshooting
+- 🔧 **[Session Storage](./docs/CUSTOM_SESSION_STORAGE.md)** - Custom session storage implementation
+- 💡 **[Examples](./examples/)** - Working code examples
+
 ## Features
 
 - 🔐 **Multiple Authentication Methods**: Basic Auth for on-premise systems, JWT/OAuth2 for SAP BTP ABAP Environment
-- 🔄 **Stateful Sessions**: Support for persistent sessions with CSRF token and cookie management
+- 🔄 **Auto Token Refresh**: Automatic JWT token refresh when expired (for cloud systems)
+- 💾 **Stateful Sessions**: Support for persistent sessions with CSRF token and cookie management
 - 📝 **Custom Logging**: Pluggable logger interface for integration with any logging system
 - 🛠️ **CLI Tool**: Built-in authentication helper for SAP BTP service key authentication
 - 📦 **TypeScript**: Full TypeScript support with type definitions included
@@ -16,6 +25,8 @@ ABAP connection layer for MCP ABAP ADT server. Provides a unified interface for 
 ```bash
 npm install @mcp-abap-adt/connection
 ```
+
+For detailed installation instructions, see [Installation Guide](./docs/INSTALLATION.md).
 
 ## Quick Start
 

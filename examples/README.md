@@ -2,43 +2,117 @@
 
 This directory contains example code demonstrating how to use the `@mcp-abap-adt/connection` package.
 
-## Running Examples
+## Prerequisites
 
 ```bash
-# From packages/connection directory
-node examples/custom-session-storage.js
+# Install dependencies
+cd packages/connection
+npm install
+
+# Build the package
+npm run build
+
+# Set up environment variables
+cp .env.example .env
+# Edit .env with your SAP credentials
 ```
 
 ## Available Examples
 
+### basic-connection.js
+
+Simple example showing how to connect to SAP and make an ADT request.
+
+```bash
+node examples/basic-connection.js
+```
+
+**What it demonstrates:**
+- Creating connection with factory function
+- Connecting to SAP system
+- Making GET request to ADT endpoint
+- Basic error handling
+
+### auto-refresh.js
+
+Demonstrates automatic JWT token refresh when token expires.
+
+```bash
+node examples/auto-refresh.js
+```
+
+**What it demonstrates:**
+- Cloud connection with JWT authentication
+- Auto-refresh configuration
+- Automatic token refresh on 401/403 errors
+- Multiple requests with auto-refresh
+
+**Required environment variables:**
+- `SAP_URL`
+- `SAP_JWT_TOKEN`
+- `SAP_REFRESH_TOKEN`
+- `SAP_UAA_URL`
+- `SAP_UAA_CLIENT_ID`
+- `SAP_UAA_CLIENT_SECRET`
+
+### session-persistence.js
+
+Shows how to use FileSessionStorage to persist and reuse sessions.
+
+```bash
+node examples/session-persistence.js
+```
+
+**What it demonstrates:**
+- Creating FileSessionStorage instance
+- Saving session to disk
+- Reusing session in new connection
+- Avoiding repeated CSRF token fetches
+
 ### custom-session-storage.js
 
-Demonstrates how to use `getSessionState()` and `setSessionState()` methods to implement custom session persistence.
+Advanced example showing custom session persistence implementation.
 
-**Use cases:**
-- Store sessions in database (MongoDB, PostgreSQL, etc.)
-- Store sessions in Redis/Memcached
-- Store sessions in cloud storage
-- Implement custom session lifecycle management
+```bash
+node examples/custom-session-storage.js
+```
 
-**What it shows:**
-1. Making a request and capturing session state with `getSessionState()`
-2. Storing session state in custom storage (in-memory example)
-3. Creating a new connection and restoring session with `setSessionState()`
-4. Making requests with restored session
+**What it demonstrates:**
+- Using `getSessionState()` and `setSessionState()` methods
+- Implementing custom session storage (in-memory, database, Redis, etc.)
+- Session lifecycle management
+- Restoring sessions across connections
 
 ## Configuration
 
-Examples can be configured via environment variables:
+### Using .env file
+
+Create `.env` in project root:
 
 ```bash
-# Set environment variables
+# Basic Auth
+SAP_URL=https://your-sap-system.com
+SAP_AUTH_TYPE=basic
+SAP_USERNAME=your_username
+SAP_PASSWORD=your_password
+SAP_CLIENT=100
+
+# JWT Auth (Cloud/BTP)
+SAP_AUTH_TYPE=jwt
+SAP_JWT_TOKEN=eyJhbGciOiJSUzI1NiIs...
+SAP_REFRESH_TOKEN=your-refresh-token
+SAP_UAA_URL=https://your-uaa-server.com
+SAP_UAA_CLIENT_ID=sb-client-id!b123
+SAP_UAA_CLIENT_SECRET=client-secret-xyz
+```
+
+### Using Environment Variables
+
+```bash
 export SAP_URL=https://your-sap-system.com
 export SAP_USERNAME=your_username
 export SAP_PASSWORD=your_password
-
-# Or use .env file in adt-clients package
-# Examples will try to load ../adt-clients/.env
+node examples/basic-connection.js
 ```
 
 ## Session State Structure
