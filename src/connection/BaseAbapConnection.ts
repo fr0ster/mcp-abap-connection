@@ -302,8 +302,16 @@ export abstract class BaseAbapConnection implements AbapConnection {
         cookieLength: this.cookies?.length || 0
       });
     } catch (error) {
-      // Don't throw error - just log warning
-      // The retry logic in makeAdtRequest will handle CSRF token errors automatically
+      // For JWT auth errors, throw immediately - these are auth failures that need user action
+      if (error instanceof Error &&
+          (error.message.includes('JWT token has expired') ||
+           error.message.includes('Please refresh your authentication token') ||
+           error.message.includes('Please re-authenticate'))) {
+        throw error;
+      }
+
+      // For other errors (network, etc.), just log warning
+      // The retry logic in makeAdtRequest will handle transient errors automatically
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.logger.warn(`[WARN] BaseAbapConnection - Could not connect to SAP system upfront: ${errorMsg}. Will retry on first request.`);
 
@@ -438,6 +446,29 @@ export abstract class BaseAbapConnection implements AbapConnection {
 
       this.logger.error(errorDetails.message, errorDetails);
 
+      // Auto-refresh logic for JWT authentication (401/403 errors)
+      if (error instanceof AxiosError &&
+          (error.response?.status === 401 || error.response?.status === 403)) {
+        const cloudConnection = this as any;
+        if (typeof cloudConnection.canRefreshToken === 'function' && cloudConnection.canRefreshToken()) {
+          try {
+            this.logger.info(`Received ${error.response.status} in makeAdtRequest, attempting automatic token refresh...`);
+            await cloudConnection.refreshToken();
+
+            // Retry the request with new token
+            this.logger.debug("Retrying ADT request with refreshed token...");
+            return await this.makeAdtRequest(options);
+          } catch (refreshError: any) {
+            this.logger.error(`Token refresh failed: ${refreshError.message}`);
+            throw new Error("JWT token has expired and refresh failed. Please re-authenticate.");
+          }
+        }
+        // If refresh not possible but we get 401/403 on JWT auth, throw with clear message
+        if (this.config.authType === 'jwt') {
+          throw new Error("JWT token has expired. Please refresh your authentication token.");
+        }
+      }
+
       // Retry logic for CSRF token errors (403 with CSRF message)
       if (this.shouldRetryCsrf(error)) {
         if (this.logger.csrfToken) {
@@ -469,12 +500,12 @@ export abstract class BaseAbapConnection implements AbapConnection {
       }
 
       // Retry logic for 401 errors on GET requests (authentication issue - need cookies)
-      // Don't retry if JWT expired - it won't help
+      // Only for basic auth - JWT auth will be handled by refresh logic below
       if (
         error instanceof AxiosError &&
         error.response?.status === 401 &&
         normalizedMethod === "GET" &&
-        !this.isJwtExpiredError(error)
+        this.config.authType === 'basic'  // Only for basic auth
       ) {
         // If we already have cookies from error response, retry immediately
         if (this.cookies) {
@@ -510,12 +541,14 @@ export abstract class BaseAbapConnection implements AbapConnection {
       }
 
       // If JWT expired, try to refresh token if possible
-      if (error instanceof AxiosError && error.response?.status === 401 && this.isJwtExpiredError(error)) {
+      // For JWT authentication: any 401/403 should trigger refresh attempt (if refresh token available)
+      if (error instanceof AxiosError &&
+          (error.response?.status === 401 || error.response?.status === 403)) {
         // Check if token refresh is possible (CloudAbapConnection has this method)
         const cloudConnection = this as any;
         if (typeof cloudConnection.canRefreshToken === 'function' && cloudConnection.canRefreshToken()) {
           try {
-            this.logger.info("JWT token expired, attempting automatic refresh...");
+            this.logger.info(`Received ${error.response.status}, attempting automatic token refresh...`);
             await cloudConnection.refreshToken();
 
             // Retry the request with new token
@@ -541,7 +574,9 @@ export abstract class BaseAbapConnection implements AbapConnection {
             this.logger.error(`Token refresh failed: ${refreshError.message}`);
             throw new Error("JWT token has expired and refresh failed. Please re-authenticate.");
           }
-        } else {
+        }
+        // If refresh not possible but we get 401/403, throw with clear message
+        if (this.config.authType === 'jwt') {
           throw new Error("JWT token has expired. Please refresh your authentication token.");
         }
       }
@@ -783,6 +818,29 @@ export abstract class BaseAbapConnection implements AbapConnection {
         return token;
       } catch (error) {
         if (error instanceof AxiosError) {
+          // Auto-refresh logic for JWT authentication (401/403 errors) - try ONCE per fetchCsrfToken call
+          if ((error.response?.status === 401 || error.response?.status === 403)) {
+            const cloudConnection = this as any;
+            if (typeof cloudConnection.canRefreshToken === 'function' && cloudConnection.canRefreshToken()) {
+              try {
+                this.logger.info(`Received ${error.response.status} in fetchCsrfToken, attempting automatic token refresh...`);
+                await cloudConnection.refreshToken();
+
+                // Retry the CSRF fetch with new token (recursive call starts fresh with attempt=0)
+                this.logger.debug("Retrying CSRF fetch with refreshed token...");
+                return await this.fetchCsrfToken(url, retryCount, retryDelay);
+              } catch (refreshError: any) {
+                this.logger.error(`Token refresh failed: ${refreshError.message}`);
+                throw new Error("JWT token has expired and refresh failed. Please re-authenticate.");
+              }
+            } else {
+              // Can't refresh, throw immediately for JWT auth
+              if (this.config.authType === 'jwt') {
+                throw new Error("JWT token has expired. Please refresh your authentication token.");
+              }
+            }
+          }
+
           // Always try to extract cookies from error response, even on 401
           // This ensures cookies are available for subsequent requests
           if (error.response?.headers) {
@@ -932,8 +990,8 @@ export abstract class BaseAbapConnection implements AbapConnection {
     const responseData = error.response?.data;
     const responseText = typeof responseData === "string" ? responseData : JSON.stringify(responseData || "");
 
-    // Don't retry if JWT expired - it won't help
-    if (this.isJwtExpiredError(error)) {
+    // Don't retry for JWT auth - refresh logic will handle it
+    if (this.config.authType === 'jwt') {
       return false;
     }
 
@@ -946,8 +1004,7 @@ export abstract class BaseAbapConnection implements AbapConnection {
     return (
       (!!error.response && error.response.status === 403 && responseText.includes("CSRF")) ||
       responseText.includes("CSRF token") ||
-      (needsCsrfToken && error.response?.status === 401 && !this.isJwtExpiredError(error))
+      (needsCsrfToken && error.response?.status === 401)
     );
   }
 }
-
