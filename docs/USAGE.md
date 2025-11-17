@@ -53,7 +53,8 @@ await connection.connect();
 ### JWT Authentication (Cloud/BTP)
 
 ```typescript
-import { CloudAbapConnection } from '@mcp-abap-adt/connection';
+import { JwtAbapConnection } from '@mcp-abap-adt/connection';
+// Or use deprecated alias: CloudAbapConnection
 
 const config = {
   url: 'https://tenant.abap.cloud',
@@ -62,7 +63,7 @@ const config = {
   client: '100',
 };
 
-const connection = new CloudAbapConnection(config, console);
+const connection = new JwtAbapConnection(config, console);
 await connection.connect();
 ```
 
@@ -82,7 +83,7 @@ const config = {
   uaaClientSecret: 'client-secret-xyz',
 };
 
-const connection = new CloudAbapConnection(config, console);
+const connection = new JwtAbapConnection(config, console);
 
 // Token will auto-refresh on 401/403 errors
 await connection.connect();

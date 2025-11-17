@@ -13,9 +13,13 @@ export type { ILogger, SessionState, ISessionStorage } from "./logger.js";
 export { FileSessionStorage, type FileSessionStorageOptions } from "./utils/FileSessionStorage.js";
 
 // Connection classes
+export { AbstractAbapConnection } from "./connection/AbstractAbapConnection.js";
 export { BaseAbapConnection } from "./connection/BaseAbapConnection.js";
-export { OnPremAbapConnection } from "./connection/OnPremAbapConnection.js";
-export { CloudAbapConnection } from "./connection/CloudAbapConnection.js";
+export { JwtAbapConnection } from "./connection/JwtAbapConnection.js";
+
+// Deprecated aliases for backward compatibility
+export { BaseAbapConnection as OnPremAbapConnection } from "./connection/BaseAbapConnection.js";
+export { JwtAbapConnection as CloudAbapConnection } from "./connection/JwtAbapConnection.js";
 
 // Factory
 export { createAbapConnection } from "./connection/connectionFactory.js";

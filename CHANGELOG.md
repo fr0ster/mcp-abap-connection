@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING**: Architecture refactoring for better separation of concerns:
+  - `BaseAbapConnection` (abstract class) → `AbstractAbapConnection` (contains common logic for all auth types)
+  - `OnPremAbapConnection` (Basic Auth) → `BaseAbapConnection` (clearer naming: "Base" = Basic Auth)
+  - `CloudAbapConnection` (JWT) → `JwtAbapConnection` (more descriptive name)
+  - Auto-refresh logic is now contained ONLY in `JwtAbapConnection` (no JWT-specific code in `AbstractAbapConnection`)
+  - Old names available as deprecated aliases for backward compatibility:
+    - `OnPremAbapConnection` → alias for `BaseAbapConnection`
+    - `CloudAbapConnection` → alias for `JwtAbapConnection`
+
 ### Added
 - Automatic JWT token refresh functionality for cloud connections
   - Auto-refresh on 401/403 errors in `fetchCsrfToken()`, `makeAdtRequest()`, and `request()`
@@ -25,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated `examples/README.md` with all examples
 
 ### Changed
-- `CloudAbapConnection.canRefreshToken()` now includes debug logging
+- `JwtAbapConnection.canRefreshToken()` now includes debug logging
 - `BaseAbapConnection.fetchCsrfToken()` simplified auto-refresh logic
   - Removed complex `isJwtExpiredError()` checks
   - Auto-refresh triggers on any 401/403 for JWT auth
@@ -58,7 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Custom logger interface (`ILogger`)
 - Connection factory (`createAbapConnection()`)
 - `OnPremAbapConnection` for basic auth
-- `CloudAbapConnection` for JWT auth
+- `JwtAbapConnection` (formerly `CloudAbapConnection`) for JWT auth
 - Session state management (`getSessionState()`, `setSessionState()`)
 
 ### Documentation

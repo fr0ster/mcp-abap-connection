@@ -1,9 +1,13 @@
 import { SapConfig } from "../config/sapConfig.js";
-import { BaseAbapConnection } from "./BaseAbapConnection.js";
+import { AbstractAbapConnection } from "./AbstractAbapConnection.js";
 import { ILogger, ISessionStorage } from "../logger.js";
 import { refreshJwtToken } from "../utils/tokenRefresh.js";
 
-export class CloudAbapConnection extends BaseAbapConnection {
+/**
+ * JWT Authentication connection for SAP BTP Cloud systems
+ * Supports automatic token refresh using OAuth2 refresh tokens
+ */
+export class JwtAbapConnection extends AbstractAbapConnection {
   private tokenRefreshInProgress: boolean = false;
 
   constructor(
@@ -12,7 +16,7 @@ export class CloudAbapConnection extends BaseAbapConnection {
     sessionStorage?: ISessionStorage,
     sessionId?: string
   ) {
-    CloudAbapConnection.validateConfig(config);
+    JwtAbapConnection.validateConfig(config);
     super(config, logger, sessionStorage, sessionId);
   }
 
@@ -93,7 +97,7 @@ export class CloudAbapConnection extends BaseAbapConnection {
 
   private static validateConfig(config: SapConfig): void {
     if (config.authType !== "jwt") {
-      throw new Error(`Cloud connection expects authType "jwt", got "${config.authType}"`);
+      throw new Error(`JWT connection expects authType "jwt", got "${config.authType}"`);
     }
 
     if (!config.jwtToken) {
