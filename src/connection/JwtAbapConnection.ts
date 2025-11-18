@@ -98,6 +98,76 @@ export class JwtAbapConnection extends AbstractAbapConnection {
   }
 
   /**
+   * Override connect to handle JWT token refresh on errors
+   */
+  async connect(): Promise<void> {
+    const baseUrl = await this.getBaseUrl();
+    const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;
+
+    this.logger.debug(`[DEBUG] JwtAbapConnection - Connecting to SAP system: ${discoveryUrl}`);
+
+    try {
+      // Try to get CSRF token (this will also get cookies)
+      const token = await this.fetchCsrfToken(discoveryUrl, 3, 1000);
+      this.setCsrfToken(token);
+
+      // Save session state after successful connection
+      await this.saveSessionState();
+
+      this.logger.debug("Successfully connected to SAP system", {
+        hasCsrfToken: !!this.getCsrfToken(),
+        hasCookies: !!this.getCookies(),
+        cookieLength: this.getCookies()?.length || 0
+      });
+    } catch (error) {
+      // Handle JWT auth errors (401/403) during connect
+      if (error instanceof AxiosError &&
+          (error.response?.status === 401 || error.response?.status === 403)) {
+
+        // Check if this is really an auth error, not a permissions error
+        const responseData = error.response?.data;
+        const responseText = typeof responseData === "string" ? responseData : JSON.stringify(responseData || "");
+
+        // Don't retry on "No Access" errors
+        if (responseText.includes("ExceptionResourceNoAccess") ||
+            responseText.includes("No authorization") ||
+            responseText.includes("Missing authorization")) {
+          throw error;
+        }
+
+        // Try token refresh if possible
+        if (this.canRefreshToken()) {
+          try {
+            this.logger.debug(`Received ${error.response.status} during connect, attempting JWT token refresh...`);
+            await this.refreshToken();
+            this.logger.debug(`✓ Token refreshed successfully, retrying connect...`);
+
+            // Retry CSRF token fetch with new JWT token
+            const token = await this.fetchCsrfToken(discoveryUrl, 3, 1000);
+            this.setCsrfToken(token);
+            await this.saveSessionState();
+
+            this.logger.debug("Successfully connected after JWT refresh", {
+              hasCsrfToken: !!this.getCsrfToken(),
+              hasCookies: !!this.getCookies()
+            });
+            return;
+          } catch (refreshError: any) {
+            this.logger.error(`❌ Token refresh failed during connect: ${refreshError.message}`);
+            throw new Error("JWT token has expired and refresh failed. Please re-authenticate.");
+          }
+        } else {
+          throw new Error("JWT token has expired. Please refresh your authentication token.");
+        }
+      }
+
+      // Re-throw other errors
+      throw error;
+    }
+  }
+
+
+  /**
    * Override makeAdtRequest to handle JWT token refresh on 401/403
    */
   async makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse> {

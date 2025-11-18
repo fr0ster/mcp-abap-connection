@@ -8,20 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **BREAKING**: Architecture refactoring for better separation of concerns:
-  - `BaseAbapConnection` (abstract class) → `AbstractAbapConnection` (contains common logic for all auth types)
-  - `OnPremAbapConnection` (Basic Auth) → `BaseAbapConnection` (clearer naming: "Base" = Basic Auth)
-  - `CloudAbapConnection` (JWT) → `JwtAbapConnection` (more descriptive name)
-  - Auto-refresh logic is now contained ONLY in `JwtAbapConnection` (no JWT-specific code in `AbstractAbapConnection`)
-  - Old names available as deprecated aliases for backward compatibility:
-    - `OnPremAbapConnection` → alias for `BaseAbapConnection`
-    - `CloudAbapConnection` → alias for `JwtAbapConnection`
+- **BREAKING**: Architecture refactoring for proper separation of concerns:
+  - `connect()` method changed from concrete to **abstract** in `AbstractAbapConnection`
+  - Each authentication type now implements its own `connect()` logic:
+    - `BaseAbapConnection`: Basic auth with CSRF token fetch, logs warnings on errors
+    - `JwtAbapConnection`: JWT auth with automatic token refresh on 401/403 errors
+  - `fetchCsrfToken()` changed from `private` to `protected` for use by concrete implementations
+  - Added protected getters/setters: `getCsrfToken()`, `setCsrfToken()`, `getCookies()`
+  - Removed ALL JWT-specific logic from `AbstractAbapConnection`:
+    - Removed JWT expiration checks from `connect()`
+    - Removed JWT error handling from base class
+    - Base class is now completely auth-agnostic
+  - `JwtAbapConnection.connect()` now handles:
+    - Token expiration detection (401/403 errors)
+    - Permission vs auth error distinction (`ExceptionResourceNoAccess` check)
+    - Automatic token refresh and retry
+  - `JwtAbapConnection.makeAdtRequest()` override handles JWT refresh for regular requests
+  - Previous architecture cleanup (from earlier versions):
+    - `BaseAbapConnection` (abstract) → `AbstractAbapConnection` 
+    - `OnPremAbapConnection` → `BaseAbapConnection`
+    - `CloudAbapConnection` → `JwtAbapConnection`
 
 ### Added
 - Automatic JWT token refresh functionality for cloud connections
-  - Auto-refresh on 401/403 errors in `fetchCsrfToken()`, `makeAdtRequest()`, and `request()`
-  - `canRefreshToken()` method to check if refresh is possible
-  - `refreshToken()` method to refresh JWT using UAA OAuth endpoint
+  - Auto-refresh on 401/403 errors in both `connect()` and `makeAdtRequest()`
+  - Permission error detection: skips refresh for "ExceptionResourceNoAccess", "No authorization", "Missing authorization"
+  - `canRefreshToken()` method to check if refresh credentials available
+  - `refreshToken()` method to refresh JWT using UAA OAuth2 endpoint
+  - Concurrent refresh protection (prevents multiple simultaneous refresh attempts)
+- Protected helper methods in `AbstractAbapConnection` for subclass use:
+  - `fetchCsrfToken()` - CSRF token fetching with retry logic
+  - `getCsrfToken()`, `setCsrfToken()` - CSRF token management
+  - `getCookies()` - Cookie access for concrete implementations
 - Unit tests for auto-refresh logic (`src/__tests__/auto-refresh.test.ts`)
 - Documentation structure:
   - `docs/INSTALLATION.md` - Installation guide
@@ -34,20 +52,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `examples/session-persistence.js` - FileSessionStorage usage
   - Updated `examples/README.md` with all examples
 
-### Changed
-- `JwtAbapConnection.canRefreshToken()` now includes debug logging
-- `BaseAbapConnection.fetchCsrfToken()` simplified auto-refresh logic
-  - Removed complex `isJwtExpiredError()` checks
-  - Auto-refresh triggers on any 401/403 for JWT auth
-- `connect()` method now throws auth errors immediately for JWT expired scenarios
-- README.md updated with documentation links
-
 ### Removed
+- JWT-specific logic from `AbstractAbapConnection`:
+  - Removed `isJwtExpiredError()` helper method
+  - Removed JWT refresh logic from base `connect()` method
+  - Removed JWT error messages from abstract class
+- `AbstractAbapConnection` from public exports (internal use only)
+  - Only `BaseAbapConnection` and `JwtAbapConnection` are exported publicly
 - `AUTO_REFRESH_IMPROVEMENTS.md` (temporary document, content moved to CHANGELOG)
 - `CONNECTION_LAYER_ROADMAP.md` (roadmap belongs in root project)
 - `PUBLICATION_ROADMAP.md` (roadmap belongs in root project)
 
 ### Fixed
+- JWT token refresh now properly handles connection errors (401/403 during initial connect)
+- Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
+- Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
 - Auto-refresh not triggering due to `canRefreshToken()` returning false
   - Root cause: Test configuration not reading UAA credentials from environment
   - Fixed in `packages/adt-clients` by updating `getConfig()` to read UAA variables
