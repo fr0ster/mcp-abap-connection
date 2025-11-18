@@ -39,7 +39,7 @@ export abstract class AbstractAbapConnection implements AbapConnection {
     // Try to load existing session state
     await this.loadSessionState();
 
-    this.logger.info("Stateful session enabled", {
+    this.logger.debug("Stateful session enabled", {
       sessionId,
       hasExistingState: !!this.csrfToken || !!this.cookies
     });
@@ -62,7 +62,7 @@ export abstract class AbstractAbapConnection implements AbapConnection {
     this.sessionId = null;
     this.sessionStorage = null;
 
-    this.logger.info("Stateful session disabled", {
+    this.logger.debug("Stateful session disabled", {
       savedBeforeDisable: saveBeforeDisable
     });
   }
@@ -296,7 +296,7 @@ export abstract class AbstractAbapConnection implements AbapConnection {
       // Save session state after successful connection
       await this.saveSessionState();
 
-      this.logger.info("Successfully connected to SAP system", {
+      this.logger.debug("Successfully connected to SAP system", {
         hasCsrfToken: !!this.csrfToken,
         hasCookies: !!this.cookies,
         cookieLength: this.cookies?.length || 0
@@ -394,7 +394,7 @@ export abstract class AbstractAbapConnection implements AbapConnection {
       requestConfig.data = data;
     }
 
-    this.logger.info(`Executing ${normalizedMethod} request to: ${requestUrl}`, {
+    this.logger.debug(`Executing ${normalizedMethod} request to: ${requestUrl}`, {
       type: "REQUEST_INFO",
       url: requestUrl,
       method: normalizedMethod
@@ -407,7 +407,7 @@ export abstract class AbstractAbapConnection implements AbapConnection {
       // Save session state after successful request (if session storage is configured)
       await this.saveSessionState();
 
-      this.logger.info(`Request succeeded with status ${response.status}`, {
+      this.logger.debug(`Request succeeded with status ${response.status}`, {
         type: "REQUEST_SUCCESS",
         status: response.status,
         url: requestUrl,
@@ -444,7 +444,12 @@ export abstract class AbstractAbapConnection implements AbapConnection {
       // Save session state even on error (cookies might have been updated)
       await this.saveSessionState();
 
-      this.logger.error(errorDetails.message, errorDetails);
+      // Log 404 as debug (common for existence checks), other errors as error
+      if (errorDetails.status === 404) {
+        this.logger.debug(errorDetails.message, errorDetails);
+      } else {
+        this.logger.error(errorDetails.message, errorDetails);
+      }
 
       // Auto-refresh logic for JWT authentication (401/403 errors)
       if (error instanceof AxiosError &&
@@ -454,7 +459,7 @@ export abstract class AbstractAbapConnection implements AbapConnection {
           try {
             this.logger.debug(`[DEBUG] BaseAbapConnection - Received ${error.response.status} in makeAdtRequest, attempting automatic token refresh...`);
             await cloudConnection.refreshToken();
-            this.logger.info(`✓ Token refreshed successfully, retrying ADT request...`);
+            this.logger.debug(`✓ Token refreshed successfully, retrying ADT request...`);
 
             // Retry the request with new token
             return await this.makeAdtRequest(options);
@@ -550,7 +555,7 @@ export abstract class AbstractAbapConnection implements AbapConnection {
           try {
             this.logger.debug(`[DEBUG] BaseAbapConnection - Received ${error.response.status}, attempting automatic token refresh...`);
             await cloudConnection.refreshToken();
-            this.logger.info(`✓ Token refreshed successfully, retrying request...`);
+            this.logger.debug(`✓ Token refreshed successfully, retrying request...`);
 
             // Retry the request with new token
             const authHeaders = await this.getAuthHeaders();
@@ -784,7 +789,7 @@ export abstract class AbstractAbapConnection implements AbapConnection {
               try {
                 this.logger.debug(`[DEBUG] BaseAbapConnection - Received ${error.response.status} in fetchCsrfToken, attempting automatic token refresh...`);
                 await cloudConnection.refreshToken();
-                this.logger.info(`✓ Token refreshed successfully, retrying CSRF fetch...`);
+                this.logger.debug(`✓ Token refreshed successfully, retrying CSRF fetch...`);
 
                 // Retry the CSRF fetch with new token (recursive call starts fresh with attempt=0)
                 return await this.fetchCsrfToken(url, retryCount, retryDelay);

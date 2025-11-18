@@ -56,7 +56,7 @@ export class JwtAbapConnection extends AbstractAbapConnection {
     this.tokenRefreshInProgress = true;
 
     try {
-      this.logger.info("Refreshing JWT token...");
+      this.logger.debug("Refreshing JWT token...");
       const tokens = await refreshJwtToken(
         config.refreshToken,
         config.uaaUrl,
@@ -73,7 +73,7 @@ export class JwtAbapConnection extends AbstractAbapConnection {
       // Clear CSRF token and cookies to force new session with new token
       this.reset();
 
-      this.logger.info("JWT token refreshed successfully");
+      this.logger.debug("JWT token refreshed successfully");
     } catch (error: any) {
       this.logger.error(`Failed to refresh JWT token: ${error.message}`);
       throw error;
