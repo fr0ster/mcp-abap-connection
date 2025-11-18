@@ -5,7 +5,7 @@ import { getTimeout } from "../utils/timeouts.js";
 import { SapConfig } from "../config/sapConfig.js";
 import { AbapConnection, AbapRequestOptions } from "./AbapConnection.js";
 
-export abstract class AbstractAbapConnection implements AbapConnection {
+abstract class AbstractAbapConnection implements AbapConnection {
   private axiosInstance: AxiosInstance | null = null;
   private csrfToken: string | null = null;
   private cookies: string | null = null;
@@ -449,29 +449,6 @@ export abstract class AbstractAbapConnection implements AbapConnection {
         this.logger.debug(errorDetails.message, errorDetails);
       } else {
         this.logger.error(errorDetails.message, errorDetails);
-      }
-
-      // Auto-refresh logic for JWT authentication (401/403 errors)
-      if (error instanceof AxiosError &&
-          (error.response?.status === 401 || error.response?.status === 403)) {
-        const cloudConnection = this as any;
-        if (typeof cloudConnection.canRefreshToken === 'function' && cloudConnection.canRefreshToken()) {
-          try {
-            this.logger.debug(`[DEBUG] BaseAbapConnection - Received ${error.response.status} in makeAdtRequest, attempting automatic token refresh...`);
-            await cloudConnection.refreshToken();
-            this.logger.debug(`✓ Token refreshed successfully, retrying ADT request...`);
-
-            // Retry the request with new token
-            return await this.makeAdtRequest(options);
-          } catch (refreshError: any) {
-            this.logger.error(`❌ Token refresh failed: ${refreshError.message}`);
-            throw new Error("JWT token has expired and refresh failed. Please re-authenticate.");
-          }
-        }
-        // If refresh not possible but we get 401/403 on JWT auth, throw with clear message
-        if (this.config.authType === 'jwt') {
-          throw new Error("JWT token has expired. Please refresh your authentication token.");
-        }
       }
 
       // Retry logic for CSRF token errors (403 with CSRF message)
@@ -972,3 +949,6 @@ export abstract class AbstractAbapConnection implements AbapConnection {
     );
   }
 }
+
+// Export only for internal use by BaseAbapConnection and JwtAbapConnection
+export { AbstractAbapConnection };

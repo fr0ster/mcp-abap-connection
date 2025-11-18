@@ -12,8 +12,7 @@ export type { ILogger, SessionState, ISessionStorage } from "./logger.js";
 // Session storage implementations
 export { FileSessionStorage, type FileSessionStorageOptions } from "./utils/FileSessionStorage.js";
 
-// Connection classes
-export { AbstractAbapConnection } from "./connection/AbstractAbapConnection.js";
+// Connection classes - only final implementations
 export { BaseAbapConnection } from "./connection/BaseAbapConnection.js";
 export { JwtAbapConnection } from "./connection/JwtAbapConnection.js";
 

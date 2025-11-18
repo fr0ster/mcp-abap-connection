@@ -1,7 +1,9 @@
 import { SapConfig } from "../config/sapConfig.js";
 import { AbstractAbapConnection } from "./AbstractAbapConnection.js";
+import { AbapRequestOptions } from "./AbapConnection.js";
 import { ILogger, ISessionStorage } from "../logger.js";
 import { refreshJwtToken } from "../utils/tokenRefresh.js";
+import { AxiosError, AxiosResponse } from "axios";
 
 /**
  * JWT Authentication connection for SAP BTP Cloud systems
@@ -93,6 +95,50 @@ export class JwtAbapConnection extends AbstractAbapConnection {
       config.uaaClientId &&
       config.uaaClientSecret
     );
+  }
+
+  /**
+   * Override makeAdtRequest to handle JWT token refresh on 401/403
+   */
+  async makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse> {
+    try {
+      return await super.makeAdtRequest(options);
+    } catch (error) {
+      // Handle JWT auth errors (401/403)
+      if (error instanceof AxiosError &&
+          (error.response?.status === 401 || error.response?.status === 403)) {
+
+        // Check if this is really an auth error, not a permissions error
+        const responseData = error.response?.data;
+        const responseText = typeof responseData === "string" ? responseData : JSON.stringify(responseData || "");
+
+        // Don't retry on "No Access" errors - these are permission issues, not auth issues
+        if (responseText.includes("ExceptionResourceNoAccess") ||
+            responseText.includes("No authorization") ||
+            responseText.includes("Missing authorization")) {
+          throw error;
+        }
+
+        // Try token refresh if possible
+        if (this.canRefreshToken()) {
+          try {
+            this.logger.debug(`Received ${error.response.status}, attempting JWT token refresh...`);
+            await this.refreshToken();
+            this.logger.debug(`✓ Token refreshed successfully, retrying ADT request...`);
+
+            // Retry the request with new token
+            return await super.makeAdtRequest(options);
+          } catch (refreshError: any) {
+            this.logger.error(`❌ Token refresh failed: ${refreshError.message}`);
+            throw new Error("JWT token has expired and refresh failed. Please re-authenticate.");
+          }
+        } else {
+          throw new Error("JWT token has expired. Please refresh your authentication token.");
+        }
+      }
+
+      throw error;
+    }
   }
 
   private static validateConfig(config: SapConfig): void {
