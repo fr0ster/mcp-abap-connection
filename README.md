@@ -52,6 +52,7 @@ The package uses a clean separation of concerns:
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
 - 🧪 **[Testing Guide](./docs/AUTO_REFRESH_TESTING.md)** - Auto-refresh testing and troubleshooting
 - 🔧 **[Session Storage](./docs/CUSTOM_SESSION_STORAGE.md)** - Custom session storage implementation
+- 🔁 **[Stateful Session Guide (Connection)](./docs/STATEFUL_SESSION_GUIDE.md)** - Cookies, CSRF tokens, and session storage responsibilities
 - 💡 **[Examples](./examples/)** - Working code examples
 
 ## Features
