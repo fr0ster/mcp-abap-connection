@@ -1,3 +1,6 @@
+import * as path from 'path';
+import * as fs from 'fs';
+
 export type SapAuthType = "basic" | "jwt";
 
 export interface SapConfig {
@@ -18,15 +21,89 @@ export interface SapConfig {
  * Used internally for caching connection instances when configuration changes.
  */
 /**
+ * Load .env file if dotenv is available and file exists
+ * @param envPath - Path to .env file (default: .env in current working directory or project root)
+ * @returns true if .env was loaded, false otherwise
+ */
+export function loadEnvFile(envPath?: string): boolean {
+  // Determine .env file path
+  let resolvedPath: string;
+  if (envPath) {
+    resolvedPath = path.resolve(envPath);
+  } else {
+    // Try current directory first
+    const currentDirEnv = path.resolve(process.cwd(), '.env');
+    if (fs.existsSync(currentDirEnv)) {
+      resolvedPath = currentDirEnv;
+    } else {
+      // Try project root (go up from node_modules or dist)
+      const projectRoot = path.resolve(__dirname, '../../..');
+      resolvedPath = path.resolve(projectRoot, '.env');
+    }
+  }
+
+  if (!fs.existsSync(resolvedPath)) {
+    return false;
+  }
+
+  // Try to use dotenv if available
+  try {
+    const dotenv = require('dotenv');
+    const result = dotenv.config({ path: resolvedPath, override: false });
+    if (!result.error) {
+      return true;
+    }
+  } catch (error) {
+    // dotenv not available - fallback to manual parsing
+  }
+
+  // Manual fallback parser (supports KEY=VALUE, ignores comments)
+  try {
+    const content = fs.readFileSync(resolvedPath, 'utf8');
+    const lines = content.split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) {
+        continue;
+      }
+      const eqIndex = trimmed.indexOf('=');
+      if (eqIndex === -1) {
+        continue;
+      }
+      const key = trimmed.substring(0, eqIndex).trim();
+      const value = trimmed.substring(eqIndex + 1).trim();
+      if (!process.env[key]) {
+        process.env[key] = value;
+      }
+    }
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
  * Get SAP configuration from environment variables
  * Used by tests and applications to create connection config
+ *
+ * Automatically detects auth type:
+ * - If SAP_JWT_TOKEN is present → uses 'jwt'
+ * - If SAP_AUTH_TYPE is set → uses that value
+ * - Otherwise → uses 'basic'
  */
 export function getConfigFromEnv(): SapConfig {
   const rawUrl = process.env.SAP_URL;
   const url = rawUrl ? rawUrl.split('#')[0].trim() : rawUrl;
   const rawClient = process.env.SAP_CLIENT;
   const client = rawClient ? rawClient.split('#')[0].trim() : rawClient;
-  const rawAuthType = process.env.SAP_AUTH_TYPE || 'basic';
+
+  // Auto-detect auth type: if JWT token is present, use JWT; otherwise check SAP_AUTH_TYPE or default to basic
+  // Priority: SAP_JWT_TOKEN presence > SAP_AUTH_TYPE > default to basic
+  let rawAuthType = process.env.SAP_AUTH_TYPE;
+  if (process.env.SAP_JWT_TOKEN) {
+    rawAuthType = 'jwt'; // Auto-detect JWT if token is present (overrides SAP_AUTH_TYPE)
+  }
+  rawAuthType = rawAuthType || 'basic';
   const authType = rawAuthType.split('#')[0].trim();
 
   if (!url || !/^https?:\/\//.test(url)) {
@@ -71,6 +148,18 @@ export function getConfigFromEnv(): SapConfig {
   }
 
   return config;
+}
+
+/**
+ * Load .env file and get SAP configuration from environment variables
+ * Convenience function that combines loadEnvFile() and getConfigFromEnv()
+ *
+ * @param envPath - Optional path to .env file (default: auto-detect)
+ * @returns SAP configuration
+ */
+export function loadConfigFromEnvFile(envPath?: string): SapConfig {
+  loadEnvFile(envPath);
+  return getConfigFromEnv();
 }
 
 export function sapConfigSignature(config: SapConfig): string {

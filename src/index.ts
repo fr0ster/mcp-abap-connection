@@ -24,7 +24,7 @@ export { JwtAbapConnection as CloudAbapConnection } from "./connection/JwtAbapCo
 export { createAbapConnection } from "./connection/connectionFactory.js";
 
 // Config utilities
-export { sapConfigSignature, getConfigFromEnv } from "./config/sapConfig.js";
+export { sapConfigSignature, getConfigFromEnv, loadEnvFile, loadConfigFromEnvFile } from "./config/sapConfig.js";
 
 // Timeouts
 export { getTimeout, getTimeoutConfig, type TimeoutConfig } from "./utils/timeouts.js";
