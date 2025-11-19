@@ -4,7 +4,7 @@ This document explains how `@mcp-abap-adt/connection` manages HTTP-level session
 Read it together with:
 
 - [`../README.md`](../README.md) – package overview
-- [`../../doc/STATEFUL_SESSION_GUIDE.md`](../../doc/STATEFUL_SESSION_GUIDE.md) – MCP server/handler usage
+- [`../../doc/architecture/STATEFUL_SESSION_GUIDE.md`](../../doc/architecture/STATEFUL_SESSION_GUIDE.md) – MCP server/handler usage
 - [`../../adt-clients/docs/STATEFUL_SESSION_GUIDE.md`](../../adt-clients/docs/STATEFUL_SESSION_GUIDE.md) – Builder/high-level client perspective
 
 ---
@@ -103,7 +103,7 @@ This logic is transparent to callers (Builders, handlers, CLI scripts).
 
 ## Related Docs
 
-- [`../../doc/STATEFUL_SESSION_GUIDE.md`](../../doc/STATEFUL_SESSION_GUIDE.md) – server workflow
+- [`../../doc/architecture/STATEFUL_SESSION_GUIDE.md`](../../doc/architecture/STATEFUL_SESSION_GUIDE.md) – server workflow
 - [`../../adt-clients/docs/STATEFUL_SESSION_GUIDE.md`](../../adt-clients/docs/STATEFUL_SESSION_GUIDE.md) – Builder workflow
 - [`CUSTOM_SESSION_STORAGE.md`](./CUSTOM_SESSION_STORAGE.md) – Implementing `ISessionStorage`
 
