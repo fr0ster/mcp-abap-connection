@@ -1,0 +1,130 @@
+# JWT Auth Tools
+
+This package ships with a helper CLI (`sap-abap-auth`) to obtain JWT and refresh tokens for SAP BTP ABAP systems.
+
+
+## Prerequisites
+
+- Node.js >= 18
+- Service key JSON for your SAP BTP ABAP instance (from SAP BTP Cockpit)
+- Browser access (for OAuth flow)
+
+
+## Quick Start
+
+```bash
+npx sap-abap-auth auth -k path/to/service-key.json
+```
+
+This launches the OAuth browser flow and prints a `.env` file containing `SAP_JWT_TOKEN`, `SAP_REFRESH_TOKEN`, `SAP_UAA_URL`, etc.
+
+
+## Installation Options
+
+### Local (Project) Install
+
+If `@mcp-abap-adt/connection` is part of your `dependencies` or `devDependencies`, you already have the CLI available:
+
+```bash
+npm install @mcp-abap-adt/connection --save-dev
+npx sap-abap-auth auth -k service-key.json
+```
+
+Pros:
+- CLI travels with your project.
+- No need for global npm installs.
+
+### Global Install
+
+```bash
+npm install -g @mcp-abap-adt/connection
+sap-abap-auth auth -k service-key.json
+```
+
+Pros:
+- Available system-wide.
+- Useful if you run the tool frequently from the terminal.
+
+### On-Demand (One-off) Usage
+
+```bash
+npx @mcp-abap-adt/connection sap-abap-auth auth -k service-key.json
+```
+
+Pros:
+- No install needed.
+- Perfect for quick usage on CI or temporary machines.
+
+## CLI Usage
+
+```bash
+# Show help
+sap-abap-auth --help
+
+# Authenticate using service key JSON
+sap-abap-auth auth -k service-key.json
+
+# Use specific browser (chrome, firefox, edge, system, none)
+sap-abap-auth auth -k service-key.json --browser chrome
+
+# Output to custom file (default: .env)
+sap-abap-auth auth -k service-key.json --output .env.production
+
+# Print tokens to stdout (no file)
+sap-abap-auth auth -k service-key.json --browser none --output -
+```
+
+### Full Command Reference
+
+| Option                   | Description                                          |
+|-------------------------|------------------------------------------------------|
+| `-k, --key <path>`      | Path to service key JSON (required)                  |
+| `-b, --browser <name>`  | Browser to open (chrome, edge, firefox, system, none)|
+| `-o, --output <path>`   | Output `.env` path (`-` for stdout, defaults to `.env`) |
+| `--config <path>`       | Use config file with saved credentials               |
+| `--no-open`             | Same as `--browser none`                             |
+| `--help`                | Show help                                            |
+
+
+## Using Generated Tokens
+
+After running the CLI, you get `.env` similar to:
+
+```
+SAP_URL=https://<your-abap-instance>.abap.whatever.sap
+SAP_AUTH_TYPE=jwt
+SAP_JWT_TOKEN=eyJhbGciOi...
+SAP_REFRESH_TOKEN=eyJraWQiOi...
+SAP_UAA_URL=https://<your>-authentication.<region>.hana.ondemand.com/oauth/token
+SAP_UAA_CLIENT_ID=sb-<id>
+SAP_UAA_CLIENT_SECRET=<secret>
+```
+
+Load it in your project:
+
+```bash
+source .env
+
+```
+
+Or configure `SapConfig` directly:
+
+```ts
+import { createAbapConnection } from "@mcp-abap-adt/connection";
+
+const connection = createAbapConnection({
+  url: process.env.SAP_URL!,
+  authType: "jwt",
+  jwtToken: process.env.SAP_JWT_TOKEN!,
+  refreshToken: process.env.SAP_REFRESH_TOKEN!,
+  uaaUrl: process.env.SAP_UAA_URL!,
+  uaaClientId: process.env.SAP_UAA_CLIENT_ID!,
+  uaaClientSecret: process.env.SAP_UAA_CLIENT_SECRET!,
+});
+```
+
+
+## Automating in CI
+
+You can run the CLI once locally, store `.env` in secure storage, then load those variables in CI/CD to feed `@mcp-abap-adt/connection`. بهدف 
+

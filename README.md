@@ -21,7 +21,7 @@ ABAP connection layer for MCP ABAP ADT server. Provides a unified interface for 
   - Auth-type specific implementations (BaseAbapConnection, JwtAbapConnection)
   - Proper separation of concerns - no JWT logic in base class
 - 📝 **Custom Logging**: Pluggable logger interface for integration with any logging system
-- 🛠️ **CLI Tool**: Built-in authentication helper for SAP BTP service key authentication
+- 🛠️ **CLI Tool**: See [JWT Auth Tools](./docs/JWT_AUTH_TOOLS.md) for obtaining SAP BTP tokens
 - 📦 **TypeScript**: Full TypeScript support with type definitions included
 - ⚡ **Timeout Management**: Configurable timeouts for different operation types
 
@@ -233,20 +233,22 @@ const connection = createAbapConnection(config, logger);
 
 The package includes a CLI tool for authenticating with SAP BTP using service keys:
 
-### Installation
+### Installation Options
 
-After installing the package, the CLI tool is available via `npx`:
-
-```bash
-npx sap-abap-auth auth -k path/to/service-key.json
-```
-
-### Global Installation
-
-```bash
-npm install -g @mcp-abap-adt/connection
-sap-abap-auth auth -k path/to/service-key.json
-```
+- **Local project install**
+  ```bash
+  npm install @mcp-abap-adt/connection --save-dev
+  npx sap-abap-auth auth -k path/to/service-key.json
+  ```
+- **Global install**
+  ```bash
+  npm install -g @mcp-abap-adt/connection
+  sap-abap-auth auth -k path/to/service-key.json
+  ```
+- **On-demand (npx)**
+  ```bash
+  npx @mcp-abap-adt/connection sap-abap-auth auth -k path/to/service-key.json
+  ```
 
 ### Usage
 
@@ -271,6 +273,21 @@ sap-abap-auth auth -k service-key.json --output .env.production
 - `-o, --output <path>` - Path to output .env file (default: .env)
 - `-h, --help` - Show help message
 
+### Using via `npx` (without global install)
+
+If `@mcp-abap-adt/connection` is listed as a dependency in your project, you can invoke the CLI directly:
+
+```bash
+npx sap-abap-auth auth -k service-key.json
+```
+
+This works even when you do not install the package globally. For one-off usage, you can also run:
+
+```bash
+npx @mcp-abap-adt/connection sap-abap-auth auth -k service-key.json
+```
+
+This will download the package on demand and execute the CLI.
 ## API Reference
 
 ### Types
