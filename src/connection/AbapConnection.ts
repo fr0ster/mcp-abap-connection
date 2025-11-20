@@ -1,5 +1,6 @@
 import { AxiosResponse } from "axios";
 import { SapConfig } from "../config/sapConfig.js";
+import { SessionState } from "../logger.js";
 
 export interface AbapRequestOptions {
   url: string;
@@ -15,6 +16,9 @@ export interface AbapConnection {
   getBaseUrl(): Promise<string>;
   getAuthHeaders(): Promise<Record<string, string>>;
   makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
+  connect(): Promise<void>;
   reset(): void;
+  getSessionState(): SessionState | null;
+  setSessionState(state: SessionState): void;
 }
 

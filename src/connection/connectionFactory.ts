@@ -1,7 +1,7 @@
 import { SapConfig } from "../config/sapConfig.js";
 import { AbapConnection } from "./AbapConnection.js";
-import { CloudAbapConnection } from "./CloudAbapConnection.js";
-import { OnPremAbapConnection } from "./OnPremAbapConnection.js";
+import { JwtAbapConnection } from "./JwtAbapConnection.js";
+import { BaseAbapConnection } from "./BaseAbapConnection.js";
 import { ILogger, ISessionStorage } from "../logger.js";
 
 export function createAbapConnection(
@@ -12,9 +12,9 @@ export function createAbapConnection(
 ): AbapConnection {
   switch (config.authType) {
     case "basic":
-      return new OnPremAbapConnection(config, logger, sessionStorage, sessionId);
+      return new BaseAbapConnection(config, logger, sessionStorage, sessionId);
     case "jwt":
-      return new CloudAbapConnection(config, logger, sessionStorage, sessionId);
+      return new JwtAbapConnection(config, logger, sessionStorage, sessionId);
     default:
       throw new Error(`Unsupported SAP authentication type: ${config.authType}`);
   }

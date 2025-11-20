@@ -2,10 +2,64 @@
 
 ABAP connection layer for MCP ABAP ADT server. Provides a unified interface for connecting to SAP ABAP systems via ADT (ABAP Development Tools) protocol, supporting both on-premise (Basic Auth) and cloud (JWT/OAuth2) authentication methods.
 
+## Key Features
+
+- 🔐 **Multiple Authentication Methods**: 
+  - Basic Auth for on-premise SAP systems
+  - JWT/OAuth2 for SAP BTP ABAP Environment
+- 🔄 **Automatic JWT Token Refresh**: 
+  - Detects expired tokens (401/403 errors)
+  - Automatically refreshes using OAuth2 refresh token
+  - Distinguishes between auth errors and permission errors
+  - No manual intervention required
+- 💾 **Stateful Sessions**: 
+  - Persistent session management with CSRF tokens and cookies
+  - Custom storage backends (file system, database, Redis, etc.)
+  - Automatic session state save/load
+- 🏗️ **Clean Architecture**:
+  - Abstract base class for common HTTP/session logic
+  - Auth-type specific implementations (BaseAbapConnection, JwtAbapConnection)
+  - Proper separation of concerns - no JWT logic in base class
+- 📝 **Custom Logging**: Pluggable logger interface for integration with any logging system
+- 🛠️ **CLI Tool**: Built-in authentication helper for SAP BTP service key authentication
+- 📦 **TypeScript**: Full TypeScript support with type definitions included
+- ⚡ **Timeout Management**: Configurable timeouts for different operation types
+
+## Architecture
+
+The package uses a clean separation of concerns:
+
+- **`AbstractAbapConnection`** (abstract, internal only):
+  - Common HTTP request logic
+  - Session management (cookies, CSRF tokens)
+  - CSRF token fetching with retry
+  - Auth-agnostic - knows nothing about Basic or JWT
+  
+- **`BaseAbapConnection`** (concrete, exported):
+  - Basic Authentication implementation
+  - Simple connect() - fetches CSRF token
+  - Suitable for on-premise SAP systems
+  
+- **`JwtAbapConnection`** (concrete, exported):
+  - JWT/OAuth2 Authentication implementation
+  - Smart connect() - detects expired tokens and auto-refreshes
+  - Permission vs auth error detection
+  - Suitable for SAP BTP ABAP Environment
+
+## Documentation
+
+- 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
+- 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🧪 **[Testing Guide](./docs/AUTO_REFRESH_TESTING.md)** - Auto-refresh testing and troubleshooting
+- 🔧 **[Session Storage](./docs/CUSTOM_SESSION_STORAGE.md)** - Custom session storage implementation
+- 🔁 **[Stateful Session Guide (Connection)](./docs/STATEFUL_SESSION_GUIDE.md)** - Cookies, CSRF tokens, and session storage responsibilities
+- 💡 **[Examples](./examples/)** - Working code examples
+
 ## Features
 
 - 🔐 **Multiple Authentication Methods**: Basic Auth for on-premise systems, JWT/OAuth2 for SAP BTP ABAP Environment
-- 🔄 **Stateful Sessions**: Support for persistent sessions with CSRF token and cookie management
+- 🔄 **Auto Token Refresh**: Automatic JWT token refresh when expired (for cloud systems)
+- 💾 **Stateful Sessions**: Support for persistent sessions with CSRF token and cookie management
 - 📝 **Custom Logging**: Pluggable logger interface for integration with any logging system
 - 🛠️ **CLI Tool**: Built-in authentication helper for SAP BTP service key authentication
 - 📦 **TypeScript**: Full TypeScript support with type definitions included
@@ -16,6 +70,8 @@ ABAP connection layer for MCP ABAP ADT server. Provides a unified interface for 
 ```bash
 npm install @mcp-abap-adt/connection
 ```
+
+For detailed installation instructions, see [Installation Guide](./docs/INSTALLATION.md).
 
 ## Quick Start
 
@@ -50,18 +106,22 @@ const response = await connection.makeAdtRequest({
 });
 ```
 
-### Cloud Usage (JWT/OAuth2)
+### Cloud Usage (JWT/OAuth2 with Auto-Refresh)
 
 ```typescript
 import { createAbapConnection, SapConfig } from "@mcp-abap-adt/connection";
 
-// First, obtain JWT token using the CLI tool or OAuth2 flow
-// Then use it in the config:
+// JWT configuration with refresh token for auto-refresh
 const config: SapConfig = {
   url: "https://your-instance.abap.cloud.sap",
   client: "100", // Optional
   authType: "jwt",
   jwtToken: "your-jwt-token-here", // Obtained via OAuth2 flow
+  // For auto-refresh support:
+  refreshToken: "your-refresh-token",
+  uaaUrl: "https://your-tenant.authentication.cert.eu10.hana.ondemand.com",
+  uaaClientId: "your-client-id",
+  uaaClientSecret: "your-client-secret",
 };
 
 const logger = {
@@ -73,10 +133,18 @@ const logger = {
 
 const connection = createAbapConnection(config, logger);
 
+// Token will be automatically refreshed if expired during requests
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
 });
+
+// How auto-refresh works:
+// 1. If JWT token expired → SAP returns 401/403
+// 2. Connection detects this is auth error (not permission error)
+// 3. Automatically calls refresh token endpoint
+// 4. Retries the request with new token
+// 5. User doesn't need to handle this manually
 ```
 
 ### Stateful Sessions
@@ -284,6 +352,11 @@ function createAbapConnection(
 
 - Node.js >= 18.0.0
 - Access to SAP ABAP system (on-premise or BTP)
+
+## Documentation
+
+- [Custom Session Storage](./CUSTOM_SESSION_STORAGE.md) - How to implement custom session persistence (database, Redis, etc.)
+- [Examples](./examples/README.md) - Working code examples
 
 ## License
 
