@@ -1,5 +1,6 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, AxiosResponse } from "axios";
 import { Agent } from "https";
+import { randomUUID } from "crypto";
 import { ILogger, ISessionStorage, SessionState } from "../logger.js";
 import { getTimeout } from "../utils/timeouts.js";
 import { SapConfig } from "../config/sapConfig.js";
@@ -22,8 +23,11 @@ abstract class AbstractAbapConnection implements AbapConnection {
     sessionId?: string
   ) {
     this.sessionStorage = sessionStorage || null;
-    this.sessionId = sessionId || null;
-    this.sessionMode = sessionId && sessionStorage ? "stateful" : "stateless";
+    // Generate sessionId if not provided (like Eclipse ADT does on connect)
+    this.sessionId = sessionId || randomUUID();
+    this.sessionMode = this.sessionId && sessionStorage ? "stateful" : "stateless";
+    
+    this.logger.debug(`AbstractAbapConnection - Session ID: ${this.sessionId.substring(0, 8)}...`);
   }
 
   /**
