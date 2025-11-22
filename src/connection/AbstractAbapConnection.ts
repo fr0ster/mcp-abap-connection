@@ -11,7 +11,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
   private csrfToken: string | null = null;
   private cookies: string | null = null;
   private cookieStore: Map<string, string> = new Map();
-  private cachedBaseUrl: string | null = null;
+  private baseUrl: string;
   private sessionId: string | null = null;
   private sessionStorage: ISessionStorage | null = null;
   private sessionMode: "stateless" | "stateful" = "stateless";
@@ -27,6 +27,14 @@ abstract class AbstractAbapConnection implements AbapConnection {
     this.sessionId = sessionId || randomUUID();
     // Session mode depends only on storage availability (sessionId exists for both modes)
     this.sessionMode = sessionStorage ? "stateful" : "stateless";
+    
+    // Initialize baseUrl from config (required, will throw if invalid)
+    try {
+      const urlObj = new URL(config.url);
+      this.baseUrl = urlObj.origin;
+    } catch (error) {
+      throw new Error(`Invalid URL in configuration: ${error instanceof Error ? error.message : error}`);
+    }
     
     this.logger.debug(`AbstractAbapConnection - Session ID: ${this.sessionId.substring(0, 8)}..., mode: ${this.sessionMode}`);
   }
@@ -254,25 +262,11 @@ abstract class AbstractAbapConnection implements AbapConnection {
     this.csrfToken = null;
     this.cookies = null;
     this.cookieStore.clear();
-    this.cachedBaseUrl = null;
+    // Note: baseUrl is not reset as it's derived from immutable config
   }
 
   async getBaseUrl(): Promise<string> {
-    if (this.cachedBaseUrl) {
-      return this.cachedBaseUrl;
-    }
-
-    const { url } = this.config;
-    try {
-      const urlObj = new URL(url);
-      this.cachedBaseUrl = urlObj.origin;
-      return this.cachedBaseUrl;
-    } catch (error) {
-      const errorMessage = `Invalid URL in configuration: ${
-        error instanceof Error ? error.message : error
-      }`;
-      throw new Error(errorMessage);
-    }
+    return this.baseUrl;
   }
 
   async getAuthHeaders(): Promise<Record<string, string>> {
@@ -302,9 +296,11 @@ abstract class AbstractAbapConnection implements AbapConnection {
   abstract connect(): Promise<void>;
 
   async makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse> {
-    const { url, method, timeout, data, params, headers: customHeaders } = options;
+    const { url: endpoint, method, timeout, data, params, headers: customHeaders } = options;
     const normalizedMethod = method.toUpperCase();
-    const requestUrl = this.normalizeRequestUrl(url);
+    
+    // Build full URL: baseUrl + endpoint
+    const requestUrl = `${this.baseUrl}${endpoint}`;
 
     // Try to ensure CSRF token is available for POST/PUT/DELETE, but don't fail if it can't be fetched
     // The retry logic will handle CSRF token errors automatically
@@ -790,13 +786,6 @@ abstract class AbstractAbapConnection implements AbapConnection {
     }
 
     return this.axiosInstance;
-  }
-
-  private normalizeRequestUrl(url: string): string {
-    if (!url.includes("/sap/bc/adt/") && !url.endsWith("/sap/bc/adt")) {
-      return url.endsWith("/") ? `${url}sap/bc/adt` : `${url}/sap/bc/adt`;
-    }
-    return url;
   }
 
   private async ensureFreshCsrfToken(requestUrl: string): Promise<void> {
