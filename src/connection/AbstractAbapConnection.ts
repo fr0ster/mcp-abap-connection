@@ -23,29 +23,24 @@ abstract class AbstractAbapConnection implements AbapConnection {
     sessionId?: string
   ) {
     this.sessionStorage = sessionStorage || null;
-    // Generate sessionId if not provided (like Eclipse ADT does on connect)
+    // Always generate sessionId (used for sap-adt-connection-id header in all session types)
     this.sessionId = sessionId || randomUUID();
-    this.sessionMode = this.sessionId && sessionStorage ? "stateful" : "stateless";
+    // Session mode depends only on storage availability (sessionId exists for both modes)
+    this.sessionMode = sessionStorage ? "stateful" : "stateless";
     
-    this.logger.debug(`AbstractAbapConnection - Session ID: ${this.sessionId.substring(0, 8)}...`);
+    this.logger.debug(`AbstractAbapConnection - Session ID: ${this.sessionId.substring(0, 8)}..., mode: ${this.sessionMode}`);
   }
 
   /**
-   * Enable stateful session mode with storage
-   * @param sessionId - Unique session identifier
-   * @param storage - Storage implementation for persisting session state
+   * Enable stateful session mode (tells SAP to maintain stateful session)
+   * This controls whether x-sap-adt-sessiontype: stateful header is used
+   * Storage is controlled separately via setSessionStorage()
    */
-  async enableStatefulSession(sessionId: string, storage: ISessionStorage): Promise<void> {
-    this.sessionId = sessionId;
-    this.sessionStorage = storage;
+  enableStatefulSession(): void {
     this.sessionMode = "stateful";
-
-    // Try to load existing session state
-    await this.loadSessionState();
-
-    this.logger.debug("Stateful session enabled", {
-      sessionId,
-      hasExistingState: !!this.csrfToken || !!this.cookies
+    this.logger.debug("Stateful session mode enabled", {
+      sessionId: this.sessionId?.substring(0, 8),
+      hasStorage: !!this.sessionStorage
     });
   }
 
@@ -63,10 +58,8 @@ abstract class AbstractAbapConnection implements AbapConnection {
     }
 
     this.sessionMode = "stateless";
-    this.sessionId = null;
-    this.sessionStorage = null;
 
-    this.logger.debug("Stateful session disabled", {
+    this.logger.debug("Stateful session mode disabled", {
       savedBeforeDisable: saveBeforeDisable
     });
   }
@@ -101,14 +94,20 @@ abstract class AbstractAbapConnection implements AbapConnection {
 
   /**
    * Set session storage (can be changed at runtime)
+   * This controls whether session state (cookies, CSRF token) is persisted to disk/storage
    */
-  setSessionStorage(storage: ISessionStorage | null): void {
+  async setSessionStorage(storage: ISessionStorage | null): Promise<void> {
     this.sessionStorage = storage;
+    
+    // Load existing session state if storage is provided
     if (storage && this.sessionId) {
-      this.sessionMode = "stateful";
-    } else if (!storage) {
-      this.sessionMode = "stateless";
+      await this.loadSessionState();
     }
+    
+    this.logger.debug("Session storage configured", {
+      hasStorage: !!storage,
+      sessionMode: this.sessionMode
+    });
   }
 
   /**
