@@ -320,8 +320,14 @@ interface AbapConnection {
   enableStatefulSession(sessionId: string, storage: ISessionStorage): Promise<void>;
   disableStatefulSession(): void;
   getSessionMode(): "stateless" | "stateful";
+  getSessionId(): string | undefined; // Get current session ID
+  setSessionType(type: "stateless" | "stateful"): void; // Switch session type
 }
 ```
+
+**New in 0.1.6+:**
+- `getSessionId()`: Returns the current session ID if stateful session is enabled, otherwise `undefined`
+- `setSessionType(type)`: Programmatically switch between stateful and stateless modes without recreating connection
 
 #### `ILogger`
 
@@ -370,10 +376,21 @@ function createAbapConnection(
 - Node.js >= 18.0.0
 - Access to SAP ABAP system (on-premise or BTP)
 
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for detailed version history and breaking changes.
+
+**Latest version: 0.1.9**
+- Comprehensive documentation updates
+- Enhanced README with new API methods documentation
+- Complete version history in CHANGELOG
+- Fixed documentation structure and links
+
 ## Documentation
 
-- [Custom Session Storage](./CUSTOM_SESSION_STORAGE.md) - How to implement custom session persistence (database, Redis, etc.)
+- [Custom Session Storage](./docs/CUSTOM_SESSION_STORAGE.md) - How to implement custom session persistence (database, Redis, etc.)
 - [Examples](./examples/README.md) - Working code examples
+- [Changelog](./CHANGELOG.md) - Version history and release notes
 
 ## License
 
