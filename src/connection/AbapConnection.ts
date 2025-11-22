@@ -15,6 +15,8 @@ export interface AbapConnection {
   getConfig(): SapConfig;
   getBaseUrl(): Promise<string>;
   getAuthHeaders(): Promise<Record<string, string>>;
+  getSessionId(): string | null;
+  setSessionType(type: "stateful" | "stateless"): void;
   makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
   connect(): Promise<void>;
   reset(): void;

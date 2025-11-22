@@ -32,21 +32,33 @@ abstract class AbstractAbapConnection implements AbapConnection {
   }
 
   /**
-   * Enable stateful session mode (tells SAP to maintain stateful session)
-   * This controls whether x-sap-adt-sessiontype: stateful header is used
-   * Storage is controlled separately via setSessionStorage()
+   * Set session type (stateful or stateless)
+   * Controls whether x-sap-adt-sessiontype: stateful header is added to requests
+   * - stateful: SAP maintains session state between requests (locks, transactions)
+   * - stateless: Each request is independent
    */
-  enableStatefulSession(): void {
-    this.sessionMode = "stateful";
-    this.logger.debug("Stateful session mode enabled", {
+  setSessionType(type: "stateful" | "stateless"): void {
+    this.sessionMode = type;
+    this.logger.debug(`Session type set to: ${type}`, {
       sessionId: this.sessionId?.substring(0, 8),
       hasStorage: !!this.sessionStorage
     });
   }
 
   /**
+   * Enable stateful session mode (tells SAP to maintain stateful session)
+   * This controls whether x-sap-adt-sessiontype: stateful header is used
+   * Storage is controlled separately via setSessionStorage()
+   * @deprecated Use setSessionType("stateful") instead
+   */
+  enableStatefulSession(): void {
+    this.setSessionType("stateful");
+  }
+
+  /**
    * Disable stateful session mode (switch to stateless)
    * Optionally saves current state before switching
+   * @deprecated Use setSessionType("stateless") instead
    */
   async disableStatefulSession(saveBeforeDisable: boolean = false): Promise<void> {
     if (this.sessionMode === "stateless") {
@@ -317,6 +329,18 @@ abstract class AbstractAbapConnection implements AbapConnection {
     // Add custom headers (but they won't override auth/cookies)
     if (customHeaders) {
       Object.assign(requestHeaders, customHeaders);
+    }
+
+    // ALWAYS add sap-adt-connection-id header (connectionId is sent for ALL session types)
+    if (this.sessionId) {
+      requestHeaders["sap-adt-connection-id"] = this.sessionId;
+    }
+
+    // Add stateful session headers if stateful mode enabled via enableStatefulSession()
+    if (this.sessionMode === "stateful") {
+      requestHeaders["x-sap-adt-sessiontype"] = "stateful";
+      requestHeaders["sap-adt-request-id"] = randomUUID().replace(/-/g, '');
+      requestHeaders["X-sap-adt-profiling"] = "server-time";
     }
 
     // Add auth headers (these MUST NOT be overridden)
