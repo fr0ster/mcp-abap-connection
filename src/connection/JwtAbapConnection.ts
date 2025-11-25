@@ -222,10 +222,11 @@ export class JwtAbapConnection extends AbstractAbapConnection {
             return;
           } catch (refreshError: any) {
             this.logger.error(`❌ Token refresh failed during connect: ${refreshError.message}`);
-            throw new Error("JWT token has expired and refresh failed. Please re-authenticate.");
+            throw new Error("Refresh token has expired. Please re-authenticate.");
           }
         } else {
-          throw new Error("JWT token has expired. Please refresh your authentication token.");
+          // No refresh token available - JWT token expired, need to re-authenticate
+          throw new Error("JWT token has expired. Please re-authenticate.");
         }
       }
 
@@ -282,7 +283,7 @@ export class JwtAbapConnection extends AbstractAbapConnection {
           } catch (refreshError: any) {
             // Only catch errors from refreshToken()
             this.logger.error(`❌ Token refresh failed: ${refreshError.message}`);
-            throw new Error("JWT token has expired and refresh failed. Please re-authenticate.");
+            throw new Error("Refresh token has expired. Please re-authenticate.");
           }
 
           // Step 2: Reconnect to get new CSRF token and cookies
@@ -302,10 +303,16 @@ export class JwtAbapConnection extends AbstractAbapConnection {
               this.logger.error(`❌ CRITICAL: CSRF token not obtained after reconnect! Request may fail.`);
             }
           } catch (connectError: any) {
+            // If connect() fails after token refresh, it means the refresh token was invalid
+            // Check if it's an auth error (401/403)
+            if (connectError instanceof AxiosError &&
+                (connectError.response?.status === 401 || connectError.response?.status === 403)) {
+              this.logger.error(`❌ Failed to reconnect after token refresh: ${connectError.message}`);
+              throw new Error("Refresh token has expired. Please re-authenticate.");
+            }
+            // For other errors, log but continue - ensureFreshCsrfToken will try to get CSRF token during request retry
             this.logger.error(`❌ Failed to reconnect after token refresh: ${connectError.message}`);
             this.logger.error(`❌ This means CSRF token will not be available for POST/PUT/DELETE requests`);
-            // Continue anyway - ensureFreshCsrfToken will try to get CSRF token during request retry
-            // But this is likely to fail if connect() failed
           }
 
           // Step 3: Retry the request with new token
@@ -318,7 +325,7 @@ export class JwtAbapConnection extends AbstractAbapConnection {
             if (retryError instanceof AxiosError &&
                 (retryError.response?.status === 401 || retryError.response?.status === 403)) {
               this.logger.error(`❌ Token refresh didn't help - still getting ${retryError.response.status}`);
-              throw new Error("JWT token has expired and refresh failed. Please re-authenticate.");
+              throw new Error("Refresh token has expired. Please re-authenticate.");
             }
             // For other errors (400, 500, etc.), re-throw the original error
             // These are not auth errors, so they should be handled by the caller
@@ -326,10 +333,59 @@ export class JwtAbapConnection extends AbstractAbapConnection {
             throw retryError;
           }
         } else {
-          throw new Error("JWT token has expired. Please refresh your authentication token.");
+          // No refresh token available - JWT token expired, need to re-authenticate
+          throw new Error("JWT token has expired. Please re-authenticate.");
         }
       }
 
+      throw error;
+    }
+  }
+
+  /**
+   * Override fetchCsrfToken to handle JWT token refresh on 401/403 errors
+   * This ensures that token refresh works even when CSRF token is fetched during makeAdtRequest
+   */
+  protected async fetchCsrfToken(url: string, retryCount = 3, retryDelay = 1000): Promise<string> {
+    try {
+      // Try to fetch CSRF token using parent implementation
+      return await super.fetchCsrfToken(url, retryCount, retryDelay);
+    } catch (error) {
+      // Handle JWT auth errors (401/403) during CSRF token fetch
+      if (error instanceof AxiosError &&
+          (error.response?.status === 401 || error.response?.status === 403)) {
+
+        // Check if this is really an auth error, not a permissions error
+        const responseData = error.response?.data;
+        const responseText = typeof responseData === "string" ? responseData : JSON.stringify(responseData || "");
+
+        // Don't retry on "No Access" errors
+        if (responseText.includes("ExceptionResourceNoAccess") ||
+            responseText.includes("No authorization") ||
+            responseText.includes("Missing authorization")) {
+          throw error;
+        }
+
+        // Try token refresh if possible
+        if (this.canRefreshToken()) {
+          try {
+            this.logger.debug(`Received ${error.response.status} during CSRF token fetch, attempting JWT token refresh...`);
+            await this.refreshToken();
+            this.logger.debug(`✓ Token refreshed successfully, retrying CSRF token fetch...`);
+
+            // Retry CSRF token fetch with new JWT token
+            return await super.fetchCsrfToken(url, retryCount, retryDelay);
+          } catch (refreshError: any) {
+            this.logger.error(`❌ Token refresh failed during CSRF token fetch: ${refreshError.message}`);
+            throw new Error("Refresh token has expired. Please re-authenticate.");
+          }
+        } else {
+          // No refresh token available - JWT token expired, need to re-authenticate
+          throw new Error("JWT token has expired. Please re-authenticate.");
+        }
+      }
+
+      // Re-throw other errors
       throw error;
     }
   }

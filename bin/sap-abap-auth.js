@@ -123,6 +123,48 @@ async function tryRefreshToken(refreshToken, uaaUrl, clientId, clientSecret) {
 }
 
 /**
+ * Decodes JWT token and extracts expiration time
+ * @param {string} token JWT token string
+ * @returns {Object|null} Object with expiration date and timestamp, or null if decoding fails
+ */
+function getTokenExpiry(token) {
+  try {
+    if (!token) return null;
+    
+    // JWT format: header.payload.signature
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    
+    // Decode payload (base64url)
+    const payload = parts[1];
+    // Add padding if needed
+    const paddedPayload = payload + '='.repeat((4 - payload.length % 4) % 4);
+    const decodedPayload = Buffer.from(paddedPayload, 'base64').toString('utf8');
+    const payloadObj = JSON.parse(decodedPayload);
+    
+    if (!payloadObj.exp) return null;
+    
+    // exp is Unix timestamp in seconds
+    const expiryTimestamp = payloadObj.exp * 1000; // Convert to milliseconds
+    const expiryDate = new Date(expiryTimestamp);
+    
+    return {
+      timestamp: expiryTimestamp,
+      date: expiryDate,
+      dateString: expiryDate.toISOString(),
+      readableDate: expiryDate.toLocaleString('en-US', { 
+        timeZone: 'UTC',
+        dateStyle: 'full',
+        timeStyle: 'long'
+      })
+    };
+  } catch (error) {
+    // Silently fail - token might not be a valid JWT or might be in different format
+    return null;
+  }
+}
+
+/**
  * Updates the .env file with new values
  * @param {Object} updates Object with updated values
  * @param {string} envFilePath Path to .env file
@@ -134,6 +176,29 @@ function updateEnvFile(updates, envFilePath) {
       fs.unlinkSync(envFilePath);
     }
     let lines = [];
+    
+    // Get token expiry information
+    const jwtTokenExpiry = getTokenExpiry(updates.SAP_JWT_TOKEN);
+    const refreshTokenExpiry = getTokenExpiry(updates.SAP_REFRESH_TOKEN);
+    
+    // Add token expiry comments at the beginning if JWT auth
+    if (updates.SAP_AUTH_TYPE === "jwt") {
+      lines.push("# Token Expiry Information (auto-generated)");
+      if (jwtTokenExpiry) {
+        lines.push(`# JWT Token expires: ${jwtTokenExpiry.readableDate} (UTC)`);
+        lines.push(`# JWT Token expires at: ${jwtTokenExpiry.dateString}`);
+      } else {
+        lines.push("# JWT Token expiry: Unable to determine (token may not be a standard JWT)");
+      }
+      if (refreshTokenExpiry) {
+        lines.push(`# Refresh Token expires: ${refreshTokenExpiry.readableDate} (UTC)`);
+        lines.push(`# Refresh Token expires at: ${refreshTokenExpiry.dateString}`);
+      } else if (updates.SAP_REFRESH_TOKEN) {
+        lines.push("# Refresh Token expiry: Unable to determine (token may not be a standard JWT)");
+      }
+      lines.push("");
+    }
+    
     if (updates.SAP_AUTH_TYPE === "jwt") {
       // jwt: write only relevant params
       const jwtAllowed = [
