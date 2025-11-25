@@ -1,7 +1,7 @@
 # Installation Guide
 
-**Version:** 0.1.9  
-**Last Updated:** November 23, 2025
+**Version:** 0.1.10  
+**Last Updated:** December 2025
 
 ## Prerequisites
 
@@ -47,6 +47,29 @@ SAP_PASSWORD=your-password
 ```
 
 ### JWT Authentication (SAP BTP Cloud)
+
+When using the `sap-abap-auth` CLI tool, the generated `.env` file will include token expiry information:
+
+```bash
+# Token Expiry Information (auto-generated)
+# JWT Token expires: Monday, December 25, 2025 at 10:30:45 AM UTC
+# JWT Token expires at: 2025-12-25T10:30:45.000Z
+# Refresh Token expires: Tuesday, January 25, 2026 at 10:30:45 AM UTC
+# Refresh Token expires at: 2026-01-25T10:30:45.000Z
+
+SAP_URL=https://your-instance.abap.cloud.sap
+SAP_CLIENT=100
+SAP_AUTH_TYPE=jwt
+SAP_JWT_TOKEN=your-jwt-token
+
+# For automatic token refresh (recommended)
+SAP_REFRESH_TOKEN=your-refresh-token
+SAP_UAA_URL=https://your-tenant.authentication.cert.eu10.hana.ondemand.com
+SAP_UAA_CLIENT_ID=sb-your-client-id!b12345
+SAP_UAA_CLIENT_SECRET=your-client-secret
+```
+
+**Manual Setup:** If creating `.env` manually (without CLI), you can omit the expiry comments:
 
 ```bash
 SAP_URL=https://your-instance.abap.cloud.sap
@@ -273,6 +296,7 @@ export NODE_TLS_REJECT_UNAUTHORIZED=0
 
 | Package Version | Node.js | TypeScript |
 |----------------|---------|------------|
+| 0.1.10         | >= 18.0 | >= 5.0     |
 | 0.1.9          | >= 18.0 | >= 5.0     |
 | 0.1.8          | >= 18.0 | >= 5.0     |
 | 0.1.0 - 0.1.7  | >= 18.0 | >= 4.5     |
