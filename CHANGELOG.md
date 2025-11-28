@@ -15,6 +15,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [0.1.12] - 2025-01-XX
+
+### Changed
+- **BREAKING**: Removed all file reading functionality from connection package:
+  - Connection package no longer reads `.env` files or any configuration files
+  - Connection package no longer depends on `dotenv` or file system operations for configuration
+  - Consumers must now pass `SapConfig` directly to connection constructors
+  - This change improves separation of concerns: connection layer is now purely about connection logic, not configuration management
+
+### Removed
+- `loadEnvFile(envPath?: string): boolean` - Function that loaded `.env` files
+- `loadConfigFromEnvFile(envPath?: string): SapConfig` - Convenience function that combined file loading and config reading
+- `getConfigFromEnv(): SapConfig` - Function that read configuration from `process.env`
+- All file system dependencies (`fs`, `path`) from `sapConfig.ts`
+- All `dotenv` usage and dependencies from the package
+
+### Fixed
+- Resolved `stdio` mode output corruption issues by removing `dotenv` dependency
+- Connection package is now cleaner and more focused on connection logic only
+- Configuration management is now the responsibility of consumers (e.g., `mcp-abap-adt`)
+
+### Migration Guide
+If you were using `getConfigFromEnv()` or `loadConfigFromEnvFile()`:
+1. Read environment variables in your application code (using `dotenv` or manual parsing)
+2. Create `SapConfig` object from environment variables
+3. Pass `SapConfig` directly to `createAbapConnection()` or connection constructors
+
+Example:
+```typescript
+// Before (0.1.11 and earlier):
+import { loadConfigFromEnvFile, createAbapConnection } from '@mcp-abap-adt/connection';
+const config = loadConfigFromEnvFile();
+const connection = createAbapConnection(config, logger);
+
+// After (0.1.12+):
+import { SapConfig, createAbapConnection } from '@mcp-abap-adt/connection';
+// Load .env file in your application (using dotenv or manual parsing)
+const config: SapConfig = {
+  url: process.env.SAP_URL!,
+  authType: 'jwt',
+  jwtToken: process.env.SAP_JWT_TOKEN!,
+  // ... other config
+};
+const connection = createAbapConnection(config, logger);
+```
+
 ## [0.1.11] - 2025-12-XX
 
 ### Changed
@@ -300,7 +346,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
 
-[Unreleased]: https://github.com/fr0ster/mcp-abap-adt/compare/v0.1.11...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-adt/compare/v0.1.12...HEAD
+[0.1.12]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.12
 [0.1.11]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.11
 [0.1.10]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.10
 [0.1.9]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.9
