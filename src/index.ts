@@ -29,3 +29,6 @@ export { sapConfigSignature } from "./config/sapConfig.js";
 // Timeouts
 export { getTimeout, getTimeoutConfig, type TimeoutConfig } from "./utils/timeouts.js";
 
+// CSRF configuration
+export { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from "./connection/csrfConfig.js";
+

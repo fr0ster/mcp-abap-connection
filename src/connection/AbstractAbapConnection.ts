@@ -5,6 +5,7 @@ import { ILogger, ISessionStorage, SessionState } from "../logger.js";
 import { getTimeout } from "../utils/timeouts.js";
 import { SapConfig } from "../config/sapConfig.js";
 import { AbapConnection, AbapRequestOptions } from "./AbapConnection.js";
+import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from "./csrfConfig.js";
 
 abstract class AbstractAbapConnection implements AbapConnection {
   private axiosInstance: AxiosInstance | null = null;
@@ -515,14 +516,22 @@ abstract class AbstractAbapConnection implements AbapConnection {
    * Fetch CSRF token from SAP system
    * Protected method for use by concrete implementations in their connect() method
    */
-  protected async fetchCsrfToken(url: string, retryCount = 3, retryDelay = 1000): Promise<string> {
+  protected async fetchCsrfToken(
+    url: string,
+    retryCount: number = CSRF_CONFIG.RETRY_COUNT,
+    retryDelay: number = CSRF_CONFIG.RETRY_DELAY
+  ): Promise<string> {
     let csrfUrl = url;
+    // Build CSRF endpoint URL from base URL
     if (!url.includes("/sap/bc/adt/")) {
-      csrfUrl = url.endsWith("/") ? `${url}sap/bc/adt/discovery` : `${url}/sap/bc/adt/discovery`;
-    } else if (!url.includes("/sap/bc/adt/discovery")) {
+      // If URL doesn't contain ADT path, append endpoint
+      csrfUrl = url.endsWith("/") ? `${url}${CSRF_CONFIG.ENDPOINT.slice(1)}` : `${url}${CSRF_CONFIG.ENDPOINT}`;
+    } else if (!url.includes(CSRF_CONFIG.ENDPOINT)) {
+      // If URL contains ADT path but not our endpoint, extract base and append endpoint
       const base = url.split("/sap/bc/adt")[0];
-      csrfUrl = `${base}/sap/bc/adt/discovery`;
+      csrfUrl = `${base}${CSRF_CONFIG.ENDPOINT}`;
     }
+    // If URL already contains the endpoint, use it as is
 
     if (this.logger.csrfToken) {
       this.logger.csrfToken("fetch", `Fetching CSRF token from: ${csrfUrl}`);
@@ -537,8 +546,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
         const authHeaders = await this.getAuthHeaders();
         const headers: Record<string, string> = {
           ...authHeaders,
-          "x-csrf-token": "fetch",
-          Accept: "application/atomsvc+xml"
+          ...CSRF_CONFIG.REQUIRED_HEADERS
         };
 
         // Always add cookies if available - they are needed for session continuity
@@ -575,7 +583,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
             await new Promise((resolve) => setTimeout(resolve, retryDelay));
             continue;
           }
-          throw new Error("No CSRF token in response headers");
+          throw new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
         }
 
         if (response.headers["set-cookie"]) {
@@ -681,9 +689,10 @@ abstract class AbstractAbapConnection implements AbapConnection {
         }
 
         throw new Error(
-          `Failed to fetch CSRF token after ${retryCount + 1} attempts: ${
+          CSRF_ERROR_MESSAGES.FETCH_FAILED(
+            retryCount + 1,
             error instanceof Error ? error.message : String(error)
-          }`
+          )
         );
       }
     }
@@ -802,7 +811,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
     } catch (error) {
       // fetchCsrfToken already handles auth errors and auto-refresh
       // Just re-throw the error with minimal logging to avoid duplicate error messages
-      const errorMsg = error instanceof Error ? error.message : "CSRF token is required for POST/PUT requests but could not be fetched";
+      const errorMsg = error instanceof Error ? error.message : CSRF_ERROR_MESSAGES.REQUIRED_FOR_MUTATION;
 
       // Only log at DEBUG level to avoid duplicate error messages
       // (fetchCsrfToken already logged the error at ERROR level if auth failed)
