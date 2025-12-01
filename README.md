@@ -371,6 +371,66 @@ function createAbapConnection(
 ): AbapConnection;
 ```
 
+#### `CSRF_CONFIG` and `CSRF_ERROR_MESSAGES`
+
+**New in 0.1.13+:** Exported constants for consistent CSRF token handling across different connection implementations.
+
+```typescript
+import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from '@mcp-abap-adt/connection';
+
+// CSRF_CONFIG contains:
+// - RETRY_COUNT: number (default: 3)
+// - RETRY_DELAY: number (default: 1000ms)
+// - ENDPOINT: string (default: '/sap/bc/adt/core/discovery')
+// - REQUIRED_HEADERS: { 'x-csrf-token': 'fetch', 'Accept': 'application/atomsvc+xml' }
+
+// CSRF_ERROR_MESSAGES contains:
+// - FETCH_FAILED(attempts: number, cause: string): string
+// - NOT_IN_HEADERS: string
+// - REQUIRED_FOR_MUTATION: string
+```
+
+**Use case:** When implementing custom connection classes (e.g., Cloud SDK-based), you can use these constants to ensure consistent CSRF token handling:
+
+```typescript
+import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from '@mcp-abap-adt/connection';
+
+async function fetchCsrfToken(baseUrl: string): Promise<string> {
+  const csrfUrl = `${baseUrl}${CSRF_CONFIG.ENDPOINT}`;
+  
+  for (let attempt = 0; attempt <= CSRF_CONFIG.RETRY_COUNT; attempt++) {
+    try {
+      const response = await yourHttpClient.get(csrfUrl, {
+        headers: CSRF_CONFIG.REQUIRED_HEADERS
+      });
+      
+      const token = response.headers['x-csrf-token'];
+      if (!token) {
+        if (attempt < CSRF_CONFIG.RETRY_COUNT) {
+          await new Promise(resolve => setTimeout(resolve, CSRF_CONFIG.RETRY_DELAY));
+          continue;
+        }
+        throw new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
+      }
+      
+      return token;
+    } catch (error) {
+      if (attempt >= CSRF_CONFIG.RETRY_COUNT) {
+        throw new Error(
+          CSRF_ERROR_MESSAGES.FETCH_FAILED(
+            CSRF_CONFIG.RETRY_COUNT + 1,
+            error instanceof Error ? error.message : String(error)
+          )
+        );
+      }
+      await new Promise(resolve => setTimeout(resolve, CSRF_CONFIG.RETRY_DELAY));
+    }
+  }
+}
+```
+
+See [PR Proposal](./PR_PROPOSAL_CSRF_CONFIG.md) for more details.
+
 ## Requirements
 
 - Node.js >= 18.0.0
@@ -380,11 +440,10 @@ function createAbapConnection(
 
 See [CHANGELOG.md](./CHANGELOG.md) for detailed version history and breaking changes.
 
-**Latest version: 0.1.9**
-- Comprehensive documentation updates
-- Enhanced README with new API methods documentation
-- Complete version history in CHANGELOG
-- Fixed documentation structure and links
+**Latest version: 0.1.13**
+- Added `CSRF_CONFIG` and `CSRF_ERROR_MESSAGES` exports for consistent CSRF token handling
+- Updated CSRF token endpoint to `/sap/bc/adt/core/discovery` (lighter response, available on all systems)
+- See [CHANGELOG.md](./CHANGELOG.md) for full details
 
 ## Documentation
 

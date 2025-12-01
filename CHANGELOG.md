@@ -7,13 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
 ### Added
+- **CSRF Configuration Export**: Exported `CSRF_CONFIG` and `CSRF_ERROR_MESSAGES` constants for consistent CSRF token handling across different connection implementations
+  - `CSRF_CONFIG`: Centralized constants for CSRF token fetching (retry count, delay, endpoint, headers)
+  - `CSRF_ERROR_MESSAGES`: Standardized error messages for CSRF token operations
+  - Enables other projects (e.g., Cloud SDK-based connections) to use the same CSRF configuration
+  - See [PR Proposal](./PR_PROPOSAL_CSRF_CONFIG.md) for details
 
-### Removed
+### Changed
+- **CSRF Token Endpoint**: Updated CSRF token fetching to use `/sap/bc/adt/core/discovery` endpoint instead of `/sap/bc/adt/discovery`
+  - Lighter response payload
+  - Available on all SAP systems (on-premise and cloud)
+  - Standard ADT discovery endpoint
 
 ### Fixed
+
+### Removed
 
 ## [0.1.12] - 2025-01-XX
 

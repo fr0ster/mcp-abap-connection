@@ -1,7 +1,7 @@
 # Usage Guide
 
-**Version:** 0.1.9  
-**Last Updated:** November 23, 2025
+**Version:** 0.1.13  
+**Last Updated:** January 2025
 
 ## Table of Contents
 
@@ -394,6 +394,83 @@ class BaseAbapConnection extends AbstractAbapConnection {
   constructor(config: SapConfig, logger: ILogger);
 }
 ```
+
+### `CSRF_CONFIG` and `CSRF_ERROR_MESSAGES` (New in 0.1.13+)
+
+Exported constants for consistent CSRF token handling across different connection implementations:
+
+```typescript
+import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from '@mcp-abap-adt/connection';
+
+// CSRF_CONFIG structure:
+const config = {
+  RETRY_COUNT: 3,                    // Number of retry attempts
+  RETRY_DELAY: 1000,                 // Delay between retries (ms)
+  ENDPOINT: '/sap/bc/adt/core/discovery',  // CSRF token endpoint
+  REQUIRED_HEADERS: {
+    'x-csrf-token': 'fetch',
+    'Accept': 'application/atomsvc+xml'
+  }
+};
+
+// CSRF_ERROR_MESSAGES structure:
+const messages = {
+  FETCH_FAILED: (attempts: number, cause: string) => string,
+  NOT_IN_HEADERS: 'No CSRF token in response headers',
+  REQUIRED_FOR_MUTATION: 'CSRF token is required for POST/PUT requests but could not be fetched'
+};
+```
+
+**Use case:** When implementing custom connection classes (e.g., Cloud SDK-based), use these constants to ensure consistent CSRF token handling:
+
+```typescript
+import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from '@mcp-abap-adt/connection';
+import { executeHttpRequest } from '@sap-cloud-sdk/http-client';
+
+export class CloudSdkAbapConnection {
+  async fetchCsrfToken(baseUrl: string): Promise<string> {
+    const csrfUrl = `${baseUrl}${CSRF_CONFIG.ENDPOINT}`;
+    
+    for (let attempt = 0; attempt <= CSRF_CONFIG.RETRY_COUNT; attempt++) {
+      try {
+        const response = await executeHttpRequest(
+          { destinationName: this.destination },
+          {
+            method: 'GET',
+            url: csrfUrl,
+            headers: CSRF_CONFIG.REQUIRED_HEADERS
+          }
+        );
+        
+        const token = response.headers['x-csrf-token'];
+        if (!token) {
+          if (attempt < CSRF_CONFIG.RETRY_COUNT) {
+            await new Promise(resolve => setTimeout(resolve, CSRF_CONFIG.RETRY_DELAY));
+            continue;
+          }
+          throw new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
+        }
+        
+        return token;
+      } catch (error) {
+        if (attempt >= CSRF_CONFIG.RETRY_COUNT) {
+          throw new Error(
+            CSRF_ERROR_MESSAGES.FETCH_FAILED(
+              CSRF_CONFIG.RETRY_COUNT + 1,
+              error instanceof Error ? error.message : String(error)
+            )
+          );
+        }
+        await new Promise(resolve => setTimeout(resolve, CSRF_CONFIG.RETRY_DELAY));
+      }
+    }
+    
+    throw new Error(CSRF_ERROR_MESSAGES.FETCH_FAILED(CSRF_CONFIG.RETRY_COUNT + 1, 'Unknown error'));
+  }
+}
+```
+
+See [PR Proposal](../PR_PROPOSAL_CSRF_CONFIG.md) for more details.
 
 ### `JwtAbapConnection` (JWT/OAuth2)
 
