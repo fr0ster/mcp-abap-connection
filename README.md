@@ -46,6 +46,58 @@ The package uses a clean separation of concerns:
   - Permission vs auth error detection
   - Suitable for SAP BTP ABAP Environment
 
+## Responsibilities and Design Principles
+
+### Core Development Principle
+
+**Interface-Only Communication**: This package follows a fundamental development principle: **all interactions with external dependencies happen ONLY through interfaces**. The code knows **NOTHING beyond what is defined in the interfaces**.
+
+This means:
+- Does not know about concrete implementation classes from other packages
+- Does not know about internal data structures or methods not defined in interfaces
+- Does not make assumptions about implementation behavior beyond interface contracts
+- Does not access properties or methods not explicitly defined in interfaces
+
+This principle ensures:
+- **Loose coupling**: Connection classes are decoupled from concrete implementations in other packages
+- **Flexibility**: New implementations can be added without modifying connection classes
+- **Testability**: Easy to mock dependencies for testing
+- **Maintainability**: Changes to implementations don't affect connection classes
+
+### Package Responsibilities
+
+This package is responsible for:
+
+1. **HTTP communication with SAP systems**: Makes HTTP requests to SAP ABAP systems via ADT protocol
+2. **Authentication handling**: Supports Basic Auth and JWT/OAuth2 authentication methods
+3. **Session management**: Manages cookies, CSRF tokens, and session state
+4. **Token refresh**: Automatically refreshes expired JWT tokens (for `JwtAbapConnection`)
+5. **Error handling**: Distinguishes between authentication errors and permission errors
+
+#### What This Package Does
+
+- **Provides connection abstraction**: `AbapConnection` interface for interacting with SAP systems
+- **Handles HTTP requests**: Makes requests to SAP ADT endpoints with proper headers and authentication
+- **Manages sessions**: Handles cookies, CSRF tokens, and session state persistence
+- **Refreshes tokens**: Automatically refreshes expired JWT tokens when detected
+- **Validates tokens**: Detects expired tokens by analyzing HTTP response codes (401/403)
+
+#### What This Package Does NOT Do
+
+- **Does NOT obtain tokens**: Token acquisition is handled by `@mcp-abap-adt/auth-providers` and `@mcp-abap-adt/auth-broker`
+- **Does NOT store tokens**: Token storage is handled by `@mcp-abap-adt/auth-stores`
+- **Does NOT orchestrate authentication**: Token lifecycle management is handled by `@mcp-abap-adt/auth-broker`
+- **Does NOT know about destinations**: Destination-based authentication is handled by consumers
+- **Does NOT handle OAuth2 flows**: OAuth2 flows are handled by token providers
+
+### External Dependencies
+
+This package interacts with external packages **ONLY through interfaces**:
+
+- **Logger interface**: Uses `ILogger` interface for logging - does not know about concrete logger implementation
+- **Session storage interface**: Uses `ISessionStorage` interface for session persistence - does not know about concrete storage implementation
+- **No direct dependencies on auth packages**: All token-related operations are handled through configuration (`SapConfig`) passed by consumers
+
 ## Documentation
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
