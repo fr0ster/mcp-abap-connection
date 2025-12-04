@@ -1,10 +1,9 @@
-export interface TimeoutConfig {
-  default: number;
-  csrf: number;
-  long: number;
-}
+import type { ITimeoutConfig } from '@mcp-abap-adt/interfaces';
 
-export function getTimeoutConfig(): TimeoutConfig {
+// Re-export for backward compatibility
+export type TimeoutConfig = ITimeoutConfig;
+
+export function getTimeoutConfig(): ITimeoutConfig {
   const defaultTimeout = parseInt(process.env.SAP_TIMEOUT_DEFAULT || "45000", 10);
   const csrfTimeout = parseInt(process.env.SAP_TIMEOUT_CSRF || "15000", 10);
   const longTimeout = parseInt(process.env.SAP_TIMEOUT_LONG || "60000", 10);

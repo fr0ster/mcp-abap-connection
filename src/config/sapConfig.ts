@@ -1,19 +1,11 @@
-export type SapAuthType = "basic" | "jwt";
+// Import interfaces from shared package
+import type { ISapConfig, SapAuthType } from '@mcp-abap-adt/interfaces';
 
-export interface SapConfig {
-  url: string;
-  client?: string;
-  authType: SapAuthType;
-  username?: string;
-  password?: string;
-  jwtToken?: string;
-  refreshToken?: string;
-  uaaUrl?: string; // UAA URL for token refresh (optional, can be extracted from service key)
-  uaaClientId?: string; // UAA client ID for token refresh (optional)
-  uaaClientSecret?: string; // UAA client secret for token refresh (optional)
-}
+// Re-export for backward compatibility
+export type { SapAuthType };
+export type SapConfig = ISapConfig;
 
-export function sapConfigSignature(config: SapConfig): string {
+export function sapConfigSignature(config: ISapConfig): string {
   // Include token preview (first 10 and last 10 chars) to detect token changes
   // This allows connection recreation when token is updated via HTTP headers
   const jwtTokenPreview = config.jwtToken

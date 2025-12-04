@@ -1,11 +1,11 @@
-// Types
+// Types - re-exported from interfaces package with backward compatibility aliases
 export type {
   SapConfig,
   SapAuthType,
 } from "./config/sapConfig.js";
 export type { AbapRequestOptions } from "./connection/AbapConnection.js";
 
-// Interfaces
+// Interfaces - re-exported from interfaces package with backward compatibility aliases
 export { type AbapConnection } from "./connection/AbapConnection.js";
 export type { ILogger, SessionState, ISessionStorage } from "./logger.js";
 

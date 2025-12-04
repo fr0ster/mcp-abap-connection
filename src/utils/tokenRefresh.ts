@@ -3,11 +3,10 @@
  */
 
 import axios from 'axios';
+import type { ITokenRefreshResult } from '@mcp-abap-adt/interfaces';
 
-export interface TokenRefreshResult {
-  accessToken: string;
-  refreshToken?: string;
-}
+// Re-export for backward compatibility
+export type TokenRefreshResult = ITokenRefreshResult;
 
 /**
  * Refreshes the access token using refresh token
@@ -22,7 +21,7 @@ export async function refreshJwtToken(
   uaaUrl: string,
   clientId: string,
   clientSecret: string
-): Promise<TokenRefreshResult> {
+): Promise<ITokenRefreshResult> {
   try {
     const tokenUrl = `${uaaUrl}/oauth/token`;
 

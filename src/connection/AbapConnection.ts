@@ -1,26 +1,9 @@
 import { AxiosResponse } from "axios";
-import { SapConfig } from "../config/sapConfig.js";
-import { SessionState } from "../logger.js";
+import type { ISapConfig } from '@mcp-abap-adt/interfaces';
+import type { ISessionState } from '@mcp-abap-adt/interfaces';
+import type { IAbapRequestOptions, IAbapConnection } from '@mcp-abap-adt/interfaces';
 
-export interface AbapRequestOptions {
-  url: string;
-  method: string;
-  timeout: number;
-  data?: any;
-  params?: any;
-  headers?: Record<string, string>;
-}
-
-export interface AbapConnection {
-  getConfig(): SapConfig;
-  getBaseUrl(): Promise<string>;
-  getAuthHeaders(): Promise<Record<string, string>>;
-  getSessionId(): string | null;
-  setSessionType(type: "stateful" | "stateless"): void;
-  makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
-  connect(): Promise<void>;
-  reset(): void;
-  getSessionState(): SessionState | null;
-  setSessionState(state: SessionState): void;
-}
+// Re-export for backward compatibility
+export type AbapRequestOptions = IAbapRequestOptions;
+export type AbapConnection = IAbapConnection;
 

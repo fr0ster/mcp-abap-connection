@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.14] - 2024-12-04
+
+### Added
+- **Interfaces Package Integration**: Migrated to use `@mcp-abap-adt/interfaces` package for all interface definitions
+  - All interfaces now imported from shared package
+  - Backward compatibility maintained with type aliases
+  - Dependency on `@mcp-abap-adt/interfaces@^0.1.0` added
+
+### Changed
+- **Interface Renaming**: Interfaces renamed to follow `I` prefix convention:
+  - `SapConfig` → `ISapConfig` (type alias for backward compatibility)
+  - `AbapConnection` → `IAbapConnection` (type alias for backward compatibility)
+  - `AbapRequestOptions` → `IAbapRequestOptions` (type alias for backward compatibility)
+  - `SessionState` → `ISessionState` (type alias for backward compatibility)
+  - `TokenRefreshResult` → `ITokenRefreshResult` (type alias for backward compatibility)
+  - `TimeoutConfig` → `ITimeoutConfig` (type alias for backward compatibility)
+  - Old names still work via type aliases for backward compatibility
+
+## [0.1.13] - 2024-XX-XX
+
 ### Added
 - **CSRF Configuration Export**: Exported `CSRF_CONFIG` and `CSRF_ERROR_MESSAGES` constants for consistent CSRF token handling across different connection implementations
   - `CSRF_CONFIG`: Centralized constants for CSRF token fetching (retry count, delay, endpoint, headers)
@@ -19,10 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Lighter response payload
   - Available on all SAP systems (on-premise and cloud)
   - Standard ADT discovery endpoint
-
-### Fixed
-
-### Removed
 
 ## [0.1.12] - 2025-01-XX
 
