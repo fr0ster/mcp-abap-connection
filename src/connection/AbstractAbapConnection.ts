@@ -437,16 +437,13 @@ abstract class AbstractAbapConnection implements AbapConnection {
 
       // Retry logic for CSRF token errors (403 with CSRF message)
       if (this.shouldRetryCsrf(error)) {
-        if (this.logger.csrfToken) {
-          this.logger.csrfToken(
-            "retry",
-            "CSRF token validation failed, fetching new token and retrying request",
-            {
-              url: requestUrl,
-              method: normalizedMethod
-            }
-          );
-        }
+        this.logger.debug(
+          "CSRF token validation failed, fetching new token and retrying request",
+          {
+            url: requestUrl,
+            method: normalizedMethod
+          }
+        );
 
         this.csrfToken = await this.fetchCsrfToken(requestUrl, 5, 2000);
         if (this.csrfToken) {
@@ -533,14 +530,12 @@ abstract class AbstractAbapConnection implements AbapConnection {
     }
     // If URL already contains the endpoint, use it as is
 
-    if (this.logger.csrfToken) {
-      this.logger.csrfToken("fetch", `Fetching CSRF token from: ${csrfUrl}`);
-    }
+    this.logger.debug(`Fetching CSRF token from: ${csrfUrl}`);
 
     for (let attempt = 0; attempt <= retryCount; attempt++) {
       try {
-        if (attempt > 0 && this.logger.csrfToken) {
-          this.logger.csrfToken("retry", `Retry attempt ${attempt}/${retryCount} for CSRF token`);
+        if (attempt > 0) {
+          this.logger.debug(`Retry attempt ${attempt}/${retryCount} for CSRF token`);
         }
 
         const authHeaders = await this.getAuthHeaders();
@@ -572,12 +567,10 @@ abstract class AbstractAbapConnection implements AbapConnection {
 
         const token = response.headers["x-csrf-token"] as string | undefined;
         if (!token) {
-          if (this.logger.csrfToken) {
-            this.logger.csrfToken("error", "No CSRF token in response headers", {
-              headers: response.headers,
-              status: response.status
-            });
-          }
+          this.logger.error("No CSRF token in response headers", {
+            headers: response.headers,
+            status: response.status
+          });
 
           if (attempt < retryCount) {
             await new Promise((resolve) => setTimeout(resolve, retryDelay));
@@ -590,20 +583,16 @@ abstract class AbstractAbapConnection implements AbapConnection {
           this.updateCookiesFromResponse(response.headers);
           if (this.cookies) {
             this.logger.debug(`[DEBUG] BaseAbapConnection - Cookies received from CSRF response (first 100 chars): ${this.cookies.substring(0, 100)}...`);
-            if (this.logger.csrfToken) {
-              this.logger.csrfToken("success", "Cookies extracted from response", {
-                cookieLength: this.cookies.length
-              });
-            }
+            this.logger.debug("Cookies extracted from response", {
+              cookieLength: this.cookies.length
+            });
           }
         }
 
         // Save session state after CSRF token fetch (cookies and token are now available)
         await this.saveSessionState();
 
-        if (this.logger.csrfToken) {
-          this.logger.csrfToken("success", "CSRF token successfully obtained");
-        }
+        this.logger.debug("CSRF token successfully obtained");
         return token;
       } catch (error) {
         if (error instanceof AxiosError) {
@@ -619,22 +608,17 @@ abstract class AbstractAbapConnection implements AbapConnection {
             }
           }
 
-          if (this.logger.csrfToken) {
-            this.logger.csrfToken("error", `CSRF token error: ${error.message}`, {
-              url: csrfUrl,
-              status: error.response?.status,
-              attempt: attempt + 1,
-              maxAttempts: retryCount + 1
-            });
-          }
+          this.logger.error(`CSRF token error: ${error.message}`, {
+            url: csrfUrl,
+            status: error.response?.status,
+            attempt: attempt + 1,
+            maxAttempts: retryCount + 1
+          });
 
           if (error.response?.status === 405 && error.response?.headers["x-csrf-token"]) {
-            if (this.logger.csrfToken) {
-              this.logger.csrfToken(
-                "retry",
-                "CSRF: SAP returned 405 (Method Not Allowed) — not critical, token found in header"
-              );
-            }
+            this.logger.debug(
+              "CSRF: SAP returned 405 (Method Not Allowed) — not critical, token found in header"
+            );
 
             const token = error.response.headers["x-csrf-token"] as string;
             if (token) {
@@ -644,20 +628,17 @@ abstract class AbstractAbapConnection implements AbapConnection {
           }
 
           if (error.response?.headers["x-csrf-token"]) {
-            if (this.logger.csrfToken) {
-              this.logger.csrfToken(
-                "success",
-                `Got CSRF token despite error (status: ${error.response?.status})`
-              );
-            }
+            this.logger.debug(
+              `Got CSRF token despite error (status: ${error.response?.status})`
+            );
 
             const token = error.response.headers["x-csrf-token"] as string;
             this.updateCookiesFromResponse(error.response.headers);
             return token;
           }
 
-          if (error.response && this.logger.csrfToken) {
-            this.logger.csrfToken("error", "CSRF error details", {
+          if (error.response) {
+            this.logger.error("CSRF error details", {
               status: error.response.status,
               statusText: error.response.statusText,
               headers: Object.keys(error.response.headers),
@@ -666,13 +647,13 @@ abstract class AbstractAbapConnection implements AbapConnection {
                   ? error.response.data.slice(0, 200)
                   : JSON.stringify(error.response.data).slice(0, 200)
             });
-          } else if (error.request && this.logger.csrfToken) {
-            this.logger.csrfToken("error", "CSRF request error - no response received", {
+          } else if (error.request) {
+            this.logger.error("CSRF request error - no response received", {
               request: error.request.path
             });
           }
-        } else if (this.logger.csrfToken) {
-          this.logger.csrfToken("error", "CSRF non-axios error", {
+        } else {
+          this.logger.error("CSRF non-axios error", {
             error: error instanceof Error ? error.message : String(error)
           });
         }
@@ -783,9 +764,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
         (process.env.TLS_REJECT_UNAUTHORIZED === "1" &&
           process.env.NODE_TLS_REJECT_UNAUTHORIZED !== "0");
 
-      if (this.logger.tlsConfig) {
-        this.logger.tlsConfig(rejectUnauthorized);
-      }
+      this.logger.debug(`TLS configuration: rejectUnauthorized=${rejectUnauthorized}`);
 
       this.axiosInstance = axios.create({
         httpsAgent: new Agent({
