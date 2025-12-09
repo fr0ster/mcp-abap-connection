@@ -7,10 +7,7 @@ export type { AbapRequestOptions } from "./connection/AbapConnection.js";
 
 // Interfaces - re-exported from interfaces package with backward compatibility aliases
 export { type AbapConnection } from "./connection/AbapConnection.js";
-export type { ILogger, SessionState, ISessionStorage } from "./logger.js";
-
-// Session storage implementations
-export { FileSessionStorage, type FileSessionStorageOptions } from "./utils/FileSessionStorage.js";
+export type { ILogger } from "./logger.js";
 
 // Connection classes - only final implementations
 export { BaseAbapConnection } from "./connection/BaseAbapConnection.js";

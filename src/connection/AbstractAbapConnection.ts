@@ -1,7 +1,7 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, AxiosResponse } from "axios";
 import { Agent } from "https";
 import { randomUUID } from "crypto";
-import { ILogger, ISessionStorage, SessionState } from "../logger.js";
+import { ILogger } from "../logger.js";
 import { getTimeout } from "../utils/timeouts.js";
 import { SapConfig } from "../config/sapConfig.js";
 import { AbapConnection, AbapRequestOptions } from "./AbapConnection.js";
@@ -14,20 +14,15 @@ abstract class AbstractAbapConnection implements AbapConnection {
   private cookieStore: Map<string, string> = new Map();
   private baseUrl: string;
   private sessionId: string | null = null;
-  private sessionStorage: ISessionStorage | null = null;
   private sessionMode: "stateless" | "stateful" = "stateless";
 
   protected constructor(
     private readonly config: SapConfig,
-    protected readonly logger: ILogger,
-    sessionStorage?: ISessionStorage,
+    protected readonly logger: ILogger | null,
     sessionId?: string
   ) {
-    this.sessionStorage = sessionStorage || null;
-    // Always generate sessionId (used for sap-adt-connection-id header in all session types)
+    // Generate sessionId (used for sap-adt-connection-id header)
     this.sessionId = sessionId || randomUUID();
-    // Session mode depends only on storage availability (sessionId exists for both modes)
-    this.sessionMode = sessionStorage ? "stateful" : "stateless";
     
     // Initialize baseUrl from config (required, will throw if invalid)
     try {
@@ -37,7 +32,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
       throw new Error(`Invalid URL in configuration: ${error instanceof Error ? error.message : error}`);
     }
     
-    this.logger.debug(`AbstractAbapConnection - Session ID: ${this.sessionId.substring(0, 8)}..., mode: ${this.sessionMode}`);
+    this.logger?.debug(`AbstractAbapConnection - Session ID: ${this.sessionId.substring(0, 8)}...`);
   }
 
   /**
@@ -48,16 +43,14 @@ abstract class AbstractAbapConnection implements AbapConnection {
    */
   setSessionType(type: "stateful" | "stateless"): void {
     this.sessionMode = type;
-    this.logger.debug(`Session type set to: ${type}`, {
-      sessionId: this.sessionId?.substring(0, 8),
-      hasStorage: !!this.sessionStorage
+    this.logger?.debug(`Session type set to: ${type}`, {
+      sessionId: this.sessionId?.substring(0, 8)
     });
   }
 
   /**
    * Enable stateful session mode (tells SAP to maintain stateful session)
    * This controls whether x-sap-adt-sessiontype: stateful header is used
-   * Storage is controlled separately via setSessionStorage()
    * @deprecated Use setSessionType("stateful") instead
    */
   enableStatefulSession(): void {
@@ -66,23 +59,16 @@ abstract class AbstractAbapConnection implements AbapConnection {
 
   /**
    * Disable stateful session mode (switch to stateless)
-   * Optionally saves current state before switching
    * @deprecated Use setSessionType("stateless") instead
    */
-  async disableStatefulSession(saveBeforeDisable: boolean = false): Promise<void> {
+  disableStatefulSession(): void {
     if (this.sessionMode === "stateless") {
       return;
     }
 
-    if (saveBeforeDisable && this.sessionId && this.sessionStorage) {
-      await this.saveSessionState();
-    }
-
     this.sessionMode = "stateless";
 
-    this.logger.debug("Stateful session mode disabled", {
-      savedBeforeDisable: saveBeforeDisable
-    });
+    this.logger?.debug("Stateful session mode disabled");
   }
 
   /**
@@ -93,17 +79,12 @@ abstract class AbstractAbapConnection implements AbapConnection {
   }
 
   /**
-   * Set session ID for stateful operations
-   * When session ID is set, session state (cookies, CSRF token) will be persisted
-   * @deprecated Use enableStatefulSession() instead
+   * Set session ID
+   * @deprecated Session ID is auto-generated, use setSessionType() to control session mode
    */
   setSessionId(sessionId: string): void {
-    if (this.sessionStorage) {
-      this.sessionId = sessionId;
-      this.sessionMode = "stateful";
-    } else {
-      this.logger.warn("Cannot set session ID without session storage. Use enableStatefulSession() instead.");
-    }
+    this.sessionId = sessionId;
+    this.logger?.debug(`Session ID set to: ${sessionId.substring(0, 8)}...`);
   }
 
   /**
@@ -113,142 +94,6 @@ abstract class AbstractAbapConnection implements AbapConnection {
     return this.sessionId;
   }
 
-  /**
-   * Set session storage (can be changed at runtime)
-   * This controls whether session state (cookies, CSRF token) is persisted to disk/storage
-   */
-  async setSessionStorage(storage: ISessionStorage | null): Promise<void> {
-    this.sessionStorage = storage;
-    
-    // Load existing session state if storage is provided
-    if (storage && this.sessionId) {
-      await this.loadSessionState();
-    }
-    
-    this.logger.debug("Session storage configured", {
-      hasStorage: !!storage,
-      sessionMode: this.sessionMode
-    });
-  }
-
-  /**
-   * Get current session storage
-   */
-  getSessionStorage(): ISessionStorage | null {
-    return this.sessionStorage;
-  }
-
-  /**
-   * Load session state from storage
-   */
-  async loadSessionState(): Promise<void> {
-    if (!this.sessionId || !this.sessionStorage) {
-      return;
-    }
-
-    try {
-      const state = await this.sessionStorage.load(this.sessionId);
-      if (state) {
-        this.csrfToken = state.csrfToken;
-        this.cookies = state.cookies;
-        this.cookieStore = new Map(Object.entries(state.cookieStore));
-        this.logger.debug("Session state loaded", {
-          sessionId: this.sessionId,
-          hasCookies: !!this.cookies,
-          hasCsrfToken: !!this.csrfToken
-        });
-      }
-    } catch (error) {
-      this.logger.warn("Failed to load session state", {
-        sessionId: this.sessionId,
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
-  }
-
-  /**
-   * Save session state to storage
-   * Only saves if in stateful mode
-   */
-  async saveSessionState(): Promise<void> {
-    if (this.sessionMode !== "stateful" || !this.sessionId || !this.sessionStorage) {
-      return;
-    }
-
-    try {
-      const state: SessionState = {
-        cookies: this.cookies,
-        csrfToken: this.csrfToken,
-        cookieStore: Object.fromEntries(this.cookieStore)
-      };
-      await this.sessionStorage.save(this.sessionId, state);
-      this.logger.debug("Session state saved", {
-        sessionId: this.sessionId,
-        hasCookies: !!this.cookies,
-        hasCsrfToken: !!this.csrfToken
-      });
-    } catch (error) {
-      this.logger.warn("Failed to save session state", {
-        sessionId: this.sessionId,
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
-  }
-
-  /**
-   * Get current session state
-   * Returns cookies, CSRF token, and cookie store for manual persistence
-   * @returns Current session state or null if no session data
-   */
-  getSessionState(): SessionState | null {
-    if (!this.cookies && !this.csrfToken) {
-      return null;
-    }
-
-    return {
-      cookies: this.cookies,
-      csrfToken: this.csrfToken,
-      cookieStore: Object.fromEntries(this.cookieStore)
-    };
-  }
-
-  /**
-   * Set session state manually
-   * Allows user to restore session from custom storage (e.g., database, Redis)
-   * @param state - Session state with cookies, CSRF token, and cookie store
-   */
-  setSessionState(state: SessionState): void {
-    this.cookies = state.cookies || null;
-    this.csrfToken = state.csrfToken || null;
-    this.cookieStore = new Map(Object.entries(state.cookieStore || {}));
-
-    this.logger.debug("Session state set manually", {
-      hasCookies: !!this.cookies,
-      hasCsrfToken: !!this.csrfToken,
-      cookieCount: this.cookieStore.size
-    });
-  }
-
-  /**
-   * Clear session state from storage
-   */
-  async clearSessionState(): Promise<void> {
-    if (!this.sessionId || !this.sessionStorage) {
-      return;
-    }
-
-    try {
-      await this.sessionStorage.delete(this.sessionId);
-      this.logger.debug("Session state cleared", {
-        sessionId: this.sessionId
-      });
-    } catch (error) {
-      this.logger.warn("Failed to clear session state", {
-        sessionId: this.sessionId,
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
-  }
 
   getConfig(): SapConfig {
     return this.config;
@@ -312,7 +157,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
         } catch (error) {
           // If CSRF token can't be fetched upfront, continue anyway
           // The retry logic will handle CSRF token errors automatically
-          this.logger.debug(`[DEBUG] BaseAbapConnection - Could not fetch CSRF token upfront, will retry on error: ${error instanceof Error ? error.message : String(error)}`);
+          this.logger?.debug(`[DEBUG] BaseAbapConnection - Could not fetch CSRF token upfront, will retry on error: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
     }
@@ -350,9 +195,9 @@ abstract class AbstractAbapConnection implements AbapConnection {
     // Add cookies LAST (MUST NOT be overridden by custom headers)
     if (this.cookies) {
       requestHeaders["Cookie"] = this.cookies;
-      this.logger.debug(`[DEBUG] BaseAbapConnection - Adding cookies to request (first 100 chars): ${this.cookies.substring(0, 100)}...`);
+      this.logger?.debug(`[DEBUG] BaseAbapConnection - Adding cookies to request (first 100 chars): ${this.cookies.substring(0, 100)}...`);
     } else {
-      this.logger.debug(`[DEBUG] BaseAbapConnection - NO COOKIES available for this request to ${requestUrl}`);
+      this.logger?.debug(`[DEBUG] BaseAbapConnection - NO COOKIES available for this request to ${requestUrl}`);
     }
 
     if ((normalizedMethod === "POST" || normalizedMethod === "PUT") && data) {
@@ -378,7 +223,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
       requestConfig.data = data;
     }
 
-    this.logger.debug(`Executing ${normalizedMethod} request to: ${requestUrl}`, {
+    this.logger?.debug(`Executing ${normalizedMethod} request to: ${requestUrl}`, {
       type: "REQUEST_INFO",
       url: requestUrl,
       method: normalizedMethod
@@ -388,10 +233,8 @@ abstract class AbstractAbapConnection implements AbapConnection {
       const response = await this.getAxiosInstance()(requestConfig);
       this.updateCookiesFromResponse(response.headers);
 
-      // Save session state after successful request (if session storage is configured)
-      await this.saveSessionState();
 
-      this.logger.debug(`Request succeeded with status ${response.status}`, {
+      this.logger?.debug(`Request succeeded with status ${response.status}`, {
         type: "REQUEST_SUCCESS",
         status: response.status,
         url: requestUrl,
@@ -425,19 +268,17 @@ abstract class AbstractAbapConnection implements AbapConnection {
         this.updateCookiesFromResponse(error.response.headers);
       }
 
-      // Save session state even on error (cookies might have been updated)
-      await this.saveSessionState();
 
       // Log 404 as debug (common for existence checks), other errors as error
       if (errorDetails.status === 404) {
-        this.logger.debug(errorDetails.message, errorDetails);
+        this.logger?.debug(errorDetails.message, errorDetails);
       } else {
-        this.logger.error(errorDetails.message, errorDetails);
+        this.logger?.error(errorDetails.message, errorDetails);
       }
 
       // Retry logic for CSRF token errors (403 with CSRF message)
       if (this.shouldRetryCsrf(error)) {
-        this.logger.debug(
+        this.logger?.debug(
           "CSRF token validation failed, fetching new token and retrying request",
           {
             url: requestUrl,
@@ -456,8 +297,6 @@ abstract class AbstractAbapConnection implements AbapConnection {
         const retryResponse = await this.getAxiosInstance()(requestConfig);
         this.updateCookiesFromResponse(retryResponse.headers);
 
-        // Save session state after retry
-        await this.saveSessionState();
 
         return retryResponse;
       }
@@ -472,33 +311,31 @@ abstract class AbstractAbapConnection implements AbapConnection {
       ) {
         // If we already have cookies from error response, retry immediately
         if (this.cookies) {
-          this.logger.debug(`[DEBUG] BaseAbapConnection - 401 on GET request, retrying with cookies from error response`);
+          this.logger?.debug(`[DEBUG] BaseAbapConnection - 401 on GET request, retrying with cookies from error response`);
           requestHeaders["Cookie"] = this.cookies;
 
           const retryResponse = await this.getAxiosInstance()(requestConfig);
           this.updateCookiesFromResponse(retryResponse.headers);
-          await this.saveSessionState();
 
           return retryResponse;
         }
 
         // If no cookies, try to get them via CSRF token fetch
-        this.logger.debug(`[DEBUG] BaseAbapConnection - 401 on GET request, attempting to get cookies via CSRF token fetch`);
+        this.logger?.debug(`[DEBUG] BaseAbapConnection - 401 on GET request, attempting to get cookies via CSRF token fetch`);
         try {
           // Try to get CSRF token (this will also get cookies)
           this.csrfToken = await this.fetchCsrfToken(requestUrl, 3, 1000);
           if (this.cookies) {
             requestHeaders["Cookie"] = this.cookies;
-            this.logger.debug(`[DEBUG] BaseAbapConnection - Retrying GET request with cookies from CSRF fetch`);
+            this.logger?.debug(`[DEBUG] BaseAbapConnection - Retrying GET request with cookies from CSRF fetch`);
 
             const retryResponse = await this.getAxiosInstance()(requestConfig);
             this.updateCookiesFromResponse(retryResponse.headers);
-            await this.saveSessionState();
 
             return retryResponse;
           }
         } catch (csrfError) {
-          this.logger.debug(`[DEBUG] BaseAbapConnection - Failed to get CSRF token for 401 retry: ${csrfError instanceof Error ? csrfError.message : String(csrfError)}`);
+          this.logger?.debug(`[DEBUG] BaseAbapConnection - Failed to get CSRF token for 401 retry: ${csrfError instanceof Error ? csrfError.message : String(csrfError)}`);
           // Fall through to throw original error
         }
       }
@@ -530,12 +367,12 @@ abstract class AbstractAbapConnection implements AbapConnection {
     }
     // If URL already contains the endpoint, use it as is
 
-    this.logger.debug(`Fetching CSRF token from: ${csrfUrl}`);
+    this.logger?.debug(`Fetching CSRF token from: ${csrfUrl}`);
 
     for (let attempt = 0; attempt <= retryCount; attempt++) {
       try {
         if (attempt > 0) {
-          this.logger.debug(`Retry attempt ${attempt}/${retryCount} for CSRF token`);
+          this.logger?.debug(`Retry attempt ${attempt}/${retryCount} for CSRF token`);
         }
 
         const authHeaders = await this.getAuthHeaders();
@@ -548,13 +385,13 @@ abstract class AbstractAbapConnection implements AbapConnection {
         // Even on first attempt, if we have cookies from previous session or error response, use them
         if (this.cookies) {
           headers["Cookie"] = this.cookies;
-          this.logger.debug(`[DEBUG] BaseAbapConnection - Adding cookies to CSRF token request (attempt ${attempt + 1}, first 100 chars): ${this.cookies.substring(0, 100)}...`);
+          this.logger?.debug(`[DEBUG] BaseAbapConnection - Adding cookies to CSRF token request (attempt ${attempt + 1}, first 100 chars): ${this.cookies.substring(0, 100)}...`);
         } else {
-          this.logger.debug(`[DEBUG] BaseAbapConnection - No cookies available for CSRF token request (will get fresh cookies from response)`);
+          this.logger?.debug(`[DEBUG] BaseAbapConnection - No cookies available for CSRF token request (will get fresh cookies from response)`);
         }
 
         // Log request details for debugging (only if debug logging is enabled)
-        this.logger.debug(`[DEBUG] CSRF Token Request: url=${csrfUrl}, method=GET, hasAuth=${!!authHeaders.Authorization}, hasClient=${!!authHeaders["X-SAP-Client"]}, hasCookies=${!!headers["Cookie"]}, attempt=${attempt + 1}`);
+        this.logger?.debug(`[DEBUG] CSRF Token Request: url=${csrfUrl}, method=GET, hasAuth=${!!authHeaders.Authorization}, hasClient=${!!authHeaders["X-SAP-Client"]}, hasCookies=${!!headers["Cookie"]}, attempt=${attempt + 1}`);
 
         const response = await this.getAxiosInstance()({
           method: "GET",
@@ -567,7 +404,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
 
         const token = response.headers["x-csrf-token"] as string | undefined;
         if (!token) {
-          this.logger.error("No CSRF token in response headers", {
+          this.logger?.error("No CSRF token in response headers", {
             headers: response.headers,
             status: response.status
           });
@@ -582,17 +419,15 @@ abstract class AbstractAbapConnection implements AbapConnection {
         if (response.headers["set-cookie"]) {
           this.updateCookiesFromResponse(response.headers);
           if (this.cookies) {
-            this.logger.debug(`[DEBUG] BaseAbapConnection - Cookies received from CSRF response (first 100 chars): ${this.cookies.substring(0, 100)}...`);
-            this.logger.debug("Cookies extracted from response", {
+            this.logger?.debug(`[DEBUG] BaseAbapConnection - Cookies received from CSRF response (first 100 chars): ${this.cookies.substring(0, 100)}...`);
+            this.logger?.debug("Cookies extracted from response", {
               cookieLength: this.cookies.length
             });
           }
         }
 
-        // Save session state after CSRF token fetch (cookies and token are now available)
-        await this.saveSessionState();
 
-        this.logger.debug("CSRF token successfully obtained");
+        this.logger?.debug("CSRF token successfully obtained");
         return token;
       } catch (error) {
         if (error instanceof AxiosError) {
@@ -601,14 +436,14 @@ abstract class AbstractAbapConnection implements AbapConnection {
           if (error.response?.headers) {
             this.updateCookiesFromResponse(error.response.headers);
             if (this.cookies) {
-              this.logger.debug("Cookies extracted from error response", {
+              this.logger?.debug("Cookies extracted from error response", {
                 status: error.response.status,
                 cookieLength: this.cookies.length
               });
             }
           }
 
-          this.logger.error(`CSRF token error: ${error.message}`, {
+          this.logger?.error(`CSRF token error: ${error.message}`, {
             url: csrfUrl,
             status: error.response?.status,
             attempt: attempt + 1,
@@ -616,7 +451,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
           });
 
           if (error.response?.status === 405 && error.response?.headers["x-csrf-token"]) {
-            this.logger.debug(
+            this.logger?.debug(
               "CSRF: SAP returned 405 (Method Not Allowed) — not critical, token found in header"
             );
 
@@ -628,7 +463,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
           }
 
           if (error.response?.headers["x-csrf-token"]) {
-            this.logger.debug(
+            this.logger?.debug(
               `Got CSRF token despite error (status: ${error.response?.status})`
             );
 
@@ -638,7 +473,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
           }
 
           if (error.response) {
-            this.logger.error("CSRF error details", {
+            this.logger?.error("CSRF error details", {
               status: error.response.status,
               statusText: error.response.statusText,
               headers: Object.keys(error.response.headers),
@@ -648,12 +483,12 @@ abstract class AbstractAbapConnection implements AbapConnection {
                   : JSON.stringify(error.response.data).slice(0, 200)
             });
           } else if (error.request) {
-            this.logger.error("CSRF request error - no response received", {
+            this.logger?.error("CSRF request error - no response received", {
               request: error.request.path
             });
           }
         } else {
-          this.logger.error("CSRF non-axios error", {
+          this.logger?.error("CSRF non-axios error", {
             error: error instanceof Error ? error.message : String(error)
           });
         }
@@ -752,7 +587,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
     }
 
     this.cookies = combined;
-    this.logger.debug(
+    this.logger?.debug(
       `[DEBUG] BaseAbapConnection - Updated cookies from response (first 100 chars): ${this.cookies.substring(0, 100)}...`
     );
   }
@@ -764,7 +599,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
         (process.env.TLS_REJECT_UNAUTHORIZED === "1" &&
           process.env.NODE_TLS_REJECT_UNAUTHORIZED !== "0");
 
-      this.logger.debug(`TLS configuration: rejectUnauthorized=${rejectUnauthorized}`);
+      this.logger?.debug(`TLS configuration: rejectUnauthorized=${rejectUnauthorized}`);
 
       this.axiosInstance = axios.create({
         httpsAgent: new Agent({
@@ -780,21 +615,21 @@ abstract class AbstractAbapConnection implements AbapConnection {
     // If we already have a CSRF token, reuse it to keep the same SAP session
     // SAP ties the lock handle to the HTTP session (SAP_SESSIONID cookie)
     if (this.csrfToken) {
-      this.logger.debug(`[DEBUG] BaseAbapConnection - Reusing existing CSRF token to maintain session`);
+      this.logger?.debug(`[DEBUG] BaseAbapConnection - Reusing existing CSRF token to maintain session`);
       return;
     }
 
     try {
-      this.logger.debug(`[DEBUG] BaseAbapConnection - Fetching NEW CSRF token (will create new SAP session)`);
+      this.logger?.debug(`[DEBUG] BaseAbapConnection - Fetching NEW CSRF token (will create new SAP session)`);
       this.csrfToken = await this.fetchCsrfToken(requestUrl);
     } catch (error) {
-      // fetchCsrfToken already handles auth errors and auto-refresh
+      // fetchCsrfToken handles auth errors
       // Just re-throw the error with minimal logging to avoid duplicate error messages
       const errorMsg = error instanceof Error ? error.message : CSRF_ERROR_MESSAGES.REQUIRED_FOR_MUTATION;
 
       // Only log at DEBUG level to avoid duplicate error messages
       // (fetchCsrfToken already logged the error at ERROR level if auth failed)
-      this.logger.debug(`[DEBUG] BaseAbapConnection - ensureFreshCsrfToken failed: ${errorMsg}`);
+      this.logger?.debug(`[DEBUG] BaseAbapConnection - ensureFreshCsrfToken failed: ${errorMsg}`);
 
       throw error;
     }

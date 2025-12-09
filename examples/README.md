@@ -33,28 +33,6 @@ node examples/basic-connection.js
 - Making GET request to ADT endpoint
 - Basic error handling
 
-### auto-refresh.js
-
-Demonstrates automatic JWT token refresh when token expires.
-
-```bash
-node examples/auto-refresh.js
-```
-
-**What it demonstrates:**
-- Cloud connection with JWT authentication
-- Auto-refresh configuration
-- Automatic token refresh on 401/403 errors
-- Multiple requests with auto-refresh
-
-**Required environment variables:**
-- `SAP_URL`
-- `SAP_JWT_TOKEN`
-- `SAP_REFRESH_TOKEN`
-- `SAP_UAA_URL`
-- `SAP_UAA_CLIENT_ID`
-- `SAP_UAA_CLIENT_SECRET`
-
 ### session-persistence.js
 
 Shows how to use FileSessionStorage to persist and reuse sessions.
@@ -100,10 +78,7 @@ SAP_CLIENT=100
 # JWT Auth (Cloud/BTP)
 SAP_AUTH_TYPE=jwt
 SAP_JWT_TOKEN=eyJhbGciOiJSUzI1NiIs...
-SAP_REFRESH_TOKEN=your-refresh-token
-SAP_UAA_URL=https://your-uaa-server.com
-SAP_UAA_CLIENT_ID=sb-client-id!b123
-SAP_UAA_CLIENT_SECRET=client-secret-xyz
+# Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
 ```
 
 ### Using Environment Variables

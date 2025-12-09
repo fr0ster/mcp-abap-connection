@@ -62,11 +62,8 @@ SAP_CLIENT=100
 SAP_AUTH_TYPE=jwt
 SAP_JWT_TOKEN=your-jwt-token
 
-# For automatic token refresh (recommended)
-SAP_REFRESH_TOKEN=your-refresh-token
-SAP_UAA_URL=https://your-tenant.authentication.cert.eu10.hana.ondemand.com
-SAP_UAA_CLIENT_ID=sb-your-client-id!b12345
-SAP_UAA_CLIENT_SECRET=your-client-secret
+# Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
+# Connection package does not use refresh token credentials
 ```
 
 **Manual Setup:** If creating `.env` manually (without CLI), you can omit the expiry comments:
@@ -77,11 +74,8 @@ SAP_CLIENT=100
 SAP_AUTH_TYPE=jwt
 SAP_JWT_TOKEN=your-jwt-token
 
-# For automatic token refresh (recommended)
-SAP_REFRESH_TOKEN=your-refresh-token
-SAP_UAA_URL=https://your-tenant.authentication.cert.eu10.hana.ondemand.com
-SAP_UAA_CLIENT_ID=sb-your-client-id!b12345
-SAP_UAA_CLIENT_SECRET=your-client-secret
+# Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
+# Connection package does not use refresh token credentials
 ```
 
 ### Loading Environment Variables
@@ -99,10 +93,8 @@ const config = {
   username: process.env.SAP_USERNAME,
   password: process.env.SAP_PASSWORD,
   jwtToken: process.env.SAP_JWT_TOKEN,
-  refreshToken: process.env.SAP_REFRESH_TOKEN,
-  uaaUrl: process.env.SAP_UAA_URL,
-  uaaClientId: process.env.SAP_UAA_CLIENT_ID,
-  uaaClientSecret: process.env.SAP_UAA_CLIENT_SECRET,
+  // Note: Token refresh credentials are not used by connection package
+  // Token refresh is handled by @mcp-abap-adt/auth-broker
 };
 ```
 
@@ -304,7 +296,7 @@ export NODE_TLS_REJECT_UNAUTHORIZED=0
 ## Next Steps
 
 - 📚 Read [USAGE.md](./USAGE.md) for detailed usage examples
-- 🔧 Configure [session storage](./CUSTOM_SESSION_STORAGE.md)
-- 🧪 Setup [auto-refresh testing](./AUTO_REFRESH_TESTING.md)
+- 🔄 Token refresh is handled by `@mcp-abap-adt/auth-broker` package
+- 💾 Session state persistence is handled by `@mcp-abap-adt/auth-broker` package
 - 🔑 Use [JWT auth CLI tool](./JWT_AUTH_TOOLS.md)
 - 📖 Review [CHANGELOG.md](../CHANGELOG.md) for version history

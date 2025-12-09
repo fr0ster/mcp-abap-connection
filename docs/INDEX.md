@@ -1,8 +1,8 @@
 # Documentation Index
 
 **Package:** `@mcp-abap-adt/connection`  
-**Version:** 0.1.9  
-**Last Updated:** November 23, 2025
+**Version:** 0.2.0  
+**Last Updated:** December 8, 2025
 
 ## Package Structure
 
@@ -14,15 +14,10 @@ mcp-abap-connection/
 │   ├── INDEX.md            # This file - documentation overview
 │   ├── INSTALLATION.md     # Setup and installation guide
 │   ├── USAGE.md            # API documentation and examples
-│   ├── AUTO_REFRESH_TESTING.md     # Testing guide for JWT auto-refresh
-│   ├── CUSTOM_SESSION_STORAGE.md   # Session storage implementation
-│   ├── STATEFUL_SESSION_GUIDE.md   # Session state management guide
 │   └── JWT_AUTH_TOOLS.md   # CLI tool for authentication
 ├── examples/               # Working code examples
 │   ├── README.md          # Examples overview
-│   ├── basic-connection.js # Simple connection example
-│   ├── auto-refresh.js    # JWT auto-refresh demo
-│   └── session-persistence.js # FileSessionStorage usage
+│   └── basic-connection.js # Simple connection example
 ├── bin/                   # CLI tools
 │   └── sap-abap-auth.js  # JWT authentication CLI
 └── src/                  # Source code
@@ -40,36 +35,31 @@ mcp-abap-connection/
 - 📖 [Main README](../README.md) - Package overview and quick start
 
 ### Core Features
-- 🔄 [Auto-Refresh Testing](./AUTO_REFRESH_TESTING.md) - JWT token auto-refresh functionality
-- 💾 [Custom Session Storage](./CUSTOM_SESSION_STORAGE.md) - Implementing custom session persistence
-- 🔐 [Stateful Session Guide](./STATEFUL_SESSION_GUIDE.md) - HTTP-level session state management
 - 🔑 [JWT Auth Tools](./JWT_AUTH_TOOLS.md) - CLI tool for browser-based authentication
 
 ### Version Information
-- 📋 [CHANGELOG](../CHANGELOG.md) - Complete version history (0.1.0 - 0.1.9)
-- 🆕 [Latest Changes (0.1.9)](../CHANGELOG.md#019---2025-11-23) - Documentation updates
+- 📋 [CHANGELOG](../CHANGELOG.md) - Complete version history (0.1.0 - 0.2.0)
+- 🆕 [Latest Changes (0.2.0)](../CHANGELOG.md#020---2025-12-08) - Breaking changes: token refresh and session storage removed
 
 ### Examples
 - 📁 [Examples Overview](../examples/README.md) - All available examples
 - 🔌 [Basic Connection](../examples/basic-connection.js) - Simple connection setup
-- 🔄 [Auto-Refresh](../examples/auto-refresh.js) - JWT token auto-refresh
-- 💾 [Session Persistence](../examples/session-persistence.js) - FileSessionStorage usage
 
 ## Documentation by Topic
 
 ### Authentication
 - **Basic Auth**: [USAGE.md - Basic Authentication](./USAGE.md#basic-authentication-on-premise)
 - **JWT/OAuth2**: [USAGE.md - JWT Authentication](./USAGE.md#jwt-authentication-cloudbtp)
-- **Auto-Refresh**: [AUTO_REFRESH_TESTING.md](./AUTO_REFRESH_TESTING.md)
+- **Token Refresh**: Handled by `@mcp-abap-adt/auth-broker` package (removed in 0.2.0)
 - **CLI Tool**: [JWT_AUTH_TOOLS.md](./JWT_AUTH_TOOLS.md)
 
 ### Session Management
 - **Overview**: [USAGE.md - Session Management](./USAGE.md#session-management)
-- **Stateful Sessions**: [STATEFUL_SESSION_GUIDE.md](./STATEFUL_SESSION_GUIDE.md)
-- **Custom Storage**: [CUSTOM_SESSION_STORAGE.md](./CUSTOM_SESSION_STORAGE.md)
-- **API Methods** (new in 0.1.6+):
-  - `getSessionId()` - Get current session ID
-  - `setSessionType()` - Switch between stateful/stateless
+- **Stateful Mode**: Use `setSessionType('stateful')` for session headers
+- **Session State Persistence**: Handled by `@mcp-abap-adt/auth-broker` package
+- **API Methods**:
+  - `getSessionId()` - Get current session ID (auto-generated UUID)
+  - `setSessionType()` - Switch between stateful/stateless modes
 
 ### API Reference
 - **Connection Interface**: [USAGE.md - API Reference](./USAGE.md#api-reference)
@@ -79,7 +69,14 @@ mcp-abap-connection/
 
 ## Version Highlights
 
-### 0.1.9 (Current) - 2025-11-23
+### 0.2.0 (Current) - 2025-12-08
+- ⚠️ **Breaking Changes**: Token refresh and session storage removed
+- 🔄 Token refresh moved to `@mcp-abap-adt/auth-broker` package
+- 💾 Session state persistence moved to `@mcp-abap-adt/auth-broker` package
+- 📝 Logger is now optional (uses optional chaining)
+- 🎯 Package now focuses solely on HTTP connection management
+
+### 0.1.9 - 2025-11-23
 - 📝 Comprehensive documentation updates
 - 📚 Enhanced README with new API methods
 - 📋 Complete CHANGELOG with all versions
@@ -102,8 +99,6 @@ mcp-abap-connection/
 ### 0.1.0 - 2024-11-14
 - 🎉 Initial release
 - 🔐 Basic Auth and JWT/OAuth2 support
-- 🔄 Automatic JWT token refresh
-- 💾 Session persistence
 - 🛠️ CLI tool for authentication
 
 See [CHANGELOG.md](../CHANGELOG.md) for complete version history.

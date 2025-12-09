@@ -1,6 +1,6 @@
 import { SapConfig } from "../config/sapConfig.js";
 import { AbstractAbapConnection } from "./AbstractAbapConnection.js";
-import { ILogger, ISessionStorage } from "../logger.js";
+import { ILogger } from "../logger.js";
 import { AxiosError } from "axios";
 
 /**
@@ -9,12 +9,11 @@ import { AxiosError } from "axios";
 export class BaseAbapConnection extends AbstractAbapConnection {
   constructor(
     config: SapConfig,
-    logger: ILogger,
-    sessionStorage?: ISessionStorage,
+    logger?: ILogger | null,
     sessionId?: string
   ) {
     BaseAbapConnection.validateConfig(config);
-    super(config, logger, sessionStorage, sessionId);
+    super(config, logger || null, sessionId);
   }
 
   /**
@@ -25,17 +24,15 @@ export class BaseAbapConnection extends AbstractAbapConnection {
     const baseUrl = await this.getBaseUrl();
     const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;
 
-    this.logger.debug(`[DEBUG] BaseAbapConnection - Connecting to SAP system: ${discoveryUrl}`);
+    this.logger?.debug(`[DEBUG] BaseAbapConnection - Connecting to SAP system: ${discoveryUrl}`);
 
     try {
       // Try to get CSRF token (this will also get cookies)
       const token = await this.fetchCsrfToken(discoveryUrl, 3, 1000);
       this.setCsrfToken(token);
 
-      // Save session state after successful connection
-      await this.saveSessionState();
 
-      this.logger.debug("Successfully connected to SAP system", {
+      this.logger?.debug("Successfully connected to SAP system", {
         hasCsrfToken: !!this.getCsrfToken(),
         hasCookies: !!this.getCookies(),
         cookieLength: this.getCookies()?.length || 0
@@ -44,14 +41,13 @@ export class BaseAbapConnection extends AbstractAbapConnection {
       // For Basic auth, log warning but don't fail
       // The retry logic in makeAdtRequest will handle transient errors automatically
       const errorMsg = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`[WARN] BaseAbapConnection - Could not connect to SAP system upfront: ${errorMsg}. Will retry on first request.`);
+      this.logger?.warn(`[WARN] BaseAbapConnection - Could not connect to SAP system upfront: ${errorMsg}. Will retry on first request.`);
 
       // Still try to extract cookies from error response if available
       if (error instanceof AxiosError && error.response?.headers) {
         // updateCookiesFromResponse is private, but cookies are extracted in fetchCsrfToken
         if (this.getCookies()) {
-          this.logger.debug(`[DEBUG] BaseAbapConnection - Cookies extracted from error response during connect (first 100 chars): ${this.getCookies()!.substring(0, 100)}...`);
-          await this.saveSessionState();
+          this.logger?.debug(`[DEBUG] BaseAbapConnection - Cookies extracted from error response during connect (first 100 chars): ${this.getCookies()!.substring(0, 100)}...`);
         }
       }
     }

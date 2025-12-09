@@ -7,6 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-12-08
+
+### Breaking Changes
+
+- **Token Refresh Removed**: Token refresh functionality has been completely removed from this package
+  - `refreshToken()` method removed from `JwtAbapConnection`
+  - `canRefreshToken()` method removed from `JwtAbapConnection`
+  - All automatic token refresh logic removed from connection classes
+  - Token refresh is now handled exclusively by `@mcp-abap-adt/auth-broker` package
+  - This is a breaking change - code that relied on connection-level token refresh will need to use auth-broker instead
+
+- **Logger is Optional**: Logger parameter is now optional in all connection constructors
+  - `BaseAbapConnection`, `JwtAbapConnection`, and `createAbapConnection()` now accept `logger?: ILogger | null`
+  - All logger calls use optional chaining (`logger?.info()`, `logger?.debug()`, etc.)
+  - If no logger is provided, no logging output is produced (no-op behavior)
+  - This allows using connections without requiring a logger instance
+
+- **Session Storage Removed**: Session storage functionality has been completely removed from this package
+  - `sessionStorage` parameter removed from all connection constructors (`BaseAbapConnection`, `JwtAbapConnection`, `createAbapConnection()`)
+  - All session storage methods removed: `setSessionStorage()`, `getSessionStorage()`, `loadSessionState()`, `saveSessionState()`, `clearSessionState()`, `getSessionState()`, `setSessionState()`
+  - `FileSessionStorage` utility class removed
+  - Session state persistence is now handled exclusively by `@mcp-abap-adt/auth-broker` package
+  - Connection package now handles only HTTP communication and session headers (cookies, CSRF tokens) without persistence
+  - This is a breaking change - code that relied on connection-level session storage will need to use auth-broker instead
+
+### Changed
+
+- **Connection Package Scope**: Package now focuses solely on HTTP connection management
+  - Removed all token refresh logic from `JwtAbapConnection`
+  - Removed all token refresh logic from `connect()`, `makeAdtRequest()`, and `fetchCsrfToken()` methods
+  - Removed all session storage and state persistence logic
+  - Connection package now handles only HTTP communication and session headers (cookies, CSRF tokens)
+  - Token lifecycle management and session state persistence are delegated to auth-broker package
+
+### Removed
+
+- **Token Refresh Methods**: 
+  - `refreshToken()` method removed from `JwtAbapConnection`
+  - `canRefreshToken()` method removed from `JwtAbapConnection`
+  - `tokenRefreshInProgress` private field removed
+  - Import of `refreshJwtToken` utility removed
+
+- **Token Refresh Tests**:
+  - `auto-refresh.test.ts` removed
+  - Replaced with simplified `jwt-connection.test.ts` that tests only configuration validation
+
+- **Session Storage Components**:
+  - `FileSessionStorage` utility class removed
+  - `ISessionStorage` and `SessionState` type exports removed
+  - All session storage related imports and exports removed
+
+### Migration Guide
+
+If you were using token refresh functionality:
+
+**Before (0.1.x)**:
+```typescript
+const connection = new JwtAbapConnection(config, logger);
+if (connection.canRefreshToken()) {
+  await connection.refreshToken();
+}
+```
+
+**After (0.2.0)**:
+```typescript
+// Token refresh is now handled by auth-broker
+// Connection package only handles HTTP communication
+const connection = new JwtAbapConnection(config, logger);
+// No refreshToken() or canRefreshToken() methods available
+```
+
+**Logger Usage**:
+```typescript
+// Logger is now optional
+const connection = new JwtAbapConnection(config); // No logger - no logging output
+const connection = new JwtAbapConnection(config, logger); // With logger - logging enabled
+const connection = new JwtAbapConnection(config, null); // Explicitly no logger
+```
+
+If you were using session storage functionality:
+
+**Before (0.1.x)**:
+```typescript
+import { FileSessionStorage } from '@mcp-abap-adt/connection';
+
+const sessionStorage = new FileSessionStorage();
+const connection = new JwtAbapConnection(config, logger, sessionStorage);
+await connection.saveSessionState();
+const state = await connection.getSessionState();
+```
+
+**After (0.2.0)**:
+```typescript
+// Session storage is now handled by auth-broker
+// Connection package only handles HTTP communication
+const connection = new JwtAbapConnection(config, logger);
+// No sessionStorage parameter, no saveSessionState() or getSessionState() methods
+```
+
 ## [0.1.15] - 2025-12-05
 
 ### Changed
@@ -283,11 +382,9 @@ const connection = createAbapConnection(config, logger);
 - Documentation structure:
   - `docs/INSTALLATION.md` - Installation guide
   - `docs/USAGE.md` - Usage examples and API documentation
-  - `docs/AUTO_REFRESH_TESTING.md` - Testing guide for auto-refresh
   - `docs/CUSTOM_SESSION_STORAGE.md` - Custom session storage implementation
 - Example files:
   - `examples/basic-connection.js` - Simple connection example
-  - `examples/auto-refresh.js` - JWT auto-refresh demonstration
   - `examples/session-persistence.js` - FileSessionStorage usage
   - Updated `examples/README.md` with all examples
 
@@ -364,12 +461,10 @@ const connection = createAbapConnection(config, logger);
 - Documentation structure:
   - `docs/INSTALLATION.md` - Installation guide
   - `docs/USAGE.md` - Usage examples and API documentation
-  - `docs/AUTO_REFRESH_TESTING.md` - Testing guide for auto-refresh
   - `docs/CUSTOM_SESSION_STORAGE.md` - Custom session storage implementation
   - `docs/STATEFUL_SESSION_GUIDE.md` - Session state management guide
 - Example files:
   - `examples/basic-connection.js` - Simple connection example
-  - `examples/auto-refresh.js` - JWT auto-refresh demonstration
   - `examples/session-persistence.js` - FileSessionStorage usage
   - `examples/README.md` with all examples
 

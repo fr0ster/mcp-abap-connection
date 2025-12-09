@@ -7,15 +7,12 @@ ABAP connection layer for MCP ABAP ADT server. Provides a unified interface for 
 - 🔐 **Multiple Authentication Methods**: 
   - Basic Auth for on-premise SAP systems
   - JWT/OAuth2 for SAP BTP ABAP Environment
-- 🔄 **Automatic JWT Token Refresh**: 
-  - Detects expired tokens (401/403 errors)
-  - Automatically refreshes using OAuth2 refresh token
-  - Distinguishes between auth errors and permission errors
-  - No manual intervention required
-- 💾 **Stateful Sessions**: 
-  - Persistent session management with CSRF tokens and cookies
-  - Custom storage backends (file system, database, Redis, etc.)
-  - Automatic session state save/load
+- 🔄 **Token Management**: 
+  - Token refresh is handled by `@mcp-abap-adt/auth-broker` package
+  - Connection package focuses on HTTP communication only
+- 💾 **Session Management**: 
+  - Session headers management (cookies, CSRF tokens)
+  - Session state persistence is handled by `@mcp-abap-adt/auth-broker` package
 - 🏗️ **Clean Architecture**:
   - Abstract base class for common HTTP/session logic
   - Auth-type specific implementations (BaseAbapConnection, JwtAbapConnection)
@@ -42,9 +39,9 @@ The package uses a clean separation of concerns:
   
 - **`JwtAbapConnection`** (concrete, exported):
   - JWT/OAuth2 Authentication implementation
-  - Smart connect() - detects expired tokens and auto-refreshes
-  - Permission vs auth error detection
+  - Simple connect() - establishes connection with JWT token
   - Suitable for SAP BTP ABAP Environment
+  - Token refresh handled by auth-broker package
 
 ## Responsibilities and Design Principles
 
@@ -71,21 +68,19 @@ This package is responsible for:
 1. **HTTP communication with SAP systems**: Makes HTTP requests to SAP ABAP systems via ADT protocol
 2. **Authentication handling**: Supports Basic Auth and JWT/OAuth2 authentication methods
 3. **Session management**: Manages cookies, CSRF tokens, and session state
-4. **Token refresh**: Automatically refreshes expired JWT tokens (for `JwtAbapConnection`)
-5. **Error handling**: Distinguishes between authentication errors and permission errors
+4. **Error handling**: Handles HTTP errors and connection issues
 
 #### What This Package Does
 
 - **Provides connection abstraction**: `AbapConnection` interface for interacting with SAP systems
 - **Handles HTTP requests**: Makes requests to SAP ADT endpoints with proper headers and authentication
 - **Manages sessions**: Handles cookies, CSRF tokens, and session state persistence
-- **Refreshes tokens**: Automatically refreshes expired JWT tokens when detected
-- **Validates tokens**: Detects expired tokens by analyzing HTTP response codes (401/403)
 
 #### What This Package Does NOT Do
 
 - **Does NOT obtain tokens**: Token acquisition is handled by `@mcp-abap-adt/auth-providers` and `@mcp-abap-adt/auth-broker`
 - **Does NOT store tokens**: Token storage is handled by `@mcp-abap-adt/auth-stores`
+- **Does NOT refresh tokens**: Token refresh is handled by `@mcp-abap-adt/auth-broker`
 - **Does NOT orchestrate authentication**: Token lifecycle management is handled by `@mcp-abap-adt/auth-broker`
 - **Does NOT know about destinations**: Destination-based authentication is handled by consumers
 - **Does NOT handle OAuth2 flows**: OAuth2 flows are handled by token providers
@@ -95,25 +90,19 @@ This package is responsible for:
 This package interacts with external packages **ONLY through interfaces**:
 
 - **Logger interface**: Uses `ILogger` interface for logging - does not know about concrete logger implementation
-- **Session storage interface**: Uses `ISessionStorage` interface for session persistence - does not know about concrete storage implementation
 - **No direct dependencies on auth packages**: All token-related operations are handled through configuration (`SapConfig`) passed by consumers
 
 ## Documentation
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
-- 🧪 **[Testing Guide](./docs/AUTO_REFRESH_TESTING.md)** - Auto-refresh testing and troubleshooting
-- 🔧 **[Session Storage](./docs/CUSTOM_SESSION_STORAGE.md)** - Custom session storage implementation
-- 🔁 **[Stateful Session Guide (Connection)](./docs/STATEFUL_SESSION_GUIDE.md)** - Cookies, CSRF tokens, and session storage responsibilities
 - 💡 **[Examples](./examples/)** - Working code examples
 
 ## Features
 
 - 🔐 **Multiple Authentication Methods**: Basic Auth for on-premise systems, JWT/OAuth2 for SAP BTP ABAP Environment
-- 🔄 **Auto Token Refresh**: Automatic JWT token refresh when expired (for cloud systems)
-- 💾 **Stateful Sessions**: Support for persistent sessions with CSRF token and cookie management
-- 📝 **Custom Logging**: Pluggable logger interface for integration with any logging system
-- 🛠️ **CLI Tool**: Built-in authentication helper for SAP BTP service key authentication
+- 💾 **Session Management**: Session headers management (cookies, CSRF tokens) for HTTP communication
+- 📝 **Custom Logging**: Pluggable logger interface for integration with any logging system (optional)
 - 📦 **TypeScript**: Full TypeScript support with type definitions included
 - ⚡ **Timeout Management**: Configurable timeouts for different operation types
 
@@ -158,22 +147,17 @@ const response = await connection.makeAdtRequest({
 });
 ```
 
-### Cloud Usage (JWT/OAuth2 with Auto-Refresh)
+### Cloud Usage (JWT/OAuth2)
 
 ```typescript
 import { createAbapConnection, SapConfig } from "@mcp-abap-adt/connection";
 
-// JWT configuration with refresh token for auto-refresh
+// JWT configuration
 const config: SapConfig = {
   url: "https://your-instance.abap.cloud.sap",
   client: "100", // Optional
   authType: "jwt",
   jwtToken: "your-jwt-token-here", // Obtained via OAuth2 flow
-  // For auto-refresh support:
-  refreshToken: "your-refresh-token",
-  uaaUrl: "https://your-tenant.authentication.cert.eu10.hana.ondemand.com",
-  uaaClientId: "your-client-id",
-  uaaClientSecret: "your-client-secret",
 };
 
 const logger = {
@@ -183,20 +167,14 @@ const logger = {
   debug: (msg: string, meta?: any) => console.debug(msg, meta),
 };
 
+// Logger is optional - if not provided, no logging output
 const connection = createAbapConnection(config, logger);
 
-// Token will be automatically refreshed if expired during requests
+// Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
 });
-
-// How auto-refresh works:
-// 1. If JWT token expired → SAP returns 401/403
-// 2. Connection detects this is auth error (not permission error)
-// 3. Automatically calls refresh token endpoint
-// 4. Retries the request with new token
-// 5. User doesn't need to handle this manually
 ```
 
 ### Stateful Sessions
@@ -204,46 +182,21 @@ const response = await connection.makeAdtRequest({
 For operations that require session state (e.g., object modifications), you can enable stateful sessions:
 
 ```typescript
-import {
-  createAbapConnection,
-  ISessionStorage,
-  SessionState,
-} from "@mcp-abap-adt/connection";
-
-// Implement session storage (e.g., file system, database, memory)
-class FileSessionStorage implements ISessionStorage {
-  async save(sessionId: string, state: SessionState): Promise<void> {
-    // Save to file system
-    await fs.writeFile(
-      `sessions/${sessionId}.json`,
-      JSON.stringify(state, null, 2)
-    );
-  }
-
-  async load(sessionId: string): Promise<SessionState | null> {
-    // Load from file system
-    const data = await fs.readFile(`sessions/${sessionId}.json`, "utf-8");
-    return JSON.parse(data);
-  }
-
-  async delete(sessionId: string): Promise<void> {
-    // Delete from file system
-    await fs.unlink(`sessions/${sessionId}.json`);
-  }
-}
+import { createAbapConnection } from "@mcp-abap-adt/connection";
 
 const connection = createAbapConnection(config, logger);
-const sessionStorage = new FileSessionStorage();
 
-// Enable stateful session
-await connection.enableStatefulSession("my-session-id", sessionStorage);
+// Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
+connection.setSessionType("stateful");
 
-// Now CSRF tokens and cookies are automatically managed
+// Make requests - SAP will maintain session state
 await connection.makeAdtRequest({
   method: "POST",
   url: "/sap/bc/adt/objects/domains",
   data: { /* domain data */ },
 });
+
+// Note: Session state persistence is handled by @mcp-abap-adt/auth-broker package
 ```
 
 ### Custom Logger
@@ -369,17 +322,16 @@ Main interface for ABAP connections.
 interface AbapConnection {
   makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
   reset(): void;
-  enableStatefulSession(sessionId: string, storage: ISessionStorage): Promise<void>;
-  disableStatefulSession(): void;
-  getSessionMode(): "stateless" | "stateful";
-  getSessionId(): string | undefined; // Get current session ID
   setSessionType(type: "stateless" | "stateful"): void; // Switch session type
+  getSessionMode(): "stateless" | "stateful"; // Get current session mode
+  getSessionId(): string | null; // Get current session ID
 }
 ```
 
-**New in 0.1.6+:**
-- `getSessionId()`: Returns the current session ID if stateful session is enabled, otherwise `undefined`
-- `setSessionType(type)`: Programmatically switch between stateful and stateless modes without recreating connection
+**Session Management:**
+- `setSessionType(type)`: Programmatically switch between stateful and stateless modes
+- `getSessionMode()`: Returns current session mode
+- `getSessionId()`: Returns the current session ID (auto-generated UUID)
 
 #### `ILogger`
 
@@ -396,29 +348,16 @@ interface ILogger {
 }
 ```
 
-#### `ISessionStorage`
-
-Interface for session state persistence.
-
-```typescript
-interface ISessionStorage {
-  save(sessionId: string, state: SessionState): Promise<void>;
-  load(sessionId: string): Promise<SessionState | null>;
-  delete(sessionId: string): Promise<void>;
-}
-```
-
 ### Functions
 
-#### `createAbapConnection(config, logger, sessionStorage?, sessionId?)`
+#### `createAbapConnection(config, logger?, sessionId?)`
 
 Factory function to create an ABAP connection instance.
 
 ```typescript
 function createAbapConnection(
   config: SapConfig,
-  logger: ILogger,
-  sessionStorage?: ISessionStorage,
+  logger?: ILogger | null,
   sessionId?: string
 ): AbapConnection;
 ```
@@ -492,14 +431,14 @@ See [PR Proposal](./PR_PROPOSAL_CSRF_CONFIG.md) for more details.
 
 See [CHANGELOG.md](./CHANGELOG.md) for detailed version history and breaking changes.
 
-**Latest version: 0.1.13**
-- Added `CSRF_CONFIG` and `CSRF_ERROR_MESSAGES` exports for consistent CSRF token handling
-- Updated CSRF token endpoint to `/sap/bc/adt/core/discovery` (lighter response, available on all systems)
+**Latest version: 0.2.0**
+- Removed token refresh functionality (handled by `@mcp-abap-adt/auth-broker`)
+- Removed session storage functionality (handled by `@mcp-abap-adt/auth-broker`)
+- Logger is now optional
 - See [CHANGELOG.md](./CHANGELOG.md) for full details
 
 ## Documentation
 
-- [Custom Session Storage](./docs/CUSTOM_SESSION_STORAGE.md) - How to implement custom session persistence (database, Redis, etc.)
 - [Examples](./examples/README.md) - Working code examples
 - [Changelog](./CHANGELOG.md) - Version history and release notes
 

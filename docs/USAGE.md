@@ -1,6 +1,6 @@
 # Usage Guide
 
-**Version:** 0.1.13  
+**Version:** 0.2.0  
 **Last Updated:** January 2025
 
 ## Table of Contents
@@ -28,7 +28,7 @@ const config: SapConfig = {
   client: '100',
 };
 
-// Simple logger
+// Logger is optional - if not provided, no logging output
 const logger = {
   info: (msg: string, meta?: any) => console.log(msg, meta),
   error: (msg: string, meta?: any) => console.error(msg, meta),
@@ -36,8 +36,10 @@ const logger = {
   debug: (msg: string, meta?: any) => console.debug(msg, meta),
 };
 
-// Create connection (auto-detects on-premise vs cloud)
+// Create connection (logger is optional)
 const connection = createAbapConnection(config, logger);
+// Or without logger:
+// const connection = createAbapConnection(config);
 
 // Make ADT requests (connection happens automatically)
 const response = await connection.makeAdtRequest({
@@ -89,29 +91,22 @@ const config = {
 const connection = new JwtAbapConnection(config, logger);
 ```
 
-### JWT with Auto-Refresh (Recommended for Cloud)
+### JWT Authentication (Cloud/BTP)
 
-**New in 0.1.0+:** Automatic token refresh when JWT expires:
+For SAP BTP ABAP Environment, use `@mcp-abap-adt/auth-broker` for token refresh functionality:
 
 ```typescript
 const config = {
   url: 'https://tenant.abap.cloud',
   authType: 'jwt' as const,
   jwtToken: 'eyJhbGciOiJSUzI1NiIs...',
-  client: '100',
-  
-  // Auto-refresh configuration (required for auto-refresh)
-  // Auto-refresh configuration (required for auto-refresh)
-  refreshToken: 'your-refresh-token',
-  uaaUrl: 'https://tenant.authentication.cloud',
-  uaaClientId: 'sb-client-id!b123',
-  uaaClientSecret: 'client-secret-xyz',
+  client: '100', // Optional for cloud
 };
 
 const connection = new JwtAbapConnection(config, logger);
 
-// Token will auto-refresh on 401/403 errors
-// No manual intervention needed - just use the connection normally
+// Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
+// Connection package only handles HTTP communication
 const response = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
@@ -189,22 +184,15 @@ const connection = createAbapConnection(config, logger);
 await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' });
 ```
 
-### Stateful Mode (Session Persistence)
+### Stateful Mode (Session Headers)
 
-**New in 0.1.0+:** Enable session persistence for operations requiring consistent session state:
+Enable stateful session mode for operations requiring consistent session state:
 
 ```typescript
-import { FileSessionStorage } from '@mcp-abap-adt/connection';
-
-const sessionStorage = new FileSessionStorage({
-  sessionsDir: './.sessions',
-  enablePersistence: true,
-});
-
 const connection = createAbapConnection(config, logger);
 
-// Enable stateful session
-await connection.enableStatefulSession('my-session-id', sessionStorage);
+// Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
+connection.setSessionType('stateful');
 
 // Now all requests share the same session (cookies, CSRF token)
 await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' });
@@ -212,67 +200,39 @@ await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' })
 // Check session mode
 console.log(connection.getSessionMode()); // 'stateful'
 
-// Get session ID (new in 0.1.6+)
-console.log(connection.getSessionId()); // 'my-session-id'
+// Get session ID (auto-generated UUID)
+console.log(connection.getSessionId()); // e.g., '7f3a8b2c-...'
 
-// Switch back to stateless (new in 0.1.6+)
+// Switch back to stateless
 connection.setSessionType('stateless');
-
-// Disable stateful session
-connection.disableStatefulSession();
 ```
 
-### Custom Session Storage
-
-For production use, implement `ISessionStorage` for your backend (Redis, database, etc.):
-
-```typescript
-import { ISessionStorage, SessionState } from '@mcp-abap-adt/connection';
-
-class RedisSessionStorage implements ISessionStorage {
-  async save(sessionId: string, state: SessionState): Promise<void> {
-    await redis.set(`session:${sessionId}`, JSON.stringify(state));
-  }
-  
-  async load(sessionId: string): Promise<SessionState | null> {
-    const data = await redis.get(`session:${sessionId}`);
-    return data ? JSON.parse(data) : null;
-  }
-  
-  async delete(sessionId: string): Promise<void> {
-    await redis.del(`session:${sessionId}`);
-  }
-}
-
-const storage = new RedisSessionStorage();
-await connection.enableStatefulSession('user-123', storage);
-```
+**Note:** Session state persistence is handled by `@mcp-abap-adt/auth-broker` package. The connection package only manages session headers (cookies, CSRF tokens) for HTTP communication.
 
 ## Advanced Features
 
-### Session ID Management (New in 0.1.4+)
+### Session ID Management
 
-Session IDs are now auto-generated if not provided:
+Session IDs are auto-generated (UUID) when connection is created:
 
 ```typescript
-// Auto-generated session ID
-await connection.enableStatefulSession(undefined, storage);
+const connection = createAbapConnection(config, logger);
 console.log(connection.getSessionId()); // e.g., '7f3a8b2c-...'
 
-// Or provide your own
-await connection.enableStatefulSession('custom-session-123', storage);
+// Or provide your own when creating connection
+const connection = createAbapConnection(config, logger, 'custom-session-123');
+console.log(connection.getSessionId()); // 'custom-session-123'
 ```
 
-### Switching Session Types (New in 0.1.6+)
+### Switching Session Types
 
 Dynamically switch between stateful and stateless modes:
 
 ```typescript
-// Start in stateless mode
+// Start in stateless mode (default)
 const connection = createAbapConnection(config, logger);
 
 // Enable stateful for a series of operations
-await connection.enableStatefulSession('session-1', storage);
 connection.setSessionType('stateful');
 
 // Do stateful operations...
@@ -350,22 +310,6 @@ try {
 }
 ```
 
-### Auto-Refresh Error Handling
-
-JWT auto-refresh happens automatically, but you can detect when it fails:
-
-```typescript
-try {
-  await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' });
-} catch (error) {
-  if (error.message?.includes('refresh failed')) {
-    console.error('Token refresh failed - please re-authenticate');
-    // Trigger new authentication flow
-  } else {
-    console.error('Connection failed:', error.message);
-  }
-}
-```
 
 ## API Reference
 
@@ -377,11 +321,9 @@ Main interface for all connection types:
 interface AbapConnection {
   makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
   reset(): void;
-  enableStatefulSession(sessionId: string | undefined, storage: ISessionStorage): Promise<void>;
-  disableStatefulSession(): void;
+  setSessionType(type: "stateless" | "stateful"): void;
   getSessionMode(): "stateless" | "stateful";
-  getSessionId(): string | undefined; // New in 0.1.6+
-  setSessionType(type: "stateless" | "stateful"): void; // New in 0.1.6+
+  getSessionId(): string | null;
 }
 ```
 
@@ -391,7 +333,7 @@ For on-premise SAP systems:
 
 ```typescript
 class BaseAbapConnection extends AbstractAbapConnection {
-  constructor(config: SapConfig, logger: ILogger);
+  constructor(config: SapConfig, logger?: ILogger | null, sessionId?: string);
 }
 ```
 
@@ -474,13 +416,13 @@ See [PR Proposal](../PR_PROPOSAL_CSRF_CONFIG.md) for more details.
 
 ### `JwtAbapConnection` (JWT/OAuth2)
 
-For SAP BTP cloud systems with automatic token refresh:
+For SAP BTP cloud systems. Token refresh is handled by `@mcp-abap-adt/auth-broker`:
 
 ```typescript
 class JwtAbapConnection extends AbstractAbapConnection {
-  constructor(config: SapConfig, logger: ILogger);
-  canRefreshToken(): boolean; // Check if refresh is possible
-  refreshToken(): Promise<void>; // Manually trigger refresh
+  constructor(config: SapConfig, logger?: ILogger | null);
+  // Note: refreshToken() and canRefreshToken() methods removed in 0.2.0
+  // Use @mcp-abap-adt/auth-broker for token refresh functionality
 }
 ```
 
@@ -491,8 +433,7 @@ Recommended way to create connections:
 ```typescript
 function createAbapConnection(
   config: SapConfig,
-  logger: ILogger,
-  sessionStorage?: ISessionStorage,
+  logger?: ILogger | null,
   sessionId?: string
 ): AbapConnection;
 ```
@@ -514,11 +455,8 @@ type SapConfig = {
   // For JWT auth
   jwtToken?: string;
   
-  // For JWT auto-refresh (optional but recommended)
-  refreshToken?: string;
-  uaaUrl?: string;
-  uaaClientId?: string;
-  uaaClientSecret?: string;
+  // Note: Token refresh credentials (refreshToken, uaaUrl, etc.) are not used by connection package
+  // Token refresh is handled by @mcp-abap-adt/auth-broker package
 };
 ```
 
@@ -527,19 +465,19 @@ type SapConfig = {
 See [examples/](../examples/) for complete working examples:
 
 - `basic-connection.js` - Simple connection example
-- `auto-refresh.js` - JWT auto-refresh demonstration
-- `session-persistence.js` - Session management with FileSessionStorage
+- `basic-connection.js` - Basic authentication example
 - See [examples/README.md](../examples/README.md) for full list
 
 ## Best Practices
 
 1. **Use Factory Function**: Prefer `createAbapConnection()` over direct instantiation - it auto-detects auth type
-2. **Enable Session Persistence**: Use stateful sessions for multi-request operations (locks, transactions)
-3. **Configure Auto-Refresh**: For cloud systems, always provide refresh credentials to avoid auth interruptions
-4. **Handle Errors Gracefully**: Wrap requests in try-catch blocks and check `error.response` for HTTP errors
-5. **Use Proper Logging**: Implement custom logger for production systems with appropriate log levels
-6. **Session ID Management**: Use auto-generated session IDs (new in 0.1.4+) or provide meaningful IDs
-7. **Switch Session Types**: Use `setSessionType()` (new in 0.1.6+) to dynamically change between stateful/stateless
+2. **Enable Stateful Mode**: Use `setSessionType('stateful')` for multi-request operations (locks, transactions)
+3. **Token Refresh**: For cloud systems, use `@mcp-abap-adt/auth-broker` for token refresh functionality
+4. **Session State Persistence**: Use `@mcp-abap-adt/auth-broker` for session state persistence
+5. **Handle Errors Gracefully**: Wrap requests in try-catch blocks and check `error.response` for HTTP errors
+6. **Use Proper Logging**: Implement custom logger for production systems with appropriate log levels (logger is optional)
+7. **Session ID Management**: Session IDs are auto-generated (UUID) or can be provided when creating connection
+8. **Switch Session Types**: Use `setSessionType()` to dynamically change between stateful/stateless modes
 
 ## Version History
 
@@ -548,14 +486,14 @@ See [examples/](../examples/) for complete working examples:
 - **0.1.7**: Base URL handling refactoring
 - **0.1.6**: Added `getSessionId()` and `setSessionType()` methods
 - **0.1.4**: Automatic session ID generation
-- **0.1.0**: Initial release with JWT auto-refresh
+- **0.2.0**: Token refresh moved to auth-broker package
+- **0.1.0**: Initial release
 
 See [CHANGELOG.md](../CHANGELOG.md) for complete version history.
 
 ## Next Steps
 
-- See [AUTO_REFRESH_TESTING.md](./AUTO_REFRESH_TESTING.md) for JWT auto-refresh testing guide
-- See [CUSTOM_SESSION_STORAGE.md](./CUSTOM_SESSION_STORAGE.md) for advanced session management
-- See [STATEFUL_SESSION_GUIDE.md](./STATEFUL_SESSION_GUIDE.md) for session state management details
+- Token refresh functionality is now in `@mcp-abap-adt/auth-broker` package
+- Session state persistence is now in `@mcp-abap-adt/auth-broker` package
 - See [JWT_AUTH_TOOLS.md](./JWT_AUTH_TOOLS.md) for CLI authentication tool
 - See [INSTALLATION.md](./INSTALLATION.md) for installation instructions
