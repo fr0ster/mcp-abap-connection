@@ -1,4 +1,12 @@
 {
+    // Restricts spell checking to files inside the project only
+    "cSpell.files": [
+      "**/*"
+    ],
+    "cSpell.ignorePaths": [
+      // Ignore everything outside the project's root folder
+      "!**"
+    ],
     "cSpell.words": [
         "atomsvc",
         "DEVC",
