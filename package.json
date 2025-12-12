@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/connection",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "ABAP connection layer for MCP ABAP ADT server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
