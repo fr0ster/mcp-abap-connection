@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2025-12-13
+
+### Changed
+- Dependency bump: `@mcp-abap-adt/interfaces` → `^0.1.16` to align with latest interfaces release
+- Repository metadata: point package links to `fr0ster/mcp-abap-connection` (correct repo)
+
 ## [0.2.0] - 2025-12-08
 
 ### Breaking Changes

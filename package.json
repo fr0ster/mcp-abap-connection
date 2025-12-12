@@ -23,14 +23,13 @@
   ],
   "author": "Oleksii Kyslytsia <oleksij.kyslytsja@gmail.com>",
   "license": "MIT",
-  "homepage": "https://github.com/fr0ster/mcp-abap-adt#readme",
+  "homepage": "https://github.com/fr0ster/mcp-abap-connection#readme",
   "bugs": {
-    "url": "https://github.com/fr0ster/mcp-abap-adt/issues"
+    "url": "https://github.com/fr0ster/mcp-abap-connection/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fr0ster/mcp-abap-adt.git",
-    "directory": "packages/connection"
+    "url": "git+https://github.com/fr0ster/mcp-abap-connection.git"
   },
   "scripts": {
     "clean": "rm -rf dist tsconfig.tsbuildinfo",
@@ -43,7 +42,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@mcp-abap-adt/interfaces": "^0.1.4",
+    "@mcp-abap-adt/interfaces": "^0.1.16",
     "axios": "^1.11.0",
     "commander": "^14.0.2",
     "express": "^5.1.0",
