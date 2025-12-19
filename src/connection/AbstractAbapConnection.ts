@@ -1,6 +1,7 @@
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, AxiosResponse } from "axios";
 import { Agent } from "https";
 import { randomUUID } from "crypto";
+import { isNetworkError } from "@mcp-abap-adt/interfaces";
 import { ILogger } from "../logger.js";
 import { getTimeout } from "../utils/timeouts.js";
 import { SapConfig } from "../config/sapConfig.js";
@@ -268,6 +269,15 @@ abstract class AbstractAbapConnection implements AbapConnection {
         this.updateCookiesFromResponse(error.response.headers);
       }
 
+
+      // Check if this is a network error (connection refused, timeout, DNS, etc.)
+      // Don't retry for network errors - these indicate infrastructure/VPN issues
+      const networkError = isNetworkError(error);
+
+      if (networkError) {
+        this.logger?.error(`Network error - cannot connect to SAP system: ${errorDetails.message}`, errorDetails);
+        throw error;
+      }
 
       // Log 404 as debug (common for existence checks), other errors as error
       if (errorDetails.status === 404) {

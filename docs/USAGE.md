@@ -310,6 +310,50 @@ try {
 }
 ```
 
+### Network Error Detection
+
+The connection automatically detects network-level errors and prevents unnecessary retry attempts. Network errors include:
+
+- `ECONNREFUSED` - Connection refused (server not reachable)
+- `ETIMEDOUT` - Connection timeout
+- `ENOTFOUND` - DNS resolution failed (hostname not found)
+- `ECONNRESET` - Connection reset by peer
+- `ENETUNREACH` - Network unreachable
+- `EHOSTUNREACH` - Host unreachable
+
+When these errors occur, the connection:
+1. **Does NOT attempt CSRF token retry** - network issues can't be fixed by retrying authentication
+2. **Immediately throws the error** with clear network-related message
+3. **Logs the error** with full context for troubleshooting
+
+```typescript
+try {
+  await connection.makeAdtRequest({
+    method: 'GET',
+    url: '/sap/bc/adt/repository/nodestructure',
+  });
+} catch (error) {
+  // Check for specific network error codes
+  if (error.code === 'ECONNREFUSED') {
+    console.error('Cannot connect to SAP server - check VPN connection');
+  } else if (error.code === 'ETIMEDOUT') {
+    console.error('Connection timeout - server not responding');
+  } else if (error.code === 'ENOTFOUND') {
+    console.error('Cannot resolve hostname - check SAP URL');
+  } else if (error.response) {
+    console.error(`HTTP ${error.response.status}:`, error.response.data);
+  } else {
+    console.error('Request failed:', error.message);
+  }
+}
+```
+
+**Best Practices:**
+- Always handle network errors separately from HTTP errors
+- Network errors indicate infrastructure issues (VPN, DNS, firewall)
+- HTTP errors (401, 403, 404, etc.) indicate application-level issues
+- Use error codes to provide specific user guidance
+
 
 ## API Reference
 

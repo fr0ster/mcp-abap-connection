@@ -105,6 +105,7 @@ This package interacts with external packages **ONLY through interfaces**:
 - 📝 **Custom Logging**: Pluggable logger interface for integration with any logging system (optional)
 - 📦 **TypeScript**: Full TypeScript support with type definitions included
 - ⚡ **Timeout Management**: Configurable timeouts for different operation types
+- 🌐 **Network Error Detection**: Automatic detection and proper handling of network-level errors (connection refused, timeout, DNS failures)
 
 ## Installation
 

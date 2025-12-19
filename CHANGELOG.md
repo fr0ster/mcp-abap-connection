@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2025-12-19
+
+### Fixed
+- **Network Error Detection**: Add proper detection and handling of network-level errors in `AbstractAbapConnection.makeAdtRequest()`
+  - Detect network errors: `ECONNREFUSED`, `ETIMEDOUT`, `ENOTFOUND`, `ECONNRESET`, `ENETUNREACH`, `EHOSTUNREACH`
+  - Skip retry logic for network errors (CSRF token retry, 401 cookie retry)
+  - Throw network errors immediately with clear error message
+  - Prevents confusing error messages when VPN is down or server is unreachable
+  - Network errors now clearly indicate infrastructure issues vs application errors
+
+### Changed
+- **Error Handling**: Improved error handling logic to distinguish between network errors and HTTP errors
+  - Network errors (connection issues) are now handled separately from HTTP errors (401, 403, 404)
+  - No retry attempts for network errors (retries cannot fix infrastructure issues)
+  - Better error logging with network error context
+
+### Documentation
+- Added "Network Error Detection" section to `docs/USAGE.md` with examples and best practices
+- Documented all detected network error codes and their meanings
+- Added error handling examples showing how to handle network vs HTTP errors
+
 ## [0.2.2] - 2025-12-13
 
 ### Fixed

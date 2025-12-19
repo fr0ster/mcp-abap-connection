@@ -8,17 +8,21 @@
       "!**"
     ],
     "cSpell.words": [
-        "atomsvc",
-        "DEVC",
-        "ENOTFOUND",
-        "ETIMEDOUT",
-        "nodestructure",
-        "npmjs",
-        "Segoe",
-        "sessiontype",
-        "Tahoma",
-        "usagereferences",
-        "Verdana",
-        "ZTEST"
+      "atomsvc",
+      "DEVC",
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "ENOTFOUND",
+      "ETIMEDOUT",
+      "nodestructure",
+      "npmjs",
+      "Segoe",
+      "sessiontype",
+      "Tahoma",
+      "usagereferences",
+      "Verdana",
+      "ZTEST"
     ]
 }
