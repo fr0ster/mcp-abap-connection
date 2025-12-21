@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2025-12-21
+
+### Added
+- **connectionFactory tokenRefresher**: `createAbapConnection()` now accepts optional 4th parameter `tokenRefresher`
+  - Passes through to `JwtAbapConnection` for automatic token refresh DI
+  - Enables external token management via `AuthBroker.createTokenRefresher()`
+
 ## [0.2.4] - 2025-12-21
 
 ### Added
