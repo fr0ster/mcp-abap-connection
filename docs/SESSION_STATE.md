@@ -1,8 +1,8 @@
-# Custom Session Storage
+# Session State Management
 
-If you prefer to store session state in your own storage (database, Redis, etc.) instead of using `FileSessionStorage`, you can use `getSessionState()` and `setSessionState()` methods.
+You can use `getSessionState()` and `setSessionState()` methods to export/import session state for persistence in your own storage (database, Redis, file, etc.).
 
-**See working example:** [examples/custom-session-storage.js](./examples/custom-session-storage.js)
+**See working example:** [examples/custom-session-storage.js](../examples/custom-session-storage.js)
 
 ## Get Session State
 
@@ -117,5 +117,5 @@ await unlockClass(connection, data.objectName, data.lockHandle, 'my-session-id')
 
 - `getSessionState()` returns `null` if no cookies/CSRF token are available
 - `setSessionState()` accepts partial state (missing fields default to `null` or `{}`)
-- Session state is automatically updated after each request when using `enableStatefulSession()`
-- For manual control, use `getSessionState()` / `setSessionState()` without `enableStatefulSession()`
+- Session state is automatically updated after each request
+- Use `getSessionState()` / `setSessionState()` for manual session state management

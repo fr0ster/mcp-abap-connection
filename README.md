@@ -178,6 +178,38 @@ const response = await connection.makeAdtRequest({
 });
 ```
 
+### Cloud Usage with Automatic Token Refresh
+
+For automatic token refresh on 401/403 errors, inject `ITokenRefresher`:
+
+```typescript
+import { JwtAbapConnection, SapConfig } from "@mcp-abap-adt/connection";
+import type { ITokenRefresher } from "@mcp-abap-adt/interfaces";
+
+// Token refresher provides token acquisition and refresh
+// (created by @mcp-abap-adt/auth-broker or custom implementation)
+const tokenRefresher: ITokenRefresher = {
+  getToken: async () => { /* return current token */ },
+  refreshToken: async () => { /* refresh and return new token */ },
+};
+
+// JWT configuration
+const config: SapConfig = {
+  url: "https://your-instance.abap.cloud.sap",
+  authType: "jwt",
+  jwtToken: await tokenRefresher.getToken(), // Get initial token
+};
+
+// Create connection with token refresher - 401/403 handled automatically
+const connection = new JwtAbapConnection(config, logger, undefined, tokenRefresher);
+
+// Requests automatically retry with refreshed token on auth errors
+const response = await connection.makeAdtRequest({
+  method: "GET",
+  url: "/sap/bc/adt/programs/programs/your-program",
+});
+```
+
 ### Stateful Sessions
 
 For operations that require session state (e.g., object modifications), you can enable stateful sessions:

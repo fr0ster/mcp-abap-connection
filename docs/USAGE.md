@@ -1,7 +1,7 @@
 # Usage Guide
 
-**Version:** 0.2.0  
-**Last Updated:** January 2025
+**Version:** 0.2.4  
+**Last Updated:** December 2025
 
 ## Table of Contents
 

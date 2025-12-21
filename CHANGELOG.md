@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2025-12-21
+
+### Added
+- **ITokenRefresher Support**: `JwtAbapConnection` now supports automatic token refresh via dependency injection
+  - New optional `tokenRefresher` parameter in constructor
+  - If provided, 401/403 errors trigger automatic token refresh and request retry
+  - If not provided, legacy behavior (throw error on expired token)
+  - Works with `AuthBroker.createTokenRefresher(destination)` from `@mcp-abap-adt/auth-broker`
+
+### Changed
+- **Dependencies**: Updated `@mcp-abap-adt/interfaces` to `^0.2.5`
+  - New `ITokenRefresher` interface for token management DI
+  - Simplified `IAbapConnection` interface
+
+### Usage Example
+```typescript
+import { JwtAbapConnection } from '@mcp-abap-adt/connection';
+import { AuthBroker } from '@mcp-abap-adt/auth-broker';
+
+// Create token refresher from broker
+const tokenRefresher = broker.createTokenRefresher('TRIAL');
+
+// Inject into connection - 401/403 handled automatically
+const connection = new JwtAbapConnection(config, logger, sessionId, tokenRefresher);
+```
+
 ## [0.2.3] - 2025-12-19
 
 ### Fixed

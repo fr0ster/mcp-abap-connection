@@ -8,6 +8,7 @@
 import { JwtAbapConnection } from '../connection/JwtAbapConnection.js';
 import { SapConfig } from '../config/sapConfig.js';
 import { ILogger } from '../logger.js';
+import type { ITokenRefresher } from '@mcp-abap-adt/interfaces';
 
 // Mock logger
 const mockLogger: ILogger = {
@@ -50,6 +51,49 @@ describe('JwtAbapConnection', () => {
       } as any;
       expect(() => new JwtAbapConnection(config, mockLogger))
         .toThrow('JWT authentication requires SAP_JWT_TOKEN');
+    });
+  });
+
+  describe('Token refresher injection', () => {
+    it('should accept optional tokenRefresher parameter', () => {
+      const config: SapConfig = {
+        url: 'https://test.sap.com',
+        authType: 'jwt',
+        jwtToken: 'test-jwt-token',
+      };
+      
+      const mockTokenRefresher: ITokenRefresher = {
+        getToken: jest.fn().mockResolvedValue('new-token'),
+        refreshToken: jest.fn().mockResolvedValue('refreshed-token'),
+      };
+      
+      expect(() => new JwtAbapConnection(config, mockLogger, undefined, mockTokenRefresher)).not.toThrow();
+    });
+
+    it('should work without tokenRefresher (legacy behavior)', () => {
+      const config: SapConfig = {
+        url: 'https://test.sap.com',
+        authType: 'jwt',
+        jwtToken: 'test-jwt-token',
+      };
+      
+      // No tokenRefresher provided - should still work
+      const connection = new JwtAbapConnection(config, mockLogger);
+      expect(connection).toBeDefined();
+    });
+
+    it('should use initial token from config', async () => {
+      const config: SapConfig = {
+        url: 'https://test.sap.com',
+        authType: 'jwt',
+        jwtToken: 'initial-jwt-token',
+      };
+      
+      const connection = new JwtAbapConnection(config, mockLogger);
+      
+      // Access protected method via casting for testing
+      const authHeader = (connection as any).buildAuthorizationHeader();
+      expect(authHeader).toBe('Bearer initial-jwt-token');
     });
   });
 });

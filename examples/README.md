@@ -33,19 +33,18 @@ node examples/basic-connection.js
 - Making GET request to ADT endpoint
 - Basic error handling
 
-### session-persistence.js
+### jwt-with-token-refresh.js
 
-Shows how to use FileSessionStorage to persist and reuse sessions.
+Shows how to use `ITokenRefresher` for automatic token refresh.
 
 ```bash
-node examples/session-persistence.js
+node examples/jwt-with-token-refresh.js
 ```
 
 **What it demonstrates:**
-- Creating FileSessionStorage instance
-- Saving session to disk
-- Reusing session in new connection
-- Avoiding repeated CSRF token fetches
+- Creating connection with token refresher injection
+- Automatic token refresh on 401/403 errors
+- Retry logic with refreshed token
 
 ### custom-session-storage.js
 

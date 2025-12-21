@@ -129,11 +129,10 @@ const connection = createAbapConnection({
   url: process.env.SAP_URL!,
   authType: "jwt",
   jwtToken: process.env.SAP_JWT_TOKEN!,
-  refreshToken: process.env.SAP_REFRESH_TOKEN!,
-  uaaUrl: process.env.SAP_UAA_URL!,
-  uaaClientId: process.env.SAP_UAA_CLIENT_ID!,
-  uaaClientSecret: process.env.SAP_UAA_CLIENT_SECRET!,
 });
+
+// Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
+// The refresh token credentials in .env are used by auth-broker, not connection
 ```
 
 

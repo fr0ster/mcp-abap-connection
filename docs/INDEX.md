@@ -1,8 +1,8 @@
 # Documentation Index
 
 **Package:** `@mcp-abap-adt/connection`  
-**Version:** 0.2.0  
-**Last Updated:** December 8, 2025
+**Version:** 0.2.4  
+**Last Updated:** December 21, 2025
 
 ## Package Structure
 
@@ -69,7 +69,12 @@ mcp-abap-connection/
 
 ## Version Highlights
 
-### 0.2.0 (Current) - 2025-12-08
+### 0.2.4 (Current) - 2025-12-21
+- 🔄 ITokenRefresher DI support for automatic token refresh
+- 📦 JwtAbapConnection accepts optional tokenRefresher parameter
+- ⚡ Automatic retry on 401/403 with refreshed token
+
+### 0.2.0 - 2025-12-08
 - ⚠️ **Breaking Changes**: Token refresh and session storage removed
 - 🔄 Token refresh moved to `@mcp-abap-adt/auth-broker` package
 - 💾 Session state persistence moved to `@mcp-abap-adt/auth-broker` package
