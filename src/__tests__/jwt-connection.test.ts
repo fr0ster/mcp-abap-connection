@@ -1,14 +1,14 @@
 /**
  * Unit tests for JWT connection
- * 
+ *
  * Verifies basic JWT connection functionality.
  * Token refresh functionality is handled by auth-broker package.
  */
 
-import { JwtAbapConnection } from '../connection/JwtAbapConnection.js';
-import { SapConfig } from '../config/sapConfig.js';
-import { ILogger } from '../logger.js';
 import type { ITokenRefresher } from '@mcp-abap-adt/interfaces';
+import type { SapConfig } from '../config/sapConfig.js';
+import { JwtAbapConnection } from '../connection/JwtAbapConnection.js';
+import type { ILogger } from '../logger.js';
 
 // Mock logger
 const mockLogger: ILogger = {
@@ -39,8 +39,9 @@ describe('JwtAbapConnection', () => {
         authType: 'basic' as any,
         jwtToken: 'test-jwt-token',
       };
-      expect(() => new JwtAbapConnection(config, mockLogger))
-        .toThrow('JWT connection expects authType "jwt"');
+      expect(() => new JwtAbapConnection(config, mockLogger)).toThrow(
+        'JWT connection expects authType "jwt"',
+      );
     });
 
     it('should throw error when jwtToken is missing', () => {
@@ -49,8 +50,9 @@ describe('JwtAbapConnection', () => {
         authType: 'jwt',
         // jwtToken is missing
       } as any;
-      expect(() => new JwtAbapConnection(config, mockLogger))
-        .toThrow('JWT authentication requires SAP_JWT_TOKEN');
+      expect(() => new JwtAbapConnection(config, mockLogger)).toThrow(
+        'JWT authentication requires SAP_JWT_TOKEN',
+      );
     });
   });
 
@@ -61,13 +63,21 @@ describe('JwtAbapConnection', () => {
         authType: 'jwt',
         jwtToken: 'test-jwt-token',
       };
-      
+
       const mockTokenRefresher: ITokenRefresher = {
         getToken: jest.fn().mockResolvedValue('new-token'),
         refreshToken: jest.fn().mockResolvedValue('refreshed-token'),
       };
-      
-      expect(() => new JwtAbapConnection(config, mockLogger, undefined, mockTokenRefresher)).not.toThrow();
+
+      expect(
+        () =>
+          new JwtAbapConnection(
+            config,
+            mockLogger,
+            undefined,
+            mockTokenRefresher,
+          ),
+      ).not.toThrow();
     });
 
     it('should work without tokenRefresher (legacy behavior)', () => {
@@ -76,7 +86,7 @@ describe('JwtAbapConnection', () => {
         authType: 'jwt',
         jwtToken: 'test-jwt-token',
       };
-      
+
       // No tokenRefresher provided - should still work
       const connection = new JwtAbapConnection(config, mockLogger);
       expect(connection).toBeDefined();
@@ -88,9 +98,9 @@ describe('JwtAbapConnection', () => {
         authType: 'jwt',
         jwtToken: 'initial-jwt-token',
       };
-      
+
       const connection = new JwtAbapConnection(config, mockLogger);
-      
+
       // Access protected method via casting for testing
       const authHeader = (connection as any).buildAuthorizationHeader();
       expect(authHeader).toBe('Bearer initial-jwt-token');

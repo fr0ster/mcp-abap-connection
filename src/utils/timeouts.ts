@@ -4,23 +4,27 @@ import type { ITimeoutConfig } from '@mcp-abap-adt/interfaces';
 export type TimeoutConfig = ITimeoutConfig;
 
 export function getTimeoutConfig(): ITimeoutConfig {
-  const defaultTimeout = parseInt(process.env.SAP_TIMEOUT_DEFAULT || "45000", 10);
-  const csrfTimeout = parseInt(process.env.SAP_TIMEOUT_CSRF || "15000", 10);
-  const longTimeout = parseInt(process.env.SAP_TIMEOUT_LONG || "60000", 10);
+  const defaultTimeout = parseInt(
+    process.env.SAP_TIMEOUT_DEFAULT || '45000',
+    10,
+  );
+  const csrfTimeout = parseInt(process.env.SAP_TIMEOUT_CSRF || '15000', 10);
+  const longTimeout = parseInt(process.env.SAP_TIMEOUT_LONG || '60000', 10);
 
   return {
     default: defaultTimeout,
     csrf: csrfTimeout,
-    long: longTimeout
+    long: longTimeout,
   };
 }
 
-export function getTimeout(type: "default" | "csrf" | "long" | number = "default"): number {
-  if (typeof type === "number") {
+export function getTimeout(
+  type: 'default' | 'csrf' | 'long' | number = 'default',
+): number {
+  if (typeof type === 'number') {
     return type;
   }
 
   const config = getTimeoutConfig();
   return config[type];
 }
-

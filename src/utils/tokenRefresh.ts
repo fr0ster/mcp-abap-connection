@@ -2,8 +2,8 @@
  * Token refresh utilities for JWT authentication
  */
 
-import axios from 'axios';
 import type { ITokenRefreshResult } from '@mcp-abap-adt/interfaces';
+import axios from 'axios';
 
 // Re-export for backward compatibility
 export type TokenRefreshResult = ITokenRefreshResult;
@@ -20,7 +20,7 @@ export async function refreshJwtToken(
   refreshToken: string,
   uaaUrl: string,
   clientId: string,
-  clientSecret: string
+  clientSecret: string,
 ): Promise<ITokenRefreshResult> {
   try {
     const tokenUrl = `${uaaUrl}/oauth/token`;
@@ -29,7 +29,9 @@ export async function refreshJwtToken(
     params.append('grant_type', 'refresh_token');
     params.append('refresh_token', refreshToken);
 
-    const authString = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+    const authString = Buffer.from(`${clientId}:${clientSecret}`).toString(
+      'base64',
+    );
 
     const response = await axios({
       method: 'post',
@@ -41,7 +43,7 @@ export async function refreshJwtToken(
       data: params.toString(),
     });
 
-    if (response.data && response.data.access_token) {
+    if (response.data?.access_token) {
       return {
         accessToken: response.data.access_token,
         refreshToken: response.data.refresh_token || refreshToken, // Use new refresh token if provided, otherwise keep old one
@@ -49,14 +51,16 @@ export async function refreshJwtToken(
     } else {
       throw new Error('Response does not contain access_token');
     }
-  } catch (error: any) {
-    if (error.response) {
+  } catch (error: unknown) {
+    const err = error as { response?: { status?: number; data?: unknown } };
+    if (err.response) {
       throw new Error(
-        `Token refresh failed (${error.response.status}): ${JSON.stringify(error.response.data)}`
+        `Token refresh failed (${err.response.status}): ${JSON.stringify(err.response.data)}`,
       );
     } else {
-      throw new Error(`Token refresh failed: ${error.message}`);
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      throw new Error(`Token refresh failed: ${errorMessage}`);
     }
   }
 }
-

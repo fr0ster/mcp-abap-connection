@@ -1,6 +1,6 @@
 /**
  * CSRF Token Configuration
- * 
+ *
  * Centralized constants for CSRF token fetching to ensure consistency
  * across different connection implementations.
  */
@@ -28,8 +28,8 @@ export const CSRF_CONFIG = {
    */
   REQUIRED_HEADERS: {
     'x-csrf-token': 'fetch',
-    'Accept': 'application/atomsvc+xml'
-  }
+    Accept: 'application/atomsvc+xml',
+  },
 } as const;
 
 /**
@@ -39,9 +39,9 @@ export const CSRF_CONFIG = {
 export const CSRF_ERROR_MESSAGES = {
   FETCH_FAILED: (attempts: number, cause: string) =>
     `Failed to fetch CSRF token after ${attempts} attempts: ${cause}`,
-  
-  NOT_IN_HEADERS: 'No CSRF token in response headers',
-  
-  REQUIRED_FOR_MUTATION: 'CSRF token is required for POST/PUT requests but could not be fetched'
-} as const;
 
+  NOT_IN_HEADERS: 'No CSRF token in response headers',
+
+  REQUIRED_FOR_MUTATION:
+    'CSRF token is required for POST/PUT requests but could not be fetched',
+} as const;

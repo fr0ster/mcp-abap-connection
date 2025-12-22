@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2025-12-22
+
+### Changed
+- **Biome Migration**: Migrated from ESLint/Prettier to Biome for linting and formatting
+  - Added `@biomejs/biome` as dev dependency
+  - Added `lint`, `lint:check`, and `format` scripts to package.json
+  - Integrated Biome check into build process (`npx biome check src --diagnostic-level=error`)
+  - Updated Node.js imports to use `node:` protocol (`crypto`, `https`)
+- **Type Safety**: Improved type safety by replacing `any` with `unknown`
+  - `AbstractAbapConnection.ts`: `updateCookiesFromResponse` method parameter changed from `Record<string, any>` to `Record<string, unknown>`
+  - `tokenRefresh.ts`: `error` parameter in catch block changed from `any` to `unknown` with added type guards
+
+### Fixed
+- Fixed computed property access by using literal keys where possible (`Authorization`, `Accept`, `Cookie` headers)
+- Fixed non-null assertions by adding proper null checks (`JwtAbapConnection.ts`)
+- Fixed optional chaining usage in `tokenRefresh.ts`
+- Removed unused imports (`AbapConnection.ts`)
+- Improved error handling with proper type guards for `unknown` error types
+
 ## [0.2.5] - 2025-12-21
 
 ### Added

@@ -20,9 +20,8 @@ export function sapConfigSignature(config: ISapConfig): string {
     client: config.client ?? null,
     authType: config.authType,
     username: config.username ?? null,
-    password: config.password ? "set" : null,
+    password: config.password ? 'set' : null,
     jwtToken: jwtTokenPreview,
-    refreshToken: refreshTokenPreview
+    refreshToken: refreshTokenPreview,
   });
 }
-
