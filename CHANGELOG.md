@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.7] - 2025-12-23
+### Fixed
+- Fixed LICENSE file - corrected copyright attribution (removed incorrect fork author)
+
 ## [0.2.6] - 2025-12-22
 
 ### Changed
