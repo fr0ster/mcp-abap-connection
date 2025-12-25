@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Conditional Logging Support**: Connection package now fully supports conditional logging via `undefined` logger
+  - When `undefined` is passed as logger parameter, connection operates silently (no logging output)
+  - This enables test environments to control logging verbosity via environment variables
+  - Tests can now pass `undefined` logger when `DEBUG_CONNECTION`, `DEBUG_CONN`, or `DEBUG_CONNECTORS` are not set
+  - Connection uses optional chaining (`logger?.info()`, `logger?.debug()`, etc.) for all logging calls
+  - No breaking changes - existing code with logger continues to work as before
+
 ## [0.2.8] - 2025-12-24
 
 ### Changed

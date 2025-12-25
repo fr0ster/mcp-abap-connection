@@ -46,7 +46,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@mcp-abap-adt/interfaces": "^0.2.13",
+    "@mcp-abap-adt/interfaces": "^0.2.14",
     "axios": "^1.11.0",
     "commander": "^14.0.2",
     "express": "^5.1.0",
