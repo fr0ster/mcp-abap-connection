@@ -24,6 +24,7 @@ export {
   JwtAbapConnection,
   JwtAbapConnection as CloudAbapConnection,
 } from './connection/JwtAbapConnection.js';
+export { SamlAbapConnection } from './connection/SamlAbapConnection.js';
 export type { ILogger } from './logger.js';
 // Timeouts
 export {

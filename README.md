@@ -178,6 +178,24 @@ const response = await connection.makeAdtRequest({
 });
 ```
 
+### SSO Usage (SAML Session Cookies)
+
+```typescript
+import { createAbapConnection, SapConfig } from "@mcp-abap-adt/connection";
+
+const config: SapConfig = {
+  url: "https://your-sap-system.com",
+  authType: "saml",
+  sessionCookies: "MYSAPSSO2=...; SAP_SESSIONID=...",
+};
+
+const connection = createAbapConnection(config, logger);
+const response = await connection.makeAdtRequest({
+  method: "GET",
+  url: "/sap/bc/adt/programs/programs/your-program",
+});
+```
+
 ### Cloud Usage with Automatic Token Refresh
 
 For automatic token refresh on 401/403 errors, inject `ITokenRefresher`:
@@ -338,12 +356,14 @@ Configuration for SAP ABAP connection.
 type SapConfig = {
   url: string;
   client?: string;
-  authType: "basic" | "jwt";
+  authType: "basic" | "jwt" | "saml";
   // For basic auth
   username?: string;
   password?: string;
   // For JWT auth
   jwtToken?: string;
+  // For SAML session cookies
+  sessionCookies?: string;
 };
 ```
 
@@ -486,4 +506,3 @@ https://github.com/fr0ster/mcp-abap-adt
 ## Related Projects
 
 - [mcp-abap-adt](https://github.com/fr0ster/mcp-abap-adt) - Main MCP server for ABAP ADT
-

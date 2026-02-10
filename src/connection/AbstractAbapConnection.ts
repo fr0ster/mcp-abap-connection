@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { Agent } from 'node:https';
-import { isNetworkError } from '@mcp-abap-adt/interfaces';
+import { type IAdtResponse, isNetworkError } from '@mcp-abap-adt/interfaces';
 import axios, {
   AxiosError,
   type AxiosInstance,
   type AxiosRequestConfig,
-  type AxiosResponse,
 } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
@@ -150,7 +149,9 @@ abstract class AbstractAbapConnection implements AbapConnection {
    */
   abstract connect(): Promise<void>;
 
-  async makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse> {
+  async makeAdtRequest<T = any, D = any>(
+    options: AbapRequestOptions,
+  ): Promise<IAdtResponse<T, D>> {
     const {
       url: endpoint,
       method,
@@ -280,7 +281,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
         method: normalizedMethod,
       });
 
-      return response;
+      return response as unknown as IAdtResponse<T, D>;
     } catch (error) {
       const errorDetails: {
         type: string;
@@ -348,7 +349,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
         const retryResponse = await this.getAxiosInstance()(requestConfig);
         this.updateCookiesFromResponse(retryResponse.headers);
 
-        return retryResponse;
+        return retryResponse as unknown as IAdtResponse<T, D>;
       }
 
       // Retry logic for 401 errors on GET requests (authentication issue - need cookies)
@@ -369,7 +370,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
           const retryResponse = await this.getAxiosInstance()(requestConfig);
           this.updateCookiesFromResponse(retryResponse.headers);
 
-          return retryResponse;
+          return retryResponse as unknown as IAdtResponse<T, D>;
         }
 
         // If no cookies, try to get them via CSRF token fetch
@@ -388,7 +389,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
             const retryResponse = await this.getAxiosInstance()(requestConfig);
             this.updateCookiesFromResponse(retryResponse.headers);
 
-            return retryResponse;
+            return retryResponse as unknown as IAdtResponse<T, D>;
           }
         } catch (csrfError) {
           this.logger?.debug(
@@ -607,6 +608,10 @@ abstract class AbstractAbapConnection implements AbapConnection {
    */
   protected getCookies(): string | null {
     return this.cookies;
+  }
+
+  protected setInitialCookies(cookies: string): void {
+    this.cookies = cookies;
   }
 
   private updateCookiesFromResponse(headers?: Record<string, unknown>): void {

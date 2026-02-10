@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-02-10
+
+### Added
+- `SamlAbapConnection` for cookie-based SAML sessions and `createAbapConnection` support for `authType: 'saml'`.
+- SAML session cookie support in `SapConfig` and `sapConfigSignature()`.
+- Unit tests for SAML connection, connection factory routing, and config signature.
+
 ### Changed
 - **Conditional Logging Support**: Connection package now fully supports conditional logging via `undefined` logger
   - When `undefined` is passed as logger parameter, connection operates silently (no logging output)

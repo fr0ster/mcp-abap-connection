@@ -4,6 +4,7 @@ import type { ILogger } from '../logger.js';
 import type { AbapConnection } from './AbapConnection.js';
 import { BaseAbapConnection } from './BaseAbapConnection.js';
 import { JwtAbapConnection } from './JwtAbapConnection.js';
+import { SamlAbapConnection } from './SamlAbapConnection.js';
 
 export function createAbapConnection(
   config: SapConfig,
@@ -16,6 +17,8 @@ export function createAbapConnection(
       return new BaseAbapConnection(config, logger, sessionId);
     case 'jwt':
       return new JwtAbapConnection(config, logger, sessionId, tokenRefresher);
+    case 'saml':
+      return new SamlAbapConnection(config, logger, sessionId);
     default:
       throw new Error(
         `Unsupported SAP authentication type: ${config.authType}`,

@@ -14,6 +14,9 @@ export function sapConfigSignature(config: ISapConfig): string {
   const refreshTokenPreview = config.refreshToken
     ? `${config.refreshToken.substring(0, 10)}...${config.refreshToken.substring(Math.max(0, config.refreshToken.length - 10))}`
     : null;
+  const sessionCookiesPreview = config.sessionCookies
+    ? `${config.sessionCookies.substring(0, 10)}...${config.sessionCookies.substring(Math.max(0, config.sessionCookies.length - 10))}`
+    : null;
 
   return JSON.stringify({
     url: config.url,
@@ -23,5 +26,6 @@ export function sapConfigSignature(config: ISapConfig): string {
     password: config.password ? 'set' : null,
     jwtToken: jwtTokenPreview,
     refreshToken: refreshTokenPreview,
+    sessionCookies: sessionCookiesPreview,
   });
 }

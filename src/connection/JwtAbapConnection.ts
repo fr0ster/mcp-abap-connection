@@ -1,5 +1,5 @@
-import type { ITokenRefresher } from '@mcp-abap-adt/interfaces';
-import { AxiosError, type AxiosResponse } from 'axios';
+import type { IAdtResponse, ITokenRefresher } from '@mcp-abap-adt/interfaces';
+import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import type { AbapRequestOptions } from './AbapConnection.js';
@@ -135,12 +135,14 @@ export class JwtAbapConnection extends AbstractAbapConnection {
   /**
    * Override makeAdtRequest to handle JWT auth errors with automatic token refresh
    */
-  async makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse> {
+  async makeAdtRequest<T = any, D = any>(
+    options: AbapRequestOptions,
+  ): Promise<IAdtResponse<T, D>> {
     this.logger?.debug(
       `[DEBUG] JwtAbapConnection.makeAdtRequest - Starting request: ${options.method} ${options.url}`,
     );
     try {
-      const response = await super.makeAdtRequest(options);
+      const response = await super.makeAdtRequest<T, D>(options);
       this.logger?.debug(
         `[DEBUG] JwtAbapConnection.makeAdtRequest - Request succeeded: ${response.status}`,
       );
@@ -182,7 +184,7 @@ export class JwtAbapConnection extends AbstractAbapConnection {
             `[DEBUG] JwtAbapConnection.makeAdtRequest - Retrying request after token refresh...`,
           );
           this.reset();
-          return super.makeAdtRequest(options);
+          return super.makeAdtRequest<T, D>(options);
         }
 
         throw new Error('JWT token has expired. Please re-authenticate.');
