@@ -1,4 +1,12 @@
 // Types - re-exported from interfaces package with backward compatibility aliases
+
+export type {
+  IWebSocketCloseInfo,
+  IWebSocketConnectOptions,
+  IWebSocketMessageEnvelope,
+  IWebSocketMessageHandler,
+  IWebSocketTransport,
+} from '@mcp-abap-adt/interfaces';
 export type {
   SapAuthType,
   SapConfig,
@@ -20,6 +28,11 @@ export {
 export { createAbapConnection } from './connection/connectionFactory.js';
 // CSRF configuration
 export { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './connection/csrfConfig.js';
+export {
+  GenericWebSocketTransport,
+  type IWebSocketFactory,
+  type IWebSocketLike,
+} from './connection/GenericWebSocketTransport.js';
 export {
   JwtAbapConnection,
   JwtAbapConnection as CloudAbapConnection,
