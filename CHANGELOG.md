@@ -7,12 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-02-13
+
 ### Added
 - Added generic `GenericWebSocketTransport` implementation with injected WS factory and message envelope handling.
-- Re-exported WebSocket transport interfaces from `-abap-adt/interfaces` and transport class from package root.
+- Re-exported WebSocket transport interfaces from `@mcp-abap-adt/interfaces` and transport class from package root.
 
 ### Changed
-- Updated dependency `-abap-adt/interfaces` to `^2.4.0`.
+- Updated dependency `@mcp-abap-adt/interfaces` to `^2.4.0`.
 
 ## [1.0.1] - 2026-02-10
 
