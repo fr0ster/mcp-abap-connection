@@ -46,6 +46,33 @@ node examples/jwt-with-token-refresh.js
 - Automatic token refresh on 401/403 errors
 - Retry logic with refreshed token
 
+### saml-connection.js
+
+Shows how to use cookie-based SAML connection.
+
+```bash
+node examples/saml-connection.js
+```
+
+**What it demonstrates:**
+- Creating SAML connection via factory (`authType: "saml"`)
+- Using `sessionCookies` from environment
+- Fetching CSRF token and making ADT request with cookie auth
+
+### websocket-transport.js
+
+Shows how to use `GenericWebSocketTransport` with injected WS factory.
+
+```bash
+node examples/websocket-transport.js
+```
+
+**What it demonstrates:**
+- Creating `GenericWebSocketTransport`
+- Registering `onOpen`, `onMessage`, `onError`, `onClose` handlers
+- Sending `IWebSocketMessageEnvelope` payload
+- Connecting/disconnecting transport lifecycle
+
 ### custom-session-storage.js
 
 Advanced example showing custom session persistence implementation.
@@ -78,6 +105,10 @@ SAP_CLIENT=100
 SAP_AUTH_TYPE=jwt
 SAP_JWT_TOKEN=eyJhbGciOiJSUzI1NiIs...
 # Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
+
+# SAML Auth (Cookie-based)
+SAP_AUTH_TYPE=saml
+SAP_SESSION_COOKIES=sap-usercontext=sap-client=100; sap-contextid=...
 ```
 
 ### Using Environment Variables

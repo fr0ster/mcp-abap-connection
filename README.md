@@ -7,6 +7,7 @@ ABAP connection layer for MCP ABAP ADT server. Provides a unified interface for 
 - 🔐 **Multiple Authentication Methods**: 
   - Basic Auth for on-premise SAP systems
   - JWT/OAuth2 for SAP BTP ABAP Environment
+  - SAML session cookies for pre-authenticated enterprise flows
 - 🔄 **Token Management**: 
   - Token refresh is handled by `@mcp-abap-adt/auth-broker` package
   - Connection package focuses on HTTP communication only
@@ -15,8 +16,11 @@ ABAP connection layer for MCP ABAP ADT server. Provides a unified interface for 
   - Session state persistence is handled by `@mcp-abap-adt/auth-broker` package
 - 🏗️ **Clean Architecture**:
   - Abstract base class for common HTTP/session logic
-  - Auth-type specific implementations (BaseAbapConnection, JwtAbapConnection)
+  - Auth-type specific implementations (BaseAbapConnection, JwtAbapConnection, SamlAbapConnection)
   - Proper separation of concerns - no JWT logic in base class
+- 🔌 **Realtime Transport Scaffold**:
+  - Generic `GenericWebSocketTransport` with pluggable WS factory
+  - Reusable for debugger/traces and other event-driven flows
 - 📝 **Custom Logging**: Pluggable logger interface for integration with any logging system
 - 🛠️ **CLI Tool**: See [JWT Auth Tools](./docs/JWT_AUTH_TOOLS.md) for obtaining SAP BTP tokens
 - 📦 **TypeScript**: Full TypeScript support with type definitions included
@@ -42,6 +46,16 @@ The package uses a clean separation of concerns:
   - Simple connect() - establishes connection with JWT token
   - Suitable for SAP BTP ABAP Environment
   - Token refresh handled by auth-broker package
+
+- **`SamlAbapConnection`** (concrete, exported):
+  - Session-cookie-based authentication (`authType: "saml"`)
+  - Uses existing SSO/SAML session cookies
+  - Fetches CSRF token and executes ADT requests in same HTTP model
+
+- **`GenericWebSocketTransport`** (concrete, exported):
+  - Transport abstraction for realtime WS message flows
+  - Pluggable factory, envelope-based send/receive
+  - Intended for higher-level debugger/trace session orchestration
 
 ## Responsibilities and Design Principles
 
