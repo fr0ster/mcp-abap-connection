@@ -651,6 +651,17 @@ abstract class AbstractAbapConnection implements AbapConnection {
       this.cookieStore.set(trimmedName, trimmedValue);
     }
 
+    // Enforce configured SAP client in sap-usercontext cookie.
+    // SAP may return sap-usercontext=sap-client=<default_client> based on system
+    // default rather than the X-SAP-Client header value, causing requests to be
+    // routed to the wrong client (e.g. a read-only client → 403 on write operations).
+    if (this.config.client) {
+      this.cookieStore.set(
+        'sap-usercontext',
+        `sap-client=${this.config.client}`,
+      );
+    }
+
     if (this.cookieStore.size === 0) {
       return;
     }
