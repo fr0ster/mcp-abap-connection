@@ -20,12 +20,15 @@ abstract class AbstractAbapConnection implements AbapConnection {
   private baseUrl: string;
   private sessionId: string | null = null;
   private sessionMode: 'stateless' | 'stateful' = 'stateless';
+  private skipSessionType: boolean;
 
   protected constructor(
     private readonly config: SapConfig,
     protected readonly logger: ILogger | null,
     sessionId?: string,
+    options?: { skipSessionType?: boolean },
   ) {
+    this.skipSessionType = options?.skipSessionType ?? false;
     // Generate sessionId (used for sap-adt-connection-id header)
     this.sessionId = sessionId || randomUUID();
 
@@ -50,42 +53,20 @@ abstract class AbstractAbapConnection implements AbapConnection {
    * - stateful: SAP maintains session state between requests (locks, transactions)
    * - stateless: Each request is independent
    *
-   * On on-prem (basic/saml auth) this is a no-op: Eclipse ADT does not send
-   * x-sap-adt-sessiontype header; locks go to the global enqueue table via JCo.
-   * Sending stateful on older BASIS (e.g. 7.40) stores the lock in ABAP session
-   * memory instead, causing HTTP 423 on subsequent PUT requests.
+   * When skipSessionType is enabled (via constructor options), this is a no-op:
+   * the x-sap-adt-sessiontype header will never be sent. This is needed for
+   * older BASIS versions (e.g. 7.40) where the stateful header causes locks
+   * to be stored in ABAP session memory instead of the global enqueue table,
+   * resulting in HTTP 423 on subsequent PUT requests.
    */
   setSessionType(type: 'stateful' | 'stateless'): void {
-    if (this.config.authType !== 'jwt') {
+    if (this.skipSessionType) {
       return;
     }
     this.sessionMode = type;
     this.logger?.debug(`Session type set to: ${type}`, {
       sessionId: this.sessionId?.substring(0, 8),
     });
-  }
-
-  /**
-   * Enable stateful session mode (tells SAP to maintain stateful session)
-   * This controls whether x-sap-adt-sessiontype: stateful header is used
-   * @deprecated Use setSessionType("stateful") instead
-   */
-  enableStatefulSession(): void {
-    this.setSessionType('stateful');
-  }
-
-  /**
-   * Disable stateful session mode (switch to stateless)
-   * @deprecated Use setSessionType("stateless") instead
-   */
-  disableStatefulSession(): void {
-    if (this.sessionMode === 'stateless') {
-      return;
-    }
-
-    this.sessionMode = 'stateless';
-
-    this.logger?.debug('Stateful session mode disabled');
   }
 
   /**
@@ -210,7 +191,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
       requestHeaders['sap-adt-connection-id'] = this.sessionId;
     }
 
-    // Add stateful session headers if stateful mode enabled via enableStatefulSession()
+    // Add stateful session headers if stateful mode is enabled
     if (this.sessionMode === 'stateful') {
       requestHeaders['x-sap-adt-sessiontype'] = 'stateful';
       requestHeaders['sap-adt-request-id'] = randomUUID().replace(/-/g, '');

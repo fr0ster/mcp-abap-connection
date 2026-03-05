@@ -7,9 +7,14 @@ import { AbstractAbapConnection } from './AbstractAbapConnection.js';
  * Basic Authentication connection for on-premise SAP systems
  */
 export class BaseAbapConnection extends AbstractAbapConnection {
-  constructor(config: SapConfig, logger?: ILogger | null, sessionId?: string) {
+  constructor(
+    config: SapConfig,
+    logger?: ILogger | null,
+    sessionId?: string,
+    options?: { skipSessionType?: boolean },
+  ) {
     BaseAbapConnection.validateConfig(config);
-    super(config, logger || null, sessionId);
+    super(config, logger || null, sessionId, options);
   }
 
   /**

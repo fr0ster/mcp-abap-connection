@@ -9,9 +9,14 @@ import { AbstractAbapConnection } from './AbstractAbapConnection.js';
 export class SamlAbapConnection extends AbstractAbapConnection {
   private sessionCookies: string;
 
-  constructor(config: SapConfig, logger?: ILogger | null, sessionId?: string) {
+  constructor(
+    config: SapConfig,
+    logger?: ILogger | null,
+    sessionId?: string,
+    options?: { skipSessionType?: boolean },
+  ) {
     SamlAbapConnection.validateConfig(config);
-    super(config, logger || null, sessionId);
+    super(config, logger || null, sessionId, options);
     this.sessionCookies = config.sessionCookies || '';
     if (this.sessionCookies) {
       this.setInitialCookies(this.sessionCookies);
