@@ -403,20 +403,59 @@ abstract class AbstractAbapConnection implements AbapConnection {
     retryCount: number = CSRF_CONFIG.RETRY_COUNT,
     retryDelay: number = CSRF_CONFIG.RETRY_DELAY,
   ): Promise<string> {
-    let csrfUrl = url;
-    // Build CSRF endpoint URL from base URL
-    if (!url.includes('/sap/bc/adt/')) {
-      // If URL doesn't contain ADT path, append endpoint
-      csrfUrl = url.endsWith('/')
-        ? `${url}${CSRF_CONFIG.ENDPOINT.slice(1)}`
-        : `${url}${CSRF_CONFIG.ENDPOINT}`;
-    } else if (!url.includes(CSRF_CONFIG.ENDPOINT)) {
-      // If URL contains ADT path but not our endpoint, extract base and append endpoint
-      const base = url.split('/sap/bc/adt')[0];
-      csrfUrl = `${base}${CSRF_CONFIG.ENDPOINT}`;
-    }
-    // If URL already contains the endpoint, use it as is
+    // Try primary endpoint first, then fallback for older systems
+    const baseUrl = url.includes('/sap/bc/adt/')
+      ? url.split('/sap/bc/adt')[0]
+      : url.endsWith('/')
+        ? url.slice(0, -1)
+        : url;
 
+    let endpoints: string[];
+
+    // If the URL already contains a specific endpoint, use only that
+    if (url.includes(CSRF_CONFIG.ENDPOINT)) {
+      endpoints = [url];
+    } else if (url.includes(CSRF_CONFIG.FALLBACK_ENDPOINT)) {
+      endpoints = [url];
+    } else {
+      endpoints = [
+        `${baseUrl}${CSRF_CONFIG.ENDPOINT}`,
+        `${baseUrl}${CSRF_CONFIG.FALLBACK_ENDPOINT}`,
+      ];
+    }
+
+    let lastError: Error | undefined;
+
+    for (const csrfUrl of endpoints) {
+      try {
+        return await this.fetchCsrfTokenFromEndpoint(
+          csrfUrl,
+          retryCount,
+          retryDelay,
+        );
+      } catch (error) {
+        lastError =
+          error instanceof Error
+            ? error
+            : new Error(String(error));
+        this.logger?.debug(
+          `CSRF token not available from ${csrfUrl}, trying next endpoint...`,
+        );
+      }
+    }
+
+    // All endpoints exhausted
+    throw lastError ?? new Error('CSRF token fetch failed unexpectedly');
+  }
+
+  /**
+   * Fetch CSRF token from a specific endpoint with retries
+   */
+  private async fetchCsrfTokenFromEndpoint(
+    csrfUrl: string,
+    retryCount: number,
+    retryDelay: number,
+  ): Promise<string> {
     this.logger?.debug(`Fetching CSRF token from: ${csrfUrl}`);
 
     for (let attempt = 0; attempt <= retryCount; attempt++) {

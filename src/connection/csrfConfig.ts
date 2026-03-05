@@ -18,10 +18,17 @@ export const CSRF_CONFIG = {
   RETRY_DELAY: 1000,
 
   /**
-   * CSRF token endpoint path
-   * Standard SAP ADT core discovery endpoint (available on all systems, returns smaller response)
+   * CSRF token endpoint path (primary)
+   * Standard SAP ADT core discovery endpoint (newer systems, returns smaller response)
    */
   ENDPOINT: '/sap/bc/adt/core/discovery',
+
+  /**
+   * CSRF token endpoint path (fallback)
+   * Legacy SAP ADT discovery endpoint for older systems (e.g. BASIS < 7.52)
+   * that don't have /sap/bc/adt/core/discovery
+   */
+  FALLBACK_ENDPOINT: '/sap/bc/adt/discovery',
 
   /**
    * Required headers for CSRF token fetch
