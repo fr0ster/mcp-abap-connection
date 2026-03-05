@@ -11,14 +11,15 @@ export function createAbapConnection(
   logger?: ILogger | null,
   sessionId?: string,
   tokenRefresher?: ITokenRefresher,
+  options?: { skipSessionType?: boolean },
 ): AbapConnection {
   switch (config.authType) {
     case 'basic':
-      return new BaseAbapConnection(config, logger, sessionId);
+      return new BaseAbapConnection(config, logger, sessionId, options);
     case 'jwt':
       return new JwtAbapConnection(config, logger, sessionId, tokenRefresher);
     case 'saml':
-      return new SamlAbapConnection(config, logger, sessionId);
+      return new SamlAbapConnection(config, logger, sessionId, options);
     default:
       throw new Error(
         `Unsupported SAP authentication type: ${config.authType}`,
