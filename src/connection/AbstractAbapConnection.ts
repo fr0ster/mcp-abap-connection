@@ -434,10 +434,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
           retryDelay,
         );
       } catch (error) {
-        lastError =
-          error instanceof Error
-            ? error
-            : new Error(String(error));
+        lastError = error instanceof Error ? error : new Error(String(error));
         this.logger?.debug(
           `CSRF token not available from ${csrfUrl}, trying next endpoint...`,
         );
