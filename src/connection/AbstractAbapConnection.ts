@@ -49,8 +49,16 @@ abstract class AbstractAbapConnection implements AbapConnection {
    * Controls whether x-sap-adt-sessiontype: stateful header is added to requests
    * - stateful: SAP maintains session state between requests (locks, transactions)
    * - stateless: Each request is independent
+   *
+   * On on-prem (basic/saml auth) this is a no-op: Eclipse ADT does not send
+   * x-sap-adt-sessiontype header; locks go to the global enqueue table via JCo.
+   * Sending stateful on older BASIS (e.g. 7.40) stores the lock in ABAP session
+   * memory instead, causing HTTP 423 on subsequent PUT requests.
    */
   setSessionType(type: 'stateful' | 'stateless'): void {
+    if (this.config.authType !== 'jwt') {
+      return;
+    }
     this.sessionMode = type;
     this.logger?.debug(`Session type set to: ${type}`, {
       sessionId: this.sessionId?.substring(0, 8),
