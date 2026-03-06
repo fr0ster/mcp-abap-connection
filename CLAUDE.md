@@ -52,3 +52,6 @@ AbapConnection (interface from @mcp-abap-adt/interfaces)
 ## Release
 
 GitHub Actions triggers on `v*.*.*` tags — runs build, `npm pack`, creates GitHub Release with `.tgz`.
+
+- Never change `package.json` version without explicit user request
+- After changing the version in `package.json`, always run `npm install --package-lock-only` to update `package-lock.json` and include it in the same commit
