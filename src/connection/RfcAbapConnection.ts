@@ -1,0 +1,291 @@
+import { randomUUID } from 'node:crypto';
+import type {
+  IAbapRequestOptions,
+  IAdtResponse,
+} from '@mcp-abap-adt/interfaces';
+import type { SapConfig } from '../config/sapConfig.js';
+import type { ILogger } from '../logger.js';
+import type { AbapConnection } from './AbapConnection.js';
+
+/**
+ * RFC connection parameters for node-rfc Client
+ */
+interface RfcConnectionParams {
+  ashost: string;
+  sysnr: string;
+  client: string;
+  user: string;
+  passwd: string;
+  lang: string;
+}
+
+/**
+ * Minimal interface for node-rfc Client to avoid hard dependency
+ */
+interface IRfcClient {
+  open(): Promise<void>;
+  close(): Promise<void>;
+  call(
+    functionModule: string,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, any>>;
+  readonly alive: boolean;
+}
+
+/**
+ * Derive RFC connection parameters from ISapConfig.
+ * Parses hostname from config.url, system number from port (80XX → XX).
+ *
+ * Examples:
+ *   http://saphost:8000  → ashost=saphost, sysnr=00
+ *   http://saphost:8001  → ashost=saphost, sysnr=01
+ *   http://saphost:8042  → ashost=saphost, sysnr=42
+ */
+function buildRfcParams(config: SapConfig): RfcConnectionParams {
+  const parsed = new URL(config.url);
+
+  const port = Number.parseInt(parsed.port || '8000', 10);
+  // SAP HTTP port convention: 80XX where XX = system number
+  const sysnr = String(port - 8000).padStart(2, '0');
+
+  return {
+    ashost: parsed.hostname,
+    sysnr,
+    client: config.client || '000',
+    user: config.username || '',
+    passwd: config.password || '',
+    lang: 'EN',
+  };
+}
+
+/**
+ * RFC-based connection for on-premise SAP systems.
+ *
+ * Uses node-rfc to call SADT_REST_RFC_ENDPOINT — the same standard SAP FM
+ * that Eclipse ADT uses for all on-premise ADT operations via JCo.
+ *
+ * RFC connections are inherently stateful: one ABAP session persists for the
+ * entire connection lifetime. This solves the HTTP 423 "invalid lock handle"
+ * problem on legacy systems (BASIS < 7.50) where HTTP stateful sessions
+ * are not supported.
+ *
+ * Connection parameters are derived from the standard ISapConfig.url field:
+ *   http://saphost:8000 → ashost=saphost, sysnr=00
+ *
+ * Prerequisites:
+ *   - SAP NW RFC SDK installed on the machine
+ *   - node-rfc package installed: npm install node-rfc
+ */
+export class RfcAbapConnection implements AbapConnection {
+  private rfcClient: IRfcClient | null = null;
+  private readonly sessionId: string;
+  private readonly baseUrl: string;
+  private readonly rfcParams: RfcConnectionParams;
+
+  constructor(
+    private readonly config: SapConfig,
+    private readonly logger: ILogger | null = null,
+  ) {
+    RfcAbapConnection.validateConfig(config);
+
+    this.sessionId = randomUUID();
+    this.baseUrl = config.url;
+    this.rfcParams = buildRfcParams(config);
+
+    this.logger?.debug(
+      `RfcAbapConnection created for ${this.rfcParams.ashost}:${this.rfcParams.sysnr}, client ${this.rfcParams.client}`,
+    );
+  }
+
+  async connect(): Promise<void> {
+    let Client: new (params: RfcConnectionParams) => IRfcClient;
+    try {
+      // Dynamic require — node-rfc is NOT a declared dependency.
+      // Users who need RFC connections must install it manually:
+      //   npm install node-rfc (+ SAP NW RFC SDK on the machine)
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const noderfc = require('node-rfc');
+      Client = noderfc.Client;
+    } catch (e) {
+      throw new Error(
+        'node-rfc is not available. To use RFC connections, install SAP NW RFC SDK ' +
+          'and run: npm install node-rfc. ' +
+          `Details: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+
+    this.rfcClient = new Client(this.rfcParams);
+
+    try {
+      await this.rfcClient.open();
+      this.logger?.debug('RFC connection opened (stateful session)');
+    } catch (e) {
+      this.rfcClient = null;
+      const msg = e instanceof Error ? e.message : String(e);
+      this.logger?.error(`RFC connection failed: ${msg}`);
+      throw new Error(`Failed to open RFC connection: ${msg}`);
+    }
+  }
+
+  async getBaseUrl(): Promise<string> {
+    return this.baseUrl;
+  }
+
+  getSessionId(): string | null {
+    return this.sessionId;
+  }
+
+  setSessionType(_type: 'stateful' | 'stateless'): void {
+    // No-op — RFC connections are always stateful
+  }
+
+  async makeAdtRequest<T = any, D = any>(
+    options: IAbapRequestOptions,
+  ): Promise<IAdtResponse<T, D>> {
+    if (!this.rfcClient?.alive) {
+      throw new Error('RFC connection is not open. Call connect() first.');
+    }
+
+    const method = options.method.toUpperCase();
+    let uri = options.url;
+
+    // Add sap-client to URI if not present
+    if (this.config.client && !uri.includes('sap-client')) {
+      uri +=
+        (uri.includes('?') ? '&' : '?') + `sap-client=${this.config.client}`;
+    }
+
+    // Build header fields
+    const headerFields: Array<{ NAME: string; VALUE: string }> = [];
+    if (options.headers) {
+      for (const [name, value] of Object.entries(options.headers)) {
+        headerFields.push({ NAME: name, VALUE: value });
+      }
+    }
+
+    // Ensure Content-Type for body
+    const body =
+      options.data !== undefined && options.data !== null
+        ? String(options.data)
+        : '';
+
+    if (
+      body &&
+      !headerFields.some((h) => h.NAME.toLowerCase() === 'content-type')
+    ) {
+      headerFields.push({
+        NAME: 'Content-Type',
+        VALUE: 'text/plain; charset=utf-8',
+      });
+    }
+
+    this.logger?.debug(`RFC → ${method} ${uri}`);
+
+    try {
+      const result = await this.rfcClient.call('SADT_REST_RFC_ENDPOINT', {
+        REQUEST: {
+          REQUEST_LINE: {
+            METHOD: method,
+            URI: uri,
+            VERSION: 'HTTP/1.1',
+          },
+          HEADER_FIELDS: headerFields,
+          MESSAGE_BODY: body ? Buffer.from(body, 'utf-8') : Buffer.alloc(0),
+        },
+      });
+
+      const resp = result.RESPONSE || result;
+
+      // Parse status — RFC returns status in STATUS_LINE structure
+      const statusCode = resp.STATUS_LINE?.CODE || resp.STATUS_CODE || 200;
+      const statusText = resp.STATUS_LINE?.REASON || resp.STATUS_TEXT || 'OK';
+
+      // Parse response body
+      const respBody = resp.MESSAGE_BODY
+        ? Buffer.isBuffer(resp.MESSAGE_BODY)
+          ? resp.MESSAGE_BODY.toString('utf-8')
+          : String(resp.MESSAGE_BODY)
+        : '';
+
+      // Parse response headers
+      const respHeaders: Record<string, any> = {};
+      const respHeaderFields = resp.HEADER_FIELDS || [];
+      for (const field of respHeaderFields) {
+        if (field.NAME && field.VALUE !== undefined) {
+          respHeaders[field.NAME.toLowerCase()] = field.VALUE;
+        }
+      }
+
+      this.logger?.debug(
+        `RFC ← ${statusCode} ${statusText} (${respBody.length} bytes)`,
+      );
+
+      const response: IAdtResponse<T, D> = {
+        data: respBody as unknown as T,
+        status: statusCode,
+        statusText,
+        headers: respHeaders,
+      };
+
+      // Throw for error status codes (matching HTTP/axios behavior)
+      if (statusCode >= 400) {
+        const error = new Error(
+          `Request failed with status ${statusCode}: ${method} ${uri}`,
+        );
+        (error as any).response = response;
+        throw error;
+      }
+
+      return response;
+    } catch (e) {
+      // Re-throw our own errors (status >= 400)
+      if ((e as any)?.response) {
+        throw e;
+      }
+
+      // RFC-level error
+      const msg = e instanceof Error ? e.message : String(e);
+      this.logger?.error(`RFC call failed: ${msg}`);
+      throw new Error(`RFC call to SADT_REST_RFC_ENDPOINT failed: ${msg}`);
+    }
+  }
+
+  /**
+   * Close the RFC connection and release the ABAP session.
+   */
+  async close(): Promise<void> {
+    if (this.rfcClient) {
+      try {
+        await this.rfcClient.close();
+        this.logger?.debug('RFC connection closed');
+      } catch (e) {
+        this.logger?.debug(
+          `RFC close error: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+      this.rfcClient = null;
+    }
+  }
+
+  private static validateConfig(config: SapConfig): void {
+    if (config.authType !== 'rfc') {
+      throw new Error(
+        `RFC connection expects authType "rfc", got "${config.authType}"`,
+      );
+    }
+
+    if (!config.url) {
+      throw new Error(
+        'RFC connection requires url (hostname is parsed from it)',
+      );
+    }
+
+    if (!config.username || !config.password) {
+      throw new Error('RFC connection requires both username and password');
+    }
+
+    if (!config.client) {
+      throw new Error('RFC connection requires SAP client');
+    }
+  }
+}
