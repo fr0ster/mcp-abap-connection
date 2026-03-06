@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-03-06
+
+### Fixed
+- Fix RFC STATUS_LINE parsing: use correct field names `STATUS_CODE`/`REASON_PHRASE` (not `CODE`/`REASON`). STATUS_CODE is returned as string — now parsed with `parseInt`.
+- Remove `sap-client` URI parameter from RFC requests — the RFC session is already logged into the correct client via connection parameters. Adding `sap-client` caused "object not found" on some systems.
+- Add fallback exception XML detection: when STATUS_LINE is empty (legacy systems), parse `<exc:exception>` body to derive HTTP status codes (404, 403, 409, 423, etc.).
+
 ## [1.4.0] - 2026-03-06
 
 ### Added

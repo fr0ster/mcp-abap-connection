@@ -59,6 +59,43 @@ function buildRfcParams(config: SapConfig): RfcConnectionParams {
 }
 
 /**
+ * Map ADT exception type names to HTTP status codes.
+ * These are standard ADT exception types returned in `<exc:exception>` XML.
+ */
+const EXCEPTION_STATUS_MAP: Record<string, { code: number; text: string }> = {
+  ExceptionResourceNotFound: { code: 404, text: 'Not Found' },
+  ExceptionResourceNoAuthorization: { code: 403, text: 'Forbidden' },
+  ExceptionResourceAlreadyExists: { code: 409, text: 'Conflict' },
+  ExceptionResourceLocked: { code: 423, text: 'Locked' },
+  ExceptionBadRequest: { code: 400, text: 'Bad Request' },
+  ExceptionNotSupported: { code: 501, text: 'Not Implemented' },
+  ExceptionConflict: { code: 409, text: 'Conflict' },
+};
+
+/**
+ * Detect HTTP status from ADT exception XML in response body.
+ * On some legacy systems, SADT_REST_RFC_ENDPOINT returns errors as XML
+ * exceptions without setting proper HTTP status codes in STATUS_LINE.
+ */
+function detectExceptionStatus(body: string): {
+  statusCode: number;
+  statusText: string;
+} {
+  // Extract exception type: <exc:exception ... xmlns:exc="..."><exc:type>ExceptionName</exc:type>
+  const typeMatch = body.match(/<exc:type[^>]*>([^<]+)<\/exc:type>/);
+  if (typeMatch) {
+    const exType = typeMatch[1].trim();
+    const mapped = EXCEPTION_STATUS_MAP[exType];
+    if (mapped) {
+      return { statusCode: mapped.code, statusText: mapped.text };
+    }
+  }
+
+  // Unknown exception type — return 500 as generic server error
+  return { statusCode: 500, statusText: 'Internal Server Error' };
+}
+
+/**
  * RFC-based connection for on-premise SAP systems.
  *
  * Uses node-rfc to call SADT_REST_RFC_ENDPOINT — the same standard SAP FM
@@ -147,13 +184,12 @@ export class RfcAbapConnection implements AbapConnection {
     }
 
     const method = options.method.toUpperCase();
-    let uri = options.url;
+    const uri = options.url;
 
-    // Add sap-client to URI if not present
-    if (this.config.client && !uri.includes('sap-client')) {
-      uri +=
-        (uri.includes('?') ? '&' : '?') + `sap-client=${this.config.client}`;
-    }
+    // Note: sap-client is NOT added to URI for RFC connections.
+    // The RFC session is already logged into the correct client
+    // (via the 'client' param in RFC connection). Adding sap-client
+    // to the URI can cause "object not found" on some systems.
 
     // Build header fields
     const headerFields: Array<{ NAME: string; VALUE: string }> = [];
@@ -196,9 +232,24 @@ export class RfcAbapConnection implements AbapConnection {
 
       const resp = result.RESPONSE || result;
 
+      // Log raw RFC response structure for debugging
+      this.logger?.debug(
+        `RFC raw response keys: ${Object.keys(resp).join(', ')}`,
+      );
+      if (resp.STATUS_LINE) {
+        this.logger?.debug(
+          `RFC STATUS_LINE: ${JSON.stringify(resp.STATUS_LINE)}`,
+        );
+      }
+
       // Parse status — RFC returns status in STATUS_LINE structure
-      const statusCode = resp.STATUS_LINE?.CODE || resp.STATUS_CODE || 200;
-      const statusText = resp.STATUS_LINE?.REASON || resp.STATUS_TEXT || 'OK';
+      // Field names: STATUS_CODE (not CODE), REASON_PHRASE (not REASON)
+      const rawCode =
+        resp.STATUS_LINE?.STATUS_CODE || resp.STATUS_LINE?.CODE || 0;
+      let statusCode =
+        typeof rawCode === 'string' ? Number.parseInt(rawCode, 10) : rawCode;
+      let statusText =
+        resp.STATUS_LINE?.REASON_PHRASE || resp.STATUS_LINE?.REASON || '';
 
       // Parse response body
       const respBody = resp.MESSAGE_BODY
@@ -214,6 +265,24 @@ export class RfcAbapConnection implements AbapConnection {
         if (field.NAME && field.VALUE !== undefined) {
           respHeaders[field.NAME.toLowerCase()] = field.VALUE;
         }
+      }
+
+      // On some systems (e.g. BASIS < 7.50), SADT_REST_RFC_ENDPOINT does not
+      // populate STATUS_LINE, returning status 0. Detect errors from the
+      // response body: ADT exception XML indicates a failed request.
+      if (!statusCode && respBody.includes('<exc:exception')) {
+        const detected = detectExceptionStatus(respBody);
+        statusCode = detected.statusCode;
+        statusText = detected.statusText;
+        this.logger?.debug(
+          `RFC: STATUS_LINE empty, detected ${statusCode} from exception XML`,
+        );
+      }
+
+      // Default to 200 OK only when no error was detected
+      if (!statusCode) {
+        statusCode = 200;
+        statusText = statusText || 'OK';
       }
 
       this.logger?.debug(
