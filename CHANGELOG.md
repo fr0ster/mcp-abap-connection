@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-03-06
+
+### Added
+- `RfcAbapConnection` — RFC-based connection for legacy SAP systems (BASIS < 7.50) that don't support stateful HTTP sessions. Uses standard `SADT_REST_RFC_ENDPOINT` FM (the same FM that Eclipse ADT uses via JCo) to tunnel ADT REST requests over RFC. Solves HTTP 423 "invalid lock handle" on older systems.
+- `authType: 'rfc'` support in `createAbapConnection()` factory.
+- RFC connection parameters (ashost, sysnr) are derived from the existing `config.url` field — no config changes needed.
+
+### Changed
+- Updated dependency `@mcp-abap-adt/interfaces` to `^2.7.0` (adds `'rfc'` to `SapAuthType` union).
+
+### Notes
+- `node-rfc` is **not** a declared dependency. Users who need RFC connections must install it manually (`npm install node-rfc`) along with SAP NW RFC SDK.
+- RFC connections are inherently stateful — `setSessionType()` is a no-op.
+
 ## [1.1.0] - 2026-02-13
 
 ### Added
