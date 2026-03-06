@@ -10,6 +10,7 @@ export type {
 export type {
   SapAuthType,
   SapConfig,
+  SapConnectionType,
 } from './config/sapConfig.js';
 // Config utilities
 export { sapConfigSignature } from './config/sapConfig.js';

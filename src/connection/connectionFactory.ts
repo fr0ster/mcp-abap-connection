@@ -14,6 +14,11 @@ export function createAbapConnection(
   tokenRefresher?: ITokenRefresher,
   options?: { skipSessionType?: boolean },
 ): AbapConnection {
+  // RFC connection type takes priority over auth type
+  if (config.connectionType === 'rfc') {
+    return new RfcAbapConnection(config, logger);
+  }
+
   switch (config.authType) {
     case 'basic':
       return new BaseAbapConnection(config, logger, sessionId, options);
@@ -21,8 +26,6 @@ export function createAbapConnection(
       return new JwtAbapConnection(config, logger, sessionId, tokenRefresher);
     case 'saml':
       return new SamlAbapConnection(config, logger, sessionId, options);
-    case 'rfc':
-      return new RfcAbapConnection(config, logger);
     default:
       throw new Error(
         `Unsupported SAP authentication type: ${config.authType}`,

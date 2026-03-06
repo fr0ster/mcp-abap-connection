@@ -345,9 +345,9 @@ export class RfcAbapConnection implements AbapConnection {
   }
 
   private static validateConfig(config: SapConfig): void {
-    if (config.authType !== 'rfc') {
+    if (config.connectionType !== 'rfc') {
       throw new Error(
-        `RFC connection expects authType "rfc", got "${config.authType}"`,
+        `RFC connection expects connectionType "rfc", got "${config.connectionType}"`,
       );
     }
 

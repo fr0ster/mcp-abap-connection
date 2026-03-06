@@ -1,8 +1,12 @@
 // Import interfaces from shared package
-import type { ISapConfig, SapAuthType } from '@mcp-abap-adt/interfaces';
+import type {
+  ISapConfig,
+  SapAuthType,
+  SapConnectionType,
+} from '@mcp-abap-adt/interfaces';
 
 // Re-export for backward compatibility
-export type { SapAuthType };
+export type { SapAuthType, SapConnectionType };
 export type SapConfig = ISapConfig;
 
 export function sapConfigSignature(config: ISapConfig): string {
