@@ -184,7 +184,19 @@ export class RfcAbapConnection implements AbapConnection {
     }
 
     const method = options.method.toUpperCase();
-    const uri = options.url;
+
+    // Encode query params into URI (axios does this automatically for HTTP,
+    // but RFC needs it done manually)
+    let uri = options.url;
+    if (options.params && typeof options.params === 'object') {
+      const entries = Object.entries(
+        options.params as Record<string, string | number | boolean>,
+      ).filter(([, v]) => v !== undefined && v !== null);
+      if (entries.length > 0) {
+        const qs = new URLSearchParams(entries.map(([k, v]) => [k, String(v)]));
+        uri += (uri.includes('?') ? '&' : '?') + qs.toString();
+      }
+    }
 
     // Note: sap-client is NOT added to URI for RFC connections.
     // The RFC session is already logged into the correct client

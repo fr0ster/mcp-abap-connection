@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-03-09
+
+### Fixed
+- **RFC query params encoding**: `RfcAbapConnection.makeAdtRequest` now encodes `params` into the URI query string. Previously `params` were silently ignored, causing failures for package validation, transport checks, and any ADT operation using query parameters over RFC connections.
+
 ## [1.4.2] - 2026-03-06
 
 ### Added
