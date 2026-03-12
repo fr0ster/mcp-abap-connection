@@ -1,5 +1,7 @@
 # @mcp-abap-adt/connection
 
+[![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/StandWithUkraine.svg)](https://stand-with-ukraine.pp.ua)
+
 ABAP connection layer for MCP ABAP ADT server. Provides a unified interface for connecting to SAP ABAP systems via ADT (ABAP Development Tools) protocol, supporting both on-premise (Basic Auth) and cloud (JWT/OAuth2) authentication methods.
 
 ## Key Features
