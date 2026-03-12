@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-03-12
+
+### Added
+- **RFC stateful session support**: `setSessionType('stateful')` now injects `x-sap-adt-sessiontype: stateful` header and captures `set-cookie` from LOCK responses for cookie replay in subsequent requests (PUT, UNLOCK). This enables lock/update/unlock workflows for package objects over RFC, which require HTTP session ownership validation. `setSessionType('stateless')` clears the captured cookie.
+
 ## [1.5.2] - 2026-03-12
 
 ### Added
