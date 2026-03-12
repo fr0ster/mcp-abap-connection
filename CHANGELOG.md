@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-03-12
+
+### Added
+- **RFC debug logging**: `RfcAbapConnection` now logs full request headers, request body, response headers, and response body at `debug` level. Enable with `DEBUG_CONNECTORS=true` and `AUTH_LOG_LEVEL=debug`.
+
 ## [1.5.1] - 2026-03-09
 
 ### Fixed

@@ -228,6 +228,8 @@ export class RfcAbapConnection implements AbapConnection {
     }
 
     this.logger?.debug(`RFC → ${method} ${uri}`);
+    this.logger?.debug(`RFC → headers: ${JSON.stringify(headerFields)}`);
+    if (body) this.logger?.debug(`RFC → body: ${body}`);
 
     try {
       const result = await this.rfcClient.call('SADT_REST_RFC_ENDPOINT', {
@@ -300,6 +302,8 @@ export class RfcAbapConnection implements AbapConnection {
       this.logger?.debug(
         `RFC ← ${statusCode} ${statusText} (${respBody.length} bytes)`,
       );
+      this.logger?.debug(`RFC ← headers: ${JSON.stringify(respHeaders)}`);
+      if (respBody) this.logger?.debug(`RFC ← body: ${respBody}`);
 
       const response: IAdtResponse<T, D> = {
         data: respBody as unknown as T,
