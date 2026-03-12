@@ -118,6 +118,8 @@ export class RfcAbapConnection implements AbapConnection {
   private readonly sessionId: string;
   private readonly baseUrl: string;
   private readonly rfcParams: RfcConnectionParams;
+  private sessionType: 'stateful' | 'stateless' = 'stateless';
+  private sessionCookie: string | null = null;
 
   constructor(
     private readonly config: SapConfig,
@@ -172,8 +174,14 @@ export class RfcAbapConnection implements AbapConnection {
     return this.sessionId;
   }
 
-  setSessionType(_type: 'stateful' | 'stateless'): void {
-    // No-op — RFC connections are always stateful
+  setSessionType(type: 'stateful' | 'stateless'): void {
+    this.sessionType = type;
+    if (type === 'stateless') {
+      this.sessionCookie = null;
+      this.logger?.debug('RFC session type: stateless (cookie cleared)');
+    } else {
+      this.logger?.debug('RFC session type: stateful (will capture cookies)');
+    }
   }
 
   async makeAdtRequest<T = any, D = any>(
@@ -208,6 +216,21 @@ export class RfcAbapConnection implements AbapConnection {
     if (options.headers) {
       for (const [name, value] of Object.entries(options.headers)) {
         headerFields.push({ NAME: name, VALUE: value });
+      }
+    }
+
+    // Inject session type header so SAP creates/maintains an ICM session
+    if (this.sessionType === 'stateful') {
+      headerFields.push({ NAME: 'x-sap-adt-sessiontype', VALUE: 'stateful' });
+    }
+
+    // Replay session cookie for stateful operations (cookie captured from LOCK response)
+    if (this.sessionCookie) {
+      const existingCookie = headerFields.find(
+        (h) => h.NAME.toLowerCase() === 'cookie',
+      );
+      if (!existingCookie) {
+        headerFields.push({ NAME: 'Cookie', VALUE: this.sessionCookie });
       }
     }
 
@@ -278,6 +301,24 @@ export class RfcAbapConnection implements AbapConnection {
       for (const field of respHeaderFields) {
         if (field.NAME && field.VALUE !== undefined) {
           respHeaders[field.NAME.toLowerCase()] = field.VALUE;
+        }
+      }
+
+      // Capture session cookie from LOCK/stateful responses for cookie replay
+      if (this.sessionType === 'stateful' && respHeaders['set-cookie']) {
+        const setCookieHeader = respHeaders['set-cookie'];
+        // Extract cookie name=value pairs (strip attributes like Path, Secure, etc.)
+        const cookies = Array.isArray(setCookieHeader)
+          ? setCookieHeader
+          : [setCookieHeader];
+        const cookieValues = cookies
+          .map((c: string) => c.split(';')[0].trim())
+          .filter(Boolean);
+        if (cookieValues.length > 0) {
+          this.sessionCookie = cookieValues.join('; ');
+          this.logger?.debug(
+            `RFC: captured session cookie: ${this.sessionCookie}`,
+          );
         }
       }
 
