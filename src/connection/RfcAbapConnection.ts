@@ -8,7 +8,7 @@ import type { ILogger } from '../logger.js';
 import type { AbapConnection } from './AbapConnection.js';
 
 /**
- * RFC connection parameters for node-rfc Client
+ * RFC connection parameters for @mcp-abap-adt/sap-rfc-lite Client
  */
 interface RfcConnectionParams {
   ashost: string;
@@ -20,7 +20,7 @@ interface RfcConnectionParams {
 }
 
 /**
- * Minimal interface for node-rfc Client to avoid hard dependency
+ * Minimal interface for @mcp-abap-adt/sap-rfc-lite Client to avoid hard dependency
  */
 interface IRfcClient {
   open(): Promise<void>;
@@ -98,7 +98,7 @@ function detectExceptionStatus(body: string): {
 /**
  * RFC-based connection for on-premise SAP systems.
  *
- * Uses node-rfc to call SADT_REST_RFC_ENDPOINT — the same standard SAP FM
+ * Uses @mcp-abap-adt/sap-rfc-lite to call SADT_REST_RFC_ENDPOINT — the same standard SAP FM
  * that Eclipse ADT uses for all on-premise ADT operations via JCo.
  *
  * RFC connections are inherently stateful: one ABAP session persists for the
@@ -111,7 +111,7 @@ function detectExceptionStatus(body: string): {
  *
  * Prerequisites:
  *   - SAP NW RFC SDK installed on the machine
- *   - node-rfc package installed: npm install node-rfc
+ *   - @mcp-abap-adt/sap-rfc-lite package installed: npm install @mcp-abap-adt/sap-rfc-lite
  */
 export class RfcAbapConnection implements AbapConnection {
   private rfcClient: IRfcClient | null = null;
@@ -139,16 +139,16 @@ export class RfcAbapConnection implements AbapConnection {
   async connect(): Promise<void> {
     let Client: new (params: RfcConnectionParams) => IRfcClient;
     try {
-      // Dynamic require — node-rfc is NOT a declared dependency.
+      // Dynamic require — @mcp-abap-adt/sap-rfc-lite is NOT a declared dependency.
       // Users who need RFC connections must install it manually:
-      //   npm install node-rfc (+ SAP NW RFC SDK on the machine)
+      //   npm install @mcp-abap-adt/sap-rfc-lite (+ SAP NW RFC SDK on the machine)
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const noderfc = require('node-rfc');
+      const noderfc = require('@mcp-abap-adt/sap-rfc-lite');
       Client = noderfc.Client;
     } catch (e) {
       throw new Error(
-        'node-rfc is not available. To use RFC connections, install SAP NW RFC SDK ' +
-          'and run: npm install node-rfc. ' +
+        '@mcp-abap-adt/sap-rfc-lite is not available. To use RFC connections, install SAP NW RFC SDK ' +
+          'and run: npm install @mcp-abap-adt/sap-rfc-lite. ' +
           `Details: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
