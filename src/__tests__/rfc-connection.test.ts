@@ -13,8 +13,8 @@
 
 import * as dotenv from 'dotenv';
 import type { SapConfig } from '../config/sapConfig.js';
-import { RfcAbapConnection } from '../connection/RfcAbapConnection.js';
 import { createAbapConnection } from '../connection/connectionFactory.js';
+import { RfcAbapConnection } from '../connection/RfcAbapConnection.js';
 import type { ILogger } from '../logger.js';
 
 // Load env file — default to e77.env, override via SAP_ENV_FILE
