@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/connection",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "ABAP connection layer for MCP ABAP ADT server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -46,7 +46,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@mcp-abap-adt/interfaces": "^6.1.0",
+    "@mcp-abap-adt/interfaces": "^7.0.0",
     "axios": "^1.13.5",
     "commander": "^14.0.3",
     "express": "^5.1.0",

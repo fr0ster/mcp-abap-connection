@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-04-14
+
+### Changed
+
+- Update `@mcp-abap-adt/interfaces` to `^7.0.0` (adds `ServiceBindingVariant` type and `connect()` method in `IAbapConnection`)
+
 ## [1.5.3] - 2026-03-12
 
 ### Added
