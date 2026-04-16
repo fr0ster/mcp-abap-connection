@@ -34,14 +34,20 @@ afterEach(() => {
 
 describe('buildRfcParams — sysnr derivation', () => {
   it('derives sysnr=00 from standard port 8000', () => {
-    new RfcAbapConnection({ ...baseConfig(), url: 'http://saphost:8000' }, logger);
+    new RfcAbapConnection(
+      { ...baseConfig(), url: 'http://saphost:8000' },
+      logger,
+    );
     expect(logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('saphost:00'),
     );
   });
 
   it('derives sysnr=42 from standard port 8042', () => {
-    new RfcAbapConnection({ ...baseConfig(), url: 'http://saphost:8042' }, logger);
+    new RfcAbapConnection(
+      { ...baseConfig(), url: 'http://saphost:8042' },
+      logger,
+    );
     expect(logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('saphost:42'),
     );
@@ -49,7 +55,10 @@ describe('buildRfcParams — sysnr derivation', () => {
 
   it('uses SAP_SYSNR env var override for non-standard ports', () => {
     process.env.SAP_SYSNR = '00';
-    new RfcAbapConnection({ ...baseConfig(), url: 'http://saphost:50400' }, logger);
+    new RfcAbapConnection(
+      { ...baseConfig(), url: 'http://saphost:50400' },
+      logger,
+    );
     expect(logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('saphost:00'),
     );
@@ -57,7 +66,10 @@ describe('buildRfcParams — sysnr derivation', () => {
 
   it('uses SAP_SYSNR env var override even for standard ports', () => {
     process.env.SAP_SYSNR = '05';
-    new RfcAbapConnection({ ...baseConfig(), url: 'http://saphost:8000' }, logger);
+    new RfcAbapConnection(
+      { ...baseConfig(), url: 'http://saphost:8000' },
+      logger,
+    );
     expect(logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('saphost:05'),
     );
@@ -70,9 +82,14 @@ describe('RfcAbapConnection.connect — error serialization', () => {
     jest.mock('@mcp-abap-adt/sap-rfc-lite', () => ({
       Client: class {
         open() {
-          return Promise.reject({ code: 'RFC_INVALID_PARAMETER', message: 'hostname wrong' });
+          return Promise.reject({
+            code: 'RFC_INVALID_PARAMETER',
+            message: 'hostname wrong',
+          });
         }
-        get alive() { return false; }
+        get alive() {
+          return false;
+        }
       },
     }));
 

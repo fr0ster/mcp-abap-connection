@@ -401,9 +401,7 @@ export class RfcAbapConnection implements AbapConnection {
         await this.rfcClient.close();
         this.logger?.debug('RFC connection closed');
       } catch (e) {
-        this.logger?.debug(
-          `RFC close error: ${rfcErrorMessage(e)}`,
-        );
+        this.logger?.debug(`RFC close error: ${rfcErrorMessage(e)}`);
       }
       this.rfcClient = null;
     }
