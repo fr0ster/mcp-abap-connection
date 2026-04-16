@@ -7,6 +7,12 @@ import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import type { AbapConnection } from './AbapConnection.js';
 
+function rfcErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === 'object') return JSON.stringify(e);
+  return String(e);
+}
+
 /**
  * RFC connection parameters for @mcp-abap-adt/sap-rfc-lite Client
  */
@@ -45,8 +51,10 @@ function buildRfcParams(config: SapConfig): RfcConnectionParams {
   const parsed = new URL(config.url);
 
   const port = Number.parseInt(parsed.port || '8000', 10);
-  // SAP HTTP port convention: 80XX where XX = system number
-  const sysnr = String(port - 8000).padStart(2, '0');
+  // SAP HTTP port convention: 80XX where XX = system number.
+  // SAP_SYSNR env var overrides derivation for non-standard ports (e.g. 50400).
+  const derivedSysnr = String(port - 8000).padStart(2, '0');
+  const sysnr = process.env.SAP_SYSNR?.trim() || derivedSysnr;
 
   return {
     ashost: parsed.hostname,
@@ -149,7 +157,7 @@ export class RfcAbapConnection implements AbapConnection {
       throw new Error(
         '@mcp-abap-adt/sap-rfc-lite is not available. To use RFC connections, install SAP NW RFC SDK ' +
           'and run: npm install @mcp-abap-adt/sap-rfc-lite. ' +
-          `Details: ${e instanceof Error ? e.message : String(e)}`,
+          `Details: ${rfcErrorMessage(e)}`,
       );
     }
 
@@ -160,7 +168,7 @@ export class RfcAbapConnection implements AbapConnection {
       this.logger?.debug('RFC connection opened (stateful session)');
     } catch (e) {
       this.rfcClient = null;
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = rfcErrorMessage(e);
       this.logger?.error(`RFC connection failed: ${msg}`);
       throw new Error(`Failed to open RFC connection: ${msg}`);
     }
@@ -370,7 +378,7 @@ export class RfcAbapConnection implements AbapConnection {
       }
 
       // RFC-level error
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = rfcErrorMessage(e);
       this.logger?.error(`RFC call failed: ${msg}`);
       throw new Error(`RFC call to SADT_REST_RFC_ENDPOINT failed: ${msg}`);
     }
@@ -394,7 +402,7 @@ export class RfcAbapConnection implements AbapConnection {
         this.logger?.debug('RFC connection closed');
       } catch (e) {
         this.logger?.debug(
-          `RFC close error: ${e instanceof Error ? e.message : String(e)}`,
+          `RFC close error: ${rfcErrorMessage(e)}`,
         );
       }
       this.rfcClient = null;
