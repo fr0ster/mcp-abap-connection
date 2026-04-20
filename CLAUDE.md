@@ -55,3 +55,7 @@ GitHub Actions triggers on `v*.*.*` tags — runs build, `npm pack`, creates Git
 
 - Never change `package.json` version without explicit user request
 - After changing the version in `package.json`, always run `npm install --package-lock-only` to update `package-lock.json` and include it in the same commit
+
+## Plans and Specs
+
+After a plan under `docs/superpowers/plans/` or spec under `docs/superpowers/specs/` has been fully implemented, delete the file. Keep only active (not yet implemented) plans and specs in the tree — implementation history lives in git, not in these directories.
