@@ -33,6 +33,7 @@ mcp-abap-connection/
 - 📦 [Installation Guide](./INSTALLATION.md) - How to install and set up the package
 - 📚 [Usage Guide](./USAGE.md) - Basic usage and comprehensive API documentation
 - 📖 [Main README](../README.md) - Package overview and quick start
+- 🧭 [Scope and Boundaries](./SCOPE.md) - What this package does (and does not), sibling packages, and why there is no RFC to cloud
 
 ### Core Features
 - 🔑 [JWT Auth Tools](./JWT_AUTH_TOOLS.md) - CLI tool for browser-based authentication
