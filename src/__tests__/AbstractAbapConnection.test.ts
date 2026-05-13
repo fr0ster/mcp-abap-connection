@@ -1,6 +1,8 @@
 import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import { BaseAbapConnection } from '../connection/BaseAbapConnection.js';
+import { JwtAbapConnection } from '../connection/JwtAbapConnection.js';
+import { SamlAbapConnection } from '../connection/SamlAbapConnection.js';
 import type { ILogger } from '../logger.js';
 
 const mockLogger: ILogger = {
@@ -274,6 +276,99 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
 
     expect(mock).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('JWT auth: 401 on POST with cached token does NOT trigger stale-CSRF retry', async () => {
+    const jwtConfig: SapConfig = {
+      url: 'https://sap.example.com',
+      authType: 'jwt',
+      jwtToken: 'jwt-abc',
+      client: '100',
+    };
+    const conn = new JwtAbapConnection(jwtConfig, mockLogger);
+    (conn as any).csrfToken = 'stale-token';
+    (conn as any).cookies = 'SAP_SESSIONID_HQ6=dead';
+
+    const originalError = makeAxiosError(401, '<html>login</html>', {
+      method: 'POST',
+      url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
+    });
+
+    const mock = jest.fn().mockRejectedValue(originalError);
+    attachMockAxios(conn as unknown as BaseAbapConnection, mock);
+
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/ddic/domains/zfoo',
+        method: 'POST',
+        timeout: 30000,
+        data: '<x/>',
+      }),
+    ).rejects.toThrow('JWT token has expired. Please re-authenticate.');
+
+    expect(mock).toHaveBeenCalledTimes(1);
+    expect((conn as any).csrfToken).toBe('stale-token');
+    expect((conn as any).cookies).toBe('SAP_SESSIONID_HQ6=dead');
+  });
+
+  it('SAML auth: 401 on POST with cached token does NOT trigger stale-CSRF retry', async () => {
+    const samlConfig: SapConfig = {
+      url: 'https://sap.example.com',
+      authType: 'saml',
+      sessionCookies: 'MYSAPSSO2=abc',
+      client: '100',
+    };
+    const conn = new SamlAbapConnection(samlConfig, mockLogger);
+    (conn as any).csrfToken = 'stale-token';
+    (conn as any).cookies = 'MYSAPSSO2=abc; SAP_SESSIONID_HQ6=dead';
+
+    const originalError = makeAxiosError(401, '<html>login</html>', {
+      method: 'POST',
+      url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
+    });
+
+    const mock = jest.fn().mockRejectedValue(originalError);
+    attachMockAxios(conn as unknown as BaseAbapConnection, mock);
+
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/ddic/domains/zfoo',
+        method: 'POST',
+        timeout: 30000,
+        data: '<x/>',
+      }),
+    ).rejects.toBe(originalError);
+
+    expect(mock).toHaveBeenCalledTimes(1);
+    expect((conn as any).csrfToken).toBe('stale-token');
+  });
+
+  it('GET 401 with cached token: does NOT invalidate session (new branch is mutation-only)', async () => {
+    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    (conn as any).csrfToken = 'cached-token';
+    (conn as any).cookies = 'SAP_SESSIONID_HQ6=alive';
+    (conn as any).cookieStore.set('SAP_SESSIONID_HQ6', 'alive');
+
+    const mock = jest
+      .fn()
+      .mockRejectedValueOnce(
+        makeAxiosError(401, '<html>login</html>', {
+          method: 'GET',
+          url: 'https://sap.example.com/sap/bc/adt/oo/classes/zcl_x',
+        }),
+      )
+      .mockResolvedValueOnce({ status: 200, data: 'ok', headers: {} });
+    attachMockAxios(conn, mock);
+
+    const res = await conn.makeAdtRequest({
+      url: '/sap/bc/adt/oo/classes/zcl_x',
+      method: 'GET',
+      timeout: 30000,
+    });
+
+    expect(res.status).toBe(200);
+    expect((conn as any).csrfToken).toBe('cached-token');
+    expect((conn as any).cookies).toContain('SAP_SESSIONID_HQ6=alive');
   });
 
   it('GET 401 with cookies retries with cookies (existing GET branch)', async () => {
