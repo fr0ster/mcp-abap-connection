@@ -148,6 +148,60 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     expect(mock).toHaveBeenCalledTimes(2);
   });
 
+  it('POST 401 with cached CSRF token: invalidates session, refetches, retries with new token/cookies', async () => {
+    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    (conn as any).csrfToken = 'stale-token';
+    (conn as any).cookies = 'SAP_SESSIONID_HQ6=dead';
+    (conn as any).cookieStore.set('SAP_SESSIONID_HQ6', 'dead');
+
+    const calls: AxiosCall[] = [];
+    const mock = jest.fn().mockImplementation(async (cfg: AxiosCall) => {
+      calls.push({
+        method: cfg.method,
+        url: cfg.url,
+        headers: { ...(cfg.headers || {}) },
+      });
+      if (calls.length === 1) {
+        throw makeAxiosError(401, '<html>Anmeldung fehlgeschlagen</html>', {
+          method: cfg.method,
+          url: cfg.url,
+        });
+      }
+      if (calls.length === 2) {
+        return {
+          status: 200,
+          data: '',
+          headers: {
+            'x-csrf-token': 'fresh-token',
+            'set-cookie': ['SAP_SESSIONID_HQ6=fresh'],
+          },
+        };
+      }
+      return { status: 200, data: 'ok', headers: {} };
+    });
+    attachMockAxios(conn, mock);
+
+    const res = await conn.makeAdtRequest({
+      url: '/sap/bc/adt/ddic/domains/zfoo',
+      method: 'POST',
+      timeout: 30000,
+      data: '<x/>',
+    });
+
+    expect(res.status).toBe(200);
+    expect(mock).toHaveBeenCalledTimes(3);
+
+    const refetchCookie =
+      calls[1]?.headers?.Cookie ?? calls[1]?.headers?.cookie;
+    expect(refetchCookie ?? '').not.toContain('SAP_SESSIONID_HQ6=dead');
+
+    expect(calls[2]?.headers?.['x-csrf-token']).toBe('fresh-token');
+    const retryCookie = calls[2]?.headers?.Cookie ?? calls[2]?.headers?.cookie;
+    expect(retryCookie ?? '').toContain('SAP_SESSIONID_HQ6=fresh');
+
+    expect((conn as any).csrfToken).toBe('fresh-token');
+  });
+
   it('GET 401 with cookies retries with cookies (existing GET branch)', async () => {
     const conn = new BaseAbapConnection(baseConfig, mockLogger);
     (conn as any).csrfToken = 'whatever';
