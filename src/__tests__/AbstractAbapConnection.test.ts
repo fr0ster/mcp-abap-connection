@@ -202,6 +202,80 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     expect((conn as any).csrfToken).toBe('fresh-token');
   });
 
+  it('401 with cached token, retry also 401: original AxiosError propagates', async () => {
+    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    (conn as any).csrfToken = 'stale-token';
+    (conn as any).cookies = 'SAP_SESSIONID_HQ6=dead';
+
+    const originalError = makeAxiosError(401, '<html>first</html>', {
+      method: 'POST',
+      url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
+    });
+    const secondError = makeAxiosError(401, '<html>second</html>', {
+      method: 'POST',
+      url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
+    });
+
+    let call = 0;
+    const mock = jest.fn().mockImplementation(async () => {
+      call += 1;
+      if (call === 1) throw originalError;
+      if (call === 2) {
+        return {
+          status: 200,
+          data: '',
+          headers: { 'x-csrf-token': 'fresh-token' },
+        };
+      }
+      throw secondError;
+    });
+    attachMockAxios(conn, mock);
+
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/ddic/domains/zfoo',
+        method: 'POST',
+        timeout: 30000,
+        data: '<x/>',
+      }),
+    ).rejects.toBe(originalError);
+
+    expect(mock).toHaveBeenCalledTimes(3);
+  });
+
+  it('401 with cached token, CSRF refetch fails: original AxiosError propagates', async () => {
+    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    (conn as any).csrfToken = 'stale-token';
+    (conn as any).cookies = 'SAP_SESSIONID_HQ6=dead';
+
+    const originalError = makeAxiosError(401, '<html>first</html>', {
+      method: 'POST',
+      url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
+    });
+    const refetchError = makeAxiosError(500, 'ICF service unavailable', {
+      method: 'GET',
+      url: 'https://sap.example.com/sap/bc/adt/core/discovery',
+    });
+
+    const fetchSpy = jest
+      .spyOn(conn as any, 'fetchCsrfToken')
+      .mockRejectedValue(refetchError);
+    const mock = jest.fn().mockRejectedValue(originalError);
+    attachMockAxios(conn, mock);
+
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/ddic/domains/zfoo',
+        method: 'POST',
+        timeout: 30000,
+        data: '<x/>',
+      }),
+    ).rejects.toBe(originalError);
+
+    expect(mock).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('GET 401 with cookies retries with cookies (existing GET branch)', async () => {
     const conn = new BaseAbapConnection(baseConfig, mockLogger);
     (conn as any).csrfToken = 'whatever';
