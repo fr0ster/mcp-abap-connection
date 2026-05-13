@@ -26,7 +26,7 @@ The original issue reporter proposed matching the German strings in the response
 
 ### Detection signal
 
-Replace body-text matching with a **status + method + cached-token** signal:
+For the login-form 401 pattern, add a **status + method + cached-token** signal instead of matching locale-dependent body text:
 
 > A Basic-auth mutation request (POST/PUT/DELETE) that returns **HTTP 401** while we **have** a cached CSRF token is treated as evidence that SAP has invalidated the token and its bound session.
 
@@ -69,6 +69,8 @@ In `makeAdtRequest()` error-handling block:
 2. Fold `isCachedTokenStale` into the retry condition (either by making it a third branch returned from `shouldRetryCsrf()` or by `||`-ing it at the call site — implementation detail for the plan).
 3. **If** the retry was triggered by `isCachedTokenStale`, call `invalidateSession()` **before** `fetchCsrfToken()`. The 403/CSRF-body branches keep their current behavior (don't clear cookies — those may still be valid).
 
+`authType === 'basic'` applies only to the new 401-with-cached-token branch. Existing 403/body-based CSRF retry behavior must remain unchanged for the auth types it already supports.
+
 The retry itself reuses the existing `fetchCsrfToken(requestUrl, 5, 2000)` call and the existing single-shot retry of `requestConfig`. No new retry loop, no exponential backoff added.
 
 Wrap the CSRF refetch + retry request in `try`/`catch`. If either the refetch or the retry request fails, log the secondary failure at debug level and rethrow the original AxiosError. This preserves the pre-existing caller-visible error contract while still allowing recovery when the one-shot retry succeeds.
@@ -97,7 +99,7 @@ Unit tests in `src/__tests__/AbstractAbapConnection.test.ts` (or the closest exi
 2. **403 CSRF (existing behavior)** — POST → 403 with `"CSRF"` body → token refetched, cookies preserved, retry succeeds. Confirms existing branch still works and cookies are NOT cleared.
 3. **401 with cached token (new behavior)** — POST → 401 with HTML body, `csrfToken` set and old `SAP_SESSIONID` present → old session state is cleared before refetch, CSRF fetch is sent without the old `Cookie`, new token/cookies are captured, retry succeeds with the new `x-csrf-token` and new `Cookie`.
 4. **401 without cached token (existing behavior)** — POST → 401, `csrfToken === null` → existing branch fires, retry succeeds.
-5. **401 with cached token, retry also 401** — original AxiosError propagates. No infinite loop.
+5. **401 with cached token, retry also 401** — original AxiosError propagates. No infinite loop. Assert the thrown object is the original first POST error (for example with `toBe(originalError)`), not merely any 401 response.
 6. **401 with cached token, CSRF refetch fails** — original AxiosError propagates, not the refetch error.
 7. **JWT auth, 401 on POST** — no retry (existing JWT short-circuit holds).
 8. **SAML auth, 401 on POST** — no new stale-CSRF retry; SAML session lifecycle remains outside this Basic-auth recovery branch.
