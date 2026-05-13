@@ -4,7 +4,7 @@
 
 **Goal:** Make `AbstractAbapConnection` recover from SAP's "401 + login form" response to a mutation request when a stale CSRF token is cached, by invalidating session state and retrying once. (Issue #7.)
 
-**Architecture:** Add one private helper `invalidateSession()` to `AbstractAbapConnection`, compute a local `isCachedTokenStale` boolean in `makeAdtRequest()`'s error block, fold it into the existing CSRF retry path, and wrap the refetch+retry in `try`/`catch` so secondary failures don't replace the original `AxiosError`. Only `authType === 'basic'` triggers the new branch.
+**Architecture:** Add one private helper `invalidateSession()` to `AbstractAbapConnection`, compute a local `isCachedTokenStale` boolean in `makeAdtRequest()`'s error block, fold it into the existing CSRF retry path, clear already-built stale request cookies before refetch, and wrap the refetch+retry in `try`/`catch` so secondary failures don't replace the original `AxiosError`. Only `authType === 'basic'` triggers the new branch.
 
 **Tech Stack:** TypeScript, axios, Jest, Biome. Single source file changed: `src/connection/AbstractAbapConnection.ts`. New test file: `src/__tests__/AbstractAbapConnection.test.ts`.
 
@@ -16,7 +16,7 @@
 
 - **Modify:** `src/connection/AbstractAbapConnection.ts`
   - Add private `invalidateSession()`.
-  - In `makeAdtRequest()` error block, compute `isCachedTokenStale`, fold into retry condition, call `invalidateSession()` when it fires, wrap refetch+retry in `try`/`catch`.
+  - In `makeAdtRequest()` error block, compute `isCachedTokenStale`, fold into retry condition, call `invalidateSession()` when it fires, delete stale `Cookie`/`cookie` headers from the already-built request headers, wrap refetch+retry in `try`/`catch`.
 - **Create:** `src/__tests__/AbstractAbapConnection.test.ts`
   - Tests use `BaseAbapConnection` as the concrete subclass.
   - Mock the lazily-created axios instance by setting `(connection as any).axiosInstance` to a `jest.fn()` before invoking `makeAdtRequest()`.
@@ -29,7 +29,7 @@ No other files change. No new public API. No env vars.
 
 1. **Detection placement:** `isCachedTokenStale` is computed at the call site in `makeAdtRequest()` and `||`-ed into the existing `shouldRetryCsrf(error)` condition. `shouldRetryCsrf()` itself is NOT modified — its boolean contract stays intact for existing 403/CSRF-body cases. This avoids overloading one predicate with two semantics ("should refetch" vs "should also wipe cookies").
 
-2. **Session invalidation:** A new private `invalidateSession()` clears `csrfToken`, `cookies`, and `cookieStore`. It is called from `makeAdtRequest()` only when `isCachedTokenStale` is the triggering condition — not for the existing 403/CSRF-body branch (those keep current behavior).
+2. **Session invalidation:** A new private `invalidateSession()` clears `csrfToken`, `cookies`, and `cookieStore`. It is called from `makeAdtRequest()` only when `isCachedTokenStale` is the triggering condition — not for the existing 403/CSRF-body branch (those keep current behavior). Because `requestHeaders` was already built before the failed request, also delete stale `Cookie`/`cookie` entries from that local object immediately after invalidation.
 
 3. **Error contract:** The refetch + retry happens inside a `try`/`catch`. On secondary failure, log at debug level and throw the original `AxiosError` (the variable bound by the outer `catch (error)`).
 
@@ -49,7 +49,7 @@ No other files change. No new public API. No env vars.
 Create `src/__tests__/AbstractAbapConnection.test.ts` with:
 
 ```ts
-import { AxiosError, AxiosHeaders } from 'axios';
+import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import { BaseAbapConnection } from '../connection/BaseAbapConnection.js';
 import type { ILogger } from '../logger.js';
@@ -178,25 +178,33 @@ it('403 with "CSRF" body refetches token and retries; cookies preserved', async 
 });
 ```
 
-- [ ] **Step 4: Add bootstrap-CSRF-on-POST regression test**
+- [ ] **Step 4: Add 401-without-cached-token retry regression test**
 
-This pins that a POST with `csrfToken === null` triggers the upfront `ensureFreshCsrfToken` → token fetched → request proceeds. It is the analogue of spec test #4 ("401 without cached token") but exercised via the upfront-fetch success path, which is the realistic common case and cheap to express. The literal "POST → 401 → refetch" branch is exercised indirectly by the existing fix in Task 2/3 (which extends the same retry condition).
+This pins the existing `shouldRetryCsrf()` bootstrap branch required by the spec: a mutation returns 401 while `csrfToken === null`, so the CSRF retry path fetches a token and retries.
 
 ```ts
-it('POST without cached token: upfront CSRF fetch then request proceeds', async () => {
+it('POST 401 without cached token: refetches token and retries', async () => {
   const conn = new BaseAbapConnection(baseConfig, mockLogger);
   (conn as any).csrfToken = null;
   (conn as any).cookies = null;
 
-  const mock = jest.fn();
-  // 1st call: upfront CSRF fetch → 200 with token.
-  mock
-    .mockResolvedValueOnce({
-      status: 200,
-      data: '',
-      headers: { 'x-csrf-token': 'bootstrap-token' },
-    })
-    // 2nd call: the actual POST → succeeds.
+  const upfrontFetchError = new Error('upfront CSRF fetch unavailable');
+  const fetchSpy = jest
+    .spyOn(conn as any, 'fetchCsrfToken')
+    // 1st fetch: upfront ensureFreshCsrfToken fails, makeAdtRequest continues.
+    .mockRejectedValueOnce(upfrontFetchError)
+    // 2nd fetch: CSRF retry branch obtains a token.
+    .mockResolvedValueOnce('bootstrap-token');
+  const mock = jest
+    .fn()
+    // 1st axios call: original POST without token → 401.
+    .mockRejectedValueOnce(
+      makeAxiosError(401, '<html>login</html>', {
+        method: 'POST',
+        url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
+      }),
+    )
+    // 2nd axios call: retry POST → succeeds.
     .mockResolvedValueOnce({ status: 200, data: 'ok', headers: {} });
   attachMockAxios(conn, mock);
 
@@ -208,6 +216,7 @@ it('POST without cached token: upfront CSRF fetch then request proceeds', async 
 
   expect(res.status).toBe(200);
   expect((conn as any).csrfToken).toBe('bootstrap-token');
+  expect(fetchSpy).toHaveBeenCalledTimes(2);
   expect(mock).toHaveBeenCalledTimes(2);
 });
 ```
@@ -250,7 +259,7 @@ it('GET 401 with cookies retries with cookies (existing GET branch)', async () =
 
 - [ ] **Step 6: Run the regression tests**
 
-Run: `npx jest --testPathPattern=AbstractAbapConnection`
+Run: `npx jest --testPathPatterns=AbstractAbapConnection`
 
 Expected: 4 tests PASS against current `master`. If any fail, the test harness is wrong — fix the test, not the source.
 
@@ -335,7 +344,7 @@ it('POST 401 with cached CSRF token: invalidates session, refetches, retries wit
 
 - [ ] **Step 2: Run the test — confirm it FAILS**
 
-Run: `npx jest --testPathPattern=AbstractAbapConnection -t "401 with cached CSRF token: invalidates"`
+Run: `npx jest --testPathPatterns=AbstractAbapConnection -t "401 with cached CSRF token: invalidates"`
 
 Expected: FAIL. The current code does not recognize this case; the original 401 error propagates and `mock` is called once, not three times.
 
@@ -435,6 +444,8 @@ with:
 
         if (isCachedTokenStale) {
           this.invalidateSession();
+          delete requestHeaders.Cookie;
+          delete requestHeaders.cookie;
         }
 
         try {
@@ -461,9 +472,10 @@ with:
       }
 ```
 
-Two functional changes:
+Three functional changes:
 1. New `isCachedTokenStale` branch + `invalidateSession()` call.
-2. Refetch + retry wrapped in `try`/`catch`; on secondary failure the **original** `error` is thrown (preserves the caller-visible error contract).
+2. Stale `Cookie`/`cookie` entries are removed from the already-built `requestHeaders` object before CSRF refetch, so a refetch response without `set-cookie` cannot accidentally reuse the dead SAP session cookie.
+3. Refetch + retry wrapped in `try`/`catch`; on secondary failure the **original** `error` is thrown (preserves the caller-visible error contract).
 
 Style notes:
 - Use `this.setCsrfToken(...)` and `this.getCsrfToken()` to stay consistent with the existing accessor pattern in this class.
@@ -471,13 +483,13 @@ Style notes:
 
 - [ ] **Step 3: Run the new test — confirm it now PASSES**
 
-Run: `npx jest --testPathPattern=AbstractAbapConnection -t "401 with cached CSRF token: invalidates"`
+Run: `npx jest --testPathPatterns=AbstractAbapConnection -t "401 with cached CSRF token: invalidates"`
 
 Expected: PASS.
 
 - [ ] **Step 4: Run all regression tests — confirm none broke**
 
-Run: `npx jest --testPathPattern=AbstractAbapConnection`
+Run: `npx jest --testPathPatterns=AbstractAbapConnection`
 
 Expected: all 5 tests PASS.
 
@@ -566,13 +578,10 @@ it('401 with cached token, CSRF refetch fails: original AxiosError propagates', 
     { method: 'GET', url: 'https://sap.example.com/sap/bc/adt/core/discovery' },
   );
 
-  let call = 0;
-  const mock = jest.fn().mockImplementation(async () => {
-    call += 1;
-    if (call === 1) throw originalError;
-    // All subsequent CSRF refetch attempts also fail.
-    throw refetchError;
-  });
+  const fetchSpy = jest
+    .spyOn(conn as any, 'fetchCsrfToken')
+    .mockRejectedValue(refetchError);
+  const mock = jest.fn().mockRejectedValue(originalError);
   attachMockAxios(conn, mock);
 
   await expect(
@@ -582,12 +591,15 @@ it('401 with cached token, CSRF refetch fails: original AxiosError propagates', 
       data: '<x/>',
     }),
   ).rejects.toBe(originalError);
+
+  expect(mock).toHaveBeenCalledTimes(1);
+  expect(fetchSpy).toHaveBeenCalledTimes(1);
 });
 ```
 
 - [ ] **Step 3: Run the new tests**
 
-Run: `npx jest --testPathPattern=AbstractAbapConnection`
+Run: `npx jest --testPathPatterns=AbstractAbapConnection`
 
 Expected: all 7 tests PASS.
 
@@ -644,9 +656,10 @@ it('JWT auth: 401 on POST with cached token does NOT trigger stale-CSRF retry', 
       method: 'POST',
       data: '<x/>',
     }),
-  ).rejects.toBe(originalError);
+  ).rejects.toThrow('JWT token has expired. Please re-authenticate.');
 
-  // Only the original POST. No CSRF refetch, no retry.
+  // Only the original POST from AbstractAbapConnection. No CSRF refetch, no stale-CSRF retry.
+  // JwtAbapConnection wraps the original AxiosError into its JWT-expired error when no refresher is available.
   expect(mock).toHaveBeenCalledTimes(1);
   // Session state untouched.
   expect((conn as any).csrfToken).toBe('stale-token');
@@ -736,7 +749,7 @@ it('GET 401 with cached token: does NOT invalidate session (new branch is mutati
 
 - [ ] **Step 4: Run the full test file**
 
-Run: `npx jest --testPathPattern=AbstractAbapConnection`
+Run: `npx jest --testPathPatterns=AbstractAbapConnection`
 
 Expected: all 10 tests PASS.
 
