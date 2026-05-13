@@ -317,28 +317,63 @@ abstract class AbstractAbapConnection implements AbapConnection {
         this.logger?.error(errorDetails.message, errorDetails);
       }
 
-      // Retry logic for CSRF token errors (403 with CSRF message)
-      if (this.shouldRetryCsrf(error)) {
+      // Detect the "login-form 401" pattern: SAP returned 401 for a mutation while
+      // we have a cached CSRF token. The token and its bound SAP session must be
+      // discarded before the retry. Basic auth only — JWT/SAML lifecycles are
+      // managed elsewhere.
+      const isCachedTokenStale =
+        error instanceof AxiosError &&
+        this.config.authType === 'basic' &&
+        (normalizedMethod === 'POST' ||
+          normalizedMethod === 'PUT' ||
+          normalizedMethod === 'DELETE') &&
+        error.response?.status === 401 &&
+        this.getCsrfToken() !== null;
+
+      // Retry logic for CSRF token errors (403 with CSRF message) and the
+      // login-form 401 pattern.
+      if (this.shouldRetryCsrf(error) || isCachedTokenStale) {
         this.logger?.debug(
-          'CSRF token validation failed, fetching new token and retrying request',
+          isCachedTokenStale
+            ? 'Stale CSRF token / SAP session — invalidating and retrying'
+            : 'CSRF token validation failed, fetching new token and retrying request',
           {
             url: requestUrl,
             method: normalizedMethod,
           },
         );
 
-        this.csrfToken = await this.fetchCsrfToken(requestUrl, 5, 2000);
-        if (this.csrfToken) {
-          requestHeaders['x-csrf-token'] = this.csrfToken;
-        }
-        if (this.cookies) {
-          requestHeaders.Cookie = this.cookies;
+        if (isCachedTokenStale) {
+          this.invalidateSession();
+          delete requestHeaders.Cookie;
+          delete requestHeaders.cookie;
         }
 
-        const retryResponse = await this.getAxiosInstance()(requestConfig);
-        this.updateCookiesFromResponse(retryResponse.headers);
+        try {
+          this.setCsrfToken(await this.fetchCsrfToken(requestUrl, 5, 2000));
+          const refreshedToken = this.getCsrfToken();
+          if (refreshedToken) {
+            requestHeaders['x-csrf-token'] = refreshedToken;
+          }
+          const refreshedCookies = this.getCookies();
+          if (refreshedCookies) {
+            requestHeaders.Cookie = refreshedCookies;
+          }
 
-        return retryResponse as unknown as IAdtResponse<T, D>;
+          const retryResponse = await this.getAxiosInstance()(requestConfig);
+          this.updateCookiesFromResponse(retryResponse.headers);
+
+          return retryResponse as unknown as IAdtResponse<T, D>;
+        } catch (retryError) {
+          this.logger?.debug(
+            `CSRF retry failed; rethrowing original error: ${
+              retryError instanceof Error
+                ? retryError.message
+                : String(retryError)
+            }`,
+          );
+          throw error;
+        }
       }
 
       // Retry logic for 401 errors on GET requests (authentication issue - need cookies)
@@ -757,6 +792,19 @@ abstract class AbstractAbapConnection implements AbapConnection {
 
       throw error;
     }
+  }
+
+  /**
+   * Clear SAP-side session state when SAP rejects the cached CSRF token + session
+   * cookies (HTTP 401 on a mutation while a cached token exists). This forces the
+   * next request path to fetch a fresh token and a fresh SAP_SESSIONID cookie.
+   *
+   * Distinct from reset(): this leaves the axios instance and interceptors in place.
+   */
+  private invalidateSession(): void {
+    this.setCsrfToken(null);
+    this.cookies = null;
+    this.cookieStore.clear();
   }
 
   private shouldRetryCsrf(error: unknown): boolean {
