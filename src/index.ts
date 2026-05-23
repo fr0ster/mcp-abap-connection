@@ -7,6 +7,7 @@ export type {
   IWebSocketMessageHandler,
   IWebSocketTransport,
 } from '@mcp-abap-adt/interfaces';
+export { FileCertificateMaterialLoader } from './auth/FileCertificateMaterialLoader.js';
 export type {
   SapAuthType,
   SapConfig,
@@ -25,6 +26,7 @@ export {
   BaseAbapConnection,
   BaseAbapConnection as OnPremAbapConnection,
 } from './connection/BaseAbapConnection.js';
+export { CertificateAbapConnection } from './connection/CertificateAbapConnection.js';
 // Factory
 export { createAbapConnection } from './connection/connectionFactory.js';
 // CSRF configuration
@@ -38,6 +40,7 @@ export {
   JwtAbapConnection,
   JwtAbapConnection as CloudAbapConnection,
 } from './connection/JwtAbapConnection.js';
+export { KerberosAbapConnection } from './connection/KerberosAbapConnection.js';
 export { RfcAbapConnection } from './connection/RfcAbapConnection.js';
 export { SamlAbapConnection } from './connection/SamlAbapConnection.js';
 export type { ILogger } from './logger.js';

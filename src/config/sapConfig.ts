@@ -31,5 +31,10 @@ export function sapConfigSignature(config: ISapConfig): string {
     jwtToken: jwtTokenPreview,
     refreshToken: refreshTokenPreview,
     sessionCookies: sessionCookiesPreview,
+    certPath: config.certPath ?? null,
+    certKeyPath: config.certKeyPath ?? null,
+    certPfxPath: config.certPfxPath ?? null,
+    certPassphrase: config.certPassphrase ? 'set' : null,
+    kerberosSpn: config.kerberosSpn ?? null,
   });
 }

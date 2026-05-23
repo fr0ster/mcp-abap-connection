@@ -1,8 +1,8 @@
 import { AxiosError } from 'axios';
+import { generateSpnegoToken } from '../auth/kerberosSpnego.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
-import { generateSpnegoToken } from '../auth/kerberosSpnego.js';
 
 /** Kerberos / SPNEGO single-leg auth: send Negotiate token, reuse the resulting SAP session cookie. */
 export class KerberosAbapConnection extends AbstractAbapConnection {
@@ -12,21 +12,28 @@ export class KerberosAbapConnection extends AbstractAbapConnection {
   constructor(config: SapConfig, logger?: ILogger | null, sessionId?: string) {
     KerberosAbapConnection.validateConfig(config);
     super(config, logger || null, sessionId);
-    this.spn = config.kerberosSpn ?? `${config.kerberosService ?? 'HTTP'}@${new URL(config.url).hostname}`;
+    this.spn =
+      config.kerberosSpn ??
+      `${config.kerberosService ?? 'HTTP'}@${new URL(config.url).hostname}`;
   }
 
   private static validateConfig(config: SapConfig): void {
     if (config.authType !== 'kerberos') {
-      throw new Error(`Kerberos connection expects authType "kerberos", got "${config.authType}"`);
+      throw new Error(
+        `Kerberos connection expects authType "kerberos", got "${config.authType}"`,
+      );
     }
     if (config.connectionType === 'rfc') {
-      throw new Error('Kerberos auth is not supported with connectionType "rfc".');
+      throw new Error(
+        'Kerberos auth is not supported with connectionType "rfc".',
+      );
     }
   }
 
   /** Generate the SPNEGO token once (single-leg). */
   protected async ensureToken(): Promise<void> {
-    if (!this.currentToken) this.currentToken = await generateSpnegoToken(this.spn);
+    if (!this.currentToken)
+      this.currentToken = await generateSpnegoToken(this.spn);
   }
 
   /**
@@ -45,8 +52,14 @@ export class KerberosAbapConnection extends AbstractAbapConnection {
       this.logger?.warn(
         `[WARN] KerberosAbapConnection - connect deferred: ${error instanceof Error ? error.message : String(error)}`,
       );
-      if (error instanceof AxiosError && error.response?.headers && this.getCookies()) {
-        this.logger?.debug('[DEBUG] KerberosAbapConnection - cookies captured from error response during connect');
+      if (
+        error instanceof AxiosError &&
+        error.response?.headers &&
+        this.getCookies()
+      ) {
+        this.logger?.debug(
+          '[DEBUG] KerberosAbapConnection - cookies captured from error response during connect',
+        );
       }
     }
   }
