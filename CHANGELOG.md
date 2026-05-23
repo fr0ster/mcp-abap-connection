@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-05-24
+
+### Added
+
+- **Certificate (mTLS) authentication** — `CertificateAbapConnection` injects client-cert material into the axios `https.Agent` via a new protected `getHttpsAgentOptions()` hook on `AbstractAbapConnection`. Material loaded from PEM (`certPath`+`certKeyPath`) or PFX (`certPfxPath`+`certPassphrase`) by the injectable `FileCertificateMaterialLoader` (`ICertificateMaterialLoader`).
+- **Kerberos / SPNEGO authentication** — `KerberosAbapConnection` generates a single-leg Negotiate token locally via `generateSpnegoToken()` (lazy wrapper over the optional `kerberos` native package, declared in `optionalDependencies`), sends `Authorization: Negotiate <token>` on the first request, then reuses the SAP session cookie.
+- `createAbapConnection()` routes `authType: 'certificate'` and `'kerberos'`; both reject `connectionType: 'rfc'`. New optional `certLoader` factory option.
+- `sapConfigSignature()` includes cert paths / SPN (secrets never embedded — passphrase recorded as `'set'`/null only).
+
+### Notes
+
+- Certificate and Kerberos are connection-layer auth types (on-prem HTTP); they bypass the auth-broker and auth-providers. Requires `@mcp-abap-adt/interfaces@^7.2.0`.
+- Both connections require `connect()` before the first request; calling a request first fails loudly (cert: throws on missing material; kerberos: throws on missing token).
+
 ## [1.7.0] - 2026-04-14
 
 ### Changed

@@ -5,8 +5,10 @@
 import type { ITokenRefresher } from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import { BaseAbapConnection } from '../connection/BaseAbapConnection.js';
+import { CertificateAbapConnection } from '../connection/CertificateAbapConnection.js';
 import { createAbapConnection } from '../connection/connectionFactory.js';
 import { JwtAbapConnection } from '../connection/JwtAbapConnection.js';
+import { KerberosAbapConnection } from '../connection/KerberosAbapConnection.js';
 import { SamlAbapConnection } from '../connection/SamlAbapConnection.js';
 import type { ILogger } from '../logger.js';
 
@@ -73,5 +75,55 @@ describe('createAbapConnection', () => {
     expect(() => createAbapConnection(config, mockLogger)).toThrow(
       'Unsupported SAP authentication type: token',
     );
+  });
+
+  test('creates CertificateAbapConnection for authType certificate', () => {
+    const c = createAbapConnection(
+      {
+        url: 'https://h',
+        authType: 'certificate',
+        certPath: '/c',
+        certKeyPath: '/k',
+      } as any,
+      null,
+    );
+    expect(c.constructor.name).toBe('CertificateAbapConnection');
+  });
+
+  test('creates KerberosAbapConnection for authType kerberos', () => {
+    const c = createAbapConnection(
+      { url: 'https://h', authType: 'kerberos', kerberosSpn: 'HTTP@h' } as any,
+      null,
+    );
+    expect(c.constructor.name).toBe('KerberosAbapConnection');
+  });
+
+  test('throws for certificate + rfc', () => {
+    expect(() =>
+      createAbapConnection(
+        {
+          url: 'https://h',
+          authType: 'certificate',
+          connectionType: 'rfc',
+          certPath: '/c',
+          certKeyPath: '/k',
+        } as any,
+        null,
+      ),
+    ).toThrow(/rfc/i);
+  });
+
+  test('throws for kerberos + rfc', () => {
+    expect(() =>
+      createAbapConnection(
+        {
+          url: 'https://h',
+          authType: 'kerberos',
+          connectionType: 'rfc',
+          kerberosSpn: 'HTTP@h',
+        } as any,
+        null,
+      ),
+    ).toThrow(/rfc/i);
   });
 });
