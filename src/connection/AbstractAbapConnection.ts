@@ -740,6 +740,14 @@ abstract class AbstractAbapConnection implements AbapConnection {
     );
   }
 
+  /**
+   * Subclasses override to inject extra https.Agent options (e.g. mTLS cert/key/pfx).
+   * The returned options are merged with the base options (rejectUnauthorized).
+   */
+  protected getHttpsAgentOptions(): import('node:https').AgentOptions {
+    return {};
+  }
+
   private getAxiosInstance(): AxiosInstance {
     if (!this.axiosInstance) {
       const rejectUnauthorized =
@@ -754,6 +762,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
       this.axiosInstance = axios.create({
         httpsAgent: new Agent({
           rejectUnauthorized,
+          ...this.getHttpsAgentOptions(),
         }),
       });
     }
