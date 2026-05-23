@@ -34,3 +34,9 @@ test('rejects connectionType rfc', () => {
       ),
   ).toThrow(/rfc/i);
 });
+test('getHttpsAgentOptions throws if material not loaded (no silent no-cert TLS)', () => {
+  const c = new CertificateAbapConnection(cfg, null, undefined, fakeLoader);
+  expect(() => (c as any).getHttpsAgentOptions()).toThrow(
+    /not loaded|connect\(\)/i,
+  );
+});

@@ -21,6 +21,8 @@ test('getHttpsAgentOptions merges into the https.Agent', () => {
     null,
   );
   const agent = c.getAgent();
+  // NOTE: `agent.options` is a Node-internal field (not public API); assertion may need
+  // updating across Node majors. Verifies the merged cert/key reach the real https.Agent.
   expect((agent as any).options.cert).toBe('C');
   expect((agent as any).options.key).toBe('K');
 });

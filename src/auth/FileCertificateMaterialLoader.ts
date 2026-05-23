@@ -9,7 +9,7 @@ export class FileCertificateMaterialLoader
   implements ICertificateMaterialLoader
 {
   async load(config: ISapConfig): Promise<ICertificateMaterial> {
-    const hasPem = !!(config.certPath || config.certKeyPath);
+    const hasPem = !!(config.certPath || config.certKeyPath); // any PEM-style field present
     const hasPfx = !!config.certPfxPath;
     if (hasPem && hasPfx) {
       throw new Error(
