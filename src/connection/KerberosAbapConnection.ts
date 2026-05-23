@@ -45,6 +45,9 @@ export class KerberosAbapConnection extends AbstractAbapConnection {
     await this.ensureToken();
     const baseUrl = await this.getBaseUrl();
     const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;
+    this.logger?.debug(
+      `[DEBUG] KerberosAbapConnection - Connecting to SAP system: ${discoveryUrl}`,
+    );
     try {
       const token = await this.fetchCsrfToken(discoveryUrl, 3, 1000);
       this.setCsrfToken(token);
@@ -66,6 +69,11 @@ export class KerberosAbapConnection extends AbstractAbapConnection {
 
   protected buildAuthorizationHeader(): string {
     if (this.getCookies()) return ''; // cookie carries auth after first round-trip
-    return this.currentToken ? `Negotiate ${this.currentToken}` : '';
+    if (!this.currentToken) {
+      throw new Error(
+        'KerberosAbapConnection: SPNEGO token not yet available. Call connect() before making requests.',
+      );
+    }
+    return `Negotiate ${this.currentToken}`;
   }
 }

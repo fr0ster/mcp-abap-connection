@@ -1,9 +1,13 @@
-jest.mock('kerberos', () => ({
-  initializeClient: jest.fn(async () => ({
-    step: jest.fn(async (_c: string) => undefined),
-    response: 'YIIBexyz==',
-  })),
-}), { virtual: true });
+jest.mock(
+  'kerberos',
+  () => ({
+    initializeClient: jest.fn(async () => ({
+      step: jest.fn(async (_c: string) => undefined),
+      response: 'YIIBexyz==',
+    })),
+  }),
+  { virtual: true },
+);
 
 import { generateSpnegoToken } from '../../auth/kerberosSpnego.js';
 

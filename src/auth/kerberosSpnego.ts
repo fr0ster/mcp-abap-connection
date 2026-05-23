@@ -1,10 +1,10 @@
 /** Thin, lazily-loaded wrapper over the optional `kerberos` native package. */
 export async function generateSpnegoToken(spn: string): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // optional peer dep; typed as any because the module/types may be absent
   let kerberos: any;
   try {
-    // Dynamic import — kerberos is an optional peer dep, may not be installed
-    kerberos = await import('kerberos' as string);
+    // @ts-expect-error optional peer dependency — module may be absent at build time (TS2307)
+    kerberos = await import('kerberos');
   } catch {
     throw new Error(
       'Kerberos authentication requires the optional "kerberos" package. ' +
@@ -12,10 +12,12 @@ export async function generateSpnegoToken(spn: string): Promise<string> {
     );
   }
   const client = await kerberos.initializeClient(spn, {});
-  await client.step(''); // single-leg: initial AP-REQ
-  const token: string | undefined = client.response;
+  await client.step('');
+  const token = (client as unknown as { response?: string }).response;
   if (!token) {
-    throw new Error('Kerberos: no SPNEGO token produced (no TGT? run kinit, or check SPN).');
+    throw new Error(
+      'Kerberos: no SPNEGO token produced (no TGT? run kinit, or check SPN).',
+    );
   }
   return token;
 }

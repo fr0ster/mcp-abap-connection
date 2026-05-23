@@ -112,4 +112,18 @@ describe('createAbapConnection', () => {
       ),
     ).toThrow(/rfc/i);
   });
+
+  test('throws for kerberos + rfc', () => {
+    expect(() =>
+      createAbapConnection(
+        {
+          url: 'https://h',
+          authType: 'kerberos',
+          connectionType: 'rfc',
+          kerberosSpn: 'HTTP@h',
+        } as any,
+        null,
+      ),
+    ).toThrow(/rfc/i);
+  });
 });
