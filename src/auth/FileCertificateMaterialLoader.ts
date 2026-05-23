@@ -5,7 +5,9 @@ import type {
   ISapConfig,
 } from '@mcp-abap-adt/interfaces';
 
-export class FileCertificateMaterialLoader implements ICertificateMaterialLoader {
+export class FileCertificateMaterialLoader
+  implements ICertificateMaterialLoader
+{
   async load(config: ISapConfig): Promise<ICertificateMaterial> {
     const hasPem = !!(config.certPath || config.certKeyPath);
     const hasPfx = !!config.certPfxPath;
@@ -15,7 +17,10 @@ export class FileCertificateMaterialLoader implements ICertificateMaterialLoader
       );
     }
     if (hasPfx) {
-      return { pfx: await readFile(config.certPfxPath as string), passphrase: config.certPassphrase };
+      return {
+        pfx: await readFile(config.certPfxPath as string),
+        passphrase: config.certPassphrase,
+      };
     }
     if (config.certPath && config.certKeyPath) {
       return {
@@ -24,6 +29,8 @@ export class FileCertificateMaterialLoader implements ICertificateMaterialLoader
         passphrase: config.certPassphrase,
       };
     }
-    throw new Error('Certificate auth requires certPfxPath OR (certPath AND certKeyPath).');
+    throw new Error(
+      'Certificate auth requires certPfxPath OR (certPath AND certKeyPath).',
+    );
   }
 }
