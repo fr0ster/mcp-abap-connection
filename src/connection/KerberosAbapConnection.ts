@@ -1,5 +1,6 @@
 import { AxiosError } from 'axios';
 import { generateSpnegoToken } from '../auth/kerberosSpnego.js';
+import { isNtlmChallenge } from '../auth/ntlm.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
@@ -52,18 +53,25 @@ export class KerberosAbapConnection extends AbstractAbapConnection {
       const token = await this.fetchCsrfToken(discoveryUrl, 3, 1000);
       this.setCsrfToken(token);
     } catch (error) {
+      if (error instanceof AxiosError && error.response?.headers) {
+        const wwwAuth = error.response.headers['www-authenticate'] as
+          | string
+          | undefined;
+        if (isNtlmChallenge(wwwAuth)) {
+          throw new Error(
+            'KerberosAbapConnection: server offered NTLM authentication, which is rejected. ' +
+              'Only Kerberos/SPNEGO is supported. Ensure the SAP system accepts Kerberos (SPNEGO) for your user.',
+          );
+        }
+        if (this.getCookies()) {
+          this.logger?.debug(
+            '[DEBUG] KerberosAbapConnection - cookies captured from error response during connect',
+          );
+        }
+      }
       this.logger?.warn(
         `[WARN] KerberosAbapConnection - connect deferred: ${error instanceof Error ? error.message : String(error)}`,
       );
-      if (
-        error instanceof AxiosError &&
-        error.response?.headers &&
-        this.getCookies()
-      ) {
-        this.logger?.debug(
-          '[DEBUG] KerberosAbapConnection - cookies captured from error response during connect',
-        );
-      }
     }
   }
 

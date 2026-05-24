@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-05-24
+
+### Added
+- **NTLM hard-reject for Kerberos auth.** When `KerberosAbapConnection` receives a 401/403 whose `WWW-Authenticate` header indicates NTLM (direct `NTLM` scheme, or an NTLM token tunneled via `Negotiate` — base64 prefix `TlRMTVNTUAA` = `NTLMSSP\0`), it now throws a clear error instead of swallowing it. Prevents a silent downgrade to weaker NTLM; only Kerberos/SPNEGO is accepted. New `isNtlmChallenge()` helper (`src/auth/ntlm.ts`).
+
 ## [1.9.0] - 2026-05-24
 
 ### Added

@@ -2,6 +2,7 @@ jest.mock('../../auth/kerberosSpnego', () => ({
   generateSpnegoToken: jest.fn(async (_spn: string) => 'NEG_TOKEN'),
 }));
 
+import { AxiosError } from 'axios';
 import { generateSpnegoToken } from '../../auth/kerberosSpnego.js';
 import { KerberosAbapConnection } from '../../connection/KerberosAbapConnection.js';
 
@@ -52,4 +53,56 @@ test('returns empty auth header once a session cookie exists', async () => {
   await (c as any).ensureToken();
   (c as any).setInitialCookies('SAP_SESSIONID=abc');
   expect((c as any).buildAuthorizationHeader()).toBe('');
+});
+
+// ── NTLM-rejection guard ─────────────────────────────────────────────────────
+// Seam: spy on the protected fetchCsrfToken inherited from AbstractAbapConnection.
+// This exercises the connect() catch block directly and avoids any real HTTP call.
+// We use (instance as any) to access the protected method; jest.spyOn patches it
+// on the instance's prototype chain.
+
+function makeNtlmAxiosError(wwwAuthenticate: string): AxiosError {
+  return new AxiosError(
+    'Request failed with status 401',
+    '401',
+    {} as any,
+    null,
+    {
+      status: 401,
+      statusText: 'Unauthorized',
+      data: '',
+      headers: { 'www-authenticate': wwwAuthenticate },
+      config: {} as any,
+    } as any,
+  );
+}
+
+test('connect() rejects with NTLM error when server offers NTLM scheme', async () => {
+  const c = new KerberosAbapConnection(cfg, null, undefined);
+  jest
+    .spyOn(c as any, 'fetchCsrfToken')
+    .mockRejectedValue(makeNtlmAxiosError('NTLM'));
+
+  await expect(c.connect()).rejects.toThrow(/NTLM/i);
+});
+
+test('connect() rejects with NTLM error when server offers Negotiate+NTLM', async () => {
+  const c = new KerberosAbapConnection(cfg, null, undefined);
+  jest
+    .spyOn(c as any, 'fetchCsrfToken')
+    .mockRejectedValue(makeNtlmAxiosError('Negotiate, NTLM'));
+
+  await expect(c.connect()).rejects.toThrow(/NTLM/i);
+});
+
+test('connect() does NOT throw NTLM error for a real Kerberos Negotiate 401', async () => {
+  const c = new KerberosAbapConnection(cfg, null, undefined);
+  // A legitimate Kerberos 401 (SAP asking for SPNEGO) should be swallowed with a warning,
+  // not re-thrown as an NTLM error.
+  jest
+    .spyOn(c as any, 'fetchCsrfToken')
+    .mockRejectedValue(makeNtlmAxiosError('Negotiate YIIBexyz=='));
+
+  // Should resolve without throwing (connect() warns and continues for non-NTLM errors)
+  await expect(c.connect()).resolves.toBeUndefined();
 });
