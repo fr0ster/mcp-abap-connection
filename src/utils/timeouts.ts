@@ -28,3 +28,16 @@ export function getTimeout(
   const config = getTimeoutConfig();
   return config[type];
 }
+
+/**
+ * Large ceiling timeout applied while a connection is inside an uninterruptible
+ * critical section (lock → modify → unlock). A short per-request timeout must
+ * not abort such a request mid-flight: aborting tears down the socket, which
+ * drops the stateful ADT session and orphans the lock handle (object left
+ * locked and inactive). Configurable via SAP_TIMEOUT_CRITICAL (ms).
+ * Default 600000 (10 minutes) — a generous ceiling that still guards against a
+ * permanently dead socket hanging forever.
+ */
+export function getCriticalSectionTimeout(): number {
+  return parseInt(process.env.SAP_TIMEOUT_CRITICAL || '600000', 10);
+}

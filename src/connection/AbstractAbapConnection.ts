@@ -8,7 +8,7 @@ import axios, {
 } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
-import { getTimeout } from '../utils/timeouts.js';
+import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 
@@ -21,6 +21,18 @@ abstract class AbstractAbapConnection implements AbapConnection {
   private sessionId: string | null = null;
   private sessionMode: 'stateless' | 'stateful' = 'stateless';
   private skipSessionType: boolean;
+  /**
+   * When true, requests are treated as part of an uninterruptible critical
+   * section (e.g. a lock → modify → unlock chain). In this state a short
+   * per-request timeout must NOT abort the request mid-flight, because
+   * aborting the socket drops the stateful ADT session and orphans the lock
+   * handle (leaving the object locked and inactive). While set, makeAdtRequest
+   * raises the effective timeout to CRITICAL_SECTION_TIMEOUT (a large ceiling)
+   * so the request runs to completion instead of being interrupted.
+   */
+  private inCriticalSection = false;
+  /** Reference count for nested beginCriticalSection()/endCriticalSection() pairs. */
+  private criticalSectionDepth = 0;
 
   protected constructor(
     private readonly config: SapConfig,
@@ -74,6 +86,51 @@ abstract class AbstractAbapConnection implements AbapConnection {
    */
   getSessionMode(): 'stateless' | 'stateful' {
     return this.sessionMode;
+  }
+
+  /**
+   * Enter an uninterruptible critical section.
+   *
+   * Call this BEFORE acquiring a lock (and pair it with endCriticalSection()
+   * in a finally, AFTER unlocking). While in a critical section, a short
+   * per-request timeout is not applied — makeAdtRequest uses a large ceiling
+   * (CRITICAL_SECTION_TIMEOUT, env SAP_TIMEOUT_CRITICAL) instead — so a slow
+   * PUT/activate/unlock is not aborted mid-flight. Aborting mid-flight tears
+   * down the socket, which drops the stateful ADT session and orphans the
+   * lock handle, leaving the object locked and inactive.
+   *
+   * Nesting is reference-counted so nested begin/end pairs are safe.
+   */
+  beginCriticalSection(): void {
+    this.criticalSectionDepth++;
+    this.inCriticalSection = true;
+    this.logger?.debug(
+      `Entered critical section (depth ${this.criticalSectionDepth})`,
+    );
+  }
+
+  /**
+   * Leave the uninterruptible critical section. See beginCriticalSection().
+   * Safe to call more times than begin (clamped at 0). Normal per-request
+   * timeouts resume once the outermost section ends.
+   */
+  endCriticalSection(): void {
+    if (this.criticalSectionDepth > 0) {
+      this.criticalSectionDepth--;
+    }
+    if (this.criticalSectionDepth === 0) {
+      this.inCriticalSection = false;
+    }
+    this.logger?.debug(
+      `Left critical section (depth ${this.criticalSectionDepth})`,
+    );
+  }
+
+  /**
+   * Whether requests are currently in an uninterruptible critical section.
+   */
+  isInCriticalSection(): boolean {
+    return this.inCriticalSection;
   }
 
   /**
@@ -238,11 +295,20 @@ abstract class AbstractAbapConnection implements AbapConnection {
       }
     }
 
+    // Inside an uninterruptible critical section (lock → modify → unlock), a
+    // short per-request timeout must not abort the request mid-flight — that
+    // would drop the stateful session and orphan the lock. Raise the effective
+    // timeout to the large critical-section ceiling for the whole request
+    // (also honoured on the retry paths below, which reuse requestConfig).
+    const effectiveTimeout = this.inCriticalSection
+      ? Math.max(timeout ?? 0, getCriticalSectionTimeout())
+      : timeout;
+
     const requestConfig: AxiosRequestConfig = {
       method: normalizedMethod,
       url: requestUrl,
       headers: requestHeaders,
-      timeout,
+      timeout: effectiveTimeout,
       params,
     };
 

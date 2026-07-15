@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-07-16
+
+### Added
+- **Uninterruptible critical sections for lock → modify → unlock chains.** A short per-request timeout was aborting requests mid-flight during a stateful lock → PUT/activate → unlock chain; aborting the socket drops the stateful ADT session and orphans the lock handle, leaving the object **locked and inactive**. New connection methods `beginCriticalSection()` / `endCriticalSection()` (reference-counted) plus `isInCriticalSection()`: while in a critical section, `makeAdtRequest` raises the effective timeout to a large ceiling (`getCriticalSectionTimeout()`, env `SAP_TIMEOUT_CRITICAL`, default `600000` ms) instead of the short per-request timeout, so slow PUT/activate/unlock requests run to completion rather than being interrupted. Consumers wrap a mutating operation with `beginCriticalSection()` before locking and `endCriticalSection()` in a `finally` after unlocking. Additive and backward-compatible (no behavior change outside a critical section).
+
 ## [1.9.1] - 2026-05-24
 
 ### Added
