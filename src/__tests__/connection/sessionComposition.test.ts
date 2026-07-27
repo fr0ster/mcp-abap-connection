@@ -445,3 +445,86 @@ describe('JWT request recovery after a token refresh', () => {
     expect(stub.sessions.length).toBeGreaterThan(1); // a NEW session was opened
   });
 });
+
+describe('a teardown requested during establishment', () => {
+  let stub: Stub;
+
+  beforeEach(async () => {
+    stub = await startStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  /** Holds establishment open until the test lets it finish. */
+  function stallEstablishment(conn: BaseAbapConnection) {
+    let release!: () => void;
+    let markStarted!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    // Resolves once establishment has actually begun, so a test can land its
+    // teardown inside the window rather than before it.
+    const started = new Promise<void>((r) => {
+      markStarted = r;
+    });
+    const original = (
+      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
+    ).fetchCsrfToken.bind(conn);
+    (
+      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
+    ).fetchCsrfToken = async (url: string) => {
+      markStarted();
+      await held;
+      return original(url);
+    };
+    return { release, started };
+  }
+
+  // Checking the epoch only BEFORE establishment lets markConnected() run after
+  // it, clearing the teardown state and handing back a session the caller had
+  // already asked to close.
+  it('does not publish a connect that finished after a disconnect was requested', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+    await conn.disconnect();
+
+    const { release, started } = stallEstablishment(conn);
+    const connecting = conn.connect();
+    // Wait until establishment is genuinely IN FLIGHT: asking for the teardown
+    // before it starts is caught by the check that runs before establishing,
+    // which is the easy half and not the race under test.
+    await started;
+    const teardown = conn.disconnect();
+    release();
+
+    await expect(connecting).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
+    await teardown;
+    expect(conn.isConnected()).toBe(false);
+    expect(conn.getSessionIdentity()).toBeNull();
+  });
+
+  it('does not publish a recovery that finished after a disconnect was requested', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+    const baseline = (conn as unknown as { teardownEpoch: number })
+      .teardownEpoch;
+
+    const { release, started } = stallEstablishment(conn);
+    const recovering = (
+      conn as unknown as { recoverSession: (e: number) => Promise<void> }
+    ).recoverSession(baseline);
+    await started;
+    const teardown = conn.disconnect();
+    release();
+
+    await expect(recovering).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
+    await teardown;
+    expect(conn.isConnected()).toBe(false);
+  });
+});

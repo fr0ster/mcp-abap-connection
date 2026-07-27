@@ -191,24 +191,16 @@ abstract class AbstractAbapConnection implements AbapConnection {
    * back a session someone had already discarded.
    */
   async connect(): Promise<void> {
+    // Captured HERE, not inside the transition: the callback runs when this
+    // reaches the front of the queue, by which time a teardown the caller
+    // requested afterwards has already bumped the epoch — and comparing it
+    // against itself would let the connect publish a session the caller had
+    // asked to stop. The baseline is "when the caller asked to connect".
+    const baselineEpoch = this.lifecycle.teardownEpoch;
     await this.lifecycle.transition('connect', async () => {
       if (this.lifecycle.connected) return;
 
-      const epochAtStart = this.lifecycle.teardownEpoch;
-      await this.establishSession();
-
-      if (this.lifecycle.teardownEpoch !== epochAtStart) {
-        this.clearSessionState();
-        this.logger?.debug(
-          'Connect completed after a teardown was requested; discarding it',
-        );
-        return;
-      }
-
-      // establishSession() throws on failure, so reaching here means a session
-      // exists. There is no third outcome: no "connected but unusable", no
-      // resolved promise over an empty jar.
-      this.lifecycle.markConnected(this.sessionFingerprint());
+      await this.establishAndCommit(baselineEpoch);
     });
   }
 
@@ -278,15 +270,48 @@ abstract class AbstractAbapConnection implements AbapConnection {
    */
   protected async recoverSession(baselineEpoch: number): Promise<void> {
     await this.lifecycle.transition('recover', async () => {
-      if (this.lifecycle.teardownEpoch !== baselineEpoch) {
-        throw sessionError(
-          ADT_SESSION_ERROR.NOT_CONNECTED,
-          'Recovery abandoned: a teardown was requested for this connection',
-        );
-      }
-      await this.establishSession();
-      this.lifecycle.markConnected(this.sessionFingerprint());
+      await this.establishAndCommit(baselineEpoch);
     });
+  }
+
+  /**
+   * Establishes a session and publishes it — but only if nobody asked to stop
+   * meanwhile.
+   *
+   * The epoch is checked BEFORE, so a teardown already requested costs no round
+   * trip, and AFTER, because establishment takes time and a caller can ask to
+   * stop during it. Checking only before is the defect this exists to prevent:
+   * markConnected() would then clear the teardown state and hand back a session
+   * the caller had already discarded.
+   *
+   * Shared by connect() and recoverSession() rather than written twice —
+   * the two drifted apart once already, and a third caller would drift again.
+   */
+  private async establishAndCommit(baselineEpoch: number): Promise<void> {
+    if (this.lifecycle.teardownEpoch !== baselineEpoch) {
+      throw sessionError(
+        ADT_SESSION_ERROR.NOT_CONNECTED,
+        'Establishment abandoned: a teardown was requested for this connection',
+      );
+    }
+
+    await this.establishSession();
+
+    if (this.lifecycle.teardownEpoch !== baselineEpoch) {
+      // Release what was just established: leaving it for the queued teardown
+      // does not work, since a teardown with nothing tracked to release skips
+      // its work and the cookies would simply stay behind.
+      this.clearSessionState();
+      throw sessionError(
+        ADT_SESSION_ERROR.NOT_CONNECTED,
+        'Establishment abandoned: a teardown was requested while it was in flight',
+      );
+    }
+
+    // establishSession() throws on failure, so reaching here means a session
+    // exists. There is no third outcome: no "connected but unusable", no
+    // resolved promise over an empty jar.
+    this.lifecycle.markConnected(this.sessionFingerprint());
   }
 
   /** The teardown epoch, for a recovery to capture before it starts. */
