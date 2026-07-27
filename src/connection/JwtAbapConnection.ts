@@ -73,9 +73,10 @@ export class JwtAbapConnection extends AbstractAbapConnection {
   }
 
   /**
-   * Override connect to handle JWT token refresh on errors
+   * Establishes the session for this auth type. Called by
+   * AbstractAbapConnection.connect(), which owns the lifecycle around it.
    */
-  async connect(): Promise<void> {
+  protected async establishSession(): Promise<void> {
     const baseUrl = await this.getBaseUrl();
     const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;
 

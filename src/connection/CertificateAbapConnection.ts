@@ -60,7 +60,11 @@ export class CertificateAbapConnection extends AbstractAbapConnection {
    * Loads certificate material and primes the session. MUST be called before the first
    * request — the TLS agent is built lazily and needs the client cert present.
    */
-  async connect(): Promise<void> {
+  /**
+   * Establishes the session for this auth type. Called by
+   * AbstractAbapConnection.connect(), which owns the lifecycle around it.
+   */
+  protected async establishSession(): Promise<void> {
     await this.ensureMaterial();
     const baseUrl = await this.getBaseUrl();
     const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;

@@ -27,7 +27,11 @@ export class SamlAbapConnection extends AbstractAbapConnection {
    * Connect to SAP system using existing session cookies
    * Fetches CSRF token to establish session context
    */
-  async connect(): Promise<void> {
+  /**
+   * Establishes the session for this auth type. Called by
+   * AbstractAbapConnection.connect(), which owns the lifecycle around it.
+   */
+  protected async establishSession(): Promise<void> {
     const baseUrl = await this.getBaseUrl();
     const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;
 
