@@ -73,9 +73,8 @@ export class KerberosAbapConnection extends AbstractAbapConnection {
           );
         }
       }
-      this.logger?.warn(
-        `[WARN] KerberosAbapConnection - connect deferred: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      // Rethrow: a resolved connect() must mean a usable session exists.
+      throw error;
     }
   }
 

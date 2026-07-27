@@ -10,6 +10,7 @@
 import type { SapConfig } from '../config/sapConfig.js';
 import { BaseAbapConnection } from '../connection/BaseAbapConnection.js';
 import type { ILogger } from '../logger.js';
+import { markConnectedForTest } from './helpers/session.js';
 
 const mockLogger: ILogger = {
   info: jest.fn(),
@@ -36,6 +37,7 @@ function attachMockAxios(
 describe('CSRF fetch stays in the ADT conversation', () => {
   it('sends sap-adt-connection-id on the token fetch', async () => {
     const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    markConnectedForTest(conn);
     const seen: Array<{ url: string; headers: Record<string, string> }> = [];
     attachMockAxios(conn, async (cfg) => {
       seen.push({ url: cfg.url, headers: cfg.headers ?? {} });
@@ -63,6 +65,7 @@ describe('CSRF fetch stays in the ADT conversation', () => {
 
   it('uses the same connection id on the fetch and on the request that follows', async () => {
     const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    markConnectedForTest(conn);
     conn.setSessionType('stateful');
     const seen: Array<Record<string, string>> = [];
     attachMockAxios(conn, async (cfg) => {

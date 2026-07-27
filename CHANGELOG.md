@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — BREAKING
+- **`connect()` is mandatory, and it rejects when it fails.** `makeAdtRequest()` now refuses with `ADT_NOT_CONNECTED` unless the connection was explicitly connected, and `connect()` no longer swallows a failed establishment: it used to log a warning, resolve anyway and defer establishment to the first request, which was coherent only while that lazy path existed. Removing it means a swallowed failure would leave a connection reporting success while holding nothing. A caller that never checked `connect()` now fails at startup rather than at the first request — the better failure, but a new one.
+- **Consumers must call `connect()` before the first request.** Requests are also refused after `disconnect()` and after `reset()`, until the next `connect()`. An in-flight request is not cut off: a teardown drains before it clears anything.
+
 ## [1.10.2] - 2026-07-27
 
 ### Added

@@ -141,6 +141,9 @@ export class JwtAbapConnection extends AbstractAbapConnection {
   async makeAdtRequest<T = any, D = any>(
     options: AbapRequestOptions,
   ): Promise<IAdtResponse<T, D>> {
+    // Captured before the attempt: a recovery asks "has the caller asked to
+    // stop since this request began", not since some later bookkeeping step.
+    const baselineEpoch = this.teardownEpoch;
     this.logger?.debug(
       `[DEBUG] JwtAbapConnection.makeAdtRequest - Starting request: ${options.method} ${options.url}`,
     );
@@ -182,11 +185,16 @@ export class JwtAbapConnection extends AbstractAbapConnection {
 
         // Try to refresh token if tokenRefresher is available
         if (await this.tryRefreshToken()) {
-          // Reset connection state and retry request with new token
           this.logger?.debug(
-            `[DEBUG] JwtAbapConnection.makeAdtRequest - Retrying request after token refresh...`,
+            `[DEBUG] JwtAbapConnection.makeAdtRequest - Recovering session after token refresh...`,
           );
-          this.reset();
+          // The renewed credential cannot keep the old ABAP session, so this is
+          // a session-lost teardown — internal, or it would cancel the very
+          // recovery it is setting up. reset() would be the caller-origin one.
+          this.discardSession();
+          // Re-establish before retrying: the retry goes through admission, and
+          // a discarded session admits nothing.
+          await this.recoverSession(baselineEpoch);
           return super.makeAdtRequest<T, D>(options);
         }
 

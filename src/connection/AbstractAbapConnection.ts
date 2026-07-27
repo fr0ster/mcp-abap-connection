@@ -9,8 +9,10 @@ import axios, {
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import {
+  ADT_SESSION_ERROR,
   type DrainResult,
   SessionLifecycle,
+  sessionError,
   type WindowToken,
 } from '../session/SessionLifecycle.js';
 import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
@@ -189,31 +191,16 @@ abstract class AbstractAbapConnection implements AbapConnection {
    * back a session someone had already discarded.
    */
   async connect(): Promise<void> {
+    // Captured HERE, not inside the transition: the callback runs when this
+    // reaches the front of the queue, by which time a teardown the caller
+    // requested afterwards has already bumped the epoch — and comparing it
+    // against itself would let the connect publish a session the caller had
+    // asked to stop. The baseline is "when the caller asked to connect".
+    const baselineEpoch = this.lifecycle.teardownEpoch;
     await this.lifecycle.transition('connect', async () => {
       if (this.lifecycle.connected) return;
 
-      const epochAtStart = this.lifecycle.teardownEpoch;
-      await this.establishSession();
-
-      if (this.lifecycle.teardownEpoch !== epochAtStart) {
-        this.clearSessionState();
-        this.logger?.debug(
-          'Connect completed after a teardown was requested; discarding it',
-        );
-        return;
-      }
-
-      // NOTE (staged): establishSession() currently swallows its own failures
-      // and resolves regardless, so "did it work" is read from the token. The
-      // design has connect() reject instead — that is a breaking change and
-      // lands with the admission switch, not here.
-      if (this.getCsrfToken()) {
-        this.lifecycle.markConnected(this.sessionFingerprint());
-      } else {
-        this.logger?.warn(
-          'Connect did not establish a session; the connection stays unusable',
-        );
-      }
+      await this.establishAndCommit(baselineEpoch);
     });
   }
 
@@ -266,6 +253,71 @@ abstract class AbstractAbapConnection implements AbapConnection {
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
+  }
+
+  /**
+   * Re-establishes the session for a request that is recovering from a
+   * credential renewal, then lets that request retry.
+   *
+   * Runs as its own `recover` transition, which never joins another: each
+   * recovery carries the baseline of its own request. It yields to a caller's
+   * teardown — if the epoch moved since `baselineEpoch`, someone asked to stop
+   * while this was being prepared, and a retry must not resurrect a session
+   * they discarded.
+   *
+   * The transition queues behind the cleanup that the renewal itself raised, so
+   * it never re-establishes on top of stale transport state.
+   */
+  protected async recoverSession(baselineEpoch: number): Promise<void> {
+    await this.lifecycle.transition('recover', async () => {
+      await this.establishAndCommit(baselineEpoch);
+    });
+  }
+
+  /**
+   * Establishes a session and publishes it — but only if nobody asked to stop
+   * meanwhile.
+   *
+   * The epoch is checked BEFORE, so a teardown already requested costs no round
+   * trip, and AFTER, because establishment takes time and a caller can ask to
+   * stop during it. Checking only before is the defect this exists to prevent:
+   * markConnected() would then clear the teardown state and hand back a session
+   * the caller had already discarded.
+   *
+   * Shared by connect() and recoverSession() rather than written twice —
+   * the two drifted apart once already, and a third caller would drift again.
+   */
+  private async establishAndCommit(baselineEpoch: number): Promise<void> {
+    if (this.lifecycle.teardownEpoch !== baselineEpoch) {
+      throw sessionError(
+        ADT_SESSION_ERROR.NOT_CONNECTED,
+        'Establishment abandoned: a teardown was requested for this connection',
+      );
+    }
+
+    await this.establishSession();
+
+    if (this.lifecycle.teardownEpoch !== baselineEpoch) {
+      // Abandon WITHOUT clearing: the teardown that bumped the epoch is already
+      // queued, and it clears after draining. Clearing here would pull cookies,
+      // the CSRF token and the axios instance out from under a request that is
+      // still in flight — breaking the guarantee this whole change rests on,
+      // from inside the guard meant to protect it.
+      throw sessionError(
+        ADT_SESSION_ERROR.NOT_CONNECTED,
+        'Establishment abandoned: a teardown was requested while it was in flight',
+      );
+    }
+
+    // establishSession() throws on failure, so reaching here means a session
+    // exists. There is no third outcome: no "connected but unusable", no
+    // resolved promise over an empty jar.
+    this.lifecycle.markConnected(this.sessionFingerprint());
+  }
+
+  /** The teardown epoch, for a recovery to capture before it starts. */
+  protected get teardownEpoch(): number {
+    return this.lifecycle.teardownEpoch;
   }
 
   /**
@@ -332,6 +384,22 @@ abstract class AbstractAbapConnection implements AbapConnection {
   }
 
   async makeAdtRequest<T = any, D = any>(
+    options: AbapRequestOptions,
+  ): Promise<IAdtResponse<T, D>> {
+    // Admission first, synchronously, before any await: the check and the
+    // count must happen in one step, or a request could be admitted and still
+    // be invisible to a teardown draining at that instant. Throws
+    // NOT_CONNECTED when the caller never connected, or when a teardown has
+    // shut the door.
+    const lease = this.lifecycle.admitRequest();
+    try {
+      return await this.performRequest<T, D>(options);
+    } finally {
+      lease.release();
+    }
+  }
+
+  private async performRequest<T = any, D = any>(
     options: AbapRequestOptions,
   ): Promise<IAdtResponse<T, D>> {
     const {

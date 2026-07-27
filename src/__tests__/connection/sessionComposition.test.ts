@@ -287,3 +287,334 @@ describe('JwtAbapConnection establishment retry', () => {
     expect(attempts).toBe(2);
   });
 });
+
+describe('explicit connect is required', () => {
+  let stub: Stub;
+
+  beforeEach(async () => {
+    stub = await startStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  it('refuses a request when connect() was never called', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/x',
+        method: 'GET',
+        timeout: 5000,
+      }),
+    ).rejects.toMatchObject({ code: 'ADT_NOT_CONNECTED' });
+    // and nothing reached the server: the refusal is local
+    expect(stub.sessions).toStrictEqual([]);
+  });
+
+  it('serves requests after connect(), and refuses them after disconnect()', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/x',
+        method: 'GET',
+        timeout: 5000,
+      }),
+    ).resolves.toMatchObject({ status: 200 });
+
+    await conn.disconnect();
+
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/x',
+        method: 'GET',
+        timeout: 5000,
+      }),
+    ).rejects.toMatchObject({ code: 'ADT_NOT_CONNECTED' });
+  });
+
+  // The swallow used to hide this: connect() resolved over a broken system and
+  // the failure surfaced later, on a request, as something else entirely.
+  it('rejects when the session cannot be established', async () => {
+    const conn = new BaseAbapConnection(
+      configFor('http://127.0.0.1:1'), // nothing listens there
+      null,
+    );
+
+    await expect(conn.connect()).rejects.toThrow();
+    expect(conn.isConnected()).toBe(false);
+  });
+
+  it('lets an in-flight request finish before a teardown clears the session', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+
+    const order: string[] = [];
+    const request = conn
+      .makeAdtRequest({ url: '/sap/bc/adt/slow', method: 'GET', timeout: 5000 })
+      .then(() => order.push('request'));
+    const teardown = conn.disconnect().then(() => order.push('teardown'));
+
+    await Promise.all([request, teardown]);
+
+    expect(order).toStrictEqual(['request', 'teardown']);
+  });
+});
+
+describe('JWT request recovery after a token refresh', () => {
+  let stub: Stub;
+
+  beforeEach(async () => {
+    stub = await startStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  async function jwtConnection(refreshed: { count: number }) {
+    const { JwtAbapConnection } = await import(
+      '../../connection/JwtAbapConnection.js'
+    );
+    return new JwtAbapConnection(
+      {
+        url: stub.baseUrl,
+        client: '100',
+        authType: 'jwt',
+        jwtToken: 'STALE',
+      } as SapConfig,
+      null,
+      undefined,
+      {
+        getToken: async () => 'FRESH',
+        refreshToken: async () => {
+          refreshed.count += 1;
+          return 'FRESH';
+        },
+      },
+    );
+  }
+
+  // The renewal discards the session, and admission then refuses the retry
+  // unless the session is re-established first. Without recoverSession() the
+  // request fails with NOT_CONNECTED having never reached the server again.
+  it('re-establishes the session and retries, rather than refusing itself', async () => {
+    const refreshed = { count: 0 };
+    const conn = await jwtConnection(refreshed);
+    await conn.connect();
+
+    let attempts = 0;
+    const realAxios = (
+      conn as unknown as { getAxiosInstance: () => (cfg: unknown) => unknown }
+    ).getAxiosInstance.bind(conn);
+    (conn as unknown as { getAxiosInstance: () => unknown }).getAxiosInstance =
+      () => {
+        const instance = realAxios();
+        return async (cfg: { url: string }) => {
+          if (cfg.url.includes('/sap/bc/adt/work')) {
+            attempts += 1;
+            if (attempts === 1) {
+              const { AxiosError } = await import('axios');
+              throw new AxiosError('unauthorized', 'ERR', undefined, null, {
+                status: 401,
+                statusText: 'Unauthorized',
+                data: '',
+                headers: {},
+                // biome-ignore lint/suspicious/noExplicitAny: minimal shape
+                config: {} as any,
+              });
+            }
+          }
+          return (instance as (c: unknown) => unknown)(cfg);
+        };
+      };
+
+    const response = await conn.makeAdtRequest({
+      url: '/sap/bc/adt/work',
+      method: 'GET',
+      timeout: 5000,
+    });
+
+    expect(response.status).toBe(200);
+    expect(refreshed.count).toBe(1);
+    expect(attempts).toBe(2); // the retry actually reached the server
+    expect(conn.isConnected()).toBe(true);
+    expect(stub.sessions.length).toBeGreaterThan(1); // a NEW session was opened
+  });
+});
+
+describe('a teardown requested during establishment', () => {
+  let stub: Stub;
+
+  beforeEach(async () => {
+    stub = await startStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  /** Holds establishment open until the test lets it finish. */
+  function stallEstablishment(conn: BaseAbapConnection) {
+    let release!: () => void;
+    let markStarted!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    // Resolves once establishment has actually begun, so a test can land its
+    // teardown inside the window rather than before it.
+    const started = new Promise<void>((r) => {
+      markStarted = r;
+    });
+    const original = (
+      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
+    ).fetchCsrfToken.bind(conn);
+    (
+      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
+    ).fetchCsrfToken = async (url: string) => {
+      markStarted();
+      await held;
+      return original(url);
+    };
+    return { release, started };
+  }
+
+  // Checking the epoch only BEFORE establishment lets markConnected() run after
+  // it, clearing the teardown state and handing back a session the caller had
+  // already asked to close.
+  it('does not publish a connect that finished after a disconnect was requested', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+    await conn.disconnect();
+
+    const { release, started } = stallEstablishment(conn);
+    const connecting = conn.connect();
+    // Wait until establishment is genuinely IN FLIGHT: asking for the teardown
+    // before it starts is caught by the check that runs before establishing,
+    // which is the easy half and not the race under test.
+    await started;
+    const teardown = conn.disconnect();
+    release();
+
+    await expect(connecting).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
+    await teardown;
+    expect(conn.isConnected()).toBe(false);
+    expect(conn.getSessionIdentity()).toBeNull();
+  });
+
+  it('does not publish a recovery that finished after a disconnect was requested', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+    const baseline = (conn as unknown as { teardownEpoch: number })
+      .teardownEpoch;
+
+    const { release, started } = stallEstablishment(conn);
+    const recovering = (
+      conn as unknown as { recoverSession: (e: number) => Promise<void> }
+    ).recoverSession(baseline);
+    await started;
+    const teardown = conn.disconnect();
+    release();
+
+    await expect(recovering).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
+    await teardown;
+    expect(conn.isConnected()).toBe(false);
+  });
+});
+
+describe('an abandoned establishment leaves in-flight work alone', () => {
+  let stub: Stub;
+
+  beforeEach(async () => {
+    stub = await startStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  // The guard that abandons a doomed establishment must not clear the session:
+  // the teardown that bumped the epoch is queued and clears AFTER draining.
+  // Clearing inside the guard pulls cookies out from under a live request —
+  // the guarantee this change rests on, broken from inside its own protection.
+  it('keeps cookies until the queued teardown has drained', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+
+    // A request that will not finish until the test says so.
+    let releaseRequest!: () => void;
+    const requestHeld = new Promise<void>((r) => {
+      releaseRequest = r;
+    });
+    const realAxios = (
+      conn as unknown as { getAxiosInstance: () => (cfg: unknown) => unknown }
+    ).getAxiosInstance.bind(conn);
+    (conn as unknown as { getAxiosInstance: () => unknown }).getAxiosInstance =
+      () => {
+        const instance = realAxios();
+        return async (cfg: { url: string }) => {
+          if (cfg.url.includes('/slow')) await requestHeld;
+          return (instance as (c: unknown) => unknown)(cfg);
+        };
+      };
+
+    const inFlight = conn.makeAdtRequest({
+      url: '/sap/bc/adt/slow',
+      method: 'GET',
+      timeout: 5000,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // An establishment already in flight, so the guard is reached at all: a
+    // connect queued BEHIND the teardown could never run, since the teardown is
+    // waiting on the request this test is holding.
+    let releaseEstablishment!: () => void;
+    const establishmentHeld = new Promise<void>((r) => {
+      releaseEstablishment = r;
+    });
+    const originalFetch = (
+      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
+    ).fetchCsrfToken.bind(conn);
+    (
+      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
+    ).fetchCsrfToken = async (url: string) => {
+      await establishmentHeld;
+      return originalFetch(url);
+    };
+    const baseline = (conn as unknown as { teardownEpoch: number })
+      .teardownEpoch;
+    const recovering = (
+      conn as unknown as { recoverSession: (e: number) => Promise<void> }
+    ).recoverSession(baseline);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // The caller asks to stop while establishment is in flight.
+    const teardown = conn.disconnect();
+    releaseEstablishment();
+    await expect(recovering).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
+
+    // The live request must still have what it needs.
+    const cookies = (
+      conn as unknown as { getCookies(): string | null }
+    ).getCookies();
+    expect(cookies).not.toBeNull();
+
+    releaseRequest();
+    await expect(inFlight).resolves.toMatchObject({ status: 200 });
+    await teardown;
+
+    // Only now, after the drain, is the session gone.
+    expect(
+      (conn as unknown as { getCookies(): string | null }).getCookies(),
+    ).toBeNull();
+  });
+});
