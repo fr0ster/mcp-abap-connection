@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-07-27
+
+### Fixed
+- **CSRF token fetch now stays inside the ADT conversation.** `makeAdtRequest` sends `sap-adt-connection-id` on every request, for all session types, but the token fetch assembled its own headers (auth + `x-csrf-token: fetch` + `Accept` + `Cookie`) and omitted it. A fetch triggered while a lock was held therefore reached the server as a caller that merely presented the same cookies, with no way for either side to relate it to the conversation that opened the session. The fetch now carries the connection id like every other request.
+
 ## [1.10.0] - 2026-07-16
 
 ### Added

@@ -570,6 +570,16 @@ abstract class AbstractAbapConnection implements AbapConnection {
           ...CSRF_CONFIG.REQUIRED_HEADERS,
         };
 
+        // The token fetch belongs to the same ADT conversation as every other
+        // request this connection makes. Without the connection id the server
+        // sees a caller that merely happens to present our cookies, so a fetch
+        // issued while a lock is held reads as a stranger reaching into the
+        // session. makeAdtRequest sends this header for all session types; this
+        // path must not be the exception.
+        if (this.sessionId) {
+          headers['sap-adt-connection-id'] = this.sessionId;
+        }
+
         // Always add cookies if available - they are needed for session continuity
         // Even on first attempt, if we have cookies from previous session or error response, use them
         if (this.cookies) {
