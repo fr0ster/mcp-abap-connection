@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.2] - 2026-07-27
+
+### Added
+- **`SessionLifecycle` — the session-lifecycle core, internal for now.** Owns what the connection cannot express today: session state and identity, a serializing tail for lifecycle transitions, admission accounting with a teardown epoch, lock windows counted per occurrence, and a drain bounded by an absolute ceiling. It knows nothing of SAP, HTTP, RFC or cookies — identities are opaque `name → value` maps, windows are opaque labels — which is why its 29 tests need no server. **Not exported from the package index and not yet used by any connection**, so this release changes no behaviour and no public API; it lands the piece that the rest of the session work (fr0ster/mcp-abap-connection#15) will be composed from. Design: `docs/superpowers/specs/2026-07-27-session-lifecycle-design.md` in `@mcp-abap-adt/adt-clients`.
+
 ## [1.10.1] - 2026-07-27
 
 ### Fixed
