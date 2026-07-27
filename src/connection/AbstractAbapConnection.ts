@@ -298,10 +298,11 @@ abstract class AbstractAbapConnection implements AbapConnection {
     await this.establishSession();
 
     if (this.lifecycle.teardownEpoch !== baselineEpoch) {
-      // Release what was just established: leaving it for the queued teardown
-      // does not work, since a teardown with nothing tracked to release skips
-      // its work and the cookies would simply stay behind.
-      this.clearSessionState();
+      // Abandon WITHOUT clearing: the teardown that bumped the epoch is already
+      // queued, and it clears after draining. Clearing here would pull cookies,
+      // the CSRF token and the axios instance out from under a request that is
+      // still in flight — breaking the guarantee this whole change rests on,
+      // from inside the guard meant to protect it.
       throw sessionError(
         ADT_SESSION_ERROR.NOT_CONNECTED,
         'Establishment abandoned: a teardown was requested while it was in flight',
