@@ -111,6 +111,53 @@ describe('SessionLifecycle — admission', () => {
   });
 });
 
+describe('SessionLifecycle — reconnect', () => {
+  // The design allows connect() after disconnect() explicitly. Nothing else
+  // ends a teardown, so if markConnected() does not, the lifecycle is usable
+  // exactly once and every later session is refused.
+  it('is usable again after a graceful teardown and a fresh connect', () => {
+    const lifecycle = connected();
+    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
+    lifecycle.markDisconnected();
+
+    lifecycle.markConnected(fp({ SAP_SESSIONID: 'S2' }));
+
+    expect(lifecycle.connected).toBe(true);
+    const lease = lifecycle.admitRequest();
+    lease.release();
+    expect(() => lifecycle.beginWindow('Class/ZCL_A')).not.toThrow();
+  });
+
+  it('is usable again after a session-lost teardown', () => {
+    const lifecycle = connected();
+    lifecycle.beginWindow('Class/ZCL_A');
+    lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
+
+    lifecycle.markConnected(fp({ SAP_SESSIONID: 'S2' }));
+
+    expect(lifecycle.connected).toBe(true);
+    expect(lifecycle.identity).toBe('SAP_SESSIONID=S2');
+    // the old session's window cannot be closed from here and was already
+    // reported when the teardown gave up, so it does not haunt the new session
+    expect(lifecycle.openWindows).toStrictEqual([]);
+  });
+
+  it('is usable again after the ceiling expired and shut the gate', async () => {
+    const c = clock();
+    const lifecycle = connected({ ceilingMs: 1000, now: c.now });
+    lifecycle.beginWindow('Class/ZCL_A');
+    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
+
+    const drained = lifecycle.drain();
+    await settle();
+    c.advance(1001);
+    await drained;
+
+    lifecycle.markConnected(fp({ SAP_SESSIONID: 'S2' }));
+    expect(() => lifecycle.admitRequest()).not.toThrow();
+  });
+});
+
 describe('SessionLifecycle — windows', () => {
   // 19 — two windows may share a label; closing one must not retire the other.
   it('closes windows by token, so a shared label does not retire both', async () => {
@@ -234,6 +281,24 @@ describe('SessionLifecycle — drain', () => {
 
     const result = await drained;
     expect(admitted).toBeGreaterThan(0);
+    expect(result.abandonedWindows).toStrictEqual(['Class/ZCL_A']);
+  });
+
+  // The ceiling runs from the teardown REQUEST, so a drain() started later
+  // inherits the elapsed time rather than restarting the clock. A timestamp of
+  // 0 is a real one: `||` would treat it as absent and slide the deadline.
+  it('measures the ceiling from beginTeardown, even at timestamp zero', async () => {
+    const c = clock(0);
+    const lifecycle = connected({ ceilingMs: 1000, now: c.now });
+    lifecycle.beginWindow('Class/ZCL_A');
+    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false }); // t=0
+
+    c.advance(900);
+    const drained = lifecycle.drain(); // t=900, 100ms of ceiling left
+    await settle();
+    c.advance(101); // t=1001 — past the deadline measured from the request
+    const result = await drained;
+
     expect(result.abandonedWindows).toStrictEqual(['Class/ZCL_A']);
   });
 

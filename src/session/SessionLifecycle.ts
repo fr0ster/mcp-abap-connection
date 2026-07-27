@@ -75,7 +75,7 @@ export class SessionLifecycle {
 
   private teardownPending = false;
   private teardownLostSession = false;
-  private teardownAt = 0;
+  private teardownAt: number | null = null;
   /** Set at expiry: admission is shut regardless of open windows. */
   private admissionForcedShut = false;
 
@@ -124,9 +124,25 @@ export class SessionLifecycle {
     return [...this.windows.values()].map((w) => w.label);
   }
 
+  /**
+   * Publishes a freshly established session, which also ENDS any teardown that
+   * was pending: the flags describe the session being torn down, and this is a
+   * different one. Without this, `connect()` after `disconnect()` — which the
+   * design allows explicitly — leaves the lifecycle permanently unusable.
+   *
+   * Windows are dropped for the same reason: they belonged to the old session,
+   * nothing here can close them, and a teardown that gave up on them has
+   * already carried their labels out in its report. Keeping them would make
+   * every future drain re-report locks from a session that no longer exists.
+   */
   markConnected(fingerprint: ReadonlyMap<string, string> = new Map()): void {
     this.state = 'connected';
     this.fingerprint = new Map(fingerprint);
+    this.teardownPending = false;
+    this.teardownLostSession = false;
+    this.admissionForcedShut = false;
+    this.teardownAt = null;
+    this.windows.clear();
     this.wake();
   }
 
@@ -256,7 +272,11 @@ export class SessionLifecycle {
    * already-admitted requests to settle.
    */
   async drain(): Promise<DrainResult> {
-    const deadline = (this.teardownAt || this.now()) + this.ceilingMs;
+    // `??`, not `||`: a teardown requested at timestamp 0 is a real teardown,
+    // and treating it as absent would restart the ceiling from drain() — making
+    // the deadline relative to the wrong event, which is the sliding behaviour
+    // this design rejects.
+    const deadline = (this.teardownAt ?? this.now()) + this.ceilingMs;
 
     while (this.inFlight > 0 || this.liveWindows > 0) {
       const remaining = deadline - this.now();
