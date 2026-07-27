@@ -363,3 +363,85 @@ describe('explicit connect is required', () => {
     expect(order).toStrictEqual(['request', 'teardown']);
   });
 });
+
+describe('JWT request recovery after a token refresh', () => {
+  let stub: Stub;
+
+  beforeEach(async () => {
+    stub = await startStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  async function jwtConnection(refreshed: { count: number }) {
+    const { JwtAbapConnection } = await import(
+      '../../connection/JwtAbapConnection.js'
+    );
+    return new JwtAbapConnection(
+      {
+        url: stub.baseUrl,
+        client: '100',
+        authType: 'jwt',
+        jwtToken: 'STALE',
+      } as SapConfig,
+      null,
+      undefined,
+      {
+        getToken: async () => 'FRESH',
+        refreshToken: async () => {
+          refreshed.count += 1;
+          return 'FRESH';
+        },
+      },
+    );
+  }
+
+  // The renewal discards the session, and admission then refuses the retry
+  // unless the session is re-established first. Without recoverSession() the
+  // request fails with NOT_CONNECTED having never reached the server again.
+  it('re-establishes the session and retries, rather than refusing itself', async () => {
+    const refreshed = { count: 0 };
+    const conn = await jwtConnection(refreshed);
+    await conn.connect();
+
+    let attempts = 0;
+    const realAxios = (
+      conn as unknown as { getAxiosInstance: () => (cfg: unknown) => unknown }
+    ).getAxiosInstance.bind(conn);
+    (conn as unknown as { getAxiosInstance: () => unknown }).getAxiosInstance =
+      () => {
+        const instance = realAxios();
+        return async (cfg: { url: string }) => {
+          if (cfg.url.includes('/sap/bc/adt/work')) {
+            attempts += 1;
+            if (attempts === 1) {
+              const { AxiosError } = await import('axios');
+              throw new AxiosError('unauthorized', 'ERR', undefined, null, {
+                status: 401,
+                statusText: 'Unauthorized',
+                data: '',
+                headers: {},
+                // biome-ignore lint/suspicious/noExplicitAny: minimal shape
+                config: {} as any,
+              });
+            }
+          }
+          return (instance as (c: unknown) => unknown)(cfg);
+        };
+      };
+
+    const response = await conn.makeAdtRequest({
+      url: '/sap/bc/adt/work',
+      method: 'GET',
+      timeout: 5000,
+    });
+
+    expect(response.status).toBe(200);
+    expect(refreshed.count).toBe(1);
+    expect(attempts).toBe(2); // the retry actually reached the server
+    expect(conn.isConnected()).toBe(true);
+    expect(stub.sessions.length).toBeGreaterThan(1); // a NEW session was opened
+  });
+});

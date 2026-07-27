@@ -9,8 +9,10 @@ import axios, {
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import {
+  ADT_SESSION_ERROR,
   type DrainResult,
   SessionLifecycle,
+  sessionError,
   type WindowToken,
 } from '../session/SessionLifecycle.js';
 import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
@@ -259,6 +261,37 @@ abstract class AbstractAbapConnection implements AbapConnection {
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
+  }
+
+  /**
+   * Re-establishes the session for a request that is recovering from a
+   * credential renewal, then lets that request retry.
+   *
+   * Runs as its own `recover` transition, which never joins another: each
+   * recovery carries the baseline of its own request. It yields to a caller's
+   * teardown — if the epoch moved since `baselineEpoch`, someone asked to stop
+   * while this was being prepared, and a retry must not resurrect a session
+   * they discarded.
+   *
+   * The transition queues behind the cleanup that the renewal itself raised, so
+   * it never re-establishes on top of stale transport state.
+   */
+  protected async recoverSession(baselineEpoch: number): Promise<void> {
+    await this.lifecycle.transition('recover', async () => {
+      if (this.lifecycle.teardownEpoch !== baselineEpoch) {
+        throw sessionError(
+          ADT_SESSION_ERROR.NOT_CONNECTED,
+          'Recovery abandoned: a teardown was requested for this connection',
+        );
+      }
+      await this.establishSession();
+      this.lifecycle.markConnected(this.sessionFingerprint());
+    });
+  }
+
+  /** The teardown epoch, for a recovery to capture before it starts. */
+  protected get teardownEpoch(): number {
+    return this.lifecycle.teardownEpoch;
   }
 
   /**
