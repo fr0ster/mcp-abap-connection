@@ -223,16 +223,18 @@ abstract class AbstractAbapConnection implements AbapConnection {
    */
   async disconnect(): Promise<TeardownReport> {
     this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-    let drained: DrainResult = { abandonedWindows: [] };
-    await this.lifecycle.transition('disconnect', async () => {
-      drained = await this.lifecycle.drain();
+    // The report travels THROUGH the transition, so a joining caller gets the
+    // same one. Building it outside would leave every caller but the first
+    // reporting an empty teardown — the abandoned locks reported to nobody.
+    return this.lifecycle.transition('disconnect', async () => {
+      const drained: DrainResult = await this.lifecycle.drain();
       this.clearSessionState();
       this.lifecycle.markDisconnected();
+      return {
+        abandonedWindows: drained.abandonedWindows,
+        releasePending: false,
+      };
     });
-    return {
-      abandonedWindows: drained.abandonedWindows,
-      releasePending: false,
-    };
   }
 
   isConnected(): boolean {

@@ -175,6 +175,29 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
     await teardown;
   });
 
+  // Joining shares the answer, not just the execution. Building the report
+  // outside the transition leaves every caller but the first reporting an empty
+  // teardown — abandoned locks announced to nobody.
+  it('gives concurrent disconnects the same report', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+    conn.beginWindow('Class/ZCL_ABANDONED');
+    // Never closed: the drain gives up on it and names it.
+    (
+      conn as unknown as { lifecycle: { drain: () => Promise<unknown> } }
+    ).lifecycle.drain = async () => ({
+      abandonedWindows: ['Class/ZCL_ABANDONED'],
+    });
+
+    const [first, second] = await Promise.all([
+      conn.disconnect(),
+      conn.disconnect(),
+    ]);
+
+    expect(first.abandonedWindows).toStrictEqual(['Class/ZCL_ABANDONED']);
+    expect(second).toStrictEqual(first);
+  });
+
   it('leaves the connection unusable when reset() discards the session', async () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
@@ -185,5 +208,82 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
     // reset() returns immediately; the cleanup it queued settles after
     await new Promise((r) => setTimeout(r, 20));
     expect(conn.getSessionIdentity()).toBeNull();
+  });
+});
+
+describe('JwtAbapConnection establishment retry', () => {
+  let stub: Stub;
+
+  beforeEach(async () => {
+    stub = await startStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  // The retry used to call connect(), which runs the establishment as a
+  // joinable transition — so the nested call joined the transition already in
+  // flight, which was itself, and waited forever.
+  it('does not wait on itself when retrying after a token refresh', async () => {
+    const { JwtAbapConnection } = await import(
+      '../../connection/JwtAbapConnection.js'
+    );
+    let refreshed = 0;
+    const conn = new JwtAbapConnection(
+      {
+        url: stub.baseUrl,
+        client: '100',
+        authType: 'jwt',
+        jwtToken: 'STALE',
+      } as SapConfig,
+      null,
+      undefined,
+      {
+        getToken: async () => 'FRESH',
+        refreshToken: async () => {
+          refreshed += 1;
+          return 'FRESH';
+        },
+      },
+    );
+
+    // First establishment fails with 401, the refresher succeeds, and the retry
+    // must run rather than deadlock.
+    let attempts = 0;
+    (
+      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
+    ).fetchCsrfToken = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        // A real AxiosError: the retry path checks `instanceof`, so a lookalike
+        // would sail past it and the test would prove nothing.
+        const { AxiosError } = await import('axios');
+        throw new AxiosError(
+          'unauthorized',
+          'ERR_BAD_REQUEST',
+          undefined,
+          null,
+          {
+            status: 401,
+            statusText: 'Unauthorized',
+            data: '',
+            headers: {},
+            // biome-ignore lint/suspicious/noExplicitAny: minimal axios response shape
+            config: {} as any,
+          },
+        );
+      }
+      return 'TOKEN-AFTER-REFRESH';
+    };
+
+    const outcome = await Promise.race([
+      conn.connect().then(() => 'settled'),
+      new Promise((r) => setTimeout(() => r('hung'), 2000)),
+    ]);
+
+    expect(outcome).toBe('settled');
+    expect(refreshed).toBe(1);
+    expect(attempts).toBe(2);
   });
 });

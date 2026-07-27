@@ -118,11 +118,13 @@ export class JwtAbapConnection extends AbstractAbapConnection {
 
         // Try to refresh token if tokenRefresher is available
         if (await this.tryRefreshToken()) {
-          // Retry connect with new token
+          // Retry the ESTABLISHMENT, not connect(): connect() runs this as a
+          // joinable transition, so a nested call joins the transition already
+          // in flight — this one — and waits for itself forever.
           this.logger?.debug(
-            `[DEBUG] JwtAbapConnection - Retrying connect after token refresh...`,
+            `[DEBUG] JwtAbapConnection - Retrying establishment after token refresh...`,
           );
-          return this.connect();
+          return this.establishSession();
         }
 
         throw new Error('JWT token has expired. Please re-authenticate.');

@@ -84,7 +84,7 @@ export class SessionLifecycle {
 
   private tail: Promise<unknown> = Promise.resolve();
   private tailKind: TransitionKind | null = null;
-  private tailPromise: Promise<void> | null = null;
+  private tailPromise: Promise<unknown> | null = null;
 
   private waiters: Array<() => void> = [];
 
@@ -325,10 +325,14 @@ export class SessionLifecycle {
    * internal cleanup owes its result to nobody while a caller's teardown owes a
    * report.
    */
-  transition(kind: TransitionKind, run: () => Promise<void>): Promise<void> {
+  transition<T>(kind: TransitionKind, run: () => Promise<T>): Promise<T> {
     const joinable = kind === 'connect' || kind === 'disconnect';
     if (joinable && this.tailKind === kind && this.tailPromise) {
-      return this.tailPromise;
+      // Joining shares the ANSWER, not just the execution: a joiner that got a
+      // resolved promise carrying nothing would have to invent a result, and
+      // for a teardown that means reporting no abandoned locks when there were
+      // some. Callers of one kind ask the same question, so they get one reply.
+      return this.tailPromise as Promise<T>;
     }
 
     const queued = this.tail.then(run, run);
