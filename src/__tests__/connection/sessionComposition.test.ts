@@ -287,3 +287,79 @@ describe('JwtAbapConnection establishment retry', () => {
     expect(attempts).toBe(2);
   });
 });
+
+describe('explicit connect is required', () => {
+  let stub: Stub;
+
+  beforeEach(async () => {
+    stub = await startStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  it('refuses a request when connect() was never called', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/x',
+        method: 'GET',
+        timeout: 5000,
+      }),
+    ).rejects.toMatchObject({ code: 'ADT_NOT_CONNECTED' });
+    // and nothing reached the server: the refusal is local
+    expect(stub.sessions).toStrictEqual([]);
+  });
+
+  it('serves requests after connect(), and refuses them after disconnect()', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/x',
+        method: 'GET',
+        timeout: 5000,
+      }),
+    ).resolves.toMatchObject({ status: 200 });
+
+    await conn.disconnect();
+
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/x',
+        method: 'GET',
+        timeout: 5000,
+      }),
+    ).rejects.toMatchObject({ code: 'ADT_NOT_CONNECTED' });
+  });
+
+  // The swallow used to hide this: connect() resolved over a broken system and
+  // the failure surfaced later, on a request, as something else entirely.
+  it('rejects when the session cannot be established', async () => {
+    const conn = new BaseAbapConnection(
+      configFor('http://127.0.0.1:1'), // nothing listens there
+      null,
+    );
+
+    await expect(conn.connect()).rejects.toThrow();
+    expect(conn.isConnected()).toBe(false);
+  });
+
+  it('lets an in-flight request finish before a teardown clears the session', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+
+    const order: string[] = [];
+    const request = conn
+      .makeAdtRequest({ url: '/sap/bc/adt/slow', method: 'GET', timeout: 5000 })
+      .then(() => order.push('request'));
+    const teardown = conn.disconnect().then(() => order.push('teardown'));
+
+    await Promise.all([request, teardown]);
+
+    expect(order).toStrictEqual(['request', 'teardown']);
+  });
+});

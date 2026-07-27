@@ -203,17 +203,10 @@ abstract class AbstractAbapConnection implements AbapConnection {
         return;
       }
 
-      // NOTE (staged): establishSession() currently swallows its own failures
-      // and resolves regardless, so "did it work" is read from the token. The
-      // design has connect() reject instead — that is a breaking change and
-      // lands with the admission switch, not here.
-      if (this.getCsrfToken()) {
-        this.lifecycle.markConnected(this.sessionFingerprint());
-      } else {
-        this.logger?.warn(
-          'Connect did not establish a session; the connection stays unusable',
-        );
-      }
+      // establishSession() throws on failure, so reaching here means a session
+      // exists. There is no third outcome: no "connected but unusable", no
+      // resolved promise over an empty jar.
+      this.lifecycle.markConnected(this.sessionFingerprint());
     });
   }
 
@@ -332,6 +325,22 @@ abstract class AbstractAbapConnection implements AbapConnection {
   }
 
   async makeAdtRequest<T = any, D = any>(
+    options: AbapRequestOptions,
+  ): Promise<IAdtResponse<T, D>> {
+    // Admission first, synchronously, before any await: the check and the
+    // count must happen in one step, or a request could be admitted and still
+    // be invisible to a teardown draining at that instant. Throws
+    // NOT_CONNECTED when the caller never connected, or when a teardown has
+    // shut the door.
+    const lease = this.lifecycle.admitRequest();
+    try {
+      return await this.performRequest<T, D>(options);
+    } finally {
+      lease.release();
+    }
+  }
+
+  private async performRequest<T = any, D = any>(
     options: AbapRequestOptions,
   ): Promise<IAdtResponse<T, D>> {
     const {

@@ -5,6 +5,7 @@ jest.mock('../../auth/kerberosSpnego', () => ({
 import { AxiosError } from 'axios';
 import { generateSpnegoToken } from '../../auth/kerberosSpnego.js';
 import { KerberosAbapConnection } from '../../connection/KerberosAbapConnection.js';
+import { markConnectedForTest } from '../helpers/session.js';
 
 const cfg = {
   url: 'https://h:44300',
@@ -95,14 +96,18 @@ test('connect() rejects with NTLM error when server offers Negotiate+NTLM', asyn
   await expect(c.connect()).rejects.toThrow(/NTLM/i);
 });
 
-test('connect() does NOT throw NTLM error for a real Kerberos Negotiate 401', async () => {
+test('connect() reports a real Kerberos Negotiate 401 as itself, not as NTLM', async () => {
   const c = new KerberosAbapConnection(cfg, null, undefined);
-  // A legitimate Kerberos 401 (SAP asking for SPNEGO) should be swallowed with a warning,
-  // not re-thrown as an NTLM error.
+  // A legitimate Kerberos 401 (SAP asking for SPNEGO) must not be dressed up as
+  // an NTLM rejection.
   jest
     .spyOn(c as any, 'fetchCsrfToken')
     .mockRejectedValue(makeNtlmAxiosError('Negotiate YIIBexyz=='));
 
-  // Should resolve without throwing (connect() warns and continues for non-NTLM errors)
-  await expect(c.connect()).resolves.toBeUndefined();
+  // It rejects, because connect() no longer resolves over a session it failed
+  // to establish — this test asserted the opposite while the lazy path existed.
+  // What must stay true is WHICH error comes out.
+  await expect(c.connect()).rejects.toThrow(/401/);
+  await expect(c.connect()).rejects.not.toThrow(/NTLM/i);
+  expect(c.isConnected()).toBe(false);
 });

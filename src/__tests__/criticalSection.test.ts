@@ -10,6 +10,7 @@
 import type { SapConfig } from '../config/sapConfig.js';
 import { BaseAbapConnection } from '../connection/BaseAbapConnection.js';
 import type { ILogger } from '../logger.js';
+import { markConnectedForTest } from './helpers/session.js';
 
 const mockLogger: ILogger = {
   info: jest.fn(),
@@ -45,6 +46,7 @@ describe('critical section (uninterruptible lock → unlock)', () => {
 
   it('begin/end is reference-counted and clamped at zero', () => {
     const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    markConnectedForTest(conn);
     expect(conn.isInCriticalSection()).toBe(false);
 
     conn.beginCriticalSection();
@@ -63,6 +65,7 @@ describe('critical section (uninterruptible lock → unlock)', () => {
 
   it('uses the short per-request timeout when NOT in a critical section', async () => {
     const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    markConnectedForTest(conn);
     let captured: any;
     attachMockAxios(conn, async (cfg) => {
       captured = cfg;
@@ -80,6 +83,7 @@ describe('critical section (uninterruptible lock → unlock)', () => {
 
   it('raises the timeout to the large ceiling while in a critical section, then restores it', async () => {
     const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    markConnectedForTest(conn);
     let captured: any;
     attachMockAxios(conn, async (cfg) => {
       captured = cfg;

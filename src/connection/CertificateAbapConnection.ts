@@ -83,6 +83,13 @@ export class CertificateAbapConnection extends AbstractAbapConnection {
           );
         }
       }
+
+      // Rethrow: a resolved connect() must mean a usable session exists. This
+      // used to swallow and resolve anyway, deferring establishment to the
+      // first request — coherent only while that lazy path existed. Without it,
+      // swallowing would leave a connection that reports success, holds
+      // nothing, and refuses every request.
+      throw error;
     }
   }
 
