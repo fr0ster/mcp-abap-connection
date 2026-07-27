@@ -73,9 +73,10 @@ export class JwtAbapConnection extends AbstractAbapConnection {
   }
 
   /**
-   * Override connect to handle JWT token refresh on errors
+   * Establishes the session for this auth type. Called by
+   * AbstractAbapConnection.connect(), which owns the lifecycle around it.
    */
-  async connect(): Promise<void> {
+  protected async establishSession(): Promise<void> {
     const baseUrl = await this.getBaseUrl();
     const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;
 
@@ -117,11 +118,13 @@ export class JwtAbapConnection extends AbstractAbapConnection {
 
         // Try to refresh token if tokenRefresher is available
         if (await this.tryRefreshToken()) {
-          // Retry connect with new token
+          // Retry the ESTABLISHMENT, not connect(): connect() runs this as a
+          // joinable transition, so a nested call joins the transition already
+          // in flight — this one — and waits for itself forever.
           this.logger?.debug(
-            `[DEBUG] JwtAbapConnection - Retrying connect after token refresh...`,
+            `[DEBUG] JwtAbapConnection - Retrying establishment after token refresh...`,
           );
-          return this.connect();
+          return this.establishSession();
         }
 
         throw new Error('JWT token has expired. Please re-authenticate.');

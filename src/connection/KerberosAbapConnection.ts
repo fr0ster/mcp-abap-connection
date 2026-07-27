@@ -42,7 +42,11 @@ export class KerberosAbapConnection extends AbstractAbapConnection {
    * request — the first request carries the Negotiate header; SAP then issues a session
    * cookie which is reused for subsequent requests.
    */
-  async connect(): Promise<void> {
+  /**
+   * Establishes the session for this auth type. Called by
+   * AbstractAbapConnection.connect(), which owns the lifecycle around it.
+   */
+  protected async establishSession(): Promise<void> {
     await this.ensureToken();
     const baseUrl = await this.getBaseUrl();
     const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;

@@ -8,11 +8,31 @@ import axios, {
 } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
+import {
+  type DrainResult,
+  SessionLifecycle,
+  type WindowToken,
+} from '../session/SessionLifecycle.js';
 import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 
+/** What a teardown could not finish. `disconnect()` resolves with it, never throws. */
+export interface TeardownReport {
+  /** Labels of lock windows still open when the bounded wait gave up. */
+  abandonedWindows: string[];
+  /** A transport release did not complete and stays pending. */
+  releasePending: boolean;
+}
+
 abstract class AbstractAbapConnection implements AbapConnection {
+  /**
+   * Owns session state, admission and teardown ordering. Composed rather than
+   * inherited: RfcAbapConnection implements the interface directly, so the two
+   * transports share this unit instead of a base class.
+   */
+  protected readonly lifecycle = new SessionLifecycle();
+
   private axiosInstance: AxiosInstance | null = null;
   private csrfToken: string | null = null;
   private cookies: string | null = null;
@@ -153,7 +173,116 @@ abstract class AbstractAbapConnection implements AbapConnection {
     return this.config;
   }
 
+  /**
+   * Establish the session for this auth type. Implementations do their own auth
+   * preparation and fetch the CSRF token; connect() owns everything around it.
+   */
+  protected abstract establishSession(): Promise<void>;
+
+  /**
+   * Establishes the session, once, under the lifecycle.
+   *
+   * Idempotent, and concurrent callers share one establishment: the transition
+   * joins the tail of its own kind. A teardown requested while establishment
+   * was in flight means the caller asked to stop, so usability is NOT published
+   * and what was established is released — otherwise a slow connect would hand
+   * back a session someone had already discarded.
+   */
+  async connect(): Promise<void> {
+    await this.lifecycle.transition('connect', async () => {
+      if (this.lifecycle.connected) return;
+
+      const epochAtStart = this.lifecycle.teardownEpoch;
+      await this.establishSession();
+
+      if (this.lifecycle.teardownEpoch !== epochAtStart) {
+        this.clearSessionState();
+        this.logger?.debug(
+          'Connect completed after a teardown was requested; discarding it',
+        );
+        return;
+      }
+
+      // NOTE (staged): establishSession() currently swallows its own failures
+      // and resolves regardless, so "did it work" is read from the token. The
+      // design has connect() reject instead — that is a breaking change and
+      // lands with the admission switch, not here.
+      if (this.getCsrfToken()) {
+        this.lifecycle.markConnected(this.sessionFingerprint());
+      } else {
+        this.logger?.warn(
+          'Connect did not establish a session; the connection stays unusable',
+        );
+      }
+    });
+  }
+
+  /**
+   * Tears the session down. Never throws: the report says what did not finish
+   * rather than failing. Sends no ADT session-close — see the design's D2.
+   */
+  async disconnect(): Promise<TeardownReport> {
+    this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
+    // The report travels THROUGH the transition, so a joining caller gets the
+    // same one. Building it outside would leave every caller but the first
+    // reporting an empty teardown — the abandoned locks reported to nobody.
+    return this.lifecycle.transition('disconnect', async () => {
+      const drained: DrainResult = await this.lifecycle.drain();
+      this.clearSessionState();
+      this.lifecycle.markDisconnected();
+      return {
+        abandonedWindows: drained.abandonedWindows,
+        releasePending: false,
+      };
+    });
+  }
+
+  isConnected(): boolean {
+    return this.lifecycle.connected;
+  }
+
+  /** Fingerprint of the SAP-side session; null when nothing is tracked. */
+  getSessionIdentity(): string | null {
+    return this.lifecycle.identity;
+  }
+
+  /** Opens a lock window. See the design: a lock outlives its request. */
+  beginWindow(label: string): WindowToken {
+    return this.lifecycle.beginWindow(label);
+  }
+
+  endWindow(token: WindowToken): void {
+    this.lifecycle.endWindow(token);
+  }
+
+  /**
+   * Discards the session at a caller's request: cancels queued recoveries and
+   * queues the cleanup rather than tearing down under a live request.
+   */
   reset(): void {
+    this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: true });
+    void this.lifecycle.transition('cleanup', async () => {
+      await this.lifecycle.drain();
+      this.clearSessionState();
+      this.lifecycle.markDisconnected();
+    });
+  }
+
+  /**
+   * The same teardown raised from inside request handling — a recovery path.
+   * `internal` origin so it does not cancel the recovery that raised it.
+   */
+  protected discardSession(): void {
+    this.lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
+    void this.lifecycle.transition('cleanup', async () => {
+      await this.lifecycle.drain();
+      this.clearSessionState();
+      this.lifecycle.markDisconnected();
+    });
+  }
+
+  /** Drops everything that described the session. Not a lifecycle transition. */
+  private clearSessionState(): void {
     if (this.axiosInstance) {
       this.axiosInstance.interceptors.request.clear();
       this.axiosInstance.interceptors.response.clear();
@@ -163,6 +292,24 @@ abstract class AbstractAbapConnection implements AbapConnection {
     this.cookies = null;
     this.cookieStore.clear();
     // Note: baseUrl is not reset as it's derived from immutable config
+  }
+
+  /**
+   * The session-bearing cookies, and only those.
+   *
+   * `sap-XSRF_*` is excluded deliberately: it changes on a token refresh WITHIN
+   * the same session, so including it would report an ordinary refresh as a new
+   * session and fail exactly where nothing is wrong. `sap-usercontext` is ours,
+   * overwritten on every response.
+   */
+  protected sessionFingerprint(): Map<string, string> {
+    const fingerprint = new Map<string, string>();
+    for (const [name, value] of this.cookieStore) {
+      if (name.startsWith('SAP_SESSIONID')) {
+        fingerprint.set(name, value);
+      }
+    }
+    return fingerprint;
   }
 
   async getBaseUrl(): Promise<string> {
@@ -183,17 +330,6 @@ abstract class AbstractAbapConnection implements AbapConnection {
 
     return headers;
   }
-
-  /**
-   * Connect to SAP system and initialize session (get CSRF token and cookies)
-   * This should be called explicitly before making the first request to ensure
-   * proper authentication and session initialization.
-   *
-   * Concrete implementations must provide auth-specific connection logic:
-   * - BaseAbapConnection: Basic auth with CSRF token fetch
-   * - JwtAbapConnection: JWT auth with token refresh on 401/403
-   */
-  abstract connect(): Promise<void>;
 
   async makeAdtRequest<T = any, D = any>(
     options: AbapRequestOptions,
