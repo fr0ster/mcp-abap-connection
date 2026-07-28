@@ -1,8 +1,8 @@
 # Documentation Index
 
 **Package:** `@mcp-abap-adt/connection`  
-**Version:** 0.2.4  
-**Last Updated:** December 21, 2025
+**Version:** see [CHANGELOG.md](../CHANGELOG.md) — kept there rather than
+duplicated here, where it went stale by eight minor versions.
 
 ## Package Structure
 
@@ -11,10 +11,14 @@ mcp-abap-connection/
 ├── README.md                 # Main package documentation
 ├── CHANGELOG.md             # Version history and changes
 ├── docs/                    # Detailed documentation
-│   ├── INDEX.md            # This file - documentation overview
-│   ├── INSTALLATION.md     # Setup and installation guide
-│   ├── USAGE.md            # API documentation and examples
-│   └── JWT_AUTH_TOOLS.md   # CLI tool for authentication
+│   ├── INDEX.md                    # This file - documentation overview
+│   ├── INSTALLATION.md             # Setup and installation guide
+│   ├── USAGE.md                    # API documentation and examples
+│   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── SCOPE.md                    # What this package does and does not own
+│   ├── SESSION_STATE.md            # Exporting/importing session state
+│   ├── STATEFUL_SESSION_GUIDE.md   # Stateful requests and lock windows
+│   └── JWT_AUTH_TOOLS.md           # CLI tool for authentication
 ├── examples/               # Working code examples
 │   ├── README.md          # Examples overview
 │   └── basic-connection.js # Simple connection example

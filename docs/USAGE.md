@@ -41,13 +41,21 @@ const connection = createAbapConnection(config, logger);
 // Or without logger:
 // const connection = createAbapConnection(config);
 
-// Make ADT requests (connection happens automatically)
+// Establish the session. This is REQUIRED: a request on a connection that was
+// never connected is refused with ADT_NOT_CONNECTED, and connect() rejects if
+// the session cannot be established — it never resolves over a broken one.
+await connection.connect();
+
 const response = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
 });
 
 console.log(response.data);
+
+// When you are done. Unlock anything you hold FIRST: over HTTP a teardown does
+// not release locks, it only stops using the session.
+await connection.disconnect();
 ```
 
 ## Authentication Types
@@ -190,6 +198,7 @@ Enable stateful session mode for operations requiring consistent session state:
 
 ```typescript
 const connection = createAbapConnection(config, logger);
+await connection.connect();
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
 connection.setSessionType('stateful');
@@ -208,6 +217,79 @@ connection.setSessionType('stateless');
 ```
 
 **Note:** Session state persistence is handled by `@mcp-abap-adt/auth-broker` package. The connection package only manages session headers (cookies, CSRF tokens) for HTTP communication.
+
+## Session Lifecycle
+
+The connection owns its session, and that ownership is explicit rather than
+implied. Four things follow from it.
+
+### connect() is required, and it tells the truth
+
+```typescript
+const connection = createAbapConnection(config, logger);
+
+await connection.connect();          // establishes the session, or rejects
+connection.isConnected();            // true only while a usable session exists
+connection.getSessionIdentity();     // which SAP session, or null
+```
+
+A resolved `connect()` means a usable session exists — there is no third
+outcome. A request before it, or after a teardown, is refused with
+`ADT_NOT_CONNECTED` and never reaches the server.
+
+`connect()` is idempotent and safe to call concurrently: callers share one
+establishment rather than opening a session each.
+
+### disconnect() reports what it could not finish
+
+```typescript
+const report = await connection.disconnect();
+// { abandonedWindows: string[], releasePending: boolean }
+```
+
+It never throws — the report says what did not finish instead. It waits for
+in-flight requests to settle before clearing anything, so a teardown never
+pulls the session out from under a request already running.
+
+**Over HTTP it does not release locks.** The ABAP session lives on until its
+timeout, along with whatever it held. Unlock first; disconnecting is not a way
+to clean up after yourself.
+
+### Lock windows
+
+A lock outlives the request that takes it, which makes it the one thing a
+teardown has to know about:
+
+```typescript
+const token = connection.beginWindow('Class/ZCL_MY_CLASS');
+try {
+  // LOCK … modify … UNLOCK
+} finally {
+  // Close it on EVIDENCE, not unconditionally: only after a confirmed UNLOCK,
+  // or a confirmed failure of the LOCK itself. If the unlock failed, was never
+  // sent, or its outcome is unknown, leave the window open — the lock is most
+  // likely still there, and a teardown must be able to see it.
+}
+```
+
+While a window is open, a teardown waits for it rather than abandoning it, and
+a new window cannot be opened once a teardown has been requested. A window that
+never closes is given up on after `SAP_TIMEOUT_CRITICAL` and comes back **named**
+in `TeardownReport.abandonedWindows`.
+
+### A replaced session is fatal while a lock is held
+
+If the SAP session is replaced or lost mid-flight — a renewed credential, a
+server that says the session is gone, a session cookie that changed underneath
+you — the request fails with `ADT_SESSION_REPLACED` and the connection stops
+being usable.
+
+With no lock held the same event is transparent: nothing was being held, so
+work simply continues on the new session. The distinction is deliberate; the
+error exists to tell you that a lock handle you are carrying is now dead, which
+is the one thing you cannot work out for yourself.
+
+The connector never retries such a request internally. That decision is yours.
 
 ## Advanced Features
 

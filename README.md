@@ -34,18 +34,19 @@ The package uses a clean separation of concerns:
 
 - **`AbstractAbapConnection`** (abstract, internal only):
   - Common HTTP request logic
+  - Session lifecycle: `connect()` / `disconnect()`, admission, lock windows, teardown draining
   - Session management (cookies, CSRF tokens)
   - CSRF token fetching with retry
   - Auth-agnostic - knows nothing about Basic or JWT
   
 - **`BaseAbapConnection`** (concrete, exported):
   - Basic Authentication implementation
-  - Simple connect() - fetches CSRF token
+  - `connect()` establishes the session (required before any request)
   - Suitable for on-premise SAP systems
   
 - **`JwtAbapConnection`** (concrete, exported):
   - JWT/OAuth2 Authentication implementation
-  - Simple connect() - establishes connection with JWT token
+  - `connect()` establishes the session with the JWT token (required before any request)
   - Suitable for SAP BTP ABAP Environment
   - Token refresh handled by auth-broker package
 

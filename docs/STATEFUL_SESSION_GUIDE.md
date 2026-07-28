@@ -1,5 +1,14 @@
 # Stateful Session Guide (Connection Layer)
 
+> **The header is not what tracks your lock.** `setSessionType('stateful')` sets
+> a per-request header and nothing more — another handler can flip it back while
+> your lock is genuinely open, and a batch never sets it at all. Tell the
+> connection about the lock itself with `beginWindow()` / `endWindow()`: that is
+> what a teardown waits for, what refuses to be abandoned silently, and what
+> makes a replaced session fatal instead of unnoticed. See
+> [USAGE.md — Session Lifecycle](./USAGE.md#session-lifecycle).
+
+
 This document explains how `@mcp-abap-adt/connection` manages HTTP-level session state for SAP ADT requests.
 
 ---

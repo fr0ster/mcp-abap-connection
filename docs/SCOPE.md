@@ -5,6 +5,7 @@ This package is **one component of the `@mcp-abap-adt/*` family**. Each package 
 ## What this package does
 
 - **HTTP transport to SAP ADT** — request dispatch, CSRF token fetch, cookie and session handling, stateful/stateless session control.
+- **The session lifecycle** — establishing a session and refusing to work without one, tearing it down without cutting in-flight requests, tracking which SAP session it is talking to, and telling the caller when that session is lost while a lock is held. See [USAGE.md — Session Lifecycle](./USAGE.md#session-lifecycle).
 - **RFC transport to on-premise SAP** — via `@mcp-abap-adt/sap-rfc-lite` + NW RFC SDK, calling `SADT_REST_RFC_ENDPOINT` (the same FM Eclipse ADT uses on on-prem).
 - **Applying credentials** handed to it by the caller (Basic user/password, Bearer JWT, SAML session cookies).
 
