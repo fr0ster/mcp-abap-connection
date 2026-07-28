@@ -193,7 +193,7 @@ test('connect() diagnoses the first challenge, and never replays the token', asy
   }
 });
 
-test('a failed exchange does not leave the spent token behind', async () => {
+test('a failed exchange leaves nothing behind that mutes the next one', async () => {
   const probe = await startAuthProbe();
   try {
     (generateSpnegoToken as jest.Mock).mockClear();
@@ -205,9 +205,15 @@ test('a failed exchange does not leave the spent token behind', async () => {
     await expect(c.connect()).rejects.toThrow();
     await expect(c.connect()).rejects.toThrow();
 
-    // Two connects, two freshly minted tokens: caching one across a failure
-    // guarantees the second attempt fails exactly as the first did.
+    // Two connects, two freshly minted tokens.
     expect((generateSpnegoToken as jest.Mock).mock.calls.length).toBe(2);
+
+    // And both reached the wire. Minting is only half of it: the failed 401
+    // also set a cookie, and buildAuthorizationHeader() goes quiet once a
+    // cookie exists — so a fresh token behind a stale cookie is a fresh token
+    // that never leaves the process. Asserting on the generator alone would
+    // call that a pass.
+    expect(probe.seen).toEqual(['Negotiate NEG_TOKEN', 'Negotiate NEG_TOKEN']);
   } finally {
     await probe.close();
   }

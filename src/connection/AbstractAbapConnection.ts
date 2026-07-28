@@ -295,7 +295,28 @@ abstract class AbstractAbapConnection implements AbapConnection {
       );
     }
 
-    await this.establishSession();
+    try {
+      await this.establishSession();
+    } catch (error) {
+      // A failed establishment leaves debris that poisons the next attempt: the
+      // 401 that rejected us may still have carried a Set-Cookie, and every
+      // subclass treats a cookie as proof that auth is already settled —
+      // buildAuthorizationHeader() returns '' once one exists. So the next
+      // connect() would go out with NO credentials at all, and be rejected for
+      // a reason that has nothing to do with why the first one failed.
+      //
+      // Safe to clear here, unlike the abandonment path below: establishSession()
+      // threw, so no session was published, and admission requires a connected
+      // lifecycle — nothing can be in flight over what this drops.
+      this.invalidateSession();
+      // And the identity with it. The rejecting response was still observed, so
+      // its cookie was recorded as a session that had just been established —
+      // leaving getSessionIdentity() naming a session that never existed while
+      // isConnected() says false. Two answers to one question is worse than
+      // either.
+      this.lifecycle.markDisconnected();
+      throw error;
+    }
 
     if (this.lifecycle.teardownEpoch !== baselineEpoch) {
       // Abandon WITHOUT clearing: the teardown that bumped the epoch is already
