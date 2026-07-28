@@ -50,4 +50,3 @@ main().catch((error) => {
   console.error('Fatal:', error.message || String(error));
   process.exit(1);
 });
-

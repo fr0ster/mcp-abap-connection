@@ -1,7 +1,6 @@
 # Usage Guide
 
-**Version:** 0.2.4  
-**Last Updated:** December 2025
+**Version:** see [CHANGELOG.md](../CHANGELOG.md)  
 
 ## Table of Contents
 
@@ -41,7 +40,11 @@ const connection = createAbapConnection(config, logger);
 // Or without logger:
 // const connection = createAbapConnection(config);
 
-// Make ADT requests (connection happens automatically)
+// Establish the session. This is REQUIRED: a request on a connection that was
+// never connected is refused with ADT_NOT_CONNECTED, and connect() rejects if
+// the session cannot be established — it never resolves over a broken one.
+await connection.connect();
+
 const response = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
@@ -49,6 +52,10 @@ const response = await connection.makeAdtRequest({
 
 console.log(response.data);
 ```
+
+Tearing the session down is `disconnect()`, but it is not on the
+`IAbapConnection` type this factory returns — see
+[Session Lifecycle](#session-lifecycle) for where it lives and how to reach it.
 
 ## Authentication Types
 
@@ -68,15 +75,13 @@ const config = {
 };
 
 const connection = new BaseAbapConnection(config, logger);
-// Connection and CSRF token fetching happens automatically on first request
+await connection.connect();   // required: nothing is established implicitly
 ```
 
 ### JWT Authentication (Cloud/BTP)
 
-For SAP BTP ABAP Environment using JWT tokens:
-
-```typescript
-import { JwtAbapConnection } from '@mcp-abap-adt/connection';
+For SAP BTP ABAP Environment. Token refresh belongs to
+`@mcp-abap-adt/auth-broker`; this package only carries the token:
 
 ```typescript
 import { JwtAbapConnection } from '@mcp-abap-adt/connection';
@@ -89,21 +94,7 @@ const config = {
 };
 
 const connection = new JwtAbapConnection(config, logger);
-```
-
-### JWT Authentication (Cloud/BTP)
-
-For SAP BTP ABAP Environment, use `@mcp-abap-adt/auth-broker` for token refresh functionality:
-
-```typescript
-const config = {
-  url: 'https://tenant.abap.cloud',
-  authType: 'jwt' as const,
-  jwtToken: 'eyJhbGciOiJSUzI1NiIs...',
-  client: '100', // Optional for cloud
-};
-
-const connection = new JwtAbapConnection(config, logger);
+await connection.connect();   // required: nothing is established implicitly
 
 // Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
 // Connection package only handles HTTP communication
@@ -115,7 +106,10 @@ const response = await connection.makeAdtRequest({
 
 ## Making ADT Requests
 
-All requests are made using `makeAdtRequest()` method. Connection and CSRF token management happen automatically.
+All requests are made using the `makeAdtRequest()` method. CSRF token handling
+is automatic; **the connection is not** — the examples below assume
+`await connection.connect()` has already succeeded, and without it every one of
+them is refused with `ADT_NOT_CONNECTED`.
 
 ### GET Request
 
@@ -179,6 +173,7 @@ By default, connections are stateless - each request gets fresh cookies and CSRF
 
 ```typescript
 const connection = createAbapConnection(config, logger);
+await connection.connect();
 
 // Each request is independent
 await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' });
@@ -190,6 +185,7 @@ Enable stateful session mode for operations requiring consistent session state:
 
 ```typescript
 const connection = createAbapConnection(config, logger);
+await connection.connect();
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
 connection.setSessionType('stateful');
@@ -208,6 +204,125 @@ connection.setSessionType('stateless');
 ```
 
 **Note:** Session state persistence is handled by `@mcp-abap-adt/auth-broker` package. The connection package only manages session headers (cookies, CSRF tokens) for HTTP communication.
+
+## Session Lifecycle
+
+The connection owns its session, and that ownership is explicit rather than
+implied. Four things follow from it.
+
+> **Availability.** `connect()` is on the shared `IAbapConnection` contract and
+> works on every connection. The rest of this section — `disconnect()`,
+> `isConnected()`, `getSessionIdentity()`, `beginWindow()`, `endWindow()` — is
+> **not on the contract yet** and exists on the HTTP connection classes only.
+> Reach it through a concrete type, not through what `createAbapConnection()`
+> returns, and note that `RfcAbapConnection` does not have these at all: on RFC
+> the session *is* the open client, so it needs none of them.
+
+### connect() is required, and it tells the truth
+
+```typescript
+import { BaseAbapConnection } from '@mcp-abap-adt/connection';
+
+const connection = new BaseAbapConnection(config, logger);
+
+await connection.connect();          // establishes the session, or rejects
+connection.isConnected();            // true only while a usable session exists
+connection.getSessionIdentity();     // which SAP session, or null
+```
+
+A resolved `connect()` means a usable session exists — there is no third
+outcome. A request before it, or after a teardown, is refused with
+`ADT_NOT_CONNECTED` and never reaches the server.
+
+`connect()` is idempotent and safe to call concurrently: callers share one
+establishment rather than opening a session each.
+
+### disconnect() reports what it could not finish
+
+```typescript
+const report = await connection.disconnect();
+// { abandonedWindows: string[], releasePending: boolean }
+```
+
+It never throws — the report says what did not finish instead. It waits for
+in-flight requests to settle before clearing anything, so a teardown never
+pulls the session out from under a request already running.
+
+**Over HTTP it does not release locks.** The ABAP session lives on until its
+timeout, along with whatever it held. Unlock first; disconnecting is not a way
+to clean up after yourself.
+
+### Lock windows
+
+A lock outlives the request that takes it, which makes it the one thing a
+teardown has to know about:
+
+```typescript
+const token = connection.beginWindow('Class/ZCL_MY_CLASS');
+
+let lockHandle: string | undefined;
+try {
+  lockHandle = await lock(connection, 'ZCL_MY_CLASS');   // your LOCK call
+} catch (error) {
+  // The LOCK is confirmed to have failed, so nothing is held: close the window.
+  connection.endWindow(token);
+  throw error;
+}
+
+try {
+  await update(connection, 'ZCL_MY_CLASS', lockHandle);
+  await unlock(connection, 'ZCL_MY_CLASS', lockHandle);
+  // The UNLOCK is confirmed: the lock is released, so close the window.
+  connection.endWindow(token);
+} catch (error) {
+  // Deliberately NOT closed here. The unlock may have failed, never gone out,
+  // or come back with an unknown outcome — in each of those the lock is most
+  // likely still held, and a window left open is what makes a teardown wait for
+  // it and report it by name instead of walking past it.
+  throw error;
+}
+```
+
+Note what the `catch` does **not** do. A `finally { endWindow(token) }` reads
+naturally and is wrong here: it closes the window exactly when the lock is most
+likely still there. The window tracks *"a lock may be held"*, so only proof that
+nothing is held closes it — a confirmed unlock, or a confirmed failure to lock.
+
+The cost of forgetting `endWindow()` on the success path is not silence: every
+later teardown waits out `SAP_TIMEOUT_CRITICAL` and then reports the window as
+abandoned.
+
+While a window is open, a teardown waits for it rather than abandoning it, and
+a new window cannot be opened once a teardown has been requested. A window that
+never closes is given up on after `SAP_TIMEOUT_CRITICAL` and comes back **named**
+in `TeardownReport.abandonedWindows`.
+
+### When the session is lost
+
+Two different things can cost you the session, and they do not behave alike.
+
+**The session was replaced** — a renewed credential, or a session cookie that
+changed underneath you. This is fatal **only while a lock window is open**:
+
+```typescript
+// window open  → ADT_SESSION_REPLACED, the connection stops being usable
+// no window    → transparent; work continues on the new session
+```
+
+With nothing held there is nothing to lose, so the connector carries on. The
+error exists to tell you that a lock handle you are carrying is now dead, which
+is the one thing you cannot work out for yourself.
+
+**The server says the session is gone** — an answer meaning the session it was
+given no longer exists. This is **always** fatal, window or not: the connection
+raises `ADT_SESSION_REPLACED` and stops being usable. Unlike a replacement,
+nothing here suggests a working session to continue on — the one we had is
+confirmed dead, and re-establishing silently is what let the old connector
+carry on over a session the caller never opened.
+
+In both cases the connector does **not** retry the request internally. Retrying
+blindly is what produced further orphaned locks in the field. That decision is
+yours.
 
 ## Advanced Features
 
@@ -231,6 +346,7 @@ Dynamically switch between stateful and stateless modes:
 ```typescript
 // Start in stateless mode (default)
 const connection = createAbapConnection(config, logger);
+await connection.connect();
 
 // Enable stateful for a series of operations
 connection.setSessionType('stateful');
@@ -359,17 +475,25 @@ try {
 
 ### `AbapConnection` Interface
 
-Main interface for all connection types:
+`AbapConnection` is an alias for `IAbapConnection` — the contract every
+connection satisfies, including RFC:
 
 ```typescript
 interface AbapConnection {
+  connect(): Promise<void>; // REQUIRED before any request
   makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
-  reset(): void;
+  getBaseUrl(): Promise<string>;
   setSessionType(type: "stateless" | "stateful"): void;
-  getSessionMode(): "stateless" | "stateful";
-  getSessionId(): string | null;
+  getSessionId(): string | null; // client-side conversation id
 }
 ```
+
+Anything beyond that is **not** on the contract. `reset()`, `getSessionMode()`
+and the session lifecycle (`disconnect()`, `isConnected()`,
+`getSessionIdentity()`, `beginWindow()`, `endWindow()`) live on the HTTP
+connection classes; `RfcAbapConnection` has some of them and not others, so
+reach for them through a concrete type rather than through what
+`createAbapConnection()` returns.
 
 ### `BaseAbapConnection` (Basic Auth)
 
@@ -456,7 +580,6 @@ export class CloudSdkAbapConnection {
 }
 ```
 
-See [PR Proposal](../PR_PROPOSAL_CSRF_CONFIG.md) for more details.
 
 ### `JwtAbapConnection` (JWT/OAuth2)
 
@@ -523,17 +646,7 @@ See [examples/](../examples/) for complete working examples:
 7. **Session ID Management**: Session IDs are auto-generated (UUID) or can be provided when creating connection
 8. **Switch Session Types**: Use `setSessionType()` to dynamically change between stateful/stateless modes
 
-## Version History
-
-- **0.1.9**: Documentation improvements (this document updated)
-- **0.1.8**: Session management improvements
-- **0.1.7**: Base URL handling refactoring
-- **0.1.6**: Added `getSessionId()` and `setSessionType()` methods
-- **0.1.4**: Automatic session ID generation
-- **0.2.0**: Token refresh moved to auth-broker package
-- **0.1.0**: Initial release
-
-See [CHANGELOG.md](../CHANGELOG.md) for complete version history.
+See [CHANGELOG.md](../CHANGELOG.md) for the version history.
 
 ## Next Steps
 

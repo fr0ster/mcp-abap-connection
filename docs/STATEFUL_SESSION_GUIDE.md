@@ -1,5 +1,14 @@
 # Stateful Session Guide (Connection Layer)
 
+> **The header is not what tracks your lock.** `setSessionType('stateful')` sets
+> a per-request header and nothing more — another handler can flip it back while
+> your lock is genuinely open, and a batch never sets it at all. Tell the
+> connection about the lock itself with `beginWindow()` / `endWindow()`: that is
+> what a teardown waits for, what refuses to be abandoned silently, and what
+> makes a replaced session fatal instead of unnoticed. See
+> [USAGE.md — Session Lifecycle](./USAGE.md#session-lifecycle).
+
+
 This document explains how `@mcp-abap-adt/connection` manages HTTP-level session state for SAP ADT requests.
 
 ---
@@ -8,7 +17,7 @@ This document explains how `@mcp-abap-adt/connection` manages HTTP-level session
 
 - Fetch and cache CSRF token (per connection instance)
 - Store/reuse SAP cookies (`SAP_SESSIONID`, `sap-usercontext`, etc.)
-- Provide helper APIs for exporting/importing session snapshots
+- Track WHICH SAP session a connection is in, and refuse to work once it is lost
 
 The connection layer **does not** decide when to lock/unlock objects—that logic lives in the ADT clients. Instead it ensures every request shares the same HTTP session when desired.
 
@@ -20,6 +29,7 @@ The connection layer **does not** decide when to lock/unlock objects—that logi
 import { createAbapConnection } from '@mcp-abap-adt/connection';
 
 const connection = createAbapConnection(config, logger);
+await connection.connect();   // required before any request
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
 connection.setSessionType('stateful');
@@ -33,17 +43,30 @@ connection.setSessionType('stateless');
 
 ---
 
-## Exporting & Importing Session State
+## Knowing Which Session You Are In
 
 ```ts
-const state = connection.getSessionState();   // { cookies, csrfToken, cookieStore }
-// Persist state manually or share with another process
-connection.setSessionState(state);
+import { BaseAbapConnection } from '@mcp-abap-adt/connection';
+
+// getSessionIdentity() is on the HTTP connection classes, NOT on the
+// IAbapConnection type that createAbapConnection() returns.
+const connection = new BaseAbapConnection(config, logger);
+await connection.connect();
+
+// Which SAP session this connection is talking to. Changes only when the
+// session itself is replaced — the CSRF cookie is deliberately excluded, since
+// it rotates on a token refresh within one and the same session.
+const identity = connection.getSessionIdentity();   // e.g. 'SAP_SESSIONID_A4H_001=...'
 ```
 
-- Use when handlers need to transfer a session to another worker.
-- Useful for CLI tools that need to resume a previous session without refetching CSRF tokens.
-- See [SESSION_STATE.md](./SESSION_STATE.md) for detailed examples.
+Exporting and importing session state is **not** part of this package: the
+methods that once did it were removed in 0.2.0, and persistence belongs to
+[`@mcp-abap-adt/auth-broker`](https://www.npmjs.com/package/@mcp-abap-adt/auth-broker).
+
+Handing a session to another worker, or resuming one in a CLI tool, therefore
+goes through that package — and whatever it restores, the locks do not come
+back with it: a lock handle from a session this connection did not open is
+dead, and the connection says so rather than letting you use it.
 
 ---
 
@@ -64,15 +87,28 @@ This logic is transparent to callers (Builders, handlers, CLI scripts).
 
 - Builders receive the `AbapConnection` instance and optionally a `sessionId`.
 - `@mcp-abap-adt/connection` keeps the HTTP session alive; Builders keep the ADT session consistent.
-- When a test or handler needs to resume a workflow, it should restore both:
-  1. `connection.setSessionState(savedState)` (HTTP layer)
-  2. Pass the previous `sessionId` to the Builder/LockClient (ADT layer)
+- A workflow cannot be resumed by restoring HTTP state into this package: the
+  methods that once did that were removed in 0.2.0. Establish a session with
+  `connect()` and take the locks again — a lock handle from a previous session
+  is dead, and the connection will say so with `ADT_SESSION_REPLACED` rather
+  than let you use it.
 
 ---
 
 ## Troubleshooting
 
-- **CSRF token errors**: call `connection.reset()` to clear cookies/token and start fresh.
+- **CSRF token errors**: discard the session and establish a new one. `reset()`
+  does that, but it lives on the HTTP connection classes and is **not** on the
+  `IAbapConnection` type `createAbapConnection()` returns — reach it through a
+  concrete type:
+
+  ```ts
+  import { BaseAbapConnection } from '@mcp-abap-adt/connection';
+
+  const connection = new BaseAbapConnection(config, logger);
+  connection.reset();          // queues the cleanup; refuses requests meanwhile
+  await connection.connect();  // a new session, explicitly
+  ```
 - **Session expired**: reauthenticate to obtain a new session.
 - **Multiple connections**: each `createAbapConnection` instance maintains its own cookie jar; share the instance if you need continuity.
 
@@ -80,5 +116,6 @@ This logic is transparent to callers (Builders, handlers, CLI scripts).
 
 ## Related Docs
 
-- [SESSION_STATE.md](./SESSION_STATE.md) – Manual session state management
+- [USAGE.md — Session Lifecycle](./USAGE.md#session-lifecycle) – connect/disconnect, lock windows, a lost session
+- [MIGRATION-2.0.md](./MIGRATION-2.0.md) – what the explicit lifecycle changed for callers
 

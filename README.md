@@ -34,18 +34,19 @@ The package uses a clean separation of concerns:
 
 - **`AbstractAbapConnection`** (abstract, internal only):
   - Common HTTP request logic
+  - Session lifecycle: `connect()` / `disconnect()`, admission, lock windows, teardown draining
   - Session management (cookies, CSRF tokens)
   - CSRF token fetching with retry
   - Auth-agnostic - knows nothing about Basic or JWT
   
 - **`BaseAbapConnection`** (concrete, exported):
   - Basic Authentication implementation
-  - Simple connect() - fetches CSRF token
+  - `connect()` establishes the session (required before any request)
   - Suitable for on-premise SAP systems
   
 - **`JwtAbapConnection`** (concrete, exported):
   - JWT/OAuth2 Authentication implementation
-  - Simple connect() - establishes connection with JWT token
+  - `connect()` establishes the session with the JWT token (required before any request)
   - Suitable for SAP BTP ABAP Environment
   - Token refresh handled by auth-broker package
 
@@ -156,6 +157,7 @@ const logger = {
 
 // Create connection
 const connection = createAbapConnection(config, logger);
+await connection.connect();   // required before any request
 
 // Make ADT request
 const response = await connection.makeAdtRequest({
@@ -186,6 +188,7 @@ const logger = {
 
 // Logger is optional - if not provided, no logging output
 const connection = createAbapConnection(config, logger);
+await connection.connect();
 
 // Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
 const response = await connection.makeAdtRequest({
@@ -206,6 +209,8 @@ const config: SapConfig = {
 };
 
 const connection = createAbapConnection(config, logger);
+await connection.connect();
+
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
@@ -236,8 +241,11 @@ const config: SapConfig = {
 
 // Create connection with token refresher - 401/403 handled automatically
 const connection = new JwtAbapConnection(config, logger, undefined, tokenRefresher);
+await connection.connect();
 
-// Requests automatically retry with refreshed token on auth errors
+// Requests automatically retry with refreshed token on auth errors. A refresh
+// replaces the SAP session, so if a lock window is open the request fails with
+// ADT_SESSION_REPLACED instead of continuing on a session your lock is not in.
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
@@ -252,6 +260,7 @@ For operations that require session state (e.g., object modifications), you can 
 import { createAbapConnection } from "@mcp-abap-adt/connection";
 
 const connection = createAbapConnection(config, logger);
+await connection.connect();
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
 connection.setSessionType("stateful");
@@ -388,19 +397,33 @@ type SapConfig = {
 Main interface for ABAP connections.
 
 ```typescript
+// The shared contract (IAbapConnection), what every connection provides:
 interface AbapConnection {
+  connect(): Promise<void>; // REQUIRED before any request; rejects on failure
   makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
-  reset(): void;
+  getBaseUrl(): Promise<string>;
   setSessionType(type: "stateless" | "stateful"): void; // Switch session type
-  getSessionMode(): "stateless" | "stateful"; // Get current session mode
-  getSessionId(): string | null; // Get current session ID
+  getSessionId(): string | null; // Client-side conversation id
 }
 ```
 
+The HTTP connection classes carry the rest of the session lifecycle, which is
+**not on the shared contract yet** and is absent from `RfcAbapConnection`:
+
+```typescript
+disconnect(): Promise<TeardownReport>; // never throws; reports what it could not finish
+isConnected(): boolean;
+getSessionIdentity(): string | null;   // WHICH SAP session, not the conversation id
+beginWindow(label: string): WindowToken;
+endWindow(token: WindowToken): void;
+```
+
+See [docs/USAGE.md — Session Lifecycle](./docs/USAGE.md#session-lifecycle).
+
 **Session Management:**
-- `setSessionType(type)`: Programmatically switch between stateful and stateless modes
-- `getSessionMode()`: Returns current session mode
-- `getSessionId()`: Returns the current session ID (auto-generated UUID)
+- `setSessionType(type)`: Programmatically switch between stateful and stateless modes *(on the contract)*
+- `getSessionId()`: Returns the client-side conversation id, an auto-generated UUID *(on the contract)*
+- `getSessionMode()`: Returns current session mode *(HTTP classes only)*
 
 #### `ILogger`
 
@@ -489,7 +512,6 @@ async function fetchCsrfToken(baseUrl: string): Promise<string> {
 }
 ```
 
-See [PR Proposal](./PR_PROPOSAL_CSRF_CONFIG.md) for more details.
 
 ## Requirements
 
@@ -500,7 +522,7 @@ See [PR Proposal](./PR_PROPOSAL_CSRF_CONFIG.md) for more details.
 
 See [CHANGELOG.md](./CHANGELOG.md) for detailed version history and breaking changes.
 
-**Latest version: 0.2.0**
+**Version history:** [CHANGELOG.md](./CHANGELOG.md)
 - Removed token refresh functionality (handled by `@mcp-abap-adt/auth-broker`)
 - Removed session storage functionality (handled by `@mcp-abap-adt/auth-broker`)
 - Logger is now optional

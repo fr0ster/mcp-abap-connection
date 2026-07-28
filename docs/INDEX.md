@@ -1,8 +1,8 @@
 # Documentation Index
 
 **Package:** `@mcp-abap-adt/connection`  
-**Version:** 0.2.4  
-**Last Updated:** December 21, 2025
+**Version:** see [CHANGELOG.md](../CHANGELOG.md) — kept there rather than
+duplicated here, where it went stale by eight minor versions.
 
 ## Package Structure
 
@@ -11,10 +11,13 @@ mcp-abap-connection/
 ├── README.md                 # Main package documentation
 ├── CHANGELOG.md             # Version history and changes
 ├── docs/                    # Detailed documentation
-│   ├── INDEX.md            # This file - documentation overview
-│   ├── INSTALLATION.md     # Setup and installation guide
-│   ├── USAGE.md            # API documentation and examples
-│   └── JWT_AUTH_TOOLS.md   # CLI tool for authentication
+│   ├── INDEX.md                    # This file - documentation overview
+│   ├── INSTALLATION.md             # Setup and installation guide
+│   ├── USAGE.md                    # API documentation and examples
+│   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── SCOPE.md                    # What this package does and does not own
+│   ├── STATEFUL_SESSION_GUIDE.md   # Stateful requests and lock windows
+│   └── JWT_AUTH_TOOLS.md           # CLI tool for authentication
 ├── examples/               # Working code examples
 │   ├── README.md          # Examples overview
 │   └── basic-connection.js # Simple connection example
@@ -39,8 +42,7 @@ mcp-abap-connection/
 - 🔑 [JWT Auth Tools](./JWT_AUTH_TOOLS.md) - CLI tool for browser-based authentication
 
 ### Version Information
-- 📋 [CHANGELOG](../CHANGELOG.md) - Complete version history (0.1.0 - 0.2.0)
-- 🆕 [Latest Changes (0.2.0)](../CHANGELOG.md#020---2025-12-08) - Breaking changes: token refresh and session storage removed
+- 📋 [CHANGELOG](../CHANGELOG.md) - Complete version history, including what the latest release changed
 
 ### Examples
 - 📁 [Examples Overview](../examples/README.md) - All available examples
@@ -70,44 +72,9 @@ mcp-abap-connection/
 
 ## Version Highlights
 
-### 0.2.4 (Current) - 2025-12-21
-- 🔄 ITokenRefresher DI support for automatic token refresh
-- 📦 JwtAbapConnection accepts optional tokenRefresher parameter
-- ⚡ Automatic retry on 401/403 with refreshed token
-
-### 0.2.0 - 2025-12-08
-- ⚠️ **Breaking Changes**: Token refresh and session storage removed
-- 🔄 Token refresh moved to `@mcp-abap-adt/auth-broker` package
-- 💾 Session state persistence moved to `@mcp-abap-adt/auth-broker` package
-- 📝 Logger is now optional (uses optional chaining)
-- 🎯 Package now focuses solely on HTTP connection management
-
-### 0.1.9 - 2025-11-23
-- 📝 Comprehensive documentation updates
-- 📚 Enhanced README with new API methods
-- 📋 Complete CHANGELOG with all versions
-- 🔗 Fixed documentation structure and links
-
-### 0.1.8 - 2025-01-23
-- 🆕 Session management improvements
-- ➕ `getSessionId()` method
-- ➕ `setSessionType()` method
-- 🔧 Base URL handling refactoring
-
-### 0.1.6 - 2025-01-21
-- ➕ Added `getSessionId()` and `setSessionType()` API methods
-- 🎛️ Enhanced session control
-
-### 0.1.4 - 2025-01-19
-- 🤖 Automatic session ID generation
-- 💡 No manual session ID required
-
-### 0.1.0 - 2024-11-14
-- 🎉 Initial release
-- 🔐 Basic Auth and JWT/OAuth2 support
-- 🛠️ CLI tool for authentication
-
-See [CHANGELOG.md](../CHANGELOG.md) for complete version history.
+See [CHANGELOG.md](../CHANGELOG.md). This section used to restate it and drifted
+eight minor versions behind — a second copy of a changelog is a changelog that
+is wrong.
 
 ## Documentation Standards
 

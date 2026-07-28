@@ -29,7 +29,7 @@ async function main() {
 
     // Make a simple ADT request
     console.log('\nFetching repository structure...');
-    const response = await connection.request({
+    const response = await connection.makeAdtRequest({
       method: 'GET',
       url: '/sap/bc/adt/repository/nodestructure',
       params: {
@@ -42,7 +42,6 @@ async function main() {
     console.log('✓ Request successful');
     console.log('Response status:', response.status);
     console.log('Data length:', response.data.length);
-
   } catch (error) {
     console.error('✗ Error:', error.message);
     if (error.response) {
