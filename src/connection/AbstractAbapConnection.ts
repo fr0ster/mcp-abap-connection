@@ -321,16 +321,88 @@ abstract class AbstractAbapConnection implements AbapConnection {
   }
 
   /**
-   * The same teardown raised from inside request handling — a recovery path.
-   * `internal` origin so it does not cancel the recovery that raised it.
+   * Raises a session-lost teardown from inside request handling.
+   *
+   * There are exactly three things that can cost us the ABAP session, and they
+   * were found one at a time precisely because they were written apart. They go
+   * through here so a fourth joins the list instead of inventing its own
+   * sequence:
+   *
+   *   - the credential was renewed (the injected auth says so);
+   *   - the server says the session is gone (a dead-session response);
+   *   - the tracked cookie changed under us while a lock was held.
+   *
+   * `internal` origin, so it does not cancel the recovery that raised it, and
+   * `sessionLost`, so admission shuts at once and the identity is dropped
+   * immediately — a later comparison must see the change, and on a dead session
+   * the cookie is unchanged, so only the state can tell.
+   *
+   * Does not await: it is called from inside a request, and the queued cleanup
+   * drains that very request.
    */
-  protected discardSession(): void {
+  protected raiseSessionLost(reason: string): void {
+    this.logger?.warn(`Session lost: ${reason}`);
     this.lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
     void this.lifecycle.transition('cleanup', async () => {
       await this.lifecycle.drain();
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
+  }
+
+  /** The credential-renewal raiser; see raiseSessionLost(). */
+  protected discardSession(): void {
+    this.raiseSessionLost('the credential backing it was renewed');
+  }
+
+  /**
+   * Acts on what a response said about the session identity.
+   *
+   * A replacement is fatal only while a lock is held — and "a lock is held"
+   * means an open window, not `sessionMode`: a mode flag cannot represent
+   * windows, another handler can flip it back, and a batch never sets it.
+   * With no lock held the same replacement is not a loss: nothing was being
+   * held, so the new identity simply becomes the current one.
+   */
+  private applyIdentityPolicy(
+    classification: 'unchanged' | 'established' | 'replaced',
+  ): void {
+    if (classification !== 'replaced') return;
+
+    if (this.lifecycle.openWindows.length === 0) {
+      this.logger?.debug(
+        'Session identity changed with no lock held; continuing on the new one',
+      );
+      return;
+    }
+
+    this.raiseSessionLost('the session cookie changed while a lock was held');
+    throw sessionError(
+      ADT_SESSION_ERROR.SESSION_REPLACED,
+      'The SAP session was replaced while a lock was held; the lock handle is dead',
+    );
+  }
+
+  /**
+   * Whether the server is telling us the session it was given no longer exists.
+   *
+   * The E19 shape was HTTP 400 with "Session not found", answered in ~60 ms
+   * with the cookie present — which is why identity comparison cannot see this:
+   * the cookie, and therefore the fingerprint, is completely unchanged. The
+   * exact match is landscape-specific and is one of the live probes this design
+   * still owes.
+   */
+  private isDeadSessionResponse(error: unknown): boolean {
+    if (!(error instanceof AxiosError) || !error.response) return false;
+    if (error.response.status !== 400) return false;
+
+    const text = [
+      error.response.statusText,
+      typeof error.response.data === 'string' ? error.response.data : '',
+    ]
+      .join(' ')
+      .toLowerCase();
+    return text.includes('session not found');
   }
 
   /** Drops everything that described the session. Not a lifecycle transition. */
@@ -531,7 +603,11 @@ abstract class AbstractAbapConnection implements AbapConnection {
 
     try {
       const response = await this.getAxiosInstance()(requestConfig);
-      this.updateCookiesFromResponse(response.headers);
+      // Observe first, act second: the classification is computed while the
+      // state updates, and the policy runs before the response is handed back.
+      this.applyIdentityPolicy(
+        this.updateCookiesFromResponse(response.headers),
+      );
 
       this.logger?.debug(`Request succeeded with status ${response.status}`, {
         type: 'REQUEST_SUCCESS',
@@ -566,6 +642,22 @@ abstract class AbstractAbapConnection implements AbapConnection {
             : JSON.stringify(error.response.data).slice(0, 200);
 
         this.updateCookiesFromResponse(error.response.headers);
+      }
+
+      // The server telling us the session is gone is invisible to the identity
+      // comparison: the cookie, and therefore the fingerprint, is unchanged.
+      // Only the state can see it, and it must say so at once — otherwise a
+      // later unlockAll() finds a match and unlocks over a dead session.
+      if (this.isDeadSessionResponse(error)) {
+        this.raiseSessionLost(
+          'the server reports the session no longer exists',
+        );
+        // No internal retry: a blind retry here is what produced further locks
+        // in the field. The caller decides.
+        throw sessionError(
+          ADT_SESSION_ERROR.SESSION_REPLACED,
+          'The SAP session no longer exists; any lock handle from it is dead',
+        );
       }
 
       // Check if this is a network error (connection refused, timeout, DNS, etc.)
@@ -954,14 +1046,22 @@ abstract class AbstractAbapConnection implements AbapConnection {
     this.cookies = cookies;
   }
 
-  private updateCookiesFromResponse(headers?: Record<string, unknown>): void {
+  /**
+   * Folds a response's cookies into the jar and classifies what that means for
+   * the session identity. Returns the classification rather than acting on it:
+   * cookie parsing stays free of policy, and no exception fires in the middle
+   * of a state update. The caller decides.
+   */
+  private updateCookiesFromResponse(
+    headers?: Record<string, unknown>,
+  ): 'unchanged' | 'established' | 'replaced' {
     if (!headers) {
-      return;
+      return 'unchanged';
     }
 
     const setCookie = headers['set-cookie'] as string[] | string | undefined;
     if (!setCookie) {
-      return;
+      return 'unchanged';
     }
 
     const cookiesArray = Array.isArray(setCookie) ? setCookie : [setCookie];
@@ -1003,7 +1103,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
     }
 
     if (this.cookieStore.size === 0) {
-      return;
+      return 'unchanged';
     }
 
     const combined = Array.from(this.cookieStore.entries())
@@ -1011,13 +1111,14 @@ abstract class AbstractAbapConnection implements AbapConnection {
       .join('; ');
 
     if (!combined) {
-      return;
+      return 'unchanged';
     }
 
     this.cookies = combined;
     this.logger?.debug(
       `[DEBUG] BaseAbapConnection - Updated cookies from response (first 100 chars): ${this.cookies.substring(0, 100)}...`,
     );
+    return this.lifecycle.observe(this.sessionFingerprint());
   }
 
   /**

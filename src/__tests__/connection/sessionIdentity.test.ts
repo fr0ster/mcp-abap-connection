@@ -1,0 +1,200 @@
+/**
+ * What a response says about the session, and what the connection does about it.
+ *
+ * Two things can cost the session mid-flight and neither is visible the same
+ * way: a swapped cookie is visible to comparison and invisible to the server's
+ * answer; a dead session is the exact opposite — the cookie is unchanged, so
+ * only the answer tells. Both must end the same way for a caller holding a lock.
+ */
+import { createServer, type Server } from 'node:http';
+import type { SapConfig } from '../../config/sapConfig.js';
+import { BaseAbapConnection } from '../../connection/BaseAbapConnection.js';
+
+interface Stub {
+  baseUrl: string;
+  /** Set to rotate the session cookie on the next non-discovery response. */
+  rotateSession: boolean;
+  /** Set to answer the next non-discovery request as a dead session. */
+  deadSession: boolean;
+  close(): Promise<void>;
+}
+
+async function startStub(): Promise<Stub> {
+  const state = { rotateSession: false, deadSession: false, issued: 0 };
+  const server: Server = createServer((req, res) => {
+    const url = req.url ?? '';
+    if (url.includes('/discovery')) {
+      state.issued += 1;
+      res.writeHead(200, {
+        'content-type': 'application/atomsvc+xml',
+        'x-csrf-token': 'TOKEN',
+        'set-cookie': [`SAP_SESSIONID_STUB_100=S${state.issued}; Path=/`],
+      });
+      res.end('<service/>');
+      return;
+    }
+    if (state.deadSession) {
+      // The E19 shape: the cookie is untouched, only the answer tells.
+      res.writeHead(400, {
+        'content-type': 'text/html',
+      });
+      res.end('<html><body>Session not found</body></html>');
+      return;
+    }
+    if (state.rotateSession) {
+      state.rotateSession = false;
+      state.issued += 1;
+      res.writeHead(200, {
+        'content-type': 'text/plain',
+        'set-cookie': [`SAP_SESSIONID_STUB_100=S${state.issued}; Path=/`],
+      });
+      res.end('');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('');
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('no port');
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    get rotateSession() {
+      return state.rotateSession;
+    },
+    set rotateSession(v: boolean) {
+      state.rotateSession = v;
+    },
+    get deadSession() {
+      return state.deadSession;
+    },
+    set deadSession(v: boolean) {
+      state.deadSession = v;
+    },
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+        server.closeAllConnections();
+      }),
+  };
+}
+
+const configFor = (baseUrl: string): SapConfig => ({
+  url: baseUrl,
+  client: '100',
+  authType: 'basic',
+  username: 'STUB',
+  password: 'STUB',
+});
+
+const get = (conn: BaseAbapConnection, url = '/sap/bc/adt/work') =>
+  conn.makeAdtRequest({ url, method: 'GET', timeout: 5000 });
+
+describe('a replaced session cookie', () => {
+  let stub: Stub;
+
+  beforeEach(async () => {
+    stub = await startStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  it('is fatal while a lock window is open', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+    conn.beginWindow('Class/ZCL_A');
+
+    stub.rotateSession = true;
+
+    await expect(get(conn)).rejects.toMatchObject({
+      code: 'ADT_SESSION_REPLACED',
+    });
+    // and the session is gone, not merely reported: admission is shut
+    expect(conn.isConnected()).toBe(false);
+  });
+
+  // With nothing held there is nothing to lose, and today's transparent
+  // recovery is behaviour consumers rely on.
+  it('is transparent when no lock is held', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+
+    stub.rotateSession = true;
+
+    await expect(get(conn)).resolves.toMatchObject({ status: 200 });
+    expect(conn.isConnected()).toBe(true);
+    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S2');
+  });
+
+  // The decision must not rest on the wire header: another handler can flip it
+  // back to stateless while a lock is genuinely open, and a batch never sets it.
+  it('is fatal on the open window even when the mode says stateless', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+    conn.beginWindow('Class/ZCL_A');
+    conn.setSessionType('stateless');
+
+    stub.rotateSession = true;
+
+    await expect(get(conn)).rejects.toMatchObject({
+      code: 'ADT_SESSION_REPLACED',
+    });
+  });
+});
+
+describe('a dead session', () => {
+  let stub: Stub;
+
+  beforeEach(async () => {
+    stub = await startStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  it('is reported as a lost session, with the cookie untouched', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+    conn.beginWindow('Class/ZCL_A');
+    const identityBefore = conn.getSessionIdentity();
+
+    stub.deadSession = true;
+
+    await expect(get(conn)).rejects.toMatchObject({
+      code: 'ADT_SESSION_REPLACED',
+    });
+    // Comparison could never have seen this: nothing about the cookie changed.
+    expect(identityBefore).toBe('SAP_SESSIONID_STUB_100=S1');
+    expect(conn.isConnected()).toBe(false);
+  });
+
+  it('does not retry the request internally', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+
+    let attempts = 0;
+    const realAxios = (
+      conn as unknown as { getAxiosInstance: () => (cfg: unknown) => unknown }
+    ).getAxiosInstance.bind(conn);
+    (conn as unknown as { getAxiosInstance: () => unknown }).getAxiosInstance =
+      () => {
+        const instance = realAxios();
+        return async (cfg: { url: string }) => {
+          if (cfg.url.includes('/work')) attempts += 1;
+          return (instance as (c: unknown) => unknown)(cfg);
+        };
+      };
+
+    stub.deadSession = true;
+    await expect(get(conn)).rejects.toMatchObject({
+      code: 'ADT_SESSION_REPLACED',
+    });
+
+    // A blind retry here is what produced further locks in the field.
+    expect(attempts).toBe(1);
+  });
+});
