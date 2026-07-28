@@ -58,9 +58,28 @@ export class KerberosAbapConnection extends AbstractAbapConnection {
       `[DEBUG] KerberosAbapConnection - Connecting to SAP system: ${discoveryUrl}`,
     );
     try {
-      const token = await this.fetchCsrfToken(discoveryUrl, 3, 1000);
+      // ONE attempt, deliberately — the shared default is 3 retries a second
+      // apart, and every one of them corrupts this exchange:
+      //
+      //  - A GSS token is one-shot. Replaying it is meaningless at best, and
+      //    replay protection may answer it differently than the original.
+      //  - Worse, a 401 that sets a cookie silences buildAuthorizationHeader()
+      //    (a cookie carries auth after the first round trip), so the retry
+      //    goes out with NO Authorization at all and draws the server's plain
+      //    opening challenge.
+      //
+      // Either way the classifier below would read the LAST response and name
+      // the wrong cause. The retry cannot help here anyway: nothing about a
+      // rejected token changes by waiting a second. Retrying a transient
+      // network failure is the caller's business now that connect() is
+      // explicit, and a fresh connect() mints a fresh token.
+      const token = await this.fetchCsrfToken(discoveryUrl, 0, 0);
       this.setCsrfToken(token);
     } catch (error) {
+      // The token went out and was not accepted, so it is spent. Keeping it
+      // would make every later connect() replay a token already known to fail.
+      this.currentToken = '';
+
       if (error instanceof AxiosError && error.response?.headers) {
         const wwwAuth = error.response.headers['www-authenticate'] as
           | string

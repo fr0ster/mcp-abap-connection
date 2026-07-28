@@ -2,6 +2,8 @@ jest.mock('../../auth/kerberosSpnego', () => ({
   generateSpnegoToken: jest.fn(async (_spn: string) => 'NEG_TOKEN'),
 }));
 
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { AxiosError } from 'axios';
 import { generateSpnegoToken } from '../../auth/kerberosSpnego.js';
 import { KerberosAbapConnection } from '../../connection/KerberosAbapConnection.js';
@@ -124,6 +126,91 @@ test('connect() distinguishes a rejected token from a continuation', async () =>
   await expect(c.connect()).rejects.toThrow(/rejected the SPNEGO token/);
   await expect(c.connect()).rejects.not.toThrow(/multi-leg/);
   expect(c.isConnected()).toBe(false);
+});
+
+// ── the classifier must see the FIRST response ───────────────────────────────
+// Every test above mocks fetchCsrfToken, which is the seam ABOVE the retry
+// loop — so none of them can see what the loop does to the exchange. This one
+// runs the real loop against a real socket.
+
+interface AuthProbe {
+  baseUrl: string;
+  /** Authorization header of each request that reached the server, in order. */
+  seen: Array<string | undefined>;
+  close(): Promise<void>;
+}
+
+async function startAuthProbe(): Promise<AuthProbe> {
+  const seen: Array<string | undefined> = [];
+  const server = createServer((req, res) => {
+    seen.push(req.headers.authorization);
+    if (seen.length === 1) {
+      // First exchange: the server continues, per RFC 4559, and sets a cookie.
+      res.writeHead(401, {
+        'www-authenticate': 'Negotiate YIIBc2VydmVy',
+        'set-cookie': ['SAP_SESSIONID_STUB_100=S1; Path=/'],
+      });
+    } else {
+      // Anything after: our token is spent and the cookie has silenced the
+      // Authorization header, so the server just re-offers the scheme.
+      res.writeHead(401, { 'www-authenticate': 'Negotiate' });
+    }
+    res.end('');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    seen,
+    close: () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((e) => (e ? reject(e) : resolve())),
+      ),
+  };
+}
+
+test('connect() diagnoses the first challenge, and never replays the token', async () => {
+  const probe = await startAuthProbe();
+  try {
+    const c = new KerberosAbapConnection(
+      { ...cfg, url: probe.baseUrl },
+      null,
+      undefined,
+    );
+
+    await expect(c.connect()).rejects.toThrow(/single-leg|multi-leg/i);
+
+    // A GSS token is one-shot. Retrying it is meaningless at best; here it is
+    // actively misleading, because the 401 also set a cookie and
+    // buildAuthorizationHeader() goes quiet once a cookie exists — so a retry
+    // would carry NO Authorization at all, and the bare challenge that comes
+    // back reads as "your credentials were declined". The diagnosis would name
+    // the wrong cause, and point at kinit instead of at multi-leg support.
+    expect(probe.seen).toEqual(['Negotiate NEG_TOKEN']);
+    expect(c.isConnected()).toBe(false);
+  } finally {
+    await probe.close();
+  }
+});
+
+test('a failed exchange does not leave the spent token behind', async () => {
+  const probe = await startAuthProbe();
+  try {
+    (generateSpnegoToken as jest.Mock).mockClear();
+    const c = new KerberosAbapConnection(
+      { ...cfg, url: probe.baseUrl },
+      null,
+      undefined,
+    );
+    await expect(c.connect()).rejects.toThrow();
+    await expect(c.connect()).rejects.toThrow();
+
+    // Two connects, two freshly minted tokens: caching one across a failure
+    // guarantees the second attempt fails exactly as the first did.
+    expect((generateSpnegoToken as jest.Mock).mock.calls.length).toBe(2);
+  } finally {
+    await probe.close();
+  }
 });
 
 test('connect() still rejects when the 401 is not a Negotiate challenge', async () => {
