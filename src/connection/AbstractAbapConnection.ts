@@ -866,6 +866,13 @@ abstract class AbstractAbapConnection implements AbapConnection {
           retryDelay,
         );
       } catch (error) {
+        // Third layer with a catch on this path, and the last one that could
+        // bury a verdict: falling through to the fallback endpoint would open
+        // ANOTHER session, and by then the teardown has cleared the fingerprint
+        // so the new one reads as `established` and the loss disappears.
+        if (this.isSessionVerdict(error)) {
+          throw error;
+        }
         lastError = error instanceof Error ? error : new Error(String(error));
         this.logger?.debug(
           `CSRF token not available from ${csrfUrl}, trying next endpoint...`,
@@ -967,6 +974,15 @@ abstract class AbstractAbapConnection implements AbapConnection {
         this.logger?.debug('CSRF token successfully obtained');
         return token;
       } catch (error) {
+        // A session verdict is not a failed token fetch and must not be
+        // retried into silence: the retry would observe the SAME new session,
+        // read it as `unchanged`, and the replacement this raised would be gone
+        // for good. It leaves immediately, past the loop and past the caller's
+        // recovery.
+        if (this.isSessionVerdict(error)) {
+          throw error;
+        }
+
         if (error instanceof AxiosError) {
           // Always try to extract cookies from error response, even on 401
           // This ensures cookies are available for subsequent requests

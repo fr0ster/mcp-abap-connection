@@ -253,7 +253,12 @@ describe('a session verdict raised during a retry', () => {
         data: 'x',
       }),
     ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
-    expect(attempts).toBe(2);
+
+    // One attempt, not two: the replacement is now detected at the token
+    // refetch, before the retry goes out. Sending a write into a session
+    // already known to be gone would be the internal retry this design
+    // forbids, so stopping earlier is the stricter answer, not a weaker one.
+    expect(attempts).toBe(1);
   });
 });
 
