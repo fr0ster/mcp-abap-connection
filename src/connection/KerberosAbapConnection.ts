@@ -73,26 +73,25 @@ export class KerberosAbapConnection extends AbstractAbapConnection {
           );
         }
 
-        // A Negotiate 401 is not a failure here — it is the handshake.
+        // A 401 carrying a Negotiate token is a CONTINUATION, not a success.
         //
-        // SPNEGO in this class is single-leg: the FIRST request carries the
-        // Negotiate header and SAP issues the session cookie in response to it.
-        // A 401 on the discovery fetch is therefore the expected first leg, and
-        // rejecting on it would make connect() fail on every correctly
-        // configured Kerberos system.
+        // Per RFC 4559 the server is handing back gssapi-data for the client to
+        // feed into its GSS context and retry. This client cannot do that:
+        // generateSpnegoToken() calls step('') once and discards the context,
+        // so there is nothing to continue with. The token it holds is the
+        // initial one, and sending it again produces the same 401.
         //
-        // This is the one place where a resolved connect() does not yet mean a
-        // session cookie exists. What it does mean is that the credential is
-        // ready: ensureToken() has produced the SPNEGO token, which is what
-        // makes the next request able to authenticate. getSessionIdentity()
-        // stays null until the cookie arrives — the same state as a server that
-        // issues no session cookie at all.
+        // So this fails, and says why — resolving here would claim a readiness
+        // that does not exist and move the failure to the first real request,
+        // where it reads as an unrelated auth error.
         if (isNegotiateChallenge(wwwAuth)) {
-          this.logger?.debug(
-            'KerberosAbapConnection - Negotiate 401 during connect: the ' +
-              'session cookie arrives with the first request',
+          throw new Error(
+            'KerberosAbapConnection: the server continued the SPNEGO exchange ' +
+              '(401 with a Negotiate token), which requires feeding the server ' +
+              'token back into the GSS context. This client performs a ' +
+              'single-leg exchange only and cannot continue. See ' +
+              'https://www.rfc-editor.org/rfc/rfc4559',
           );
-          return;
         }
       }
       throw error;

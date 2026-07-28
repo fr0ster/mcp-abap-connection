@@ -38,10 +38,11 @@ try {
 If you never checked the result of `connect()`, you were relying on that
 deferral. The failure has not appeared — it has moved to where you can see it.
 
-**Kerberos is the exception.** A `Negotiate` 401 during `connect()` is the first
-leg of a single-leg SPNEGO handshake, so it resolves rather than rejecting; the
-session cookie arrives with the first request. NTLM is still rejected, and a 401
-with no challenge still fails.
+**Kerberos**: `connect()` now surfaces a limitation that used to be hidden. If
+the server continues the SPNEGO exchange (a 401 carrying a `Negotiate` token),
+this client cannot continue it — the GSS context is not retained — and
+`connect()` fails saying so. Previously the same situation resolved and failed
+later, on the first request, as an unrelated-looking 401.
 
 ### 3. Requests are refused after a teardown
 

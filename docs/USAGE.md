@@ -210,13 +210,12 @@ connection.setSessionType('stateless');
 The connection owns its session, and that ownership is explicit rather than
 implied. Four things follow from it.
 
-> **One exception, for Kerberos.** SPNEGO here is single-leg: the first request
-> carries the `Negotiate` header and SAP issues the session cookie in response
-> to it. A `Negotiate` 401 during `connect()` is therefore the handshake, not a
-> failure — `connect()` resolves, `isConnected()` is true because the credential
-> is ready, and `getSessionIdentity()` stays `null` until the cookie arrives
-> with the first request. An NTLM challenge is still rejected outright, and a
-> 401 carrying no challenge at all still fails.
+> **A Kerberos limitation worth knowing.** SPNEGO here is single-leg: one
+> `step('')` produces the token and the GSS context is discarded. If the server
+> continues the exchange — a 401 carrying a `Negotiate` token, which
+> [RFC 4559](https://www.rfc-editor.org/rfc/rfc4559) defines as a continuation —
+> this client cannot feed that token back, so `connect()` fails with an error
+> saying exactly that. Multi-leg SPNEGO is not implemented.
 
 > **Availability.** `connect()` is on the shared `IAbapConnection` contract and
 > works on every connection. The rest of this section — `disconnect()`,

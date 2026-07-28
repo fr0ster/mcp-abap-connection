@@ -96,21 +96,20 @@ test('connect() rejects with NTLM error when server offers Negotiate+NTLM', asyn
   await expect(c.connect()).rejects.toThrow(/NTLM/i);
 });
 
-test('connect() treats a real Kerberos Negotiate 401 as the handshake, not a failure', async () => {
+test('connect() fails on a Negotiate continuation, and says why', async () => {
   const c = new KerberosAbapConnection(cfg, null, undefined);
-  // A legitimate Kerberos 401 (SAP asking for SPNEGO) is the FIRST LEG: this
-  // class is single-leg, so the session cookie arrives with the first real
-  // request. Rejecting here would make connect() fail on every correctly
-  // configured Kerberos system.
+  // RFC 4559: a 401 carrying a Negotiate token is the server continuing the
+  // exchange. Continuing means feeding that token into the GSS context — and
+  // generateSpnegoToken() discards the context after one step(''), so this
+  // client cannot. Resolving here would claim a readiness that does not exist
+  // and push the failure to the first real request, where it looks unrelated.
   jest
     .spyOn(c as any, 'fetchCsrfToken')
     .mockRejectedValue(makeNtlmAxiosError('Negotiate YIIBexyz=='));
 
-  await expect(c.connect()).resolves.toBeUndefined();
-  // Usable, because the credential is ready — but with no session cookie yet,
-  // which is the same state as a server that issues none at all.
-  expect(c.isConnected()).toBe(true);
-  expect(c.getSessionIdentity()).toBeNull();
+  await expect(c.connect()).rejects.toThrow(/single-leg|continue/i);
+  await expect(c.connect()).rejects.not.toThrow(/NTLM/i);
+  expect(c.isConnected()).toBe(false);
 });
 
 test('connect() still rejects when the 401 is not a Negotiate challenge', async () => {
