@@ -27,21 +27,43 @@ export function isNtlmChallenge(wwwAuthenticate: string | undefined): boolean {
 }
 
 /**
- * Detect a genuine Kerberos/SPNEGO challenge — a `Negotiate` offer that is not
- * an NTLM token in disguise.
- *
- * This exists to tell apart the two 401s a Kerberos connect can see. An NTLM
- * offer is a hard failure: the server wants an auth scheme we refuse. A plain
- * Negotiate challenge is the opposite — it is the first leg of the handshake,
- * and treating it as a failure would break every correctly configured Kerberos
- * system.
+ * A `Negotiate` challenge that is not NTLM in disguise. Says nothing about
+ * whether it carries a token — callers that care must ask which kind it is.
  */
-export function isNegotiateChallenge(
-  wwwAuthenticate: string | undefined,
-): boolean {
+function isNegotiate(wwwAuthenticate: string | undefined): boolean {
   if (!wwwAuthenticate) return false;
   if (isNtlmChallenge(wwwAuthenticate)) return false;
   return wwwAuthenticate
     .split(',')
     .some((part) => /^negotiate\b/i.test(part.trim()));
+}
+
+/**
+ * `Negotiate <gssapi-data>` — the server has handed back a token for the client
+ * to feed into its GSS context and retry (RFC 4559 continuation).
+ */
+export function isNegotiateContinuation(
+  wwwAuthenticate: string | undefined,
+): boolean {
+  if (!isNegotiate(wwwAuthenticate)) return false;
+  return (wwwAuthenticate as string)
+    .split(',')
+    .some((part) => /^negotiate\s+\S/i.test(part.trim()));
+}
+
+/**
+ * A bare `Negotiate`, with no token.
+ *
+ * Told apart from a continuation deliberately: once the client has ALREADY sent
+ * its initial Authorization, a bare challenge is the server declining it — the
+ * credentials were not accepted. There is no server token here, so nothing
+ * could be stepped even by a client that supports multi-leg. Diagnosing the two
+ * alike sends the reader after the wrong problem.
+ */
+export function isBareNegotiateChallenge(
+  wwwAuthenticate: string | undefined,
+): boolean {
+  return (
+    isNegotiate(wwwAuthenticate) && !isNegotiateContinuation(wwwAuthenticate)
+  );
 }

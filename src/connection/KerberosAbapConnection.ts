@@ -1,6 +1,10 @@
 import { AxiosError } from 'axios';
 import { generateSpnegoToken } from '../auth/kerberosSpnego.js';
-import { isNegotiateChallenge, isNtlmChallenge } from '../auth/ntlm.js';
+import {
+  isBareNegotiateChallenge,
+  isNegotiateContinuation,
+  isNtlmChallenge,
+} from '../auth/ntlm.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
@@ -84,13 +88,27 @@ export class KerberosAbapConnection extends AbstractAbapConnection {
         // So this fails, and says why — resolving here would claim a readiness
         // that does not exist and move the failure to the first real request,
         // where it reads as an unrelated auth error.
-        if (isNegotiateChallenge(wwwAuth)) {
+        if (isNegotiateContinuation(wwwAuth)) {
           throw new Error(
             'KerberosAbapConnection: the server continued the SPNEGO exchange ' +
-              '(401 with a Negotiate token), which requires feeding the server ' +
-              'token back into the GSS context. This client performs a ' +
-              'single-leg exchange only and cannot continue. See ' +
+              '(401 with a Negotiate token), which requires feeding that token ' +
+              'back into the GSS context and retrying. This client performs a ' +
+              'single-leg exchange only — the context is discarded after the ' +
+              'first step — so multi-leg SPNEGO is not supported. See ' +
               'https://www.rfc-editor.org/rfc/rfc4559',
+          );
+        }
+
+        // A BARE Negotiate is a different problem with a different fix: the
+        // initial Authorization has already gone out, so an empty challenge is
+        // the server declining it. No token came back, so there is nothing to
+        // step even for a client that supports multi-leg.
+        if (isBareNegotiateChallenge(wwwAuth)) {
+          throw new Error(
+            'KerberosAbapConnection: the server rejected the SPNEGO token ' +
+              '(401 with a bare Negotiate challenge, no token returned). The ' +
+              'credentials were not accepted — check the SPN, the ticket ' +
+              '(klist / kinit), and that the user is permitted Kerberos logon.',
           );
         }
       }

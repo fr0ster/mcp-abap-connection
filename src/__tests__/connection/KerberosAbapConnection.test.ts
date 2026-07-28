@@ -112,6 +112,20 @@ test('connect() fails on a Negotiate continuation, and says why', async () => {
   expect(c.isConnected()).toBe(false);
 });
 
+test('connect() distinguishes a rejected token from a continuation', async () => {
+  const c = new KerberosAbapConnection(cfg, null, undefined);
+  // A BARE Negotiate, after our initial Authorization already went out: the
+  // server declined it. Nothing came back to step with, so the advice must
+  // point at the credentials, not at multi-leg support.
+  jest
+    .spyOn(c as any, 'fetchCsrfToken')
+    .mockRejectedValue(makeNtlmAxiosError('Negotiate'));
+
+  await expect(c.connect()).rejects.toThrow(/rejected the SPNEGO token/);
+  await expect(c.connect()).rejects.not.toThrow(/multi-leg/);
+  expect(c.isConnected()).toBe(false);
+});
+
 test('connect() still rejects when the 401 is not a Negotiate challenge', async () => {
   const c = new KerberosAbapConnection(cfg, null, undefined);
   // No WWW-Authenticate at all: nothing says a handshake is in progress, so
