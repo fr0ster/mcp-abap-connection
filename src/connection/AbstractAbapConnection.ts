@@ -356,6 +356,19 @@ abstract class AbstractAbapConnection implements AbapConnection {
   }
 
   /**
+   * Folds a response into the session state AND acts on what it means, in one
+   * step.
+   *
+   * Never call updateCookiesFromResponse() directly: it MUTATES the fingerprint,
+   * so discarding its classification absorbs a replacement silently and every
+   * later check reads `unchanged`. That is one call site forgetting, and it
+   * happened — on the error path and on every retry response.
+   */
+  private observeResponse(headers?: Record<string, unknown>): void {
+    this.applyIdentityPolicy(this.updateCookiesFromResponse(headers));
+  }
+
+  /**
    * Acts on what a response said about the session identity.
    *
    * A replacement is fatal only while a lock is held — and "a lock is held"
@@ -603,11 +616,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
 
     try {
       const response = await this.getAxiosInstance()(requestConfig);
-      // Observe first, act second: the classification is computed while the
-      // state updates, and the policy runs before the response is handed back.
-      this.applyIdentityPolicy(
-        this.updateCookiesFromResponse(response.headers),
-      );
+      this.observeResponse(response.headers);
 
       this.logger?.debug(`Request succeeded with status ${response.status}`, {
         type: 'REQUEST_SUCCESS',
@@ -641,7 +650,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
             ? error.response.data.slice(0, 200)
             : JSON.stringify(error.response.data).slice(0, 200);
 
-        this.updateCookiesFromResponse(error.response.headers);
+        this.observeResponse(error.response.headers);
       }
 
       // The server telling us the session is gone is invisible to the identity
@@ -723,7 +732,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
           }
 
           const retryResponse = await this.getAxiosInstance()(requestConfig);
-          this.updateCookiesFromResponse(retryResponse.headers);
+          this.observeResponse(retryResponse.headers);
 
           return retryResponse as unknown as IAdtResponse<T, D>;
         } catch (retryError) {
@@ -754,7 +763,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
           requestHeaders.Cookie = this.cookies;
 
           const retryResponse = await this.getAxiosInstance()(requestConfig);
-          this.updateCookiesFromResponse(retryResponse.headers);
+          this.observeResponse(retryResponse.headers);
 
           return retryResponse as unknown as IAdtResponse<T, D>;
         }
@@ -773,7 +782,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
             );
 
             const retryResponse = await this.getAxiosInstance()(requestConfig);
-            this.updateCookiesFromResponse(retryResponse.headers);
+            this.observeResponse(retryResponse.headers);
 
             return retryResponse as unknown as IAdtResponse<T, D>;
           }
@@ -901,7 +910,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
           timeout: getTimeout('csrf'),
         });
 
-        this.updateCookiesFromResponse(response.headers);
+        this.observeResponse(response.headers);
 
         const token = response.headers['x-csrf-token'] as string | undefined;
         if (!token) {
@@ -918,7 +927,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
         }
 
         if (response.headers['set-cookie']) {
-          this.updateCookiesFromResponse(response.headers);
+          this.observeResponse(response.headers);
           if (this.cookies) {
             this.logger?.debug(
               `[DEBUG] BaseAbapConnection - Cookies received from CSRF response (first 100 chars): ${this.cookies.substring(0, 100)}...`,
@@ -936,7 +945,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
           // Always try to extract cookies from error response, even on 401
           // This ensures cookies are available for subsequent requests
           if (error.response?.headers) {
-            this.updateCookiesFromResponse(error.response.headers);
+            this.observeResponse(error.response.headers);
             if (this.cookies) {
               this.logger?.debug('Cookies extracted from error response', {
                 status: error.response.status,
@@ -962,7 +971,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
 
             const token = error.response.headers['x-csrf-token'] as string;
             if (token) {
-              this.updateCookiesFromResponse(error.response.headers);
+              this.observeResponse(error.response.headers);
               return token;
             }
           }
@@ -973,7 +982,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
             );
 
             const token = error.response.headers['x-csrf-token'] as string;
-            this.updateCookiesFromResponse(error.response.headers);
+            this.observeResponse(error.response.headers);
             return token;
           }
 

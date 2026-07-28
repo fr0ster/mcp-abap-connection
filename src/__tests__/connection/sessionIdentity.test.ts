@@ -14,13 +14,20 @@ interface Stub {
   baseUrl: string;
   /** Set to rotate the session cookie on the next non-discovery response. */
   rotateSession: boolean;
+  /** Status the rotating response carries; a replacement counts on any of them. */
+  rotateStatus: number;
   /** Set to answer the next non-discovery request as a dead session. */
   deadSession: boolean;
   close(): Promise<void>;
 }
 
 async function startStub(): Promise<Stub> {
-  const state = { rotateSession: false, deadSession: false, issued: 0 };
+  const state = {
+    rotateSession: false,
+    rotateStatus: 200,
+    deadSession: false,
+    issued: 0,
+  };
   const server: Server = createServer((req, res) => {
     const url = req.url ?? '';
     if (url.includes('/discovery')) {
@@ -44,7 +51,9 @@ async function startStub(): Promise<Stub> {
     if (state.rotateSession) {
       state.rotateSession = false;
       state.issued += 1;
-      res.writeHead(200, {
+      // The status is the point: a replacement arriving on an ERROR response is
+      // just as much a replacement, and the error path used to swallow it.
+      res.writeHead(state.rotateStatus, {
         'content-type': 'text/plain',
         'set-cookie': [`SAP_SESSIONID_STUB_100=S${state.issued}; Path=/`],
       });
@@ -65,6 +74,12 @@ async function startStub(): Promise<Stub> {
     },
     set rotateSession(v: boolean) {
       state.rotateSession = v;
+    },
+    get rotateStatus() {
+      return state.rotateStatus;
+    },
+    set rotateStatus(v: number) {
+      state.rotateStatus = v;
     },
     get deadSession() {
       return state.deadSession;
@@ -142,6 +157,35 @@ describe('a replaced session cookie', () => {
     await expect(get(conn)).rejects.toMatchObject({
       code: 'ADT_SESSION_REPLACED',
     });
+  });
+});
+
+describe('a replacement arriving on a non-200 response', () => {
+  let stub: Stub;
+
+  beforeEach(async () => {
+    stub = await startStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  // updateCookiesFromResponse() MUTATES the fingerprint, so a call site that
+  // discards its classification absorbs the replacement silently and every
+  // later check reads `unchanged`. The error path did exactly that.
+  it('is fatal too, when a lock window is open', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+    conn.beginWindow('Class/ZCL_A');
+
+    stub.rotateSession = true;
+    stub.rotateStatus = 404;
+
+    await expect(get(conn)).rejects.toMatchObject({
+      code: 'ADT_SESSION_REPLACED',
+    });
+    expect(conn.isConnected()).toBe(false);
   });
 });
 
