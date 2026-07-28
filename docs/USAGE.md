@@ -362,6 +362,7 @@ Dynamically switch between stateful and stateless modes:
 ```typescript
 // Start in stateless mode (default)
 const connection = createAbapConnection(config, logger);
+await connection.connect();
 
 // Enable stateful for a series of operations
 connection.setSessionType('stateful');

@@ -31,7 +31,11 @@ class MockWebSocket {
   close(code, reason) {
     this.readyState = 3;
     if (this.onclose) {
-      this.onclose({ code: code || 1000, reason: reason || 'normal', wasClean: true });
+      this.onclose({
+        code: code || 1000,
+        reason: reason || 'normal',
+        wasClean: true,
+      });
     }
   }
 }
@@ -81,4 +85,3 @@ main().catch((error) => {
   console.error('Fatal:', error.message || String(error));
   process.exit(1);
 });
-

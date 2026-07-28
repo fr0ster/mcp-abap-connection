@@ -42,7 +42,6 @@ async function main() {
     console.log('✓ Request successful');
     console.log('Response status:', response.status);
     console.log('Data length:', response.data.length);
-
   } catch (error) {
     console.error('✗ Error:', error.message);
     if (error.response) {

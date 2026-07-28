@@ -1,9 +1,9 @@
 /**
  * Example: JWT Connection with Automatic Token Refresh
- * 
+ *
  * This example demonstrates how to create a JwtAbapConnection with
  * automatic token refresh using ITokenRefresher from auth-broker.
- * 
+ *
  * When 401/403 errors occur, the connection automatically:
  * 1. Calls tokenRefresher.refreshToken() to get a new token
  * 2. Updates internal token state
@@ -58,7 +58,12 @@ async function main() {
 
   // Create connection with token refresher
   // 4th parameter is the ITokenRefresher
-  const connection = new JwtAbapConnection(config, logger, undefined, tokenRefresher);
+  const connection = new JwtAbapConnection(
+    config,
+    logger,
+    undefined,
+    tokenRefresher,
+  );
 
   try {
     // This request will automatically refresh token if 401/403 occurs

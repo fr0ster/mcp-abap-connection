@@ -46,10 +46,15 @@ connection.setSessionType('stateless');
 ## Exporting & Importing Session State
 
 ```ts
-const state = connection.getSessionState();   // { cookies, csrfToken, cookieStore }
-// Persist state manually or share with another process
-connection.setSessionState(state);
+// Which SAP session this connection is talking to. Changes only when the
+// session itself is replaced — the CSRF cookie is deliberately excluded, since
+// it rotates on a token refresh within one and the same session.
+const identity = connection.getSessionIdentity();   // e.g. 'SAP_SESSIONID_A4H_001=...'
 ```
+
+Exporting and importing session state is **not** part of this package: the
+methods that once did it were removed in 0.2.0, and persistence belongs to
+[`@mcp-abap-adt/auth-broker`](https://www.npmjs.com/package/@mcp-abap-adt/auth-broker).
 
 - Use when handlers need to transfer a session to another worker.
 - Useful for CLI tools that need to resume a previous session without refetching CSRF tokens.
@@ -74,15 +79,19 @@ This logic is transparent to callers (Builders, handlers, CLI scripts).
 
 - Builders receive the `AbapConnection` instance and optionally a `sessionId`.
 - `@mcp-abap-adt/connection` keeps the HTTP session alive; Builders keep the ADT session consistent.
-- When a test or handler needs to resume a workflow, it should restore both:
-  1. `connection.setSessionState(savedState)` (HTTP layer)
-  2. Pass the previous `sessionId` to the Builder/LockClient (ADT layer)
+- A workflow cannot be resumed by restoring HTTP state into this package: the
+  methods that once did that were removed in 0.2.0. Establish a session with
+  `connect()` and take the locks again — a lock handle from a previous session
+  is dead, and the connection will say so with `ADT_SESSION_REPLACED` rather
+  than let you use it.
 
 ---
 
 ## Troubleshooting
 
-- **CSRF token errors**: call `connection.reset()` to clear cookies/token and start fresh.
+- **CSRF token errors**: call `connection.reset()` to discard the session, then
+  `connect()` again. `reset()` no longer leaves the connection usable — it
+  queues the cleanup and refuses requests until a new session exists.
 - **Session expired**: reauthenticate to obtain a new session.
 - **Multiple connections**: each `createAbapConnection` instance maintains its own cookie jar; share the instance if you need continuity.
 

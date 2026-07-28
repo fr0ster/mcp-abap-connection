@@ -16,7 +16,6 @@ mcp-abap-connection/
 │   ├── USAGE.md                    # API documentation and examples
 │   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
 │   ├── SCOPE.md                    # What this package does and does not own
-│   ├── SESSION_STATE.md            # Exporting/importing session state
 │   ├── STATEFUL_SESSION_GUIDE.md   # Stateful requests and lock windows
 │   └── JWT_AUTH_TOOLS.md           # CLI tool for authentication
 ├── examples/               # Working code examples

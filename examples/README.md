@@ -73,20 +73,6 @@ node examples/websocket-transport.js
 - Sending `IWebSocketMessageEnvelope` payload
 - Connecting/disconnecting transport lifecycle
 
-### custom-session-storage.js
-
-Advanced example showing custom session persistence implementation.
-
-```bash
-node examples/custom-session-storage.js
-```
-
-**What it demonstrates:**
-- Using `getSessionState()` and `setSessionState()` methods
-- Implementing custom session storage (in-memory, database, Redis, etc.)
-- Session lifecycle management
-- Restoring sessions across connections
-
 ## Configuration
 
 ### Using .env file
@@ -121,22 +107,6 @@ node examples/basic-connection.js
 ```
 
 ## Session State Structure
-
-The session state returned by `getSessionState()` is a plain JSON object:
-
-```json
-{
-  "cookies": "sap-usercontext=sap-client=100; sap-XSRF_TRL_100=...; sap-contextid=...",
-  "csrfToken": "abc123...",
-  "cookieStore": {
-    "sap-usercontext": "sap-client=100",
-    "sap-XSRF_TRL_100": "...",
-    "sap-contextid": "..."
-  }
-}
-```
-
-You can serialize this to JSON, store it anywhere, and later restore it with `setSessionState()`.
 
 ## See Also
 
