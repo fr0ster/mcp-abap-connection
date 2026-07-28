@@ -85,9 +85,6 @@ For SAP BTP ABAP Environment using JWT tokens:
 ```typescript
 import { JwtAbapConnection } from '@mcp-abap-adt/connection';
 
-```typescript
-import { JwtAbapConnection } from '@mcp-abap-adt/connection';
-
 const config = {
   url: 'https://tenant.abap.cloud',
   authType: 'jwt' as const,
@@ -111,6 +108,7 @@ const config = {
 };
 
 const connection = new JwtAbapConnection(config, logger);
+await connection.connect();   // required: nothing is established implicitly
 
 // Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
 // Connection package only handles HTTP communication
@@ -662,17 +660,7 @@ See [examples/](../examples/) for complete working examples:
 7. **Session ID Management**: Session IDs are auto-generated (UUID) or can be provided when creating connection
 8. **Switch Session Types**: Use `setSessionType()` to dynamically change between stateful/stateless modes
 
-## Version History
-
-- **0.1.9**: Documentation improvements (this document updated)
-- **0.1.8**: Session management improvements
-- **0.1.7**: Base URL handling refactoring
-- **0.1.6**: Added `getSessionId()` and `setSessionType()` methods
-- **0.1.4**: Automatic session ID generation
-- **0.2.0**: Token refresh moved to auth-broker package
-- **0.1.0**: Initial release
-
-See [CHANGELOG.md](../CHANGELOG.md) for complete version history.
+See [CHANGELOG.md](../CHANGELOG.md) for the version history.
 
 ## Next Steps
 
