@@ -1,7 +1,6 @@
 # Usage Guide
 
 **Version:** see [CHANGELOG.md](../CHANGELOG.md)  
-**Last Updated:** December 2025
 
 ## Table of Contents
 
@@ -76,7 +75,7 @@ const config = {
 };
 
 const connection = new BaseAbapConnection(config, logger);
-// Connection and CSRF token fetching happens automatically on first request
+await connection.connect();   // required: nothing is established implicitly
 ```
 
 ### JWT Authentication (Cloud/BTP)
@@ -123,7 +122,10 @@ const response = await connection.makeAdtRequest({
 
 ## Making ADT Requests
 
-All requests are made using `makeAdtRequest()` method. Connection and CSRF token management happen automatically.
+All requests are made using the `makeAdtRequest()` method. CSRF token handling
+is automatic; **the connection is not** — the examples below assume
+`await connection.connect()` has already succeeded, and without it every one of
+them is refused with `ADT_NOT_CONNECTED`.
 
 ### GET Request
 
@@ -187,6 +189,7 @@ By default, connections are stateless - each request gets fresh cookies and CSRF
 
 ```typescript
 const connection = createAbapConnection(config, logger);
+await connection.connect();
 
 // Each request is independent
 await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' });

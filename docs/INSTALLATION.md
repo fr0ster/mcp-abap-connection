@@ -1,7 +1,6 @@
 # Installation Guide
 
 **Version:** see [CHANGELOG.md](../CHANGELOG.md)  
-**Last Updated:** December 2025
 
 ## Prerequisites
 
@@ -166,12 +165,15 @@ const logger = {
 
 const connection = createAbapConnection(config, logger);
 
-connection.makeAdtRequest({
-  method: 'GET',
-  url: '/sap/bc/adt/discovery'
-})
-.then(() => console.log('✓ Connection successful'))
-.catch((err) => console.error('✗ Connection failed:', err.message));
+connection.connect()
+  .then(() =>
+    connection.makeAdtRequest({
+      method: 'GET',
+      url: '/sap/bc/adt/discovery',
+    }),
+  )
+  .then(() => console.log('✓ Connection successful'))
+  .catch((err) => console.error('✗ Connection failed:', err.message));
 ```
 
 Run:

@@ -89,6 +89,7 @@ a request — retrying blindly is what produced further orphaned locks in the
 field.
 
 ```typescript
+// (connection already established)
 try {
   await connection.makeAdtRequest(...);
 } catch (error) {

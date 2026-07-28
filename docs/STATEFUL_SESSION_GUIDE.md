@@ -29,6 +29,7 @@ The connection layer **does not** decide when to lock/unlock objects—that logi
 import { createAbapConnection } from '@mcp-abap-adt/connection';
 
 const connection = createAbapConnection(config, logger);
+await connection.connect();   // required before any request
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
 connection.setSessionType('stateful');

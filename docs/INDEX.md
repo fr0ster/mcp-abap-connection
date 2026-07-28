@@ -43,8 +43,7 @@ mcp-abap-connection/
 - 🔑 [JWT Auth Tools](./JWT_AUTH_TOOLS.md) - CLI tool for browser-based authentication
 
 ### Version Information
-- 📋 [CHANGELOG](../CHANGELOG.md) - Complete version history (0.1.0 - 0.2.0)
-- 🆕 [Latest Changes (0.2.0)](../CHANGELOG.md#020---2025-12-08) - Breaking changes: token refresh and session storage removed
+- 📋 [CHANGELOG](../CHANGELOG.md) - Complete version history, including what the latest release changed
 
 ### Examples
 - 📁 [Examples Overview](../examples/README.md) - All available examples

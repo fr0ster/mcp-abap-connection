@@ -157,6 +157,7 @@ const logger = {
 
 // Create connection
 const connection = createAbapConnection(config, logger);
+await connection.connect();   // required before any request
 
 // Make ADT request
 const response = await connection.makeAdtRequest({
@@ -187,6 +188,7 @@ const logger = {
 
 // Logger is optional - if not provided, no logging output
 const connection = createAbapConnection(config, logger);
+await connection.connect();
 
 // Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
 const response = await connection.makeAdtRequest({
@@ -207,6 +209,8 @@ const config: SapConfig = {
 };
 
 const connection = createAbapConnection(config, logger);
+await connection.connect();
+
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
@@ -237,8 +241,11 @@ const config: SapConfig = {
 
 // Create connection with token refresher - 401/403 handled automatically
 const connection = new JwtAbapConnection(config, logger, undefined, tokenRefresher);
+await connection.connect();
 
-// Requests automatically retry with refreshed token on auth errors
+// Requests automatically retry with refreshed token on auth errors. A refresh
+// replaces the SAP session, so if a lock window is open the request fails with
+// ADT_SESSION_REPLACED instead of continuing on a session your lock is not in.
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
@@ -253,6 +260,7 @@ For operations that require session state (e.g., object modifications), you can 
 import { createAbapConnection } from "@mcp-abap-adt/connection";
 
 const connection = createAbapConnection(config, logger);
+await connection.connect();
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
 connection.setSessionType("stateful");
@@ -389,14 +397,28 @@ type SapConfig = {
 Main interface for ABAP connections.
 
 ```typescript
+// The shared contract (IAbapConnection), what every connection provides:
 interface AbapConnection {
+  connect(): Promise<void>; // REQUIRED before any request; rejects on failure
   makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
-  reset(): void;
+  getBaseUrl(): Promise<string>;
   setSessionType(type: "stateless" | "stateful"): void; // Switch session type
-  getSessionMode(): "stateless" | "stateful"; // Get current session mode
-  getSessionId(): string | null; // Get current session ID
+  getSessionId(): string | null; // Client-side conversation id
 }
 ```
+
+The HTTP connection classes carry the rest of the session lifecycle, which is
+**not on the shared contract yet** and is absent from `RfcAbapConnection`:
+
+```typescript
+disconnect(): Promise<TeardownReport>; // never throws; reports what it could not finish
+isConnected(): boolean;
+getSessionIdentity(): string | null;   // WHICH SAP session, not the conversation id
+beginWindow(label: string): WindowToken;
+endWindow(token: WindowToken): void;
+```
+
+See [docs/USAGE.md — Session Lifecycle](./docs/USAGE.md#session-lifecycle).
 
 **Session Management:**
 - `setSessionType(type)`: Programmatically switch between stateful and stateless modes
