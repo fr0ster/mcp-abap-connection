@@ -46,21 +46,45 @@ before it clears anything.
 
 ### 4. If you hold locks, tell the connection
 
+Available on the HTTP connection classes; see the availability note in
+[USAGE.md — Session Lifecycle](./USAGE.md#session-lifecycle).
+
 ```typescript
 const token = connection.beginWindow('Class/ZCL_MY_CLASS');
-// LOCK … modify … UNLOCK
-// close the window only on a confirmed UNLOCK, or a confirmed LOCK failure
+
+let lockHandle: string | undefined;
+try {
+  lockHandle = await lock(connection, 'ZCL_MY_CLASS');
+} catch (error) {
+  connection.endWindow(token);   // confirmed NOT locked: nothing is held
+  throw error;
+}
+
+try {
+  await update(connection, 'ZCL_MY_CLASS', lockHandle);
+  await unlock(connection, 'ZCL_MY_CLASS', lockHandle);
+  connection.endWindow(token);   // confirmed unlocked: the lock is released
+} catch (error) {
+  // Left open on purpose: the unlock may have failed, never gone out, or come
+  // back with an unknown outcome. Do NOT use a finally here.
+  throw error;
+}
 ```
 
-You are not required to. Without it a teardown cannot know a lock is open, so
-it will not wait for your unlock and will not report the lock if it gives up —
-it simply tears down, and the object stays locked on the server.
+You are not required to use windows at all. Without them a teardown cannot know
+a lock is open, so it will not wait for your unlock and will not report the lock
+if it gives up — it simply tears down, and the object stays locked on the server.
+
+But do not open a window and forget to close it on success: every later teardown
+then waits out `SAP_TIMEOUT_CRITICAL` before reporting it as abandoned.
 
 ### 5. A new error you should handle
 
-`ADT_SESSION_REPLACED` means the SAP session was replaced or lost while you
-held a lock. **Your lock handle is dead**: unlocking with it will not work, and
-the object may still be locked on the server. The connector does not retry such
+`ADT_SESSION_REPLACED` means the SAP session is gone. It is raised when a
+replacement happens **while you hold a lock window**, and whenever the server
+itself says the session no longer exists — that second case regardless of any
+window. **Your lock handle is dead**: unlocking with it will not work, and the
+object may still be locked on the server. The connector does not retry such
 a request — retrying blindly is what produced further orphaned locks in the
 field.
 
@@ -77,6 +101,9 @@ try {
 ## What did NOT change
 
 - `makeAdtRequest()` keeps its signature and its behaviour on a healthy session.
+- `IAbapConnection` is unchanged: `connect()` was already on it. The rest of the
+  lifecycle API lives on the HTTP connection classes for now, so code holding
+  the interface type sees no new members and needs no change.
 - Automatic recovery still happens: a CSRF token refresh, a 401 retry, a JWT
   refresh. What changed is that a recovery which **replaces the session** while
   you hold a lock now fails loudly instead of continuing on the new one.

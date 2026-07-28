@@ -223,10 +223,20 @@ connection.setSessionType('stateless');
 The connection owns its session, and that ownership is explicit rather than
 implied. Four things follow from it.
 
+> **Availability.** `connect()` is on the shared `IAbapConnection` contract and
+> works on every connection. The rest of this section — `disconnect()`,
+> `isConnected()`, `getSessionIdentity()`, `beginWindow()`, `endWindow()` — is
+> **not on the contract yet** and exists on the HTTP connection classes only.
+> Reach it through a concrete type, not through what `createAbapConnection()`
+> returns, and note that `RfcAbapConnection` does not have these at all: on RFC
+> the session *is* the open client, so it needs none of them.
+
 ### connect() is required, and it tells the truth
 
 ```typescript
-const connection = createAbapConnection(config, logger);
+import { BaseAbapConnection } from '@mcp-abap-adt/connection';
+
+const connection = new BaseAbapConnection(config, logger);
 
 await connection.connect();          // establishes the session, or rejects
 connection.isConnected();            // true only while a usable session exists
@@ -262,34 +272,70 @@ teardown has to know about:
 
 ```typescript
 const token = connection.beginWindow('Class/ZCL_MY_CLASS');
+
+let lockHandle: string | undefined;
 try {
-  // LOCK … modify … UNLOCK
-} finally {
-  // Close it on EVIDENCE, not unconditionally: only after a confirmed UNLOCK,
-  // or a confirmed failure of the LOCK itself. If the unlock failed, was never
-  // sent, or its outcome is unknown, leave the window open — the lock is most
-  // likely still there, and a teardown must be able to see it.
+  lockHandle = await lock(connection, 'ZCL_MY_CLASS');   // your LOCK call
+} catch (error) {
+  // The LOCK is confirmed to have failed, so nothing is held: close the window.
+  connection.endWindow(token);
+  throw error;
+}
+
+try {
+  await update(connection, 'ZCL_MY_CLASS', lockHandle);
+  await unlock(connection, 'ZCL_MY_CLASS', lockHandle);
+  // The UNLOCK is confirmed: the lock is released, so close the window.
+  connection.endWindow(token);
+} catch (error) {
+  // Deliberately NOT closed here. The unlock may have failed, never gone out,
+  // or come back with an unknown outcome — in each of those the lock is most
+  // likely still held, and a window left open is what makes a teardown wait for
+  // it and report it by name instead of walking past it.
+  throw error;
 }
 ```
+
+Note what the `catch` does **not** do. A `finally { endWindow(token) }` reads
+naturally and is wrong here: it closes the window exactly when the lock is most
+likely still there. The window tracks *"a lock may be held"*, so only proof that
+nothing is held closes it — a confirmed unlock, or a confirmed failure to lock.
+
+The cost of forgetting `endWindow()` on the success path is not silence: every
+later teardown waits out `SAP_TIMEOUT_CRITICAL` and then reports the window as
+abandoned.
 
 While a window is open, a teardown waits for it rather than abandoning it, and
 a new window cannot be opened once a teardown has been requested. A window that
 never closes is given up on after `SAP_TIMEOUT_CRITICAL` and comes back **named**
 in `TeardownReport.abandonedWindows`.
 
-### A replaced session is fatal while a lock is held
+### When the session is lost
 
-If the SAP session is replaced or lost mid-flight — a renewed credential, a
-server that says the session is gone, a session cookie that changed underneath
-you — the request fails with `ADT_SESSION_REPLACED` and the connection stops
-being usable.
+Two different things can cost you the session, and they do not behave alike.
 
-With no lock held the same event is transparent: nothing was being held, so
-work simply continues on the new session. The distinction is deliberate; the
+**The session was replaced** — a renewed credential, or a session cookie that
+changed underneath you. This is fatal **only while a lock window is open**:
+
+```typescript
+// window open  → ADT_SESSION_REPLACED, the connection stops being usable
+// no window    → transparent; work continues on the new session
+```
+
+With nothing held there is nothing to lose, so the connector carries on. The
 error exists to tell you that a lock handle you are carrying is now dead, which
 is the one thing you cannot work out for yourself.
 
-The connector never retries such a request internally. That decision is yours.
+**The server says the session is gone** — an answer meaning the session it was
+given no longer exists. This is **always** fatal, window or not: the connection
+raises `ADT_SESSION_REPLACED` and stops being usable. Unlike a replacement,
+nothing here suggests a working session to continue on — the one we had is
+confirmed dead, and re-establishing silently is what let the old connector
+carry on over a session the caller never opened.
+
+In both cases the connector does **not** retry the request internally. Retrying
+blindly is what produced further orphaned locks in the field. That decision is
+yours.
 
 ## Advanced Features
 
