@@ -38,6 +38,11 @@ try {
 If you never checked the result of `connect()`, you were relying on that
 deferral. The failure has not appeared — it has moved to where you can see it.
 
+**Kerberos is the exception.** A `Negotiate` 401 during `connect()` is the first
+leg of a single-leg SPNEGO handshake, so it resolves rather than rejecting; the
+session cookie arrives with the first request. NTLM is still rejected, and a 401
+with no challenge still fails.
+
 ### 3. Requests are refused after a teardown
 
 `disconnect()` and `reset()` stop the connection from serving requests until

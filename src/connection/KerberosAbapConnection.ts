@@ -1,6 +1,6 @@
 import { AxiosError } from 'axios';
 import { generateSpnegoToken } from '../auth/kerberosSpnego.js';
-import { isNtlmChallenge } from '../auth/ntlm.js';
+import { isNegotiateChallenge, isNtlmChallenge } from '../auth/ntlm.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
@@ -72,8 +72,29 @@ export class KerberosAbapConnection extends AbstractAbapConnection {
             '[DEBUG] KerberosAbapConnection - cookies captured from error response during connect',
           );
         }
+
+        // A Negotiate 401 is not a failure here — it is the handshake.
+        //
+        // SPNEGO in this class is single-leg: the FIRST request carries the
+        // Negotiate header and SAP issues the session cookie in response to it.
+        // A 401 on the discovery fetch is therefore the expected first leg, and
+        // rejecting on it would make connect() fail on every correctly
+        // configured Kerberos system.
+        //
+        // This is the one place where a resolved connect() does not yet mean a
+        // session cookie exists. What it does mean is that the credential is
+        // ready: ensureToken() has produced the SPNEGO token, which is what
+        // makes the next request able to authenticate. getSessionIdentity()
+        // stays null until the cookie arrives — the same state as a server that
+        // issues no session cookie at all.
+        if (isNegotiateChallenge(wwwAuth)) {
+          this.logger?.debug(
+            'KerberosAbapConnection - Negotiate 401 during connect: the ' +
+              'session cookie arrives with the first request',
+          );
+          return;
+        }
       }
-      // Rethrow: a resolved connect() must mean a usable session exists.
       throw error;
     }
   }

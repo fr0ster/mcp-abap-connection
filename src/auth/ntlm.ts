@@ -25,3 +25,23 @@ export function isNtlmChallenge(wwwAuthenticate: string | undefined): boolean {
   }
   return false;
 }
+
+/**
+ * Detect a genuine Kerberos/SPNEGO challenge — a `Negotiate` offer that is not
+ * an NTLM token in disguise.
+ *
+ * This exists to tell apart the two 401s a Kerberos connect can see. An NTLM
+ * offer is a hard failure: the server wants an auth scheme we refuse. A plain
+ * Negotiate challenge is the opposite — it is the first leg of the handshake,
+ * and treating it as a failure would break every correctly configured Kerberos
+ * system.
+ */
+export function isNegotiateChallenge(
+  wwwAuthenticate: string | undefined,
+): boolean {
+  if (!wwwAuthenticate) return false;
+  if (isNtlmChallenge(wwwAuthenticate)) return false;
+  return wwwAuthenticate
+    .split(',')
+    .some((part) => /^negotiate\b/i.test(part.trim()));
+}

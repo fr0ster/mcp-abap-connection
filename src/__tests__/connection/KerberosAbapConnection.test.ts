@@ -96,18 +96,37 @@ test('connect() rejects with NTLM error when server offers Negotiate+NTLM', asyn
   await expect(c.connect()).rejects.toThrow(/NTLM/i);
 });
 
-test('connect() reports a real Kerberos Negotiate 401 as itself, not as NTLM', async () => {
+test('connect() treats a real Kerberos Negotiate 401 as the handshake, not a failure', async () => {
   const c = new KerberosAbapConnection(cfg, null, undefined);
-  // A legitimate Kerberos 401 (SAP asking for SPNEGO) must not be dressed up as
-  // an NTLM rejection.
+  // A legitimate Kerberos 401 (SAP asking for SPNEGO) is the FIRST LEG: this
+  // class is single-leg, so the session cookie arrives with the first real
+  // request. Rejecting here would make connect() fail on every correctly
+  // configured Kerberos system.
   jest
     .spyOn(c as any, 'fetchCsrfToken')
     .mockRejectedValue(makeNtlmAxiosError('Negotiate YIIBexyz=='));
 
-  // It rejects, because connect() no longer resolves over a session it failed
-  // to establish — this test asserted the opposite while the lazy path existed.
-  // What must stay true is WHICH error comes out.
-  await expect(c.connect()).rejects.toThrow(/401/);
-  await expect(c.connect()).rejects.not.toThrow(/NTLM/i);
+  await expect(c.connect()).resolves.toBeUndefined();
+  // Usable, because the credential is ready — but with no session cookie yet,
+  // which is the same state as a server that issues none at all.
+  expect(c.isConnected()).toBe(true);
+  expect(c.getSessionIdentity()).toBeNull();
+});
+
+test('connect() still rejects when the 401 is not a Negotiate challenge', async () => {
+  const c = new KerberosAbapConnection(cfg, null, undefined);
+  // No WWW-Authenticate at all: nothing says a handshake is in progress, so
+  // this is an ordinary failure and must not be waved through.
+  const error = Object.assign(new AxiosError('unauthorized'), {
+    response: {
+      status: 401,
+      headers: {},
+      data: '',
+      statusText: 'Unauthorized',
+    },
+  });
+  jest.spyOn(c as any, 'fetchCsrfToken').mockRejectedValue(error);
+
+  await expect(c.connect()).rejects.toThrow();
   expect(c.isConnected()).toBe(false);
 });
