@@ -189,6 +189,74 @@ describe('a replacement arriving on a non-200 response', () => {
   });
 });
 
+describe('a session verdict raised during a retry', () => {
+  let stub: Stub;
+
+  beforeEach(async () => {
+    stub = await startStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  // The CSRF retry catch rethrows the ORIGINAL error, which used to bury a
+  // SESSION_REPLACED raised while observing the retry's own response. A caller
+  // can retry a 403 itself; it cannot learn from a 403 that its lock is dead.
+  it('reaches the caller instead of the error that started the retry', async () => {
+    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    await conn.connect();
+    conn.beginWindow('Class/ZCL_A');
+
+    let attempts = 0;
+    const realAxios = (
+      conn as unknown as { getAxiosInstance: () => (cfg: unknown) => unknown }
+    ).getAxiosInstance.bind(conn);
+    (conn as unknown as { getAxiosInstance: () => unknown }).getAxiosInstance =
+      () => {
+        const instance = realAxios();
+        return async (cfg: { url: string }) => {
+          if (!cfg.url.includes('/work')) {
+            return (instance as (c: unknown) => unknown)(cfg);
+          }
+          attempts += 1;
+          if (attempts === 1) {
+            // A CSRF rejection: the connector refetches the token and retries.
+            const { AxiosError } = await import('axios');
+            throw new AxiosError('forbidden', 'ERR', undefined, null, {
+              status: 403,
+              statusText: 'Forbidden',
+              data: 'CSRF token validation failed',
+              headers: {},
+              // biome-ignore lint/suspicious/noExplicitAny: minimal shape
+              config: {} as any,
+            });
+          }
+          // …and the retry comes back on a DIFFERENT session.
+          return {
+            status: 200,
+            statusText: 'OK',
+            data: '',
+            headers: {
+              'set-cookie': ['SAP_SESSIONID_STUB_100=S-OTHER; Path=/'],
+            },
+            config: {},
+          };
+        };
+      };
+
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/work',
+        method: 'PUT',
+        timeout: 5000,
+        data: 'x',
+      }),
+    ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+    expect(attempts).toBe(2);
+  });
+});
+
 describe('a dead session', () => {
   let stub: Stub;
 

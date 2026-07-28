@@ -356,6 +356,23 @@ abstract class AbstractAbapConnection implements AbapConnection {
   }
 
   /**
+   * Whether an error is this connection's own verdict about the session rather
+   * than something the server said about a request.
+   *
+   * A retry path that swallows one of these and rethrows the original error
+   * turns "your lock is dead" back into "your request 403'd", which is the very
+   * information the caller needs and the only one it cannot recover itself.
+   */
+  private isSessionVerdict(error: unknown): boolean {
+    const code = (error as { code?: unknown } | null)?.code;
+    return (
+      code === ADT_SESSION_ERROR.SESSION_REPLACED ||
+      code === ADT_SESSION_ERROR.NOT_CONNECTED ||
+      code === ADT_SESSION_ERROR.RELEASE_PENDING
+    );
+  }
+
+  /**
    * Folds a response into the session state AND acts on what it means, in one
    * step.
    *
@@ -736,6 +753,12 @@ abstract class AbstractAbapConnection implements AbapConnection {
 
           return retryResponse as unknown as IAdtResponse<T, D>;
         } catch (retryError) {
+          // A session verdict outranks the error that started the retry: the
+          // caller can retry a 403 itself, but it cannot discover that its lock
+          // handle is dead from a 403.
+          if (this.isSessionVerdict(retryError)) {
+            throw retryError;
+          }
           this.logger?.debug(
             `CSRF retry failed; rethrowing original error: ${
               retryError instanceof Error
@@ -787,6 +810,9 @@ abstract class AbstractAbapConnection implements AbapConnection {
             return retryResponse as unknown as IAdtResponse<T, D>;
           }
         } catch (csrfError) {
+          if (this.isSessionVerdict(csrfError)) {
+            throw csrfError;
+          }
           this.logger?.debug(
             `[DEBUG] BaseAbapConnection - Failed to get CSRF token for 401 retry: ${csrfError instanceof Error ? csrfError.message : String(csrfError)}`,
           );
