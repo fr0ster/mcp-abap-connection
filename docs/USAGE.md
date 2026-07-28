@@ -80,26 +80,12 @@ await connection.connect();   // required: nothing is established implicitly
 
 ### JWT Authentication (Cloud/BTP)
 
-For SAP BTP ABAP Environment using JWT tokens:
+For SAP BTP ABAP Environment. Token refresh belongs to
+`@mcp-abap-adt/auth-broker`; this package only carries the token:
 
 ```typescript
 import { JwtAbapConnection } from '@mcp-abap-adt/connection';
 
-const config = {
-  url: 'https://tenant.abap.cloud',
-  authType: 'jwt' as const,
-  jwtToken: 'eyJhbGciOiJSUzI1NiIs...',
-  client: '100', // Optional for cloud
-};
-
-const connection = new JwtAbapConnection(config, logger);
-```
-
-### JWT Authentication (Cloud/BTP)
-
-For SAP BTP ABAP Environment, use `@mcp-abap-adt/auth-broker` for token refresh functionality:
-
-```typescript
 const config = {
   url: 'https://tenant.abap.cloud',
   authType: 'jwt' as const,

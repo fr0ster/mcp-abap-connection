@@ -39,8 +39,9 @@
     "format": "npx biome format --write src",
     "build": "npm run --silent clean && npx biome check src --diagnostic-level=error && npx tsc -p tsconfig.json",
     "build:fast": "npx tsc -p tsconfig.json",
-    "test": "jest",
-    "prepublishOnly": "npm run build"
+    "test": "npm run --silent check:docs && jest",
+    "prepublishOnly": "npm run build && npm run check:docs",
+    "check:docs": "node scripts/check-docs.mjs"
   },
   "engines": {
     "node": ">=18.0.0"

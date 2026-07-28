@@ -97,9 +97,18 @@ This logic is transparent to callers (Builders, handlers, CLI scripts).
 
 ## Troubleshooting
 
-- **CSRF token errors**: call `connection.reset()` to discard the session, then
-  `connect()` again. `reset()` no longer leaves the connection usable — it
-  queues the cleanup and refuses requests until a new session exists.
+- **CSRF token errors**: discard the session and establish a new one. `reset()`
+  does that, but it lives on the HTTP connection classes and is **not** on the
+  `IAbapConnection` type `createAbapConnection()` returns — reach it through a
+  concrete type:
+
+  ```ts
+  import { BaseAbapConnection } from '@mcp-abap-adt/connection';
+
+  const connection = new BaseAbapConnection(config, logger);
+  connection.reset();          // queues the cleanup; refuses requests meanwhile
+  await connection.connect();  // a new session, explicitly
+  ```
 - **Session expired**: reauthenticate to obtain a new session.
 - **Multiple connections**: each `createAbapConnection` instance maintains its own cookie jar; share the instance if you need continuity.
 
