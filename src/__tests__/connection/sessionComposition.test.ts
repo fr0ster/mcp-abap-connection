@@ -348,6 +348,40 @@ describe('explicit connect is required', () => {
     expect(conn.isConnected()).toBe(false);
   });
 
+  // A rejection can still carry a Set-Cookie, and every subclass reads a cookie
+  // as proof that auth is already settled — buildAuthorizationHeader() returns
+  // '' once one exists. Left behind, that cookie mutes the credentials on the
+  // NEXT connect(), which then fails for a reason unrelated to the first one.
+  it('keeps nothing from a failed establishment', async () => {
+    const rejecting = createServer((_req, res) => {
+      res.writeHead(401, {
+        'set-cookie': ['SAP_SESSIONID_STUB_100=DEBRIS; Path=/'],
+      });
+      res.end('');
+    });
+    await new Promise<void>((resolve) =>
+      rejecting.listen(0, '127.0.0.1', resolve),
+    );
+    const { port } = rejecting.address() as { port: number };
+
+    try {
+      const conn = new BaseAbapConnection(
+        configFor(`http://127.0.0.1:${port}`),
+        null,
+      );
+      await expect(conn.connect()).rejects.toThrow();
+
+      expect(
+        (conn as unknown as { getCookies(): string | null }).getCookies(),
+      ).toBeNull();
+      expect(conn.getSessionIdentity()).toBeNull();
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        rejecting.close((e) => (e ? reject(e) : resolve())),
+      );
+    }
+  });
+
   it('lets an in-flight request finish before a teardown clears the session', async () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
