@@ -588,7 +588,6 @@ export class CloudSdkAbapConnection {
 }
 ```
 
-See [PR Proposal](../PR_PROPOSAL_CSRF_CONFIG.md) for more details.
 
 ### `JwtAbapConnection` (JWT/OAuth2)
 

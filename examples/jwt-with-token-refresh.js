@@ -66,7 +66,12 @@ async function main() {
   );
 
   try {
-    // This request will automatically refresh token if 401/403 occurs
+    await connection.connect();
+
+    // This request will automatically refresh token if 401/403 occurs. Note
+    // that a refresh replaces the SAP session: with a lock window open the
+    // request would fail with ADT_SESSION_REPLACED rather than continue on a
+    // session your lock is not in.
     const response = await connection.makeAdtRequest({
       method: 'GET',
       url: '/sap/bc/adt/discovery',

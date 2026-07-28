@@ -111,4 +111,4 @@ node examples/basic-connection.js
 ## See Also
 
 - [Connection README](../README.md) - Main package documentation
-- [Custom Session Storage Guide](../CUSTOM_SESSION_STORAGE.md) - Detailed guide with more examples
+- [Session Lifecycle](../docs/USAGE.md#session-lifecycle) - connect/disconnect, lock windows, a lost session
