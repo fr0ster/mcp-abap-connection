@@ -491,17 +491,25 @@ try {
 
 ### `AbapConnection` Interface
 
-Main interface for all connection types:
+`AbapConnection` is an alias for `IAbapConnection` — the contract every
+connection satisfies, including RFC:
 
 ```typescript
 interface AbapConnection {
+  connect(): Promise<void>; // REQUIRED before any request
   makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
-  reset(): void;
+  getBaseUrl(): Promise<string>;
   setSessionType(type: "stateless" | "stateful"): void;
-  getSessionMode(): "stateless" | "stateful";
-  getSessionId(): string | null;
+  getSessionId(): string | null; // client-side conversation id
 }
 ```
+
+Anything beyond that is **not** on the contract. `reset()`, `getSessionMode()`
+and the session lifecycle (`disconnect()`, `isConnected()`,
+`getSessionIdentity()`, `beginWindow()`, `endWindow()`) live on the HTTP
+connection classes; `RfcAbapConnection` has some of them and not others, so
+reach for them through a concrete type rather than through what
+`createAbapConnection()` returns.
 
 ### `BaseAbapConnection` (Basic Auth)
 

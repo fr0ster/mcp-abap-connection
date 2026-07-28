@@ -421,9 +421,9 @@ endWindow(token: WindowToken): void;
 See [docs/USAGE.md — Session Lifecycle](./docs/USAGE.md#session-lifecycle).
 
 **Session Management:**
-- `setSessionType(type)`: Programmatically switch between stateful and stateless modes
-- `getSessionMode()`: Returns current session mode
-- `getSessionId()`: Returns the current session ID (auto-generated UUID)
+- `setSessionType(type)`: Programmatically switch between stateful and stateless modes *(on the contract)*
+- `getSessionId()`: Returns the client-side conversation id, an auto-generated UUID *(on the contract)*
+- `getSessionMode()`: Returns current session mode *(HTTP classes only)*
 
 #### `ILogger`
 
@@ -522,7 +522,7 @@ async function fetchCsrfToken(baseUrl: string): Promise<string> {
 
 See [CHANGELOG.md](./CHANGELOG.md) for detailed version history and breaking changes.
 
-**Latest version: 0.2.0**
+**Version history:** [CHANGELOG.md](./CHANGELOG.md)
 - Removed token refresh functionality (handled by `@mcp-abap-adt/auth-broker`)
 - Removed session storage functionality (handled by `@mcp-abap-adt/auth-broker`)
 - Logger is now optional

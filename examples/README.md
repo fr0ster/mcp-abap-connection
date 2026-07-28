@@ -106,8 +106,6 @@ export SAP_PASSWORD=your_password
 node examples/basic-connection.js
 ```
 
-## Session State Structure
-
 ## See Also
 
 - [Connection README](../README.md) - Main package documentation

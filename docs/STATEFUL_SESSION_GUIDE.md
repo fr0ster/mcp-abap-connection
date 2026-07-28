@@ -43,7 +43,7 @@ connection.setSessionType('stateless');
 
 ---
 
-## Exporting & Importing Session State
+## Knowing Which Session You Are In
 
 ```ts
 import { BaseAbapConnection } from '@mcp-abap-adt/connection';
