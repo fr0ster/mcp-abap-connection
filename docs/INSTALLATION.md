@@ -1,6 +1,6 @@
 # Installation Guide
 
-**Version:** 0.1.10  
+**Version:** see [CHANGELOG.md](../CHANGELOG.md)  
 **Last Updated:** December 2025
 
 ## Prerequisites

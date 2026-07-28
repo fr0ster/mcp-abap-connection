@@ -1,6 +1,6 @@
 # Usage Guide
 
-**Version:** 0.2.4  
+**Version:** see [CHANGELOG.md](../CHANGELOG.md)  
 **Last Updated:** December 2025
 
 ## Table of Contents
@@ -52,11 +52,11 @@ const response = await connection.makeAdtRequest({
 });
 
 console.log(response.data);
-
-// When you are done. Unlock anything you hold FIRST: over HTTP a teardown does
-// not release locks, it only stops using the session.
-await connection.disconnect();
 ```
+
+Tearing the session down is `disconnect()`, but it is not on the
+`IAbapConnection` type this factory returns — see
+[Session Lifecycle](#session-lifecycle) for where it lives and how to reach it.
 
 ## Authentication Types
 

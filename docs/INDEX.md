@@ -74,44 +74,9 @@ mcp-abap-connection/
 
 ## Version Highlights
 
-### 0.2.4 (Current) - 2025-12-21
-- 🔄 ITokenRefresher DI support for automatic token refresh
-- 📦 JwtAbapConnection accepts optional tokenRefresher parameter
-- ⚡ Automatic retry on 401/403 with refreshed token
-
-### 0.2.0 - 2025-12-08
-- ⚠️ **Breaking Changes**: Token refresh and session storage removed
-- 🔄 Token refresh moved to `@mcp-abap-adt/auth-broker` package
-- 💾 Session state persistence moved to `@mcp-abap-adt/auth-broker` package
-- 📝 Logger is now optional (uses optional chaining)
-- 🎯 Package now focuses solely on HTTP connection management
-
-### 0.1.9 - 2025-11-23
-- 📝 Comprehensive documentation updates
-- 📚 Enhanced README with new API methods
-- 📋 Complete CHANGELOG with all versions
-- 🔗 Fixed documentation structure and links
-
-### 0.1.8 - 2025-01-23
-- 🆕 Session management improvements
-- ➕ `getSessionId()` method
-- ➕ `setSessionType()` method
-- 🔧 Base URL handling refactoring
-
-### 0.1.6 - 2025-01-21
-- ➕ Added `getSessionId()` and `setSessionType()` API methods
-- 🎛️ Enhanced session control
-
-### 0.1.4 - 2025-01-19
-- 🤖 Automatic session ID generation
-- 💡 No manual session ID required
-
-### 0.1.0 - 2024-11-14
-- 🎉 Initial release
-- 🔐 Basic Auth and JWT/OAuth2 support
-- 🛠️ CLI tool for authentication
-
-See [CHANGELOG.md](../CHANGELOG.md) for complete version history.
+See [CHANGELOG.md](../CHANGELOG.md). This section used to restate it and drifted
+eight minor versions behind — a second copy of a changelog is a changelog that
+is wrong.
 
 ## Documentation Standards
 
