@@ -79,12 +79,12 @@ broke. Migration guide: [`docs/MIGRATION-2.0.md`](docs/MIGRATION-2.0.md).
 
 - Update `@mcp-abap-adt/interfaces` to `^7.0.0` (adds `ServiceBindingVariant` type and `connect()` method in `IAbapConnection`)
 
-## [1.5.3] - 2026-03-12
+## 1.5.3 - 2026-03-12
 
 ### Added
 - **RFC stateful session support**: `setSessionType('stateful')` now injects `x-sap-adt-sessiontype: stateful` header and captures `set-cookie` from LOCK responses for cookie replay in subsequent requests (PUT, UNLOCK). This enables lock/update/unlock workflows for package objects over RFC, which require HTTP session ownership validation. `setSessionType('stateless')` clears the captured cookie.
 
-## [1.5.2] - 2026-03-12
+## 1.5.2 - 2026-03-12
 
 ### Added
 - **RFC debug logging**: `RfcAbapConnection` now logs full request headers, request body, response headers, and response body at `debug` level. Enable with `DEBUG_CONNECTORS=true` and `AUTH_LOG_LEVEL=debug`.
@@ -578,7 +578,7 @@ const connection = createAbapConnection(config, logger);
 - Better TypeScript compiler options
 - Stricter type checking enabled
 
-## [0.1.0] - 2024-11-14
+## 0.1.0 - 2024-11-14
 
 ### Changed
 - **BREAKING**: Architecture refactoring for proper separation of concerns:
@@ -642,7 +642,7 @@ const connection = createAbapConnection(config, logger);
   - Root cause: Test configuration not reading UAA credentials from environment
   - Fixed in `packages/adt-clients` by updating `getConfig()` to read UAA variables
 
-## [0.1.0] - 2024-11-14
+## 0.1.0 - 2024-11-14
 
 ### Changed
 - **BREAKING**: Architecture refactoring for proper separation of concerns:

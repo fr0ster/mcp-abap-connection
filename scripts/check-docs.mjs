@@ -137,6 +137,24 @@ for (const file of markdown) {
   }
 }
 
+// ---------------------------------------------------------------- check 4 ---
+// The first version matched two exact phrasings and walked past a whole
+// "## Version History" section. It matches the SHAPE of a version claim now.
+const versionClaim =
+  /(Latest version|\*\*Version:\*\*\s*\d|^#+\s*Version History|^-\s*\*\*\d+\.\d+\.\d+\*\*|^#+\s*\d+\.\d+\.\d+)/m;
+for (const file of [...markdown, ...examples]) {
+  readFileSync(file, 'utf8')
+    .split('\n')
+    .forEach((line, i) => {
+      if (versionClaim.test(line) && !line.includes('[CHANGELOG')) {
+        report(
+          'version',
+          `${file}:${i + 1} restates a version outside the changelog`,
+        );
+      }
+    });
+}
+
 // ---------------------------------------------------------------- check 6 ---
 // A link can exist in the repo and still be broken for everyone who installed
 // the package: `files` decides what ships, and the README pointed at
@@ -163,26 +181,28 @@ for (const file of [...markdown, 'CHANGELOG.md']) {
   }
 }
 
-// ---------------------------------------------------------------- check 4 ---
-// The first version matched two exact phrasings and walked past a whole
-// "## Version History" section. It matches the SHAPE of a version claim now.
-const versionClaim =
-  /(Latest version|\*\*Version:\*\*\s*\d|^#+\s*Version History|^-\s*\*\*\d+\.\d+\.\d+\*\*|^#+\s*\d+\.\d+\.\d+)/m;
-for (const file of [...markdown, ...examples]) {
-  readFileSync(file, 'utf8')
-    .split('\n')
-    .forEach((line, i) => {
-      if (versionClaim.test(line) && !line.includes('[CHANGELOG')) {
-        report(
-          'version',
-          `${file}:${i + 1} restates a version outside the changelog`,
-        );
-      }
-    });
+// ---------------------------------------------------------------- check 7 ---
+// A bracketed heading with no reference definition renders as literal "[1.5.3]"
+// — brackets and all, linking nowhere. Three of them survived years of green
+// runs because CHANGELOG.md is excluded from every other check here, being the
+// one file allowed to restate versions. It ships now, so it gets one of its own.
+{
+  const text = readFileSync('CHANGELOG.md', 'utf8');
+  const defined = new Set(
+    [...text.matchAll(/^\[([^\]]+)\]:/gm)].map((m) => m[1]),
+  );
+  for (const m of text.matchAll(/^## \[([^\]]+)\]/gm)) {
+    if (!defined.has(m[1])) {
+      report(
+        'refs',
+        `CHANGELOG.md heading [${m[1]}] has no reference definition — drop the brackets or add a target`,
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
-const checks = ['connect', 'api', 'link', 'version', 'fences', 'ships'];
+const checks = ['connect', 'api', 'link', 'version', 'fences', 'ships', 'refs'];
 for (const name of checks) {
   const hits = problems.filter((p) => p.startsWith(`${name}:`));
   console.log(`${hits.length ? '✗' : '✓'} ${name}`);
