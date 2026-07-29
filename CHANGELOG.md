@@ -7,9 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-29
+
+The connection owns its session now, and says so. Before this release a stateful
+ADT session could be replaced underneath a caller holding a lock — silently,
+under an unchanged `sap-adt-connection-id`, with no way for either side to
+notice. That is what orphans an edit lock and leaves an object inactive and
+locked with nobody able to say whether the connector changed or the session
+broke. Migration guide: [`docs/MIGRATION-2.0.md`](docs/MIGRATION-2.0.md).
+
 ### Changed — BREAKING
 - **`connect()` is mandatory, and it rejects when it fails.** `makeAdtRequest()` now refuses with `ADT_NOT_CONNECTED` unless the connection was explicitly connected, and `connect()` no longer swallows a failed establishment: it used to log a warning, resolve anyway and defer establishment to the first request, which was coherent only while that lazy path existed. Removing it means a swallowed failure would leave a connection reporting success while holding nothing. A caller that never checked `connect()` now fails at startup rather than at the first request — the better failure, but a new one.
 - **Consumers must call `connect()` before the first request.** Requests are also refused after `disconnect()` and after `reset()`, until the next `connect()`. An in-flight request is not cut off: a teardown drains before it clears anything.
+
+### Added
+- **`disconnect(): Promise<TeardownReport>`.** Resolves rather than throws, and reports what the teardown could not finish: `abandonedWindows` names the lock windows still open when the bounded wait gave up, `releasePending` says a transport release is still outstanding. A caller learns which locks it must clean up by hand instead of discovering them on the next developer's screen.
+- **`isConnected()` and `getSessionIdentity()`.** The session is observable now: whether a caller may work, and which ABAP session it would work over. The identity is derived from the `SAP_SESSIONID*` cookies and deliberately excludes `sap-XSRF_*`, which rotates on a token refresh *within* one session — folding it in would report an ordinary refresh as a new session.
+- **`beginWindow(label)` / `endWindow(token)`.** Marks a span that must not lose its session, such as the interval between LOCK and UNLOCK. A teardown requested during an open window waits for it, bounded by an absolute ceiling measured from the request; on expiry the window is reported as abandoned rather than silently dropped.
+- **`ADT_SESSION_ERROR`, `AdtSessionErrorCode`, `TeardownReport`, `WindowToken` are exported.** A public method returning a type the consumer cannot name forces `any` and raw string comparison, so a renamed code would become a silent behaviour change downstream.
+
+### Fixed
+- **A replaced session is now detected and raised instead of absorbed.** Responses are observed through one path that updates the cookies *and* applies the identity policy together; ten call sites used to update the cookies alone, which mutated the fingerprint and made a replacement indistinguishable from the session it replaced. A lost session raises `ADT_SESSION_REPLACED` and tears down, rather than letting the next request run against a session the caller never opened.
+- **Session verdicts survive the retry layers.** Three nested catches — the CSRF retry, the 401-on-GET path and the endpoint fallback — used to swallow a session verdict and retry into a *new* session, where the replacement read as `unchanged` and the loss was gone for good.
+- **A failed establishment leaves nothing behind.** A rejecting response could still carry a `Set-Cookie`, and every auth subclass treats a cookie as proof that auth is settled, so the *next* `connect()` went out with no credentials at all and failed for an unrelated reason. Transport state and the session identity are both dropped when `establishSession()` throws; `getSessionIdentity()` no longer names a session that was never established.
+- **Kerberos: the first challenge is diagnosed, not the fourth.** The connect-time CSRF fetch inherited a 3-retry default while a GSS token is one-shot, so the diagnosis was drawn from a replayed — or credential-less — request. Multi-leg SPNEGO (RFC 4559) is still unsupported, but a landscape that needs it now fails at `connect()` saying so, instead of being misreported as rejected credentials.
+- **The CSRF token fetch stays inside the ADT conversation** (also released in 1.10.1).
+
+### Security
+- Production audit is clean. `brace-expansion` remains reachable only through `jest` and is pinned by an override; it never ships.
+
+### Dependencies
+- `@mcp-abap-adt/interfaces` 7.2.0 → 11.4.0. A no-op for this package — the breaking changes across 8–11 are in ADT object capability types, which the connector never imports — and it closes the drift against `adt-clients` and `auth-providers`, both already on 11.x.
 
 ## [1.10.2] - 2026-07-27
 
@@ -51,12 +79,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Update `@mcp-abap-adt/interfaces` to `^7.0.0` (adds `ServiceBindingVariant` type and `connect()` method in `IAbapConnection`)
 
-## [1.5.3] - 2026-03-12
+## 1.5.3 - 2026-03-12
 
 ### Added
 - **RFC stateful session support**: `setSessionType('stateful')` now injects `x-sap-adt-sessiontype: stateful` header and captures `set-cookie` from LOCK responses for cookie replay in subsequent requests (PUT, UNLOCK). This enables lock/update/unlock workflows for package objects over RFC, which require HTTP session ownership validation. `setSessionType('stateless')` clears the captured cookie.
 
-## [1.5.2] - 2026-03-12
+## 1.5.2 - 2026-03-12
 
 ### Added
 - **RFC debug logging**: `RfcAbapConnection` now logs full request headers, request body, response headers, and response body at `debug` level. Enable with `DEBUG_CONNECTORS=true` and `AUTH_LOG_LEVEL=debug`.
@@ -353,7 +381,7 @@ const connection = new JwtAbapConnection(config, logger);
   - `CSRF_CONFIG`: Centralized constants for CSRF token fetching (retry count, delay, endpoint, headers)
   - `CSRF_ERROR_MESSAGES`: Standardized error messages for CSRF token operations
   - Enables other projects (e.g., Cloud SDK-based connections) to use the same CSRF configuration
-  - See [PR Proposal](./PR_PROPOSAL_CSRF_CONFIG.md) for details
+  - Rationale in commit `ba12a42`; the standalone proposal document it linked is no longer in the tree
 
 ### Changed
 - **CSRF Token Endpoint**: Updated CSRF token fetching to use `/sap/bc/adt/core/discovery` endpoint instead of `/sap/bc/adt/discovery`
@@ -550,7 +578,7 @@ const connection = createAbapConnection(config, logger);
 - Better TypeScript compiler options
 - Stricter type checking enabled
 
-## [0.1.0] - 2024-11-14
+## 0.1.0 - 2024-11-14
 
 ### Changed
 - **BREAKING**: Architecture refactoring for proper separation of concerns:
@@ -614,7 +642,7 @@ const connection = createAbapConnection(config, logger);
   - Root cause: Test configuration not reading UAA credentials from environment
   - Fixed in `packages/adt-clients` by updating `getConfig()` to read UAA variables
 
-## [0.1.0] - 2024-11-14
+## 0.1.0 - 2024-11-14
 
 ### Changed
 - **BREAKING**: Architecture refactoring for proper separation of concerns:
@@ -687,21 +715,41 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-
-[Unreleased]: https://github.com/fr0ster/mcp-abap-adt/compare/v0.1.15...HEAD
-[0.1.15]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.15
-[0.1.14]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.14
-[0.1.13]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.13
-[0.1.12]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.12
-[0.1.11]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.11
-[0.1.10]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.10
-[0.1.9]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.9
-[0.1.8]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.8
-[0.1.7]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.7
-[0.1.6]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.6
-[0.1.5]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.5
-[0.1.4]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.4
-[0.1.3]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.3
-[0.1.2]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.2
-[0.1.1]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.1
-[0.1.0]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.0
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.10.2...v2.0.0
+[1.10.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.10.1...v1.10.2
+[1.10.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.10.0...v1.10.1
+[1.10.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.9.1...v1.10.0
+[1.9.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.9.0...v1.9.1
+[1.9.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.7.0...v1.9.0
+[1.7.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.5.1...v1.7.0
+[1.5.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.4.2...v1.5.1
+[1.4.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.4.1...v1.4.2
+[1.4.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.4.0...v1.4.1
+[1.4.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.1.0...v1.4.0
+[1.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.0.1...v1.1.0
+[1.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.8...v1.0.0
+[0.2.8]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.7...v0.2.8
+[0.2.7]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.5...v0.2.6
+[0.2.5]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.15...v0.2.0
+[0.1.15]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.14...v0.1.15
+[0.1.14]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.13...v0.1.14
+[0.1.13]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.12...v0.1.13
+[0.1.12]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.11...v0.1.12
+[0.1.11]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.10...v0.1.11
+[0.1.10]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.9...v0.1.10
+[0.1.9]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.8...v0.1.9
+[0.1.8]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.7...v0.1.8
+[0.1.7]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/fr0ster/mcp-abap-connection/releases/tag/v0.1.2

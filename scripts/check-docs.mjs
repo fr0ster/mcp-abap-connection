@@ -155,8 +155,54 @@ for (const file of [...markdown, ...examples]) {
     });
 }
 
+// ---------------------------------------------------------------- check 6 ---
+// A link can exist in the repo and still be broken for everyone who installed
+// the package: `files` decides what ships, and the README pointed at
+// docs/MIGRATION-2.0.md while `files` listed only dist, bin, README and LICENSE.
+// Check 3 sees the file on disk and passes. This one asks the other question —
+// does the target ship too.
+const published = JSON.parse(readFileSync('package.json', 'utf8')).files ?? [];
+const ships = (target) =>
+  published.some((entry) => target === entry || target.startsWith(`${entry}/`));
+
+for (const file of [...markdown, 'CHANGELOG.md']) {
+  if (!ships(file) && file !== 'README.md') continue; // not shipped, not its problem
+  const text = readFileSync(file, 'utf8');
+  for (const m of text.matchAll(/\]\((\.{0,2}\/?[A-Za-z0-9_/.-]+\.md)/g)) {
+    // Relative to the linking file, then relative to the package root, which is
+    // what `files` entries are expressed against.
+    const target = relative(root, resolve(dirname(file), m[1]));
+    if (!ships(target)) {
+      report(
+        'ships',
+        `${file} -> ${m[1]} is in the repo but not in package.json "files"`,
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------- check 7 ---
+// A bracketed heading with no reference definition renders as literal "[1.5.3]"
+// — brackets and all, linking nowhere. Three of them survived years of green
+// runs because CHANGELOG.md is excluded from every other check here, being the
+// one file allowed to restate versions. It ships now, so it gets one of its own.
+{
+  const text = readFileSync('CHANGELOG.md', 'utf8');
+  const defined = new Set(
+    [...text.matchAll(/^\[([^\]]+)\]:/gm)].map((m) => m[1]),
+  );
+  for (const m of text.matchAll(/^## \[([^\]]+)\]/gm)) {
+    if (!defined.has(m[1])) {
+      report(
+        'refs',
+        `CHANGELOG.md heading [${m[1]}] has no reference definition — drop the brackets or add a target`,
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
-const checks = ['connect', 'api', 'link', 'version', 'fences'];
+const checks = ['connect', 'api', 'link', 'version', 'fences', 'ships', 'refs'];
 for (const name of checks) {
   const hits = problems.filter((p) => p.startsWith(`${name}:`));
   console.log(`${hits.length ? '✗' : '✓'} ${name}`);

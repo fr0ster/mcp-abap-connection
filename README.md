@@ -113,6 +113,7 @@ This package interacts with external packages **ONLY through interfaces**:
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration: the explicit session lifecycle](./docs/MIGRATION-2.0.md)** - `connect()` is now required; start here if you are coming from 1.x
 - 💡 **[Examples](./examples/)** - Working code examples
 
 ## Features
