@@ -7,9 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-29
+
+The connection owns its session now, and says so. Before this release a stateful
+ADT session could be replaced underneath a caller holding a lock — silently,
+under an unchanged `sap-adt-connection-id`, with no way for either side to
+notice. That is what orphans an edit lock and leaves an object inactive and
+locked with nobody able to say whether the connector changed or the session
+broke. Migration guide: [`docs/MIGRATION-2.0.md`](docs/MIGRATION-2.0.md).
+
 ### Changed — BREAKING
 - **`connect()` is mandatory, and it rejects when it fails.** `makeAdtRequest()` now refuses with `ADT_NOT_CONNECTED` unless the connection was explicitly connected, and `connect()` no longer swallows a failed establishment: it used to log a warning, resolve anyway and defer establishment to the first request, which was coherent only while that lazy path existed. Removing it means a swallowed failure would leave a connection reporting success while holding nothing. A caller that never checked `connect()` now fails at startup rather than at the first request — the better failure, but a new one.
 - **Consumers must call `connect()` before the first request.** Requests are also refused after `disconnect()` and after `reset()`, until the next `connect()`. An in-flight request is not cut off: a teardown drains before it clears anything.
+
+### Added
+- **`disconnect(): Promise<TeardownReport>`.** Resolves rather than throws, and reports what the teardown could not finish: `abandonedWindows` names the lock windows still open when the bounded wait gave up, `releasePending` says a transport release is still outstanding. A caller learns which locks it must clean up by hand instead of discovering them on the next developer's screen.
+- **`isConnected()` and `getSessionIdentity()`.** The session is observable now: whether a caller may work, and which ABAP session it would work over. The identity is derived from the `SAP_SESSIONID*` cookies and deliberately excludes `sap-XSRF_*`, which rotates on a token refresh *within* one session — folding it in would report an ordinary refresh as a new session.
+- **`beginWindow(label)` / `endWindow(token)`.** Marks a span that must not lose its session, such as the interval between LOCK and UNLOCK. A teardown requested during an open window waits for it, bounded by an absolute ceiling measured from the request; on expiry the window is reported as abandoned rather than silently dropped.
+- **`ADT_SESSION_ERROR`, `AdtSessionErrorCode`, `TeardownReport`, `WindowToken` are exported.** A public method returning a type the consumer cannot name forces `any` and raw string comparison, so a renamed code would become a silent behaviour change downstream.
+
+### Fixed
+- **A replaced session is now detected and raised instead of absorbed.** Responses are observed through one path that updates the cookies *and* applies the identity policy together; ten call sites used to update the cookies alone, which mutated the fingerprint and made a replacement indistinguishable from the session it replaced. A lost session raises `ADT_SESSION_REPLACED` and tears down, rather than letting the next request run against a session the caller never opened.
+- **Session verdicts survive the retry layers.** Three nested catches — the CSRF retry, the 401-on-GET path and the endpoint fallback — used to swallow a session verdict and retry into a *new* session, where the replacement read as `unchanged` and the loss was gone for good.
+- **A failed establishment leaves nothing behind.** A rejecting response could still carry a `Set-Cookie`, and every auth subclass treats a cookie as proof that auth is settled, so the *next* `connect()` went out with no credentials at all and failed for an unrelated reason. Transport state and the session identity are both dropped when `establishSession()` throws; `getSessionIdentity()` no longer names a session that was never established.
+- **Kerberos: the first challenge is diagnosed, not the fourth.** The connect-time CSRF fetch inherited a 3-retry default while a GSS token is one-shot, so the diagnosis was drawn from a replayed — or credential-less — request. Multi-leg SPNEGO (RFC 4559) is still unsupported, but a landscape that needs it now fails at `connect()` saying so, instead of being misreported as rejected credentials.
+- **The CSRF token fetch stays inside the ADT conversation** (also released in 1.10.1).
+
+### Security
+- Production audit is clean. `brace-expansion` remains reachable only through `jest` and is pinned by an override; it never ships.
+
+### Dependencies
+- `@mcp-abap-adt/interfaces` 7.2.0 → 11.4.0. A no-op for this package — the breaking changes across 8–11 are in ADT object capability types, which the connector never imports — and it closes the drift against `adt-clients` and `auth-providers`, both already on 11.x.
 
 ## [1.10.2] - 2026-07-27
 

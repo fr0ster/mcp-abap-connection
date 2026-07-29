@@ -244,6 +244,26 @@ outcome. A request before it, or after a teardown, is refused with
 `connect()` is idempotent and safe to call concurrently: callers share one
 establishment rather than opening a session each.
 
+Match on the code rather than the message — the codes are exported, so a rename
+is a compile error on your side instead of a condition that silently stops
+matching:
+
+```typescript
+import { ADT_SESSION_ERROR } from '@mcp-abap-adt/connection';
+
+try {
+  await connection.makeAdtRequest(options);
+} catch (error) {
+  if ((error as { code?: string }).code === ADT_SESSION_ERROR.SESSION_REPLACED) {
+    // The SAP session was replaced under us. Anything locked over the old one
+    // is orphaned: re-connect, then re-acquire the lock.
+  }
+}
+```
+
+`TeardownReport`, `WindowToken` and `AdtSessionErrorCode` are exported for the
+same reason.
+
 ### disconnect() reports what it could not finish
 
 ```typescript
