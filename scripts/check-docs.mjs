@@ -137,6 +137,32 @@ for (const file of markdown) {
   }
 }
 
+// ---------------------------------------------------------------- check 6 ---
+// A link can exist in the repo and still be broken for everyone who installed
+// the package: `files` decides what ships, and the README pointed at
+// docs/MIGRATION-2.0.md while `files` listed only dist, bin, README and LICENSE.
+// Check 3 sees the file on disk and passes. This one asks the other question —
+// does the target ship too.
+const published = JSON.parse(readFileSync('package.json', 'utf8')).files ?? [];
+const ships = (target) =>
+  published.some((entry) => target === entry || target.startsWith(`${entry}/`));
+
+for (const file of [...markdown, 'CHANGELOG.md']) {
+  if (!ships(file) && file !== 'README.md') continue; // not shipped, not its problem
+  const text = readFileSync(file, 'utf8');
+  for (const m of text.matchAll(/\]\((\.{0,2}\/?[A-Za-z0-9_/.-]+\.md)/g)) {
+    // Relative to the linking file, then relative to the package root, which is
+    // what `files` entries are expressed against.
+    const target = relative(root, resolve(dirname(file), m[1]));
+    if (!ships(target)) {
+      report(
+        'ships',
+        `${file} -> ${m[1]} is in the repo but not in package.json "files"`,
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------- check 4 ---
 // The first version matched two exact phrasings and walked past a whole
 // "## Version History" section. It matches the SHAPE of a version claim now.
@@ -156,7 +182,7 @@ for (const file of [...markdown, ...examples]) {
 }
 
 // ---------------------------------------------------------------------------
-const checks = ['connect', 'api', 'link', 'version', 'fences'];
+const checks = ['connect', 'api', 'link', 'version', 'fences', 'ships'];
 for (const name of checks) {
   const hits = problems.filter((p) => p.startsWith(`${name}:`));
   console.log(`${hits.length ? '✗' : '✓'} ${name}`);

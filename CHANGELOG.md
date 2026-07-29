@@ -381,7 +381,7 @@ const connection = new JwtAbapConnection(config, logger);
   - `CSRF_CONFIG`: Centralized constants for CSRF token fetching (retry count, delay, endpoint, headers)
   - `CSRF_ERROR_MESSAGES`: Standardized error messages for CSRF token operations
   - Enables other projects (e.g., Cloud SDK-based connections) to use the same CSRF configuration
-  - See [PR Proposal](./PR_PROPOSAL_CSRF_CONFIG.md) for details
+  - Rationale in commit `ba12a42`; the standalone proposal document it linked is no longer in the tree
 
 ### Changed
 - **CSRF Token Endpoint**: Updated CSRF token fetching to use `/sap/bc/adt/core/discovery` endpoint instead of `/sap/bc/adt/discovery`
@@ -715,21 +715,41 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-
-[Unreleased]: https://github.com/fr0ster/mcp-abap-adt/compare/v0.1.15...HEAD
-[0.1.15]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.15
-[0.1.14]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.14
-[0.1.13]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.13
-[0.1.12]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.12
-[0.1.11]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.11
-[0.1.10]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.10
-[0.1.9]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.9
-[0.1.8]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.8
-[0.1.7]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.7
-[0.1.6]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.6
-[0.1.5]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.5
-[0.1.4]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.4
-[0.1.3]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.3
-[0.1.2]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.2
-[0.1.1]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.1
-[0.1.0]: https://github.com/fr0ster/mcp-abap-adt/releases/tag/v0.1.0
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.10.2...v2.0.0
+[1.10.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.10.1...v1.10.2
+[1.10.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.10.0...v1.10.1
+[1.10.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.9.1...v1.10.0
+[1.9.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.9.0...v1.9.1
+[1.9.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.7.0...v1.9.0
+[1.7.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.5.1...v1.7.0
+[1.5.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.4.2...v1.5.1
+[1.4.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.4.1...v1.4.2
+[1.4.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.4.0...v1.4.1
+[1.4.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.1.0...v1.4.0
+[1.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.0.1...v1.1.0
+[1.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.8...v1.0.0
+[0.2.8]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.7...v0.2.8
+[0.2.7]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.5...v0.2.6
+[0.2.5]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.15...v0.2.0
+[0.1.15]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.14...v0.1.15
+[0.1.14]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.13...v0.1.14
+[0.1.13]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.12...v0.1.13
+[0.1.12]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.11...v0.1.12
+[0.1.11]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.10...v0.1.11
+[0.1.10]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.9...v0.1.10
+[0.1.9]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.8...v0.1.9
+[0.1.8]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.7...v0.1.8
+[0.1.7]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.6...v0.1.7
+[0.1.6]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.5...v0.1.6
+[0.1.5]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.4...v0.1.5
+[0.1.4]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/fr0ster/mcp-abap-connection/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/fr0ster/mcp-abap-connection/releases/tag/v0.1.2
