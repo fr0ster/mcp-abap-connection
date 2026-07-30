@@ -227,16 +227,53 @@ implied. Four things follow from it.
 > The split is the point. `IAbapConnection` is the minimum every transport can
 > honour, and `RfcAbapConnection` has none of these — on RFC the session *is* the
 > open client, so it needs none. Requiring them of every connection would force a
-> transport with no HTTP session to implement a lie. So narrow to the atom you
-> need rather than to a concrete class:
+> transport with no HTTP session to implement a lie.
+>
+> So ask for the atom you need, not for a concrete class:
 >
 > ```typescript
 > function withLock(conn: IAbapConnection & ILockWindowAware) { /* ... */ }
 > ```
 >
-> `createAbapConnection()` returns `IAbapConnection`, so widen it yourself when
-> you need an atom — the compiler then rejects an RFC connection at the call site
-> instead of failing at runtime.
+> **How you satisfy that parameter decides whether you get a compile-time
+> guarantee, and there is only one way that does.**
+>
+> Construct the connection through a concrete HTTP class and the compiler knows
+> it implements the atoms, so passing an RFC connection is an error at the call
+> site:
+>
+> ```typescript
+> const conn = new BaseAbapConnection(config, logger);
+> withLock(conn);                       // ✅ checked
+> withLock(new RfcAbapConnection(cfg)); // ✅ compile error, as it should be
+> ```
+>
+> `createAbapConnection()` cannot give you that. It returns `IAbapConnection` for
+> **every** config, RFC included, so the type carries no evidence either way and
+> the compiler rejects its result whatever the transport. Asserting past that —
+> `conn as IAbapConnection & ILockWindowAware` — silences the error for the HTTP
+> case *and* for RFC, which then fails at runtime on `beginWindow()`. An assertion
+> is not a check; it is a promise you make to the compiler on your own authority.
+>
+> When you only have an `IAbapConnection` — from the factory, or from a caller —
+> narrow it at runtime with a predicate:
+>
+> ```typescript
+> function supportsLockWindows(
+>   conn: IAbapConnection,
+> ): conn is IAbapConnection & ILockWindowAware {
+>   return typeof (conn as Partial<ILockWindowAware>).beginWindow === 'function';
+> }
+>
+> if (supportsLockWindows(conn)) {
+>   withLock(conn);            // narrowed by evidence, not by assertion
+> } else {
+>   // No lock windows here. On RFC that is expected, not a failure.
+> }
+> ```
+>
+> That is a real check, and the `else` branch is the honest part: a transport
+> without the capability needs a different plan, not a cast.
 
 ### connect() is required, and it tells the truth
 
