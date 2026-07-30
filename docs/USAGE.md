@@ -262,7 +262,14 @@ implied. Four things follow from it.
 > function supportsLockWindows(
 >   conn: IAbapConnection,
 > ): conn is IAbapConnection & ILockWindowAware {
->   return typeof (conn as Partial<ILockWindowAware>).beginWindow === 'function';
+>   const candidate = conn as Partial<ILockWindowAware>;
+>   // EVERY method of the atom. A predicate narrows to the whole interface, so
+>   // checking one method and promising two puts the failure back where this
+>   // check was meant to remove it — inside the branch that looked safe.
+>   return (
+>     typeof candidate.beginWindow === 'function' &&
+>     typeof candidate.endWindow === 'function'
+>   );
 > }
 >
 > if (supportsLockWindows(conn)) {
@@ -272,8 +279,13 @@ implied. Four things follow from it.
 > }
 > ```
 >
-> That is a real check, and the `else` branch is the honest part: a transport
-> without the capability needs a different plan, not a cast.
+> That is a real check, and two things about it are load-bearing. The predicate
+> covers the atom in full — a partial implementation must fail it, not pass it and
+> break later. And the `else` branch is the honest part: a transport without the
+> capability needs a different plan, not a cast.
+>
+> `ISessionLifecycleAware` takes the same treatment, over all three of
+> `disconnect`, `isConnected` and `getSessionIdentity`.
 
 ### connect() is required, and it tells the truth
 

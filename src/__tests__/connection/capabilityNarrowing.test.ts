@@ -34,18 +34,31 @@ const rfcConfig = {
   sysnr: '00',
 } as any;
 
-/** The predicate USAGE tells consumers to write. Evidence, not assertion. */
+/**
+ * The predicates USAGE tells consumers to write. Evidence, not assertion.
+ *
+ * Every method of the atom, deliberately: a predicate narrows to the WHOLE
+ * interface, so checking one method and promising the rest would put the failure
+ * back inside the branch that looked safe.
+ */
 function supportsLockWindows(
   conn: IAbapConnection,
 ): conn is IAbapConnection & ILockWindowAware {
-  return typeof (conn as Partial<ILockWindowAware>).beginWindow === 'function';
+  const candidate = conn as Partial<ILockWindowAware>;
+  return (
+    typeof candidate.beginWindow === 'function' &&
+    typeof candidate.endWindow === 'function'
+  );
 }
 
 function supportsSessionLifecycle(
   conn: IAbapConnection,
 ): conn is IAbapConnection & ISessionLifecycleAware {
+  const candidate = conn as Partial<ISessionLifecycleAware>;
   return (
-    typeof (conn as Partial<ISessionLifecycleAware>).disconnect === 'function'
+    typeof candidate.disconnect === 'function' &&
+    typeof candidate.isConnected === 'function' &&
+    typeof candidate.getSessionIdentity === 'function'
   );
 }
 
@@ -82,7 +95,31 @@ describe('narrowing to a connection capability', () => {
     expect(supportsSessionLifecycle(conn)).toBe(true);
   });
 
-  // Claim 3: the branch that matters. A consumer holding only an
+  // Claim 3: a PARTIAL implementation must fail the guard.
+  //
+  // This is the case a one-method check waves through: an object with
+  // beginWindow but no endWindow passes, narrows to the full atom, and then
+  // throws inside the branch the guard was supposed to make safe. Test doubles
+  // are the likeliest source — they implement what the test under way happens
+  // to call.
+  it('rejects a connection that implements only part of an atom', () => {
+    const half = {
+      ...(new BaseAbapConnection(httpConfig, null) as unknown as Record<
+        string,
+        unknown
+      >),
+      beginWindow: (label: string) => Symbol(label),
+      endWindow: undefined,
+      isConnected: () => true,
+      getSessionIdentity: () => null,
+      disconnect: undefined,
+    } as unknown as IAbapConnection;
+
+    expect(supportsLockWindows(half)).toBe(false);
+    expect(supportsSessionLifecycle(half)).toBe(false);
+  });
+
+  // Claim 4: the branch that matters. A consumer holding only an
   // IAbapConnection must handle "no such capability" rather than cast past it.
   it('leaves a transport without the capability to a different plan', () => {
     const conn: IAbapConnection = new RfcAbapConnection(rfcConfig, null);
