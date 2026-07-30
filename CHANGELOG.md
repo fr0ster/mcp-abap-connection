@@ -21,10 +21,12 @@ broke. Migration guide: [`docs/MIGRATION-2.0.md`](docs/MIGRATION-2.0.md).
 - **Consumers must call `connect()` before the first request.** Requests are also refused after `disconnect()` and after `reset()`, until the next `connect()`. An in-flight request is not cut off: a teardown drains before it clears anything.
 
 ### Added
-- **`disconnect(): Promise<TeardownReport>`.** Resolves rather than throws, and reports what the teardown could not finish: `abandonedWindows` names the lock windows still open when the bounded wait gave up, `releasePending` says a transport release is still outstanding. A caller learns which locks it must clean up by hand instead of discovering them on the next developer's screen.
+- **`disconnect(): Promise<ITeardownReport>`.** Resolves rather than throws, and reports what the teardown could not finish: `abandonedWindows` names the lock windows still open when the bounded wait gave up, `releasePending` says a transport release is still outstanding. A caller learns which locks it must clean up by hand instead of discovering them on the next developer's screen.
 - **`isConnected()` and `getSessionIdentity()`.** The session is observable now: whether a caller may work, and which ABAP session it would work over. The identity is derived from the `SAP_SESSIONID*` cookies and deliberately excludes `sap-XSRF_*`, which rotates on a token refresh *within* one session — folding it in would report an ordinary refresh as a new session.
 - **`beginWindow(label)` / `endWindow(token)`.** Marks a span that must not lose its session, such as the interval between LOCK and UNLOCK. A teardown requested during an open window waits for it, bounded by an absolute ceiling measured from the request; on expiry the window is reported as abandoned rather than silently dropped.
-- **`ADT_SESSION_ERROR`, `AdtSessionErrorCode`, `TeardownReport`, `WindowToken` are exported.** A public method returning a type the consumer cannot name forces `any` and raw string comparison, so a renamed code would become a silent behaviour change downstream.
+- **The session lifecycle is on the shared contract, as capability atoms.** `AbstractAbapConnection` now declares `implements ISessionLifecycleAware, ILockWindowAware` from `@mcp-abap-adt/interfaces` 11.5.0, and `ITeardownReport`, `WindowToken`, `ADT_SESSION_ERROR` and `AdtSessionErrorCode` come from there. **Import them from `@mcp-abap-adt/interfaces`, not from this package** — it deliberately does not re-export them, because a contract type with two names is a contract type that can drift.
+
+  Atoms rather than five more methods on `IAbapConnection`: that interface is the minimum every transport can honour, and `RfcAbapConnection` owns no HTTP session and can open no lock window. Requiring these of every connection would force a transport with no session to implement a lie. Narrow to the atom you need — `IAbapConnection & ILockWindowAware` — and the compiler rejects an RFC connection at the call site instead of failing at runtime.
 
 ### Fixed
 - **A replaced session is now detected and raised instead of absorbed.** Responses are observed through one path that updates the cookies *and* applies the identity policy together; ten call sites used to update the cookies alone, which mutated the fingerprint and made a replacement indistinguishable from the session it replaced. A lost session raises `ADT_SESSION_REPLACED` and tears down, rather than letting the next request run against a session the caller never opened.
@@ -37,7 +39,7 @@ broke. Migration guide: [`docs/MIGRATION-2.0.md`](docs/MIGRATION-2.0.md).
 - Production audit is clean. `brace-expansion` remains reachable only through `jest` and is pinned by an override; it never ships.
 
 ### Dependencies
-- `@mcp-abap-adt/interfaces` 7.2.0 → 11.4.0. A no-op for this package — the breaking changes across 8–11 are in ADT object capability types, which the connector never imports — and it closes the drift against `adt-clients` and `auth-providers`, both already on 11.x.
+- `@mcp-abap-adt/interfaces` 7.2.0 → **11.5.0**, now a real requirement rather than a version bump: this release imports the connection capability atoms from it. Crossing 8–11 was a no-op — those breaking changes are all in ADT object capability types, which the connector never imports — and it also closes the drift against `adt-clients` and `auth-providers`, both already on 11.x.
 
 ## [1.10.2] - 2026-07-27
 

@@ -218,12 +218,25 @@ implied. Four things follow from it.
 > saying exactly that. Multi-leg SPNEGO is not implemented.
 
 > **Availability.** `connect()` is on the shared `IAbapConnection` contract and
-> works on every connection. The rest of this section — `disconnect()`,
-> `isConnected()`, `getSessionIdentity()`, `beginWindow()`, `endWindow()` — is
-> **not on the contract yet** and exists on the HTTP connection classes only.
-> Reach it through a concrete type, not through what `createAbapConnection()`
-> returns, and note that `RfcAbapConnection` does not have these at all: on RFC
-> the session *is* the open client, so it needs none of them.
+> works on every connection. The rest of this section is on the contract too, but
+> as two **capability atoms** in `@mcp-abap-adt/interfaces` (11.5.0+) rather than
+> as methods on `IAbapConnection`: `ISessionLifecycleAware` (`disconnect()`,
+> `isConnected()`, `getSessionIdentity()`) and `ILockWindowAware`
+> (`beginWindow()`, `endWindow()`).
+>
+> The split is the point. `IAbapConnection` is the minimum every transport can
+> honour, and `RfcAbapConnection` has none of these — on RFC the session *is* the
+> open client, so it needs none. Requiring them of every connection would force a
+> transport with no HTTP session to implement a lie. So narrow to the atom you
+> need rather than to a concrete class:
+>
+> ```typescript
+> function withLock(conn: IAbapConnection & ILockWindowAware) { /* ... */ }
+> ```
+>
+> `createAbapConnection()` returns `IAbapConnection`, so widen it yourself when
+> you need an atom — the compiler then rejects an RFC connection at the call site
+> instead of failing at runtime.
 
 ### connect() is required, and it tells the truth
 
@@ -244,12 +257,12 @@ outcome. A request before it, or after a teardown, is refused with
 `connect()` is idempotent and safe to call concurrently: callers share one
 establishment rather than opening a session each.
 
-Match on the code rather than the message — the codes are exported, so a rename
-is a compile error on your side instead of a condition that silently stops
-matching:
+Match on the code rather than the message, so a rename is a compile error on your
+side instead of a condition that silently stops matching. The codes live in
+`@mcp-abap-adt/interfaces` — import them from there, not from this package:
 
 ```typescript
-import { ADT_SESSION_ERROR } from '@mcp-abap-adt/connection';
+import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces';
 
 try {
   await connection.makeAdtRequest(options);
@@ -261,8 +274,12 @@ try {
 }
 ```
 
-`TeardownReport`, `WindowToken` and `AdtSessionErrorCode` are exported for the
-same reason.
+`ITeardownReport`, `WindowToken` and `AdtSessionErrorCode` come from the same
+place, as do the two capability interfaces this connection implements —
+`ISessionLifecycleAware` and `ILockWindowAware`. Depend on those rather than on a
+concrete connection class where you can: an `RfcAbapConnection` is a valid
+`IAbapConnection` that implements neither, so the atom you require is also the
+documentation of what your code actually needs.
 
 ### disconnect() reports what it could not finish
 
@@ -322,7 +339,7 @@ abandoned.
 While a window is open, a teardown waits for it rather than abandoning it, and
 a new window cannot be opened once a teardown has been requested. A window that
 never closes is given up on after `SAP_TIMEOUT_CRITICAL` and comes back **named**
-in `TeardownReport.abandonedWindows`.
+in `ITeardownReport.abandonedWindows`.
 
 ### When the session is lost
 

@@ -20,11 +20,10 @@ export type {
   AbapConnection,
   AbapRequestOptions,
 } from './connection/AbapConnection.js';
-// Session lifecycle vocabulary — see also ADT_SESSION_ERROR below. disconnect()
-// returns a TeardownReport and the session errors carry a code, so a consumer
-// that cannot name either is left typing `any` and comparing raw strings, which
-// is how a renamed code becomes a silent behaviour change downstream.
-export type { TeardownReport } from './connection/AbstractAbapConnection.js';
+// The session lifecycle vocabulary — ISessionLifecycleAware, ILockWindowAware,
+// ITeardownReport, WindowToken, ADT_SESSION_ERROR — is deliberately NOT exported
+// here. It lives in @mcp-abap-adt/interfaces, and a consumer imports it from
+// there: re-exporting a contract type gives it two names and lets the two drift.
 // Connection classes - only final implementations
 // Deprecated aliases for backward compatibility
 export {
@@ -49,11 +48,6 @@ export { KerberosAbapConnection } from './connection/KerberosAbapConnection.js';
 export { RfcAbapConnection } from './connection/RfcAbapConnection.js';
 export { SamlAbapConnection } from './connection/SamlAbapConnection.js';
 export type { ILogger } from './logger.js';
-export {
-  ADT_SESSION_ERROR,
-  type AdtSessionErrorCode,
-  type WindowToken,
-} from './session/SessionLifecycle.js';
 // Timeouts
 export {
   getTimeout,

@@ -8,10 +8,8 @@
  *
  * No SAP, no HTTP, no RFC: this unit knows about none of them.
  */
-import {
-  ADT_SESSION_ERROR,
-  SessionLifecycle,
-} from '../session/SessionLifecycle.js';
+import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces';
+import { SessionLifecycle } from '../session/SessionLifecycle.js';
 
 /** Manual clock, so a "ceiling" costs no wall time. */
 function clock(start = 0) {

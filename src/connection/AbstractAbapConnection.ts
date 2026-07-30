@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { Agent } from 'node:https';
-import { type IAdtResponse, isNetworkError } from '@mcp-abap-adt/interfaces';
+import {
+  ADT_SESSION_ERROR,
+  type IAdtResponse,
+  type ILockWindowAware,
+  type ISessionLifecycleAware,
+  type ITeardownReport,
+  isNetworkError,
+  type WindowToken,
+} from '@mcp-abap-adt/interfaces';
 import axios, {
   AxiosError,
   type AxiosInstance,
@@ -9,25 +17,23 @@ import axios, {
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import {
-  ADT_SESSION_ERROR,
   type DrainResult,
   SessionLifecycle,
   sessionError,
-  type WindowToken,
 } from '../session/SessionLifecycle.js';
 import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 
-/** What a teardown could not finish. `disconnect()` resolves with it, never throws. */
-export interface TeardownReport {
-  /** Labels of lock windows still open when the bounded wait gave up. */
-  abandonedWindows: string[];
-  /** A transport release did not complete and stays pending. */
-  releasePending: boolean;
-}
-
-abstract class AbstractAbapConnection implements AbapConnection {
+/**
+ * Declares the capabilities explicitly rather than satisfying them by accident.
+ * `AbapConnection` is the base contract every transport honours; these two are
+ * the HTTP session's own, and naming them means a signature that drifts from
+ * the published contract fails to compile here instead of at the consumer.
+ */
+abstract class AbstractAbapConnection
+  implements AbapConnection, ISessionLifecycleAware, ILockWindowAware
+{
   /**
    * Owns session state, admission and teardown ordering. Composed rather than
    * inherited: RfcAbapConnection implements the interface directly, so the two
@@ -208,7 +214,7 @@ abstract class AbstractAbapConnection implements AbapConnection {
    * Tears the session down. Never throws: the report says what did not finish
    * rather than failing. Sends no ADT session-close — see the design's D2.
    */
-  async disconnect(): Promise<TeardownReport> {
+  async disconnect(): Promise<ITeardownReport> {
     this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
     // The report travels THROUGH the transition, so a joining caller gets the
     // same one. Building it outside would leave every caller but the first
@@ -228,7 +234,16 @@ abstract class AbstractAbapConnection implements AbapConnection {
     return this.lifecycle.connected;
   }
 
-  /** Fingerprint of the SAP-side session; null when nothing is tracked. */
+  /**
+   * Fingerprint of the SAP-side session, or null when none is known.
+   *
+   * `null` is NOT a statement about the connection. Two situations produce it:
+   * no session exists, or the connection is live over a server that issued no
+   * session cookie. Use {@link isConnected} for connection state.
+   *
+   * It follows that null → non-null is not a replacement but an identity being
+   * learned; only a CHANGED value means the session was replaced.
+   */
   getSessionIdentity(): string | null {
     return this.lifecycle.identity;
   }
