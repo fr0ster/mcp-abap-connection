@@ -11,8 +11,11 @@
  * @mcp-abap-adt/adt-clients.
  */
 
-/** Opaque handle for one open lock window: `Symbol(label)`. */
-export type WindowToken = symbol;
+import {
+  ADT_SESSION_ERROR,
+  type AdtSessionErrorCode,
+  type WindowToken,
+} from '@mcp-abap-adt/interfaces';
 
 export type TransitionKind = 'connect' | 'disconnect' | 'recover' | 'cleanup';
 
@@ -34,15 +37,6 @@ export interface BeginTeardownOptions {
   /** Decides admission: a lost session cannot let an open window finish. */
   sessionLost: boolean;
 }
-
-export const ADT_SESSION_ERROR = {
-  NOT_CONNECTED: 'ADT_NOT_CONNECTED',
-  SESSION_REPLACED: 'ADT_SESSION_REPLACED',
-  RELEASE_PENDING: 'ADT_RELEASE_PENDING',
-} as const;
-
-export type AdtSessionErrorCode =
-  (typeof ADT_SESSION_ERROR)[keyof typeof ADT_SESSION_ERROR];
 
 export function sessionError(
   code: AdtSessionErrorCode,

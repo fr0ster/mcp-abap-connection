@@ -218,12 +218,74 @@ implied. Four things follow from it.
 > saying exactly that. Multi-leg SPNEGO is not implemented.
 
 > **Availability.** `connect()` is on the shared `IAbapConnection` contract and
-> works on every connection. The rest of this section — `disconnect()`,
-> `isConnected()`, `getSessionIdentity()`, `beginWindow()`, `endWindow()` — is
-> **not on the contract yet** and exists on the HTTP connection classes only.
-> Reach it through a concrete type, not through what `createAbapConnection()`
-> returns, and note that `RfcAbapConnection` does not have these at all: on RFC
-> the session *is* the open client, so it needs none of them.
+> works on every connection. The rest of this section is on the contract too, but
+> as two **capability atoms** in `@mcp-abap-adt/interfaces` (11.5.0+) rather than
+> as methods on `IAbapConnection`: `ISessionLifecycleAware` (`disconnect()`,
+> `isConnected()`, `getSessionIdentity()`) and `ILockWindowAware`
+> (`beginWindow()`, `endWindow()`).
+>
+> The split is the point. `IAbapConnection` is the minimum every transport can
+> honour, and `RfcAbapConnection` has none of these — on RFC the session *is* the
+> open client, so it needs none. Requiring them of every connection would force a
+> transport with no HTTP session to implement a lie.
+>
+> So ask for the atom you need, not for a concrete class:
+>
+> ```typescript
+> function withLock(conn: IAbapConnection & ILockWindowAware) { /* ... */ }
+> ```
+>
+> **How you satisfy that parameter decides whether you get a compile-time
+> guarantee, and there is only one way that does.**
+>
+> Construct the connection through a concrete HTTP class and the compiler knows
+> it implements the atoms, so passing an RFC connection is an error at the call
+> site:
+>
+> ```typescript
+> const conn = new BaseAbapConnection(config, logger);
+> withLock(conn);                       // ✅ checked
+> withLock(new RfcAbapConnection(cfg)); // ✅ compile error, as it should be
+> ```
+>
+> `createAbapConnection()` cannot give you that. It returns `IAbapConnection` for
+> **every** config, RFC included, so the type carries no evidence either way and
+> the compiler rejects its result whatever the transport. Asserting past that —
+> `conn as IAbapConnection & ILockWindowAware` — silences the error for the HTTP
+> case *and* for RFC, which then fails at runtime on `beginWindow()`. An assertion
+> is not a check; it is a promise you make to the compiler on your own authority.
+>
+> When you only have an `IAbapConnection` — from the factory, or from a caller —
+> narrow it at runtime with a predicate:
+>
+> ```typescript
+> function supportsLockWindows(
+>   conn: IAbapConnection,
+> ): conn is IAbapConnection & ILockWindowAware {
+>   const candidate = conn as Partial<ILockWindowAware>;
+>   // EVERY method of the atom. A predicate narrows to the whole interface, so
+>   // checking one method and promising two puts the failure back where this
+>   // check was meant to remove it — inside the branch that looked safe.
+>   return (
+>     typeof candidate.beginWindow === 'function' &&
+>     typeof candidate.endWindow === 'function'
+>   );
+> }
+>
+> if (supportsLockWindows(conn)) {
+>   withLock(conn);            // narrowed by evidence, not by assertion
+> } else {
+>   // No lock windows here. On RFC that is expected, not a failure.
+> }
+> ```
+>
+> That is a real check, and two things about it are load-bearing. The predicate
+> covers the atom in full — a partial implementation must fail it, not pass it and
+> break later. And the `else` branch is the honest part: a transport without the
+> capability needs a different plan, not a cast.
+>
+> `ISessionLifecycleAware` takes the same treatment, over all three of
+> `disconnect`, `isConnected` and `getSessionIdentity`.
 
 ### connect() is required, and it tells the truth
 
@@ -244,12 +306,12 @@ outcome. A request before it, or after a teardown, is refused with
 `connect()` is idempotent and safe to call concurrently: callers share one
 establishment rather than opening a session each.
 
-Match on the code rather than the message — the codes are exported, so a rename
-is a compile error on your side instead of a condition that silently stops
-matching:
+Match on the code rather than the message, so a rename is a compile error on your
+side instead of a condition that silently stops matching. The codes live in
+`@mcp-abap-adt/interfaces` — import them from there, not from this package:
 
 ```typescript
-import { ADT_SESSION_ERROR } from '@mcp-abap-adt/connection';
+import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces';
 
 try {
   await connection.makeAdtRequest(options);
@@ -261,8 +323,12 @@ try {
 }
 ```
 
-`TeardownReport`, `WindowToken` and `AdtSessionErrorCode` are exported for the
-same reason.
+`ITeardownReport`, `WindowToken` and `AdtSessionErrorCode` come from the same
+place, as do the two capability interfaces this connection implements —
+`ISessionLifecycleAware` and `ILockWindowAware`. Depend on those rather than on a
+concrete connection class where you can: an `RfcAbapConnection` is a valid
+`IAbapConnection` that implements neither, so the atom you require is also the
+documentation of what your code actually needs.
 
 ### disconnect() reports what it could not finish
 
@@ -322,7 +388,7 @@ abandoned.
 While a window is open, a teardown waits for it rather than abandoning it, and
 a new window cannot be opened once a teardown has been requested. A window that
 never closes is given up on after `SAP_TIMEOUT_CRITICAL` and comes back **named**
-in `TeardownReport.abandonedWindows`.
+in `ITeardownReport.abandonedWindows`.
 
 ### When the session is lost
 

@@ -408,16 +408,24 @@ interface AbapConnection {
 }
 ```
 
-The HTTP connection classes carry the rest of the session lifecycle, which is
-**not on the shared contract yet** and is absent from `RfcAbapConnection`:
+The HTTP connection classes carry the rest of the session lifecycle. It is on the
+shared contract as two **capability atoms** in `@mcp-abap-adt/interfaces` (11.5.0+)
+rather than as methods on `IAbapConnection`, which is why `RfcAbapConnection` — a
+transport that owns no HTTP session — is unaffected by their existence:
 
 ```typescript
-disconnect(): Promise<TeardownReport>; // never throws; reports what it could not finish
+// ISessionLifecycleAware
+disconnect(): Promise<ITeardownReport>; // never throws; reports what it could not finish
 isConnected(): boolean;
-getSessionIdentity(): string | null;   // WHICH SAP session, not the conversation id
+getSessionIdentity(): string | null;    // WHICH SAP session; null is not "disconnected"
+
+// ILockWindowAware
 beginWindow(label: string): WindowToken;
 endWindow(token: WindowToken): void;
 ```
+
+Import those names from `@mcp-abap-adt/interfaces`, not from this package: a
+contract type re-exported under a second name is a contract type that can drift.
 
 See [docs/USAGE.md — Session Lifecycle](./docs/USAGE.md#session-lifecycle).
 
