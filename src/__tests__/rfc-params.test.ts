@@ -78,20 +78,31 @@ describe('buildRfcParams — sysnr derivation', () => {
 
 describe('RfcAbapConnection.connect — error serialization', () => {
   it('includes RFC error fields in message when SDK throws plain object', async () => {
-    // Mock @mcp-abap-adt/sap-rfc-lite to return a client that throws a plain object
-    jest.mock('@mcp-abap-adt/sap-rfc-lite', () => ({
-      Client: class {
-        open() {
-          return Promise.reject({
-            code: 'RFC_INVALID_PARAMETER',
-            message: 'hostname wrong',
-          });
-        }
-        get alive() {
-          return false;
-        }
-      },
-    }));
+    // Mock @mcp-abap-adt/sap-rfc-lite to return a client that throws a plain object.
+    //
+    // `virtual: true` because the real module is an OPTIONAL dependency with a
+    // native build (node-gyp-build against the SAP NW RFC SDK). On any machine
+    // without that SDK npm skips it silently, and jest.mock() on a module it
+    // cannot resolve throws — so this suite went red on every clean install,
+    // masked here only by a node_modules left over from an install that had it.
+    // The test never wanted the real module: it replaces it entirely.
+    jest.mock(
+      '@mcp-abap-adt/sap-rfc-lite',
+      () => ({
+        Client: class {
+          open() {
+            return Promise.reject({
+              code: 'RFC_INVALID_PARAMETER',
+              message: 'hostname wrong',
+            });
+          }
+          get alive() {
+            return false;
+          }
+        },
+      }),
+      { virtual: true },
+    );
 
     const conn = new RfcAbapConnection(baseConfig(), logger);
 
