@@ -699,6 +699,23 @@ abstract class AbstractAbapConnection
 
       return response as unknown as IAdtResponse<T, D>;
     } catch (error) {
+      // FENCE FIRST, before anything reads or writes shared state.
+      //
+      // Fencing observeResponse() alone was not enough, and the gap was wide:
+      // everything below acts on this connection, not on the request. A late
+      // 400 "session not found" would call raiseSessionLost() and tear down the
+      // healthy session established since; a late 401/403 would call
+      // invalidateSession(), write a fresh CSRF token, and RETRY — replaying a
+      // mutation from a dead session inside the live one.
+      //
+      // A stale request gets its error back and nothing else happens.
+      if (!this.lifecycle.isCurrent(lease)) {
+        this.logger?.debug(
+          'A request from a previous session failed; its recovery is fenced',
+        );
+        throw error;
+      }
+
       const errorDetails: {
         type: string;
         message: string;

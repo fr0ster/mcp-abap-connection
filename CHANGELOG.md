@@ -59,6 +59,14 @@ surviving the retry layers, the Kerberos diagnosis — is unchanged.
   successful recovery, requests from the dead session carry the same epoch as the
   new one and pass straight through a fence built on it.
 
+  The fence sits at the **top of the error path**, before anything reads or
+  writes shared state — not merely before the response headers are applied.
+  Everything below it acts on the connection rather than on the request: a late
+  400 "session not found" would tear down the healthy session established since,
+  and a late 401/403 would clear the live session's state, fetch a fresh CSRF
+  token and **retry** — replaying a mutation from a dead session inside the live
+  one. A stale request now gets its error back and nothing else happens.
+
 ### Fixed
 - **Our own re-establishment no longer reads as someone else's replacement.**
   With a replacement now always fatal, a deliberate re-authentication would have
