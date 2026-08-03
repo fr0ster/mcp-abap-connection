@@ -1,20 +1,19 @@
 /**
  * Owns the session lifecycle: what state the session is in, who may use it, and
- * when it is safe to tear it down.
+ * when it stops being current.
  *
  * Deliberately knows nothing about SAP, HTTP, RFC, cookies or ADT. Identities
- * are opaque maps of name → value that someone else computed; windows are
- * opaque labels. That is what makes this unit testable without a server, and it
- * is where the hard part of the design lives: ordering, admission, deadlines.
+ * are opaque maps of name → value that someone else computed. That is what makes
+ * this unit testable without a server, and it is where the hard part lives:
+ * ordering, admission, and telling one session from the next.
  *
- * Design: docs/superpowers/specs/2026-07-27-session-lifecycle-design.md in
+ * Design: docs/superpowers/specs/2026-07-31-teardown-policy-design.md in
  * @mcp-abap-adt/adt-clients.
  */
 
 import {
   ADT_SESSION_ERROR,
   type AdtSessionErrorCode,
-  type WindowToken,
 } from '@mcp-abap-adt/interfaces';
 
 export type TransitionKind = 'connect' | 'disconnect' | 'recover' | 'cleanup';
@@ -22,19 +21,20 @@ export type TransitionKind = 'connect' | 'disconnect' | 'recover' | 'cleanup';
 export interface RequestLease {
   /** Teardown epoch at admission — the baseline a recovery compares against. */
   readonly epoch: number;
+  /**
+   * Session generation at admission — the baseline a RESPONSE compares against
+   * before touching shared state. Distinct from `epoch` on purpose: see
+   * `sessionGeneration`.
+   */
+  readonly generation: number;
   /** Call once the request settles. Safe to call twice. */
   release(): void;
-}
-
-export interface DrainResult {
-  /** Labels of windows still open when the wait gave up, deduplicated. */
-  abandonedWindows: string[];
 }
 
 export interface BeginTeardownOptions {
   /** Decides the epoch: a caller's request cancels recoveries, an internal one must not. */
   origin: 'caller' | 'internal';
-  /** Decides admission: a lost session cannot let an open window finish. */
+  /** A lost session cannot be spoken to again; its identity is dropped at once. */
   sessionLost: boolean;
 }
 
@@ -49,53 +49,22 @@ export function sessionError(
   return error;
 }
 
-export interface SessionLifecycleOptions {
-  /** Ceiling for the window wait, from the moment a teardown is requested. */
-  ceilingMs?: number;
-  /** Injected clock, so tests need no real time. */
-  now?: () => number;
-}
-
-interface WindowEntry {
-  label: string;
-  /** Given up on: still open, but no longer waited for. */
-  abandoned: boolean;
-}
-
 export class SessionLifecycle {
   private state: 'connected' | 'disconnected' = 'disconnected';
   private fingerprint = new Map<string, string>();
   private epoch = 0;
+  private generation = 0;
 
   private teardownPending = false;
-  private teardownLostSession = false;
-  private teardownAt: number | null = null;
-  /** Set at expiry: admission is shut regardless of open windows. */
-  private admissionForcedShut = false;
-
-  private readonly windows = new Map<WindowToken, WindowEntry>();
   private inFlight = 0;
 
   private tail: Promise<unknown> = Promise.resolve();
   private tailKind: TransitionKind | null = null;
   private tailPromise: Promise<unknown> | null = null;
 
-  private waiters: Array<() => void> = [];
-
-  private readonly ceilingMs: number;
-  private readonly now: () => number;
-
-  constructor(options: SessionLifecycleOptions = {}) {
-    this.ceilingMs = options.ceilingMs ?? 600_000;
-    this.now = options.now ?? (() => Date.now());
-  }
-
   // ---------------------------------------------------------------- state ---
 
-  /**
-   * Whether a caller may start work. False throughout a teardown, including
-   * while a grandfathered window is still finishing: finishing is not starting.
-   */
+  /** Whether a caller may start work. False throughout a pending teardown. */
   get connected(): boolean {
     return this.state === 'connected' && !this.teardownPending;
   }
@@ -113,9 +82,22 @@ export class SessionLifecycle {
     return this.epoch;
   }
 
-  /** One entry per open window, abandoned ones included. */
-  get openWindows(): readonly string[] {
-    return [...this.windows.values()].map((w) => w.label);
+  /**
+   * Which session is current, counted from zero.
+   *
+   * Two counters answer two different questions, and one cannot do both:
+   *
+   * - `epoch` — did the CALLER ask to stop? It moves only on a caller-initiated
+   *   teardown, because a recovery must not cancel itself.
+   * - `generation` — is this still the session you were issued against? It moves
+   *   on every change of which session is current, however caused.
+   *
+   * A fence built on `epoch` misses every internal teardown: after a session
+   * loss and a successful recovery, requests from the dead session carry the
+   * same epoch as the new one and sail straight through.
+   */
+  get sessionGeneration(): number {
+    return this.generation;
   }
 
   /**
@@ -123,27 +105,28 @@ export class SessionLifecycle {
    * was pending: the flags describe the session being torn down, and this is a
    * different one. Without this, `connect()` after `disconnect()` — which the
    * design allows explicitly — leaves the lifecycle permanently unusable.
-   *
-   * Windows are dropped for the same reason: they belonged to the old session,
-   * nothing here can close them, and a teardown that gave up on them has
-   * already carried their labels out in its report. Keeping them would make
-   * every future drain re-report locks from a session that no longer exists.
    */
   markConnected(fingerprint: ReadonlyMap<string, string> = new Map()): void {
     this.state = 'connected';
     this.fingerprint = new Map(fingerprint);
     this.teardownPending = false;
-    this.teardownLostSession = false;
-    this.admissionForcedShut = false;
-    this.teardownAt = null;
-    this.windows.clear();
-    this.wake();
+    this.generation += 1;
+  }
+
+  /**
+   * Drops the tracked identity without touching state or generation.
+   *
+   * For a session the caller discarded ON PURPOSE — a credential renewal, a
+   * cache invalidation. The next fingerprint then reads as `established` rather
+   * than `replaced`, which is the truth: nothing was taken from us.
+   */
+  forgetIdentity(): void {
+    this.fingerprint.clear();
   }
 
   markDisconnected(): void {
     this.state = 'disconnected';
     this.fingerprint.clear();
-    this.wake();
   }
 
   /**
@@ -151,7 +134,7 @@ export class SessionLifecycle {
    *
    * Additive: a name appearing where none was tracked is `established`, never
    * `replaced` — otherwise the identifier a LOCK response adds would read as a
-   * new session and blow up the window it just opened.
+   * new session and condemn the operation it just covered.
    */
   observe(
     fingerprint: ReadonlyMap<string, string>,
@@ -172,24 +155,8 @@ export class SessionLifecycle {
 
   // ------------------------------------------------------------ admission ---
 
-  /** True while an already-open window is allowed to finish its work. */
-  private get finishingWindowOpen(): boolean {
-    return (
-      this.teardownPending &&
-      !this.teardownLostSession &&
-      !this.admissionForcedShut &&
-      this.windows.size > 0
-    );
-  }
-
-  private get admits(): boolean {
-    if (this.state !== 'connected') return false;
-    if (!this.teardownPending) return true;
-    return this.finishingWindowOpen;
-  }
-
   assertUsable(): void {
-    if (!this.admits) {
+    if (this.state !== 'connected' || this.teardownPending) {
       throw sessionError(ADT_SESSION_ERROR.NOT_CONNECTED);
     }
   }
@@ -199,111 +166,55 @@ export class SessionLifecycle {
     this.assertUsable();
     this.inFlight += 1;
     const epoch = this.epoch;
+    const generation = this.generation;
     let released = false;
     return {
       epoch,
+      generation,
       release: () => {
         if (released) return;
         released = true;
         this.inFlight -= 1;
-        this.wake();
       },
     };
   }
 
-  // -------------------------------------------------------------- windows ---
-
-  /**
-   * A lock outlives the request that takes it, so it is the one thing a pending
-   * teardown refuses outright.
-   */
-  beginWindow(label: string): WindowToken {
-    if (this.state !== 'connected' || this.teardownPending) {
-      throw sessionError(ADT_SESSION_ERROR.NOT_CONNECTED);
-    }
-    const token = Symbol(label);
-    this.windows.set(token, { label, abandoned: false });
-    return token;
+  /** How many admitted requests have not settled. Diagnostics only — nothing waits on it. */
+  get requestsInFlight(): number {
+    return this.inFlight;
   }
 
-  /** A token matching no open window is ignored: double close, foreign token. */
-  endWindow(token: WindowToken): void {
-    if (!this.windows.delete(token)) return;
-    this.wake();
+  /**
+   * Whether a lease may still touch shared state.
+   *
+   * A request outliving its session is ordinary now that a teardown does not
+   * wait: its response must not write cookies over a newer session's, and must
+   * not be read as a replacement — which would raise a session-lost teardown
+   * against a session that is perfectly healthy.
+   */
+  isCurrent(lease: Pick<RequestLease, 'generation'>): boolean {
+    return lease.generation === this.generation;
   }
 
   // ------------------------------------------------------------- teardown ---
 
   beginTeardown({ origin, sessionLost }: BeginTeardownOptions): void {
-    if (!this.teardownPending) {
-      this.teardownAt = this.now();
-    }
     this.teardownPending = true;
     if (origin === 'caller') {
       this.epoch += 1;
     }
+    // The moment a session stops being current is the moment leases against it
+    // go stale — whether or not a replacement exists yet. Counting only at
+    // markConnected() leaves the gap between a teardown and the next connect,
+    // where a late response would write into state just cleared.
+    this.generation += 1;
     if (sessionLost) {
-      this.teardownLostSession = true;
-      // Nothing can finish over a session that is gone: give up on every window
-      // now, and drop the identity so a later comparison sees the change.
-      for (const entry of this.windows.values()) entry.abandoned = true;
       this.fingerprint.clear();
     }
-    this.wake();
   }
 
   get teardownRequested(): boolean {
     return this.teardownPending;
-  }
-
-  /**
-   * Resolves when nothing is in flight and no window is still worth waiting
-   * for. Bounded by the ceiling measured from the teardown request — absolute,
-   * never extended by request activity.
-   *
-   * On expiry, before resolving and without yielding in between: shuts
-   * admission, gives up on the remaining windows, then waits once more for the
-   * already-admitted requests to settle.
-   */
-  async drain(): Promise<DrainResult> {
-    // `??`, not `||`: a teardown requested at timestamp 0 is a real teardown,
-    // and treating it as absent would restart the ceiling from drain() — making
-    // the deadline relative to the wrong event, which is the sliding behaviour
-    // this design rejects.
-    const deadline = (this.teardownAt ?? this.now()) + this.ceilingMs;
-
-    while (this.inFlight > 0 || this.liveWindows > 0) {
-      const remaining = deadline - this.now();
-      if (remaining <= 0) break;
-      await this.changed(remaining);
-    }
-
-    if (this.inFlight === 0 && this.liveWindows === 0) {
-      return { abandonedWindows: this.abandonedLabels() };
-    }
-
-    // Expiry. Synchronous, before any await: no request may enter after this.
-    this.admissionForcedShut = true;
-    for (const entry of this.windows.values()) entry.abandoned = true;
-
-    while (this.inFlight > 0) {
-      await this.changed();
-    }
-    return { abandonedWindows: this.abandonedLabels() };
-  }
-
-  private get liveWindows(): number {
-    let live = 0;
-    for (const entry of this.windows.values()) if (!entry.abandoned) live += 1;
-    return live;
-  }
-
-  private abandonedLabels(): string[] {
-    const labels = new Set<string>();
-    for (const entry of this.windows.values()) {
-      if (entry.abandoned) labels.add(entry.label);
-    }
-    return [...labels];
   }
 
   // ---------------------------------------------------------- transitions ---
@@ -316,16 +227,11 @@ export class SessionLifecycle {
    * when nothing is queued behind it, so a join can never overtake a queued
    * transition of another kind. `recover` and `cleanup` never join and are
    * never joined: a recovery carries its own request's baseline, and an
-   * internal cleanup owes its result to nobody while a caller's teardown owes a
-   * report.
+   * internal cleanup owes its result to nobody.
    */
   transition<T>(kind: TransitionKind, run: () => Promise<T>): Promise<T> {
     const joinable = kind === 'connect' || kind === 'disconnect';
     if (joinable && this.tailKind === kind && this.tailPromise) {
-      // Joining shares the ANSWER, not just the execution: a joiner that got a
-      // resolved promise carrying nothing would have to invent a result, and
-      // for a teardown that means reporting no abandoned locks when there were
-      // some. Callers of one kind ask the same question, so they get one reply.
       return this.tailPromise as Promise<T>;
     }
 
@@ -345,29 +251,5 @@ export class SessionLifecycle {
     };
     queued.then(settle, settle);
     return queued;
-  }
-
-  // ----------------------------------------------------------- internals ---
-
-  private wake(): void {
-    const waiters = this.waiters;
-    this.waiters = [];
-    for (const resolve of waiters) resolve();
-  }
-
-  private changed(timeoutMs?: number): Promise<void> {
-    return new Promise<void>((resolve) => {
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        resolve();
-      };
-      this.waiters.push(finish);
-      if (timeoutMs !== undefined) {
-        const timer = setTimeout(finish, timeoutMs);
-        if (typeof timer.unref === 'function') timer.unref();
-      }
-    });
   }
 }

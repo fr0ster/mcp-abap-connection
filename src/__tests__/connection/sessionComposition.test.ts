@@ -116,12 +116,7 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
 
-    const report = await conn.disconnect();
-
-    expect(report).toStrictEqual({
-      abandonedWindows: [],
-      releasePending: false,
-    });
+    await conn.disconnect();
     expect(conn.isConnected()).toBe(false);
     expect(conn.getSessionIdentity()).toBeNull();
   });
@@ -138,64 +133,30 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
     expect(stub.sessions).toStrictEqual(['S1', 'S2']);
   });
 
-  it('waits for an open window before tearing down, and reports nothing abandoned', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
-    await conn.connect();
-    const token = conn.beginWindow('Class/ZCL_A');
-
-    const order: string[] = [];
-    const teardown = conn.disconnect().then((r) => {
-      order.push('disconnected');
-      return r;
-    });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(order).toStrictEqual([]);
-    // the session must still be intact while the window finishes
-    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S1');
-
-    order.push('window closed');
-    conn.endWindow(token);
-    const report = await teardown;
-
-    expect(order).toStrictEqual(['window closed', 'disconnected']);
-    expect(report.abandonedWindows).toStrictEqual([]);
-  });
-
-  it('refuses a new window once a teardown is pending', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
-    await conn.connect();
-    const token = conn.beginWindow('Class/ZCL_A');
-    const teardown = conn.disconnect();
-
-    expect(() => conn.beginWindow('Class/ZCL_B')).toThrow(
-      expect.objectContaining({ code: 'ADT_NOT_CONNECTED' }),
-    );
-
-    conn.endWindow(token);
-    await teardown;
-  });
-
   // Joining shares the answer, not just the execution. Building the report
   // outside the transition leaves every caller but the first reporting an empty
   // teardown — abandoned locks announced to nobody.
-  it('gives concurrent disconnects the same report', async () => {
+  it('tears down once for concurrent disconnects', async () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
-    conn.beginWindow('Class/ZCL_ABANDONED');
-    // Never closed: the drain gives up on it and names it.
-    (
-      conn as unknown as { lifecycle: { drain: () => Promise<unknown> } }
-    ).lifecycle.drain = async () => ({
-      abandonedWindows: ['Class/ZCL_ABANDONED'],
-    });
 
-    const [first, second] = await Promise.all([
-      conn.disconnect(),
-      conn.disconnect(),
-    ]);
+    let cleared = 0;
+    const realClear = (
+      conn as unknown as { clearSessionState: () => void }
+    ).clearSessionState.bind(conn);
+    (conn as unknown as { clearSessionState: () => void }).clearSessionState =
+      () => {
+        cleared += 1;
+        realClear();
+      };
 
-    expect(first.abandonedWindows).toStrictEqual(['Class/ZCL_ABANDONED']);
-    expect(second).toStrictEqual(first);
+    await Promise.all([conn.disconnect(), conn.disconnect()]);
+
+    // Callers of one kind join the tail, so the body runs once. There is no
+    // report to share any more — a teardown that waits for nothing has nothing
+    // to tell anyone.
+    expect(cleared).toBe(1);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('leaves the connection unusable when reset() discards the session', async () => {
@@ -382,19 +343,26 @@ describe('explicit connect is required', () => {
     }
   });
 
-  it('lets an in-flight request finish before a teardown clears the session', async () => {
+  // The reverse of what an earlier version asserted, and deliberately: waiting
+  // for in-flight requests is what made a teardown unbounded, since a caller may
+  // legitimately pass no timeout at all. The request is not aborted — it simply
+  // no longer holds the teardown, or everything queued behind it, open.
+  it('does not wait for an in-flight request', async () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
 
     const order: string[] = [];
     const request = conn
       .makeAdtRequest({ url: '/sap/bc/adt/slow', method: 'GET', timeout: 5000 })
-      .then(() => order.push('request'));
+      .then(() => order.push('request'))
+      .catch(() => order.push('request'));
     const teardown = conn.disconnect().then(() => order.push('teardown'));
 
-    await Promise.all([request, teardown]);
+    await teardown;
+    expect(order).toStrictEqual(['teardown']);
 
-    expect(order).toStrictEqual(['request', 'teardown']);
+    await request;
+    expect(conn.isConnected()).toBe(false);
   });
 });
 
@@ -574,11 +542,12 @@ describe('an abandoned establishment leaves in-flight work alone', () => {
     await stub.close();
   });
 
-  // The guard that abandons a doomed establishment must not clear the session:
-  // the teardown that bumped the epoch is queued and clears AFTER draining.
-  // Clearing inside the guard pulls cookies out from under a live request —
-  // the guarantee this change rests on, broken from inside its own protection.
-  it('keeps cookies until the queued teardown has drained', async () => {
+  // The guard that abandons a doomed establishment must not clear the session
+  // itself — the queued teardown does that. What changed since: the teardown no
+  // longer waits, so "the live request keeps its cookies" is gone as a
+  // guarantee. What replaces it is fencing: the request runs to completion
+  // untouched, and its result cannot reach the connection.
+  it('leaves the clearing to the teardown, and fences the request', async () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
 
@@ -636,17 +605,22 @@ describe('an abandoned establishment leaves in-flight work alone', () => {
       code: 'ADT_NOT_CONNECTED',
     });
 
-    // The live request must still have what it needs.
-    const cookies = (
-      conn as unknown as { getCookies(): string | null }
-    ).getCookies();
-    expect(cookies).not.toBeNull();
-
-    releaseRequest();
-    await expect(inFlight).resolves.toMatchObject({ status: 200 });
+    // The teardown does not wait, so by now the session is already gone. That is
+    // the trade this design accepts: the in-flight request loses the state it
+    // was using, rather than holding a teardown — and everything queued behind
+    // it — open for as long as it likes.
     await teardown;
+    expect(
+      (conn as unknown as { getCookies(): string | null }).getCookies(),
+    ).toBeNull();
+    expect(conn.isConnected()).toBe(false);
 
-    // Only now, after the drain, is the session gone.
+    // It is not aborted, though. It settles on its own terms, and whatever it
+    // returns cannot touch the connection: its lease belongs to a generation
+    // that is no longer current.
+    releaseRequest();
+    await inFlight.catch(() => undefined);
+    expect(conn.isConnected()).toBe(false);
     expect(
       (conn as unknown as { getCookies(): string | null }).getCookies(),
     ).toBeNull();

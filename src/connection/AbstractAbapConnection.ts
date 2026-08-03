@@ -3,11 +3,8 @@ import { Agent } from 'node:https';
 import {
   ADT_SESSION_ERROR,
   type IAdtResponse,
-  type ILockWindowAware,
   type ISessionLifecycleAware,
-  type ITeardownReport,
   isNetworkError,
-  type WindowToken,
 } from '@mcp-abap-adt/interfaces';
 import axios, {
   AxiosError,
@@ -17,7 +14,7 @@ import axios, {
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import {
-  type DrainResult,
+  type RequestLease,
   SessionLifecycle,
   sessionError,
 } from '../session/SessionLifecycle.js';
@@ -32,7 +29,7 @@ import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
  * the published contract fails to compile here instead of at the consumer.
  */
 abstract class AbstractAbapConnection
-  implements AbapConnection, ISessionLifecycleAware, ILockWindowAware
+  implements AbapConnection, ISessionLifecycleAware
 {
   /**
    * Owns session state, admission and teardown ordering. Composed rather than
@@ -211,22 +208,27 @@ abstract class AbstractAbapConnection
   }
 
   /**
-   * Tears the session down. Never throws: the report says what did not finish
-   * rather than failing. Sends no ADT session-close — see the design's D2.
+   * Tears the session down. Never throws, and always settles.
+   *
+   * It waits for NOTHING. Deciding when to disconnect is the caller's, and so is
+   * preparing for it — finishing chains, releasing locks. Waiting here on a
+   * request whose caller chose no timeout is what made a teardown unbounded, and
+   * an unbounded teardown blocks every later transition on the serialized tail.
+   *
+   * Requests already in flight run to completion untouched. Generation fencing
+   * (see `SessionLifecycle.isCurrent`) keeps their results from reaching this
+   * connection afterwards.
+   *
+   * Sends no ADT session-close — see the design's D2.
    */
-  async disconnect(): Promise<ITeardownReport> {
+  async disconnect(): Promise<void> {
+    // Synchronous, at the call: admission shuts and the generation moves before
+    // anything is queued, so a caller who has asked to disconnect cannot have
+    // requests still going through while this waits its turn.
     this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-    // The report travels THROUGH the transition, so a joining caller gets the
-    // same one. Building it outside would leave every caller but the first
-    // reporting an empty teardown — the abandoned locks reported to nobody.
-    return this.lifecycle.transition('disconnect', async () => {
-      const drained: DrainResult = await this.lifecycle.drain();
+    await this.lifecycle.transition('disconnect', async () => {
       this.clearSessionState();
       this.lifecycle.markDisconnected();
-      return {
-        abandonedWindows: drained.abandonedWindows,
-        releasePending: false,
-      };
     });
   }
 
@@ -248,15 +250,6 @@ abstract class AbstractAbapConnection
     return this.lifecycle.identity;
   }
 
-  /** Opens a lock window. See the design: a lock outlives its request. */
-  beginWindow(label: string): WindowToken {
-    return this.lifecycle.beginWindow(label);
-  }
-
-  endWindow(token: WindowToken): void {
-    this.lifecycle.endWindow(token);
-  }
-
   /**
    * Discards the session at a caller's request: cancels queued recoveries and
    * queues the cleanup rather than tearing down under a live request.
@@ -264,7 +257,6 @@ abstract class AbstractAbapConnection
   reset(): void {
     this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: true });
     void this.lifecycle.transition('cleanup', async () => {
-      await this.lifecycle.drain();
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
@@ -310,6 +302,12 @@ abstract class AbstractAbapConnection
       );
     }
 
+    // Whatever session arrives from here is one we are deliberately
+    // establishing, so it must not read as a replacement: the identity policy
+    // treats a changed fingerprint as fatal, and it cannot tell our own
+    // re-establishment from a session taken out from under us. Forgetting first
+    // makes the new fingerprint `established`, which is what it is.
+    this.lifecycle.forgetIdentity();
     try {
       await this.establishSession();
     } catch (error) {
@@ -373,14 +371,13 @@ abstract class AbstractAbapConnection
    * immediately — a later comparison must see the change, and on a dead session
    * the cookie is unchanged, so only the state can tell.
    *
-   * Does not await: it is called from inside a request, and the queued cleanup
-   * drains that very request.
+   * Does not await: it is called from inside a request, and the cleanup must not
+   * wait for the very request that raised it.
    */
   protected raiseSessionLost(reason: string): void {
     this.logger?.warn(`Session lost: ${reason}`);
     this.lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
     void this.lifecycle.transition('cleanup', async () => {
-      await this.lifecycle.drain();
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
@@ -417,35 +414,56 @@ abstract class AbstractAbapConnection
    * later check reads `unchanged`. That is one call site forgetting, and it
    * happened — on the error path and on every retry response.
    */
-  private observeResponse(headers?: Record<string, unknown>): void {
+  private observeResponse(
+    headers?: Record<string, unknown>,
+    generation?: number,
+  ): void {
+    // Fenced by SESSION GENERATION, not by the teardown epoch. Only a
+    // caller-initiated teardown moves the epoch — a recovery deliberately does
+    // not — so after a session loss and a successful recovery, a request from
+    // the dead session carries the same epoch as the new one and would sail
+    // straight through. The generation moves whenever the current session does.
+    //
+    // `undefined` means "not issued against a session": the CSRF fetch during
+    // connect() has no lease and must apply, since it is establishing the very
+    // session this would compare against.
+    if (
+      generation !== undefined &&
+      generation !== this.lifecycle.sessionGeneration
+    ) {
+      this.logger?.debug(
+        'Ignoring a response from a previous session: its effects are fenced',
+      );
+      return;
+    }
     this.applyIdentityPolicy(this.updateCookiesFromResponse(headers));
   }
 
   /**
    * Acts on what a response said about the session identity.
    *
-   * A replacement is fatal only while a lock is held — and "a lock is held"
-   * means an open window, not `sessionMode`: a mode flag cannot represent
-   * windows, another handler can flip it back, and a batch never sets it.
-   * With no lock held the same replacement is not a loss: nothing was being
-   * held, so the new identity simply becomes the current one.
+   * A replacement is always fatal, and that is a narrowing: an earlier version
+   * tolerated it "when no lock is held", deciding from the connection's own
+   * lock windows. Those are gone, and rightly — this layer does not know that a
+   * lock exists, what object it covers or what would release it. Locks are
+   * tracked a layer up, per object, by the code that took them.
+   *
+   * So the rule is written from what this layer CAN know: the ABAP session we
+   * were speaking to is not the one we are speaking to now. Anything the caller
+   * held against the old one is dead, and continuing quietly would hand them a
+   * session they never opened — the failure this whole design exists to prevent.
+   * Being wrong in this direction costs a reconnect; being wrong the other way
+   * costs a lock nobody can find.
    */
   private applyIdentityPolicy(
     classification: 'unchanged' | 'established' | 'replaced',
   ): void {
     if (classification !== 'replaced') return;
 
-    if (this.lifecycle.openWindows.length === 0) {
-      this.logger?.debug(
-        'Session identity changed with no lock held; continuing on the new one',
-      );
-      return;
-    }
-
-    this.raiseSessionLost('the session cookie changed while a lock was held');
+    this.raiseSessionLost('the session cookie changed under us');
     throw sessionError(
       ADT_SESSION_ERROR.SESSION_REPLACED,
-      'The SAP session was replaced while a lock was held; the lock handle is dead',
+      'The SAP session was replaced; anything held against the previous one is dead',
     );
   }
 
@@ -531,7 +549,7 @@ abstract class AbstractAbapConnection
     // shut the door.
     const lease = this.lifecycle.admitRequest();
     try {
-      return await this.performRequest<T, D>(options);
+      return await this.performRequest<T, D>(options, lease);
     } finally {
       lease.release();
     }
@@ -539,6 +557,7 @@ abstract class AbstractAbapConnection
 
   private async performRequest<T = any, D = any>(
     options: AbapRequestOptions,
+    lease: Pick<RequestLease, 'generation'>,
   ): Promise<IAdtResponse<T, D>> {
     const {
       url: endpoint,
@@ -669,7 +688,7 @@ abstract class AbstractAbapConnection
 
     try {
       const response = await this.getAxiosInstance()(requestConfig);
-      this.observeResponse(response.headers);
+      this.observeResponse(response.headers, lease.generation);
 
       this.logger?.debug(`Request succeeded with status ${response.status}`, {
         type: 'REQUEST_SUCCESS',
@@ -703,7 +722,7 @@ abstract class AbstractAbapConnection
             ? error.response.data.slice(0, 200)
             : JSON.stringify(error.response.data).slice(0, 200);
 
-        this.observeResponse(error.response.headers);
+        this.observeResponse(error.response.headers, lease.generation);
       }
 
       // The server telling us the session is gone is invisible to the identity
@@ -774,7 +793,9 @@ abstract class AbstractAbapConnection
         }
 
         try {
-          this.setCsrfToken(await this.fetchCsrfToken(requestUrl, 5, 2000));
+          this.setCsrfToken(
+            await this.fetchCsrfToken(requestUrl, 5, 2000, lease.generation),
+          );
           const refreshedToken = this.getCsrfToken();
           if (refreshedToken) {
             requestHeaders['x-csrf-token'] = refreshedToken;
@@ -785,7 +806,7 @@ abstract class AbstractAbapConnection
           }
 
           const retryResponse = await this.getAxiosInstance()(requestConfig);
-          this.observeResponse(retryResponse.headers);
+          this.observeResponse(retryResponse.headers, lease.generation);
 
           return retryResponse as unknown as IAdtResponse<T, D>;
         } catch (retryError) {
@@ -822,7 +843,7 @@ abstract class AbstractAbapConnection
           requestHeaders.Cookie = this.cookies;
 
           const retryResponse = await this.getAxiosInstance()(requestConfig);
-          this.observeResponse(retryResponse.headers);
+          this.observeResponse(retryResponse.headers, lease.generation);
 
           return retryResponse as unknown as IAdtResponse<T, D>;
         }
@@ -833,7 +854,12 @@ abstract class AbstractAbapConnection
         );
         try {
           // Try to get CSRF token (this will also get cookies)
-          this.csrfToken = await this.fetchCsrfToken(requestUrl, 3, 1000);
+          this.csrfToken = await this.fetchCsrfToken(
+            requestUrl,
+            3,
+            1000,
+            lease.generation,
+          );
           if (this.cookies) {
             requestHeaders.Cookie = this.cookies;
             this.logger?.debug(
@@ -841,7 +867,7 @@ abstract class AbstractAbapConnection
             );
 
             const retryResponse = await this.getAxiosInstance()(requestConfig);
-            this.observeResponse(retryResponse.headers);
+            this.observeResponse(retryResponse.headers, lease.generation);
 
             return retryResponse as unknown as IAdtResponse<T, D>;
           }
@@ -870,6 +896,8 @@ abstract class AbstractAbapConnection
     url: string,
     retryCount: number = CSRF_CONFIG.RETRY_COUNT,
     retryDelay: number = CSRF_CONFIG.RETRY_DELAY,
+    /** Fences the response effects; omitted during connect(), which has no lease. */
+    generation?: number,
   ): Promise<string> {
     // Try primary endpoint first, then fallback for older systems
     const baseUrl = url.includes('/sap/bc/adt/')
@@ -900,6 +928,7 @@ abstract class AbstractAbapConnection
           csrfUrl,
           retryCount,
           retryDelay,
+          generation,
         );
       } catch (error) {
         // Third layer with a catch on this path, and the last one that could
@@ -927,6 +956,7 @@ abstract class AbstractAbapConnection
     csrfUrl: string,
     retryCount: number,
     retryDelay: number,
+    generation?: number,
   ): Promise<string> {
     this.logger?.debug(`Fetching CSRF token from: ${csrfUrl}`);
 
@@ -979,7 +1009,7 @@ abstract class AbstractAbapConnection
           timeout: getTimeout('csrf'),
         });
 
-        this.observeResponse(response.headers);
+        this.observeResponse(response.headers, generation);
 
         const token = response.headers['x-csrf-token'] as string | undefined;
         if (!token) {
@@ -996,7 +1026,7 @@ abstract class AbstractAbapConnection
         }
 
         if (response.headers['set-cookie']) {
-          this.observeResponse(response.headers);
+          this.observeResponse(response.headers, generation);
           if (this.cookies) {
             this.logger?.debug(
               `[DEBUG] BaseAbapConnection - Cookies received from CSRF response (first 100 chars): ${this.cookies.substring(0, 100)}...`,
@@ -1023,7 +1053,7 @@ abstract class AbstractAbapConnection
           // Always try to extract cookies from error response, even on 401
           // This ensures cookies are available for subsequent requests
           if (error.response?.headers) {
-            this.observeResponse(error.response.headers);
+            this.observeResponse(error.response.headers, generation);
             if (this.cookies) {
               this.logger?.debug('Cookies extracted from error response', {
                 status: error.response.status,
@@ -1049,7 +1079,7 @@ abstract class AbstractAbapConnection
 
             const token = error.response.headers['x-csrf-token'] as string;
             if (token) {
-              this.observeResponse(error.response.headers);
+              this.observeResponse(error.response.headers, generation);
               return token;
             }
           }
@@ -1060,7 +1090,7 @@ abstract class AbstractAbapConnection
             );
 
             const token = error.response.headers['x-csrf-token'] as string;
-            this.observeResponse(error.response.headers);
+            this.observeResponse(error.response.headers, generation);
             return token;
           }
 
@@ -1282,6 +1312,13 @@ abstract class AbstractAbapConnection
     this.setCsrfToken(null);
     this.cookies = null;
     this.cookieStore.clear();
+    // And the tracked identity, because WE discarded the session. Without this
+    // the cookie that arrives next reads as a foreign replacement — and since a
+    // replacement is now always fatal, our own deliberate re-authentication
+    // would tear the connection down. The distinction that matters is not
+    // "was a lock held" but "did we cause this": what we discarded on purpose
+    // is not a session taken from under us.
+    this.lifecycle.forgetIdentity();
   }
 
   private shouldRetryCsrf(error: unknown): boolean {

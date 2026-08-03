@@ -2,10 +2,11 @@
 
 > **The header is not what tracks your lock.** `setSessionType('stateful')` sets
 > a per-request header and nothing more — another handler can flip it back while
-> your lock is genuinely open, and a batch never sets it at all. Tell the
-> connection about the lock itself with `beginWindow()` / `endWindow()`: that is
-> what a teardown waits for, what refuses to be abandoned silently, and what
-> makes a replaced session fatal instead of unnoticed. See
+> your lock is genuinely open, and a batch never sets it at all. Nothing in this
+> layer tracks locks: that belongs to `@mcp-abap-adt/adt-clients`, which holds the
+> handles and pairs each LOCK with its UNLOCK per object. What the connection
+> offers is `beginCriticalSection()` / `endCriticalSection()`, so a short timeout
+> cannot abort a request mid-span. See
 > [USAGE.md — Session Lifecycle](./USAGE.md#session-lifecycle).
 
 

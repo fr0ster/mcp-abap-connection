@@ -409,23 +409,25 @@ interface AbapConnection {
 ```
 
 The HTTP connection classes carry the rest of the session lifecycle. It is on the
-shared contract as two **capability atoms** in `@mcp-abap-adt/interfaces` (11.5.0+)
-rather than as methods on `IAbapConnection`, which is why `RfcAbapConnection` — a
-transport that owns no HTTP session — is unaffected by their existence:
+shared contract as a **capability atom** in `@mcp-abap-adt/interfaces` rather than
+as methods on `IAbapConnection`, which is why `RfcAbapConnection` — a transport
+that owns no HTTP session — is unaffected by its existence:
 
 ```typescript
 // ISessionLifecycleAware
-disconnect(): Promise<ITeardownReport>; // never throws; reports what it could not finish
+disconnect(): Promise<void>;         // never throws, and waits for nothing
 isConnected(): boolean;
-getSessionIdentity(): string | null;    // WHICH SAP session; null is not "disconnected"
-
-// ILockWindowAware
-beginWindow(label: string): WindowToken;
-endWindow(token: WindowToken): void;
+getSessionIdentity(): string | null; // WHICH SAP session; null is not "disconnected"
 ```
 
 Import those names from `@mcp-abap-adt/interfaces`, not from this package: a
 contract type re-exported under a second name is a contract type that can drift.
+
+**The connection does not track locks.** Deciding when to disconnect, and
+preparing for it, belongs to the caller; pairing every LOCK with its UNLOCK
+belongs to `@mcp-abap-adt/adt-clients`, which holds the handles. What this layer
+owns is not being interrupted by a timeout mid-operation — see
+`beginCriticalSection()` below.
 
 See [docs/USAGE.md — Session Lifecycle](./docs/USAGE.md#session-lifecycle).
 
