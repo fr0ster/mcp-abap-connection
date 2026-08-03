@@ -104,27 +104,16 @@ describe('path C — a login-form 401 on a mutation', () => {
     });
 
     expect(response.status).toBe(200);
-    // A new session was established, and with nothing held that is fine.
+    // A new session was established, and it is not a "replacement": WE
+    // discarded the old one. invalidateSession() drops the tracked identity
+    // with the cookies, so the next fingerprint reads as established rather
+    // than as a session taken from under us — which, since a replacement is now
+    // always fatal, would otherwise make our own re-authentication tear the
+    // connection down. The pair of tests here used to differ only by whether a
+    // lock window was open; with windows gone the distinction that survives is
+    // "did we cause this".
     expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S2');
     expect(conn.isConnected()).toBe(true);
-  });
-
-  it('is fatal while a lock is held, with no code of its own', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
-    await conn.connect();
-    conn.beginWindow('Class/ZCL_A');
-
-    stub.nextWorkStatus = 401;
-
-    await expect(
-      conn.makeAdtRequest({
-        url: '/sap/bc/adt/work',
-        method: 'PUT',
-        timeout: 5000,
-        data: 'x',
-      }),
-    ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
-    expect(conn.isConnected()).toBe(false);
   });
 });
 
@@ -144,7 +133,6 @@ describe('path D — a 401 on a GET', () => {
   it('retries on the same session when it still has cookies', async () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
-    conn.beginWindow('Class/ZCL_A');
 
     stub.nextWorkStatus = 401;
     const response = await conn.makeAdtRequest({

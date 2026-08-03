@@ -20,10 +20,10 @@ export type {
   AbapConnection,
   AbapRequestOptions,
 } from './connection/AbapConnection.js';
-// The session lifecycle vocabulary — ISessionLifecycleAware, ILockWindowAware,
-// ITeardownReport, WindowToken, ADT_SESSION_ERROR — is deliberately NOT exported
-// here. It lives in @mcp-abap-adt/interfaces, and a consumer imports it from
-// there: re-exporting a contract type gives it two names and lets the two drift.
+// The session lifecycle vocabulary — ISessionLifecycleAware, ADT_SESSION_ERROR —
+// is deliberately NOT exported here. It lives in @mcp-abap-adt/interfaces, and a
+// consumer imports it from there: re-exporting a contract type gives it two
+// names and lets the two drift.
 // Connection classes - only final implementations
 // Deprecated aliases for backward compatibility
 export {

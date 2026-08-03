@@ -219,10 +219,9 @@ implied. Four things follow from it.
 
 > **Availability.** `connect()` is on the shared `IAbapConnection` contract and
 > works on every connection. The rest of this section is on the contract too, but
-> as two **capability atoms** in `@mcp-abap-adt/interfaces` (11.5.0+) rather than
-> as methods on `IAbapConnection`: `ISessionLifecycleAware` (`disconnect()`,
-> `isConnected()`, `getSessionIdentity()`) and `ILockWindowAware`
-> (`beginWindow()`, `endWindow()`).
+> as a **capability atom** in `@mcp-abap-adt/interfaces` rather than as methods on
+> `IAbapConnection`: `ISessionLifecycleAware` — `disconnect()`, `isConnected()`,
+> `getSessionIdentity()`.
 >
 > The split is the point. `IAbapConnection` is the minimum every transport can
 > honour, and `RfcAbapConnection` has none of these — on RFC the session *is* the
@@ -232,50 +231,51 @@ implied. Four things follow from it.
 > So ask for the atom you need, not for a concrete class:
 >
 > ```typescript
-> function withLock(conn: IAbapConnection & ILockWindowAware) { /* ... */ }
+> function tearDownAfter(conn: IAbapConnection & ISessionLifecycleAware) { /* ... */ }
 > ```
 >
 > **How you satisfy that parameter decides whether you get a compile-time
 > guarantee, and there is only one way that does.**
 >
 > Construct the connection through a concrete HTTP class and the compiler knows
-> it implements the atoms, so passing an RFC connection is an error at the call
+> it implements the atom, so passing an RFC connection is an error at the call
 > site:
 >
 > ```typescript
 > const conn = new BaseAbapConnection(config, logger);
-> withLock(conn);                       // ✅ checked
-> withLock(new RfcAbapConnection(cfg)); // ✅ compile error, as it should be
+> tearDownAfter(conn);                       // ✅ checked
+> tearDownAfter(new RfcAbapConnection(cfg)); // ✅ compile error, as it should be
 > ```
 >
 > `createAbapConnection()` cannot give you that. It returns `IAbapConnection` for
 > **every** config, RFC included, so the type carries no evidence either way and
 > the compiler rejects its result whatever the transport. Asserting past that —
-> `conn as IAbapConnection & ILockWindowAware` — silences the error for the HTTP
-> case *and* for RFC, which then fails at runtime on `beginWindow()`. An assertion
-> is not a check; it is a promise you make to the compiler on your own authority.
+> `conn as IAbapConnection & ISessionLifecycleAware` — silences the error for the
+> HTTP case *and* for RFC, which then fails at runtime. An assertion is not a
+> check; it is a promise you make to the compiler on your own authority.
 >
 > When you only have an `IAbapConnection` — from the factory, or from a caller —
 > narrow it at runtime with a predicate:
 >
 > ```typescript
-> function supportsLockWindows(
+> function ownsItsSession(
 >   conn: IAbapConnection,
-> ): conn is IAbapConnection & ILockWindowAware {
->   const candidate = conn as Partial<ILockWindowAware>;
+> ): conn is IAbapConnection & ISessionLifecycleAware {
+>   const candidate = conn as Partial<ISessionLifecycleAware>;
 >   // EVERY method of the atom. A predicate narrows to the whole interface, so
->   // checking one method and promising two puts the failure back where this
->   // check was meant to remove it — inside the branch that looked safe.
+>   // checking one and promising three puts the failure back where this check
+>   // was meant to remove it — inside the branch that looked safe.
 >   return (
->     typeof candidate.beginWindow === 'function' &&
->     typeof candidate.endWindow === 'function'
+>     typeof candidate.disconnect === 'function' &&
+>     typeof candidate.isConnected === 'function' &&
+>     typeof candidate.getSessionIdentity === 'function'
 >   );
 > }
 >
-> if (supportsLockWindows(conn)) {
->   withLock(conn);            // narrowed by evidence, not by assertion
+> if (ownsItsSession(conn)) {
+>   tearDownAfter(conn);       // narrowed by evidence, not by assertion
 > } else {
->   // No lock windows here. On RFC that is expected, not a failure.
+>   // No HTTP session here. On RFC that is expected, not a failure.
 > }
 > ```
 >
@@ -323,72 +323,68 @@ try {
 }
 ```
 
-`ITeardownReport`, `WindowToken` and `AdtSessionErrorCode` come from the same
-place, as do the two capability interfaces this connection implements —
-`ISessionLifecycleAware` and `ILockWindowAware`. Depend on those rather than on a
-concrete connection class where you can: an `RfcAbapConnection` is a valid
-`IAbapConnection` that implements neither, so the atom you require is also the
+`AdtSessionErrorCode` comes from the same place, as does the capability interface
+this connection implements — `ISessionLifecycleAware`. Depend on that rather than
+on a concrete connection class where you can: an `RfcAbapConnection` is a valid
+`IAbapConnection` that does not implement it, so the atom you require is also the
 documentation of what your code actually needs.
 
-### disconnect() reports what it could not finish
+### disconnect() waits for nothing
 
 ```typescript
-const report = await connection.disconnect();
-// { abandonedWindows: string[], releasePending: boolean }
+await connection.disconnect();   // Promise<void>
 ```
 
-It never throws — the report says what did not finish instead. It waits for
-in-flight requests to settle before clearing anything, so a teardown never
-pulls the session out from under a request already running.
+It never throws, and it always settles. **It waits for nothing** — not for
+requests in flight, not for anything you hold. Deciding when to disconnect is
+yours, and so is preparing for it.
+
+Requests already in flight run to completion untouched; nothing is aborted. What
+the connection guarantees is that their results can no longer reach it: a
+response arriving after the teardown is fenced, so it cannot write its cookies
+over a session established since, and cannot be mistaken for a replacement.
+
+An earlier version waited for in-flight requests before clearing anything. That
+turned out to be unbounded — a request whose caller chose no timeout could hold a
+teardown open forever, and since lifecycle transitions are serialized, every
+later `connect()` queued behind it.
 
 **Over HTTP it does not release locks.** The ABAP session lives on until its
-timeout, along with whatever it held. Unlock first; disconnecting is not a way
-to clean up after yourself.
+timeout, along with whatever it held. Unlock first; disconnecting is not a way to
+clean up after yourself.
 
-### Lock windows
+### Uninterruptible spans
 
-A lock outlives the request that takes it, which makes it the one thing a
-teardown has to know about:
+The connection does **not** track locks — it does not know one exists, what
+object it covers, or what would release it. Pairing every LOCK with its UNLOCK is
+`@mcp-abap-adt/adt-clients`' job, and it does it per object in its lock registry.
+
+What this layer owns is the timeout, because a timeout is the server taking too
+long and nothing about it depends on the caller. Aborting a request mid-flight
+leaves an operation whose outcome you cannot determine — a `LOCK` that may have
+succeeded server-side, with a handle you never received:
 
 ```typescript
-const token = connection.beginWindow('Class/ZCL_MY_CLASS');
-
-let lockHandle: string | undefined;
+connection.beginCriticalSection();
 try {
-  lockHandle = await lock(connection, 'ZCL_MY_CLASS');   // your LOCK call
-} catch (error) {
-  // The LOCK is confirmed to have failed, so nothing is held: close the window.
-  connection.endWindow(token);
-  throw error;
-}
-
-try {
-  await update(connection, 'ZCL_MY_CLASS', lockHandle);
-  await unlock(connection, 'ZCL_MY_CLASS', lockHandle);
-  // The UNLOCK is confirmed: the lock is released, so close the window.
-  connection.endWindow(token);
-} catch (error) {
-  // Deliberately NOT closed here. The unlock may have failed, never gone out,
-  // or come back with an unknown outcome — in each of those the lock is most
-  // likely still held, and a window left open is what makes a teardown wait for
-  // it and report it by name instead of walking past it.
-  throw error;
+  const handle = await lock(connection, 'ZCL_MY_CLASS');
+  await update(connection, 'ZCL_MY_CLASS', handle);
+  await unlock(connection, 'ZCL_MY_CLASS', handle);
+} finally {
+  connection.endCriticalSection();
 }
 ```
 
-Note what the `catch` does **not** do. A `finally { endWindow(token) }` reads
-naturally and is wrong here: it closes the window exactly when the lock is most
-likely still there. The window tracks *"a lock may be held"*, so only proof that
-nothing is held closes it — a confirmed unlock, or a confirmed failure to lock.
+While a section is active the effective timeout is raised to
+`SAP_TIMEOUT_CRITICAL` (600s by default) — `Math.max(yours, the ceiling)`, so it
+never shortens a timeout you chose. The pair is reference-counted, so nesting is
+safe.
 
-The cost of forgetting `endWindow()` on the success path is not silence: every
-later teardown waits out `SAP_TIMEOUT_CRITICAL` and then reports the window as
-abandoned.
-
-While a window is open, a teardown waits for it rather than abandoning it, and
-a new window cannot be opened once a teardown has been requested. A window that
-never closes is given up on after `SAP_TIMEOUT_CRITICAL` and comes back **named**
-in `ITeardownReport.abandonedWindows`.
+The raise is **connection-wide**: while any section is active, every request on
+that connection gets the ceiling, including one that has nothing to do with the
+locked object. Those requests share one ABAP session, and an abort leaves that
+session in the same uncertain state during a span someone declared sensitive
+precisely to avoid it.
 
 ### When the session is lost
 
@@ -583,7 +579,7 @@ interface AbapConnection {
 
 Anything beyond that is **not** on the contract. `reset()`, `getSessionMode()`
 and the session lifecycle (`disconnect()`, `isConnected()`,
-`getSessionIdentity()`, `beginWindow()`, `endWindow()`) live on the HTTP
+`getSessionIdentity()`) live on the HTTP
 connection classes; `RfcAbapConnection` has some of them and not others, so
 reach for them through a concrete type rather than through what
 `createAbapConnection()` returns.

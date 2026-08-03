@@ -117,10 +117,9 @@ describe('a replaced session cookie', () => {
     await stub.close();
   });
 
-  it('is fatal while a lock window is open', async () => {
+  it('is fatal', async () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
-    conn.beginWindow('Class/ZCL_A');
 
     stub.rotateSession = true;
 
@@ -131,25 +130,29 @@ describe('a replaced session cookie', () => {
     expect(conn.isConnected()).toBe(false);
   });
 
-  // With nothing held there is nothing to lose, and today's transparent
-  // recovery is behaviour consumers rely on.
-  it('is transparent when no lock is held', async () => {
+  // An earlier version tolerated a replacement "when no lock is held", deciding
+  // from the connection's own lock windows. Those are gone: this layer does not
+  // know a lock exists, what object it covers or what would release it, so the
+  // rule is written from what it CAN know — the session we were speaking to is
+  // not the one we are speaking to now.
+  it('is fatal even with nothing obviously at stake', async () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
 
     stub.rotateSession = true;
 
-    await expect(get(conn)).resolves.toMatchObject({ status: 200 });
-    expect(conn.isConnected()).toBe(true);
-    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S2');
+    await expect(get(conn)).rejects.toMatchObject({
+      code: 'ADT_SESSION_REPLACED',
+    });
+    expect(conn.isConnected()).toBe(false);
   });
 
-  // The decision must not rest on the wire header: another handler can flip it
-  // back to stateless while a lock is genuinely open, and a batch never sets it.
-  it('is fatal on the open window even when the mode says stateless', async () => {
+  // The decision must not rest on the wire header either: another handler can
+  // flip it back to stateless while a lock is genuinely open, and a batch never
+  // sets it at all.
+  it('is fatal regardless of the session mode', async () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
-    conn.beginWindow('Class/ZCL_A');
     conn.setSessionType('stateless');
 
     stub.rotateSession = true;
@@ -174,10 +177,9 @@ describe('a replacement arriving on a non-200 response', () => {
   // updateCookiesFromResponse() MUTATES the fingerprint, so a call site that
   // discards its classification absorbs the replacement silently and every
   // later check reads `unchanged`. The error path did exactly that.
-  it('is fatal too, when a lock window is open', async () => {
+  it('is fatal too', async () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
-    conn.beginWindow('Class/ZCL_A');
 
     stub.rotateSession = true;
     stub.rotateStatus = 404;
@@ -206,7 +208,6 @@ describe('a session verdict raised during a retry', () => {
   it('reaches the caller instead of the error that started the retry', async () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
-    conn.beginWindow('Class/ZCL_A');
 
     let attempts = 0;
     const realAxios = (
@@ -276,7 +277,6 @@ describe('a dead session', () => {
   it('is reported as a lost session, with the cookie untouched', async () => {
     const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
     await conn.connect();
-    conn.beginWindow('Class/ZCL_A');
     const identityBefore = conn.getSessionIdentity();
 
     stub.deadSession = true;

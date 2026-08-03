@@ -1,26 +1,14 @@
 /**
  * SessionLifecycle — the concurrency rules of the session design, executed.
  *
- * Numbers refer to the test list in the design spec
- * (docs/superpowers/specs/2026-07-27-session-lifecycle-design.md in
- * @mcp-abap-adt/adt-clients). Each one names the implementation it is meant to
+ * Design: docs/superpowers/specs/2026-07-31-teardown-policy-design.md in
+ * @mcp-abap-adt/adt-clients. Each test names the implementation it is meant to
  * fail, because most of them pass on a plausible wrong version.
  *
  * No SAP, no HTTP, no RFC: this unit knows about none of them.
  */
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces';
 import { SessionLifecycle } from '../session/SessionLifecycle.js';
-
-/** Manual clock, so a "ceiling" costs no wall time. */
-function clock(start = 0) {
-  let t = start;
-  return {
-    now: () => t,
-    advance: (ms: number) => {
-      t += ms;
-    },
-  };
-}
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -32,16 +20,14 @@ function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
-/** Lets queued microtasks and expired timers run. */
+/** Lets queued microtasks run. */
 const settle = () => new Promise((r) => setTimeout(r, 5));
 
 const fp = (entries: Record<string, string>) =>
   new Map(Object.entries(entries));
 
-function connected(
-  options?: ConstructorParameters<typeof SessionLifecycle>[0],
-) {
-  const lifecycle = new SessionLifecycle(options);
+function connected() {
+  const lifecycle = new SessionLifecycle();
   lifecycle.markConnected(fp({ SAP_SESSIONID: 'S1' }));
   return lifecycle;
 }
@@ -50,310 +36,118 @@ describe('SessionLifecycle — admission', () => {
   it('refuses requests before connect', () => {
     const lifecycle = new SessionLifecycle();
     expect(() => lifecycle.admitRequest()).toThrow(
-      expect.objectContaining({ code: ADT_SESSION_ERROR.NOT_CONNECTED }),
+      ADT_SESSION_ERROR.NOT_CONNECTED,
     );
   });
 
-  // 7 — with NO window open, a pending teardown refuses at once.
-  it('refuses a request during a teardown when no window is open', () => {
+  it('refuses a request the moment a teardown is requested', () => {
     const lifecycle = connected();
     lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-
-    expect(lifecycle.connected).toBe(false);
     expect(() => lifecycle.admitRequest()).toThrow(
-      expect.objectContaining({ code: ADT_SESSION_ERROR.NOT_CONNECTED }),
+      ADT_SESSION_ERROR.NOT_CONNECTED,
     );
+    expect(lifecycle.connected).toBe(false);
   });
 
-  // 16 (lifecycle half) — with a window open, the chain may still finish.
-  it('admits requests during a teardown while a window is open, and reports not-connected', () => {
+  // The teardown intent applies synchronously, before any transition is queued:
+  // a caller who has asked to disconnect cannot have requests still going
+  // through while the transition waits its turn on the tail.
+  it('shuts admission before the transition even starts', async () => {
     const lifecycle = connected();
-    const token = lifecycle.beginWindow('Class/ZCL_A');
-    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
+    const blocked = deferred();
+    void lifecycle.transition('connect', () => blocked.promise);
 
-    // finishing work is allowed…
+    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
+    void lifecycle.transition('disconnect', async () => {
+      lifecycle.markDisconnected();
+    });
+
+    // The disconnect body has not run — it is queued behind the connect.
+    expect(() => lifecycle.admitRequest()).toThrow(
+      ADT_SESSION_ERROR.NOT_CONNECTED,
+    );
+    blocked.resolve();
+    await settle();
+  });
+
+  it('counts an admitted request in flight until it is released', () => {
+    const lifecycle = connected();
     const lease = lifecycle.admitRequest();
+    expect(lifecycle.requestsInFlight).toBe(1);
     lease.release();
-    // …but starting work is not: a caller asking "may I begin" hears no.
-    expect(lifecycle.connected).toBe(false);
-
-    lifecycle.endWindow(token);
-    expect(() => lifecycle.admitRequest()).toThrow(
-      expect.objectContaining({ code: ADT_SESSION_ERROR.NOT_CONNECTED }),
-    );
-  });
-
-  // 18 — grandfathering covers finishing, never starting something new.
-  it('refuses a new window once a teardown is pending', () => {
-    const lifecycle = connected();
-    lifecycle.beginWindow('Class/ZCL_A');
-    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-
-    expect(() => lifecycle.beginWindow('Class/ZCL_B')).toThrow(
-      expect.objectContaining({ code: ADT_SESSION_ERROR.NOT_CONNECTED }),
-    );
-  });
-
-  // 31/32/33 (lifecycle half) — a lost session cannot let anything finish.
-  it('shuts admission at once on a session-lost teardown, even with a window open', () => {
-    const lifecycle = connected();
-    lifecycle.beginWindow('Class/ZCL_A');
-
-    lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
-
-    expect(() => lifecycle.admitRequest()).toThrow(
-      expect.objectContaining({ code: ADT_SESSION_ERROR.NOT_CONNECTED }),
-    );
-    // and the identity is dropped immediately, so a later comparison sees it
-    expect(lifecycle.identity).toBeNull();
+    lease.release(); // idempotent
+    expect(lifecycle.requestsInFlight).toBe(0);
   });
 });
 
 describe('SessionLifecycle — reconnect', () => {
-  // The design allows connect() after disconnect() explicitly. Nothing else
-  // ends a teardown, so if markConnected() does not, the lifecycle is usable
-  // exactly once and every later session is refused.
   it('is usable again after a graceful teardown and a fresh connect', () => {
     const lifecycle = connected();
     lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
     lifecycle.markDisconnected();
+    expect(lifecycle.connected).toBe(false);
 
     lifecycle.markConnected(fp({ SAP_SESSIONID: 'S2' }));
-
     expect(lifecycle.connected).toBe(true);
-    const lease = lifecycle.admitRequest();
-    lease.release();
-    expect(() => lifecycle.beginWindow('Class/ZCL_A')).not.toThrow();
+    expect(() => lifecycle.admitRequest()).not.toThrow();
   });
 
   it('is usable again after a session-lost teardown', () => {
     const lifecycle = connected();
-    lifecycle.beginWindow('Class/ZCL_A');
     lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
+    lifecycle.markDisconnected();
+    expect(lifecycle.identity).toBeNull();
 
     lifecycle.markConnected(fp({ SAP_SESSIONID: 'S2' }));
-
     expect(lifecycle.connected).toBe(true);
     expect(lifecycle.identity).toBe('SAP_SESSIONID=S2');
-    // the old session's window cannot be closed from here and was already
-    // reported when the teardown gave up, so it does not haunt the new session
-    expect(lifecycle.openWindows).toStrictEqual([]);
+  });
+});
+
+describe('SessionLifecycle — session generation', () => {
+  // The fence that makes a non-waiting teardown safe. Without it a response
+  // arriving after a later connect() writes into the new session's state.
+  it('goes stale for a lease taken before a teardown', () => {
+    const lifecycle = connected();
+    const lease = lifecycle.admitRequest();
+    expect(lifecycle.isCurrent(lease)).toBe(true);
+
+    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
+    expect(lifecycle.isCurrent(lease)).toBe(false);
   });
 
-  it('is usable again after the ceiling expired and shut the gate', async () => {
-    const c = clock();
-    const lifecycle = connected({ ceilingMs: 1000, now: c.now });
-    lifecycle.beginWindow('Class/ZCL_A');
+  // The gap an earlier design left: counting only at markConnected() leaves a
+  // lease valid between a teardown and the next connect, so a late response
+  // writes into state just cleared.
+  it('goes stale before any replacement exists', () => {
+    const lifecycle = connected();
+    const lease = lifecycle.admitRequest();
     lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
+    lifecycle.markDisconnected();
 
-    const drained = lifecycle.drain();
-    await settle();
-    c.advance(1001);
-    await drained;
+    expect(lifecycle.isCurrent(lease)).toBe(false);
+  });
 
+  it('goes stale across a session-lost teardown and its recovery', () => {
+    const lifecycle = connected();
+    const lease = lifecycle.admitRequest();
+
+    // Internal origin: the epoch deliberately does NOT move here.
+    const epochBefore = lifecycle.teardownEpoch;
+    lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
     lifecycle.markConnected(fp({ SAP_SESSIONID: 'S2' }));
-    expect(() => lifecycle.admitRequest()).not.toThrow();
-  });
-});
+    expect(lifecycle.teardownEpoch).toBe(epochBefore);
 
-describe('SessionLifecycle — windows', () => {
-  // 19 — two windows may share a label; closing one must not retire the other.
-  it('closes windows by token, so a shared label does not retire both', async () => {
-    const lifecycle = connected();
-    const first = lifecycle.beginWindow('Class/ZCL_A');
-    lifecycle.beginWindow('Class/ZCL_A');
-    // Two distinct windows, not one entry seen twice: an implementation keyed
-    // on the label collapses them here, before any close happens.
-    expect(lifecycle.openWindows).toStrictEqual(['Class/ZCL_A', 'Class/ZCL_A']);
-    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-
-    lifecycle.endWindow(first);
-
-    let drained = false;
-    void lifecycle.drain().then(() => {
-      drained = true;
-    });
-    await settle();
-    expect(drained).toBe(false);
-    expect(lifecycle.openWindows).toStrictEqual(['Class/ZCL_A']);
+    // ...which is exactly why the fence cannot be built on it.
+    expect(lifecycle.isCurrent(lease)).toBe(false);
   });
 
-  // 20 — a bare counter would let a second close retire someone else's window.
-  it('ignores an unknown or already-used token', async () => {
-    const lifecycle = connected();
-    const token = lifecycle.beginWindow('Class/ZCL_A');
-    const other = lifecycle.beginWindow('Class/ZCL_B');
-
-    lifecycle.endWindow(token);
-    lifecycle.endWindow(token); // double close
-    lifecycle.endWindow(Symbol('Class/ZCL_FOREIGN')); // foreign token
-
-    expect(lifecycle.openWindows).toStrictEqual(['Class/ZCL_B']);
-    lifecycle.endWindow(other);
-    expect(lifecycle.openWindows).toStrictEqual([]);
-  });
-});
-
-describe('SessionLifecycle — drain', () => {
-  // 9 — a request admitted first must settle before the teardown may release.
-  it('waits for an in-flight request', async () => {
+  it('stays current for a lease of the session in hand', () => {
     const lifecycle = connected();
     const lease = lifecycle.admitRequest();
-    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-
-    const order: string[] = [];
-    const drained = lifecycle.drain().then(() => order.push('drained'));
-    await settle();
-    expect(order).toStrictEqual([]);
-
-    order.push('request settled');
+    expect(lifecycle.isCurrent(lease)).toBe(true);
     lease.release();
-    await drained;
-
-    expect(order).toStrictEqual(['request settled', 'drained']);
-  });
-
-  // 16 (drain half) — the gap between PUT and UNLOCK has zero requests in
-  // flight, so a request-counting drain finishes there and orphans the lock.
-  it('waits for an open window even with nothing in flight', async () => {
-    const lifecycle = connected();
-    const token = lifecycle.beginWindow('Class/ZCL_A');
-    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-
-    const order: string[] = [];
-    const drained = lifecycle.drain().then((r) => {
-      order.push('drained');
-      return r;
-    });
-    await settle();
-    expect(order).toStrictEqual([]);
-
-    order.push('window closed');
-    lifecycle.endWindow(token);
-    const result = await drained;
-
-    expect(order).toStrictEqual(['window closed', 'drained']);
-    expect(result.abandonedWindows).toStrictEqual([]);
-  });
-
-  // 17 — a window that never closes is abandoned, and named.
-  it('gives up at the ceiling and names the window', async () => {
-    const c = clock();
-    const lifecycle = connected({ ceilingMs: 1000, now: c.now });
-    lifecycle.beginWindow('Domain/ZOK_D_CS_553');
-    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-
-    const drained = lifecycle.drain();
-    await settle();
-    c.advance(1001);
-    const result = await drained;
-
-    expect(result.abandonedWindows).toStrictEqual(['Domain/ZOK_D_CS_553']);
-  });
-
-  // 26 — a sliding deadline never fires under a steady stream of requests.
-  it('does not let request activity postpone the ceiling', async () => {
-    const c = clock();
-    const lifecycle = connected({ ceilingMs: 1000, now: c.now });
-    lifecycle.beginWindow('Class/ZCL_A');
-    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-
-    const drained = lifecycle.drain();
-
-    // A busy consumer: short requests arriving throughout the wait. Each one
-    // settles, so a deadline measured from the last settled request would be
-    // pushed past every check and this would hang instead of failing.
-    let admitted = 0;
-    for (let i = 0; i < 5; i++) {
-      try {
-        const lease = lifecycle.admitRequest();
-        admitted += 1;
-        c.advance(300);
-        lease.release();
-      } catch {
-        // Expected once the ceiling has expired and the gate has shut.
-        c.advance(300);
-      }
-      await settle();
-    }
-
-    const result = await drained;
-    expect(admitted).toBeGreaterThan(0);
-    expect(result.abandonedWindows).toStrictEqual(['Class/ZCL_A']);
-  });
-
-  // The ceiling runs from the teardown REQUEST, so a drain() started later
-  // inherits the elapsed time rather than restarting the clock. A timestamp of
-  // 0 is a real one: `||` would treat it as absent and slide the deadline.
-  it('measures the ceiling from beginTeardown, even at timestamp zero', async () => {
-    const c = clock(0);
-    const lifecycle = connected({ ceilingMs: 1000, now: c.now });
-    lifecycle.beginWindow('Class/ZCL_A');
-    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false }); // t=0
-
-    c.advance(900);
-    const drained = lifecycle.drain(); // t=900, 100ms of ceiling left
-    await settle();
-    c.advance(101); // t=1001 — past the deadline measured from the request
-    const result = await drained;
-
-    expect(result.abandonedWindows).toStrictEqual(['Class/ZCL_A']);
-  });
-
-  // 25 — the gate must shut inside drain(), before it resolves.
-  it('admits nothing once the ceiling has expired', async () => {
-    const c = clock();
-    const lifecycle = connected({ ceilingMs: 1000, now: c.now });
-    lifecycle.beginWindow('Class/ZCL_A');
-    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-
-    const drained = lifecycle.drain();
-    await settle();
-    c.advance(1001);
-    await drained;
-
-    expect(() => lifecycle.admitRequest()).toThrow(
-      expect.objectContaining({ code: ADT_SESSION_ERROR.NOT_CONNECTED }),
-    );
-  });
-
-  // 25 (second half) — a request admitted BEFORE expiry still settles first.
-  it('waits for a request admitted before expiry, after giving up on the window', async () => {
-    const c = clock();
-    const lifecycle = connected({ ceilingMs: 1000, now: c.now });
-    lifecycle.beginWindow('Class/ZCL_A');
-    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-    const lease = lifecycle.admitRequest();
-
-    const order: string[] = [];
-    const drained = lifecycle.drain().then(() => order.push('drained'));
-    await settle();
-    c.advance(1001);
-    await settle();
-    expect(order).toStrictEqual([]);
-
-    order.push('request settled');
-    lease.release();
-    await drained;
-
-    expect(order).toStrictEqual(['request settled', 'drained']);
-  });
-
-  // 28 (drain half) — an abandoned window is not waited on a second time.
-  it('does not re-wait a window it has already abandoned', async () => {
-    const c = clock();
-    const lifecycle = connected({ ceilingMs: 1000, now: c.now });
-    lifecycle.beginWindow('Class/ZCL_A');
-    lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-
-    const first = lifecycle.drain();
-    await settle();
-    c.advance(1001);
-    expect((await first).abandonedWindows).toStrictEqual(['Class/ZCL_A']);
-
-    // no further time passes: a second teardown must not sit out the ceiling
-    const second = await lifecycle.drain();
-    expect(second.abandonedWindows).toStrictEqual(['Class/ZCL_A']);
+    expect(lifecycle.isCurrent(lease)).toBe(true);
   });
 });
 

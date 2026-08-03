@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-08-03
+
+Undoes two mistakes from 2.0.0, four days old. Everything else that release
+carried — mandatory `connect()`, replaced-session detection, session verdicts
+surviving the retry layers, the Kerberos diagnosis — is unchanged.
+
+### Changed — BREAKING
+- **`disconnect()` returns `Promise<void>` and waits for nothing.** It used to
+  drain in-flight requests before clearing anything, and that drain had an
+  unbounded tail: a request whose caller chose no timeout — a legitimate choice
+  for a long poll — could hold a teardown open forever. Because lifecycle
+  transitions are serialized, every later `connect()` queued behind it. We
+  published a `disconnect()` that resolves; that path could not.
+
+  Deciding when to disconnect is the caller's, and so is preparing for it.
+  Requests in flight now run to completion untouched — nothing is aborted — and
+  the session state is cleared at once. Requires `@mcp-abap-adt/interfaces`
+  **^12.0.0**.
+- **A replaced session is always fatal.** It used to be tolerated when no lock
+  window was open. Windows are gone (below), and this layer does not know that a
+  lock exists, what object it covers or what would release it — so the rule is
+  written from what it can know: the ABAP session we were speaking to is not the
+  one we are speaking to now, and anything held against the old one is dead.
+  Being wrong in this direction costs a reconnect; being wrong the other way
+  costs a lock nobody can find.
+
+### Removed — BREAKING
+- **`beginWindow()` / `endWindow()`**, and the window accounting in
+  `SessionLifecycle`. They were added in 2.0.0 and never worked: `beginWindow()`
+  put a label in a map and touched no timeout. The protection they were assumed
+  to provide — a span where a short per-request timeout must not abort a
+  request — is `beginCriticalSection()` / `endCriticalSection()`, which has done
+  it since 1.9.0, is reference-counted, and is **unchanged by this release**. Two
+  mechanisms for one idea, and the one promoted into the public API was the
+  no-op. Nothing called it: zero callers across every repository that depends on
+  this package.
+
+### Added
+- **Session-generation fencing.** Removing the wait means a request can settle
+  after a later `connect()` established a new session, and the response path
+  mutates shared state — cookies, the identity policy, the CSRF cache. A stale
+  response would write over the new session and could be read as a replacement,
+  tearing down a session that is perfectly healthy. Every lease now carries the
+  generation it was admitted under, and a response whose generation is not
+  current has its effects skipped. It still resolves normally to its own caller:
+  fencing suppresses effects, not results.
+
+  Deliberately not the teardown epoch. Only a caller-initiated teardown moves the
+  epoch — a recovery must not cancel itself — so after a session loss and a
+  successful recovery, requests from the dead session carry the same epoch as the
+  new one and pass straight through a fence built on it.
+
+  The fence sits at the **top of the error path**, before anything reads or
+  writes shared state — not merely before the response headers are applied.
+  Everything below it acts on the connection rather than on the request: a late
+  400 "session not found" would tear down the healthy session established since,
+  and a late 401/403 would clear the live session's state, fetch a fresh CSRF
+  token and **retry** — replaying a mutation from a dead session inside the live
+  one. A stale request now gets its error back and nothing else happens.
+
+### Fixed
+- **Our own re-establishment no longer reads as someone else's replacement.**
+  With a replacement now always fatal, a deliberate re-authentication would have
+  torn the connection down: `invalidateSession()` dropped the cookies but kept
+  the tracked identity, so the next cookie looked foreign. Both it and the
+  establishment path now forget the identity first. The distinction that matters
+  is not "was a lock held" but "did we cause this".
+
 ## [2.0.0] - 2026-07-29
 
 The connection owns its session now, and says so. Before this release a stateful
@@ -718,7 +786,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.10.2...v2.0.0
 [1.10.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.10.1...v1.10.2
 [1.10.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v1.10.0...v1.10.1
