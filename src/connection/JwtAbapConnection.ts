@@ -4,6 +4,7 @@ import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import type { AbapRequestOptions } from './AbapConnection.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
+import { CSRF_CONFIG } from './csrfConfig.js';
 
 /**
  * JWT Authentication connection for SAP BTP Cloud systems
@@ -210,12 +211,19 @@ export class JwtAbapConnection extends AbstractAbapConnection {
    */
   protected async fetchCsrfToken(
     url: string,
-    retryCount = 3,
-    retryDelay = 1000,
+    retryCount: number = CSRF_CONFIG.RETRY_COUNT,
+    retryDelay: number = CSRF_CONFIG.RETRY_DELAY,
+    /** Fences the response effects; omitted during connect(), which has no lease. */
+    generation?: number,
   ): Promise<string> {
     try {
       // Try to fetch CSRF token using parent implementation
-      return await super.fetchCsrfToken(url, retryCount, retryDelay);
+      return await super.fetchCsrfToken(
+        url,
+        retryCount,
+        retryDelay,
+        generation,
+      );
     } catch (error) {
       // Handle JWT auth errors (401/403) during CSRF token fetch
       if (
@@ -244,7 +252,7 @@ export class JwtAbapConnection extends AbstractAbapConnection {
           this.logger?.debug(
             `[DEBUG] JwtAbapConnection.fetchCsrfToken - Retrying after token refresh...`,
           );
-          return super.fetchCsrfToken(url, retryCount, retryDelay);
+          return super.fetchCsrfToken(url, retryCount, retryDelay, generation);
         }
 
         throw new Error('JWT token has expired. Please re-authenticate.');
