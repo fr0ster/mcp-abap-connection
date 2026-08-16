@@ -247,10 +247,17 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 interface IRecoveryScope {
   /** `tokenGeneration` as it stood when this operation began. */
   readonly baseline: number;
+  /** Cleared when the operation that opened this scope returns. */
+  active: boolean;
 }
 
-private static readonly recoveryScope =
-  new AsyncLocalStorage<IRecoveryScope>();
+/**
+ * Per connection, deliberately NOT static. `baseline` is compared against
+ * `this.tokenGeneration`, which is instance state — so a store shared between
+ * instances would let one connection's operation hand its baseline to another
+ * connection's, and the comparison would be between unrelated counters.
+ */
+private readonly recoveryScope = new AsyncLocalStorage<IRecoveryScope>();
 
 /** Monotonic; incremented once per completed network refresh. */
 private tokenGeneration = 0;
@@ -269,12 +276,23 @@ private refreshInFlight?: Promise<boolean>;
 
    ```ts
    private withRecoveryScope<T>(fn: () => Promise<T>): Promise<T> {
-     const active = JwtAbapConnection.recoveryScope.getStore();
-     if (active) return fn();
-     return JwtAbapConnection.recoveryScope.run(
-       { baseline: this.tokenGeneration },
-       fn,
-     );
+     const inherited = this.recoveryScope.getStore();
+     // Inherit only a scope that is still running. A store reached through an
+     // async resource that outlived its operation is stale, and its baseline
+     // describes a credential state that has since moved.
+     if (inherited?.active) return fn();
+
+     const scope: IRecoveryScope = {
+       baseline: this.tokenGeneration,
+       active: true,
+     };
+     return this.recoveryScope.run(scope, async () => {
+       try {
+         return await fn();
+       } finally {
+         scope.active = false;
+       }
+     });
    }
    ```
 
@@ -289,11 +307,11 @@ private refreshInFlight?: Promise<boolean>;
 
    ```ts
    private async ensureFreshToken(): Promise<boolean> {
-     const scope = JwtAbapConnection.recoveryScope.getStore();
-     // No scope means a caller reached a handler by a path that does not open
-     // one. Treat it as its own operation rather than silently sharing another's
-     // baseline.
-     const baseline = scope?.baseline ?? this.tokenGeneration;
+     const scope = this.recoveryScope.getStore();
+     // No live scope means a caller reached a handler by a path that does not
+     // open one, or through a stale async context. Either way, treat it as its
+     // own operation rather than trusting a baseline nobody is standing behind.
+     const baseline = scope?.active ? scope.baseline : this.tokenGeneration;
 
      // Somebody already refreshed since this operation began — this operation's
      // retry will use the newer token, which is the point. Refreshing again asks
@@ -324,9 +342,19 @@ private refreshInFlight?: Promise<boolean>;
    }
    ```
 
-4. **Ending.** The scope ends when the outermost call returns; `AsyncLocalStorage` needs no
-   teardown and cannot leak into an unrelated request. `tokenGeneration` outlives it deliberately
-   — it is what a *later* operation compares against to decide the token has since been renewed.
+4. **Ending.** The outermost call clears `active` in a `finally`, and that flag — not the store's
+   presence — is what marks the operation over.
+
+   An earlier draft said the scope "cannot leak into an unrelated request", which is too strong:
+   `AsyncLocalStorage` propagates the store to every async resource created inside `run()`, and
+   such a resource can outlive the callback. A timer, an unawaited promise or a retained
+   continuation started during one operation still sees that store when it later runs. What is
+   guaranteed is narrower and sufficient: a **stale** store is visibly stale, because `active` is
+   false, so nothing inherits a baseline from an operation that has finished. Raised in review,
+   2026-08-16.
+
+   `tokenGeneration` outlives every scope deliberately — it is what a *later* operation compares
+   against to decide the token has since been renewed.
 
 **What this gives, per case:**
 
@@ -336,8 +364,11 @@ private refreshInFlight?: Promise<boolean>;
 | two concurrent `makeAdtRequest`, both hit the same expired token | **1** — single-flight, and the loser retries with the winner's token |
 | a later `makeAdtRequest` after the renewed token also expires | **1** — its baseline is the current generation, so it refreshes properly |
 | `connect()` alone, 401 on CSRF | **1** — `fetchCsrfToken` refreshes, `establishSession` no longer does |
+| an operation on connection **B** started inside connection **A**'s async context | **each refreshes its own** — B's storage is B's, so B sees no store and opens its own scope |
+| a stale async context left behind by a finished operation | **treated as a fresh operation** — `active` is false, so its baseline is not inherited |
 
-The third row is the one an instance-level flag gets wrong.
+The third row is the one an instance-level flag gets wrong; the fifth is the one a **static**
+`AsyncLocalStorage` gets wrong, which is what an earlier draft specified.
 
 
 ## What breaks
@@ -418,14 +449,27 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
    request also 401s. `refreshToken` is called a **second** time. This is the case a re-entrancy
    flag gets wrong, and without it "refresh at most once" could be satisfied by never refreshing
    twice at all.
-8. **The `generation` argument reaches the base implementation.** Spy on
+8. **Two connections do not share a recovery scope.** Build `A` and `B`, each with its own
+   refresher. Establish both, then start `B.makeAdtRequest(...)` **from inside `A`'s async
+   context** — inside a `.then` of an A request, which is what a caller juggling two systems
+   writes without thinking about it. Both requests 401. Assert **each refresher was called
+   once**: B must not inherit A's baseline, because B compares it against B's own
+   `tokenGeneration` and the two counters describe different credentials. This is the test a
+   static `AsyncLocalStorage` fails.
+9. **A finished operation's async context is not inherited.** Run one operation to completion
+   while retaining a continuation created inside it (an unawaited promise captured in the test),
+   then start a new operation from that continuation. It must refresh on its own account rather
+   than reading the finished operation's baseline — the `active` flag, tested directly, since
+   `AsyncLocalStorage` alone does not give this.
+10. **The `generation` argument reaches the base implementation.** Spy on
    `AbstractAbapConnection.prototype.fetchCsrfToken` and assert the fourth argument arrives when
    `makeAdtRequest` passes a lease generation — the dropped-parameter defect, which no current
    test would notice because the code compiles and behaves plausibly without it.
 
-Tests 2, 5, 6, 7 and 8 are the ones that would have caught these classes of defect; 1 is the one
-that catches this instance. 6 and 7 are a pair on purpose: either alone can be passed by a design
-that is wrong in the other direction.
+Tests 2 and 5–10 are the ones that would have caught these classes of defect; 1 is the one that
+catches this instance. 6 and 7 are a pair on purpose — either alone can be passed by a design that
+is wrong in the other direction — and 8 and 9 are the two ways an operation-scoped baseline can
+be read by something it does not belong to: another connection, or a later moment.
 
 ## Out of scope
 
