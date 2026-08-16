@@ -194,26 +194,41 @@ return super.makeAdtRequest<T, D>(options);
 Same helper and same shape as `establishAndCommit`, so a reader meeting the second one recognises
 it.
 
-**Test 14, and the window is the test.** A teardown merely "during the renewal" proves nothing:
-`establishAndCommit`'s own checks catch it, `performRenewal` rejects, `renewalInFlight` rejects,
-and every request fails `NOT_CONNECTED` with or without the new guard. Such a test stays green
-when the guard is deleted, which makes it decoration. Raised in review, 2026-08-16.
+**Test 14, and the window is the test.** Two drafts of it were green either way.
 
-The teardown has to land **after** `recoverSession` has passed both its checks and
-`markConnected` has run, and **before** `ensureRecovered` returns:
+*Draft one* put the teardown "during the renewal". `establishAndCommit`'s own checks catch that —
+`performRenewal` rejects, `renewalInFlight` rejects, everything fails `NOT_CONNECTED` with the
+guard or without it.
 
-- wrap `recoverSession`;
-- `await` the original — it resolves, the session is live, admission is open;
-- call the caller-facing teardown (`reset()`) synchronously;
-- return, letting `performRenewal` finish and `ensureRecovered` answer `true`.
+*Draft two* moved it after `recoverSession` resolved, and hit a different blocker:
+`reset()` → `beginTeardown` sets `teardownPending = true` **synchronously**
+(`SessionLifecycle.ts:202`), so the retry stops at `admitRequest()` with the same
+`NOT_CONNECTED` and never reaches the transport. Deleting the guard changes nothing observable.
+Both raised in review, 2026-08-16.
 
-Then the renewal reports success and only the new check stands between it and the transport.
-Assert the transport received **no retry**, and that the rejection is `NOT_CONNECTED`. One
-request is enough; a second joiner adds nothing here, since both pass through the same gap.
+**What isolates the guard is a connection that is usable again *and* has a moved epoch.** Only a
+caller teardown bumps the epoch (`origin === 'caller'`, `SessionLifecycle.ts:203-205`) — the
+renewal's own `discardSession()` is `origin: 'internal'` and does not — and `markConnected` clears
+`teardownPending` **without** touching the epoch (`SessionLifecycle.ts:109-114`). So after
+`reset()` followed by a successful `connect()`, admission is open and the epoch is still moved.
+That is the only state in which the guard is the sole thing standing between a stale operation
+and the transport, and it is exactly the case it exists for: the connection was torn down and
+made usable again before the retry.
+
+The test, then — wrapping **`ensureRecovered`**, not `recoverSession`:
+
+- `await` the original, so the renewal has completed and `renewalInFlight` is cleared;
+- call `reset()`;
+- `await connect()`, so the cleanup drains and a new session is connected;
+- return the original's answer to the outer handler.
+
+Assert: the rejection is `NOT_CONNECTED`, and the **transport received no retry**. One request is
+enough; a joiner adds nothing, since the request that started the renewal passes through the same
+gap.
 
 **Mutation check for this one is mandatory rather than routine:** delete the guard and the
-transport must see the forbidden retry. If it does not, the window was missed and the test is
-back to decoration.
+transport must see the forbidden retry, issued over the *new* session. If it does not, the window
+was missed again and the test is back to decoration.
 
 `baselineEpoch` is already captured at the top of `makeAdtRequest`
 (`JwtAbapConnection.ts:146`) and needs no new plumbing; `sessionError` and `ADT_SESSION_ERROR`
