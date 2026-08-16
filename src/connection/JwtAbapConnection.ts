@@ -7,11 +7,26 @@ import { AbstractAbapConnection } from './AbstractAbapConnection.js';
 import { CSRF_CONFIG } from './csrfConfig.js';
 
 /**
+ * Is this worth refreshing a token for?
+ *
+ * 401 only. A 403 means the server authenticated the caller and refused the
+ * action anyway — a new token is the same caller, so refreshing answers a
+ * question nobody asked and, worse, used to end with the original error
+ * replaced by "JWT token has expired". See issue #30.
+ */
+function isTokenExpiryCandidate(error: unknown): error is AxiosError {
+  return error instanceof AxiosError && error.response?.status === 401;
+}
+
+/**
  * JWT Authentication connection for SAP BTP Cloud systems
  *
  * Supports automatic token refresh via ITokenRefresher injection:
- * - If tokenRefresher is provided, 401/403 errors trigger automatic token refresh
- * - If tokenRefresher is not provided, 401/403 errors throw an error (legacy behavior)
+ * - a **401** triggers a token refresh when a tokenRefresher is available;
+ * - without one, or when the refresh does not help, the server's own error is
+ *   thrown unchanged — status and body intact;
+ * - a **403** is never a token problem. It propagates as it arrived, because a
+ *   new token is the same caller and cannot change a permissions answer.
  */
 export class JwtAbapConnection extends AbstractAbapConnection {
   private tokenRefresher?: ITokenRefresher;
@@ -96,42 +111,11 @@ export class JwtAbapConnection extends AbstractAbapConnection {
         cookieLength: this.getCookies()?.length || 0,
       });
     } catch (error) {
-      // Handle JWT auth errors (401/403) during connect
-      if (
-        error instanceof AxiosError &&
-        (error.response?.status === 401 || error.response?.status === 403)
-      ) {
-        // Check if this is really an auth error, not a permissions error
-        const responseData = error.response?.data;
-        const responseText =
-          typeof responseData === 'string'
-            ? responseData
-            : JSON.stringify(responseData || '');
-
-        // Don't retry on "No Access" errors
-        if (
-          responseText.includes('ExceptionResourceNoAccess') ||
-          responseText.includes('No authorization') ||
-          responseText.includes('Missing authorization')
-        ) {
-          throw error;
-        }
-
-        // Try to refresh token if tokenRefresher is available
-        if (await this.tryRefreshToken()) {
-          // Retry the ESTABLISHMENT, not connect(): connect() runs this as a
-          // joinable transition, so a nested call joins the transition already
-          // in flight — this one — and waits for itself forever.
-          this.logger?.debug(
-            `[DEBUG] JwtAbapConnection - Retrying establishment after token refresh...`,
-          );
-          return this.establishSession();
-        }
-
-        throw new Error('JWT token has expired. Please re-authenticate.');
+      if (isTokenExpiryCandidate(error)) {
+        this.logger?.error(
+          '[ERROR] JwtAbapConnection.establishSession - 401 while establishing; fetchCsrfToken has already refreshed and retried for this',
+        );
       }
-
-      // Re-throw other errors
       throw error;
     }
   }
@@ -159,30 +143,10 @@ export class JwtAbapConnection extends AbstractAbapConnection {
         `[DEBUG] JwtAbapConnection.makeAdtRequest - Request failed: ${error instanceof Error ? error.message : String(error)}`,
       );
 
-      // Handle JWT auth errors (401/403)
-      if (
-        error instanceof AxiosError &&
-        (error.response?.status === 401 || error.response?.status === 403)
-      ) {
+      if (isTokenExpiryCandidate(error)) {
         this.logger?.debug(
-          `[DEBUG] JwtAbapConnection.makeAdtRequest - Got ${error.response.status}, attempting token refresh...`,
+          `[DEBUG] JwtAbapConnection.makeAdtRequest - Got 401, attempting token refresh...`,
         );
-
-        // Check if this is really an auth error, not a permissions error
-        const responseData = error.response?.data;
-        const responseText =
-          typeof responseData === 'string'
-            ? responseData
-            : JSON.stringify(responseData || '');
-
-        // Don't retry on "No Access" errors - these are permission issues, not auth issues
-        if (
-          responseText.includes('ExceptionResourceNoAccess') ||
-          responseText.includes('No authorization') ||
-          responseText.includes('Missing authorization')
-        ) {
-          throw error;
-        }
 
         // Try to refresh token if tokenRefresher is available
         if (await this.tryRefreshToken()) {
@@ -199,7 +163,9 @@ export class JwtAbapConnection extends AbstractAbapConnection {
           return super.makeAdtRequest<T, D>(options);
         }
 
-        throw new Error('JWT token has expired. Please re-authenticate.');
+        this.logger?.error(
+          '[ERROR] JwtAbapConnection.makeAdtRequest - 401 persists and the token could not be refreshed; the credential may need re-authentication',
+        );
       }
 
       throw error;
@@ -225,7 +191,7 @@ export class JwtAbapConnection extends AbstractAbapConnection {
         generation,
       );
     } catch (error) {
-      // Handle JWT auth errors (401/403) during CSRF token fetch
+      // A 401 here may be an expired token; anything else is not ours to interpret.
       if (
         error instanceof AxiosError &&
         (error.response?.status === 401 || error.response?.status === 403)
@@ -255,7 +221,9 @@ export class JwtAbapConnection extends AbstractAbapConnection {
           return super.fetchCsrfToken(url, retryCount, retryDelay, generation);
         }
 
-        throw new Error('JWT token has expired. Please re-authenticate.');
+        this.logger?.error(
+          '[ERROR] JwtAbapConnection.fetchCsrfToken - 401 persists and the token could not be refreshed; the credential may need re-authentication',
+        );
       }
 
       // Re-throw other errors

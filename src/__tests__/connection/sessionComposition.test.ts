@@ -18,14 +18,25 @@ interface Stub {
   baseUrl: string;
   /** Session ids handed out, in order. */
   sessions: string[];
+  /** While true, /discovery answers 401 — a stale credential, from the server. */
+  rejectDiscovery: boolean;
+  /** How many times /discovery was asked, refusals included. */
+  readonly discoveryAttempts: number;
   close(): Promise<void>;
 }
 
 async function startStub(): Promise<Stub> {
   const sessions: string[] = [];
+  const state = { rejectDiscovery: false, discoveryAttempts: 0 };
   const server: Server = createServer((req, res) => {
     const url = req.url ?? '';
     if (url.includes('/discovery')) {
+      state.discoveryAttempts += 1;
+      if (state.rejectDiscovery) {
+        res.writeHead(401, { 'content-type': 'text/plain' });
+        res.end('unauthorized');
+        return;
+      }
       const id = `S${sessions.length + 1}`;
       sessions.push(id);
       res.writeHead(200, {
@@ -52,6 +63,15 @@ async function startStub(): Promise<Stub> {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     sessions,
+    get rejectDiscovery() {
+      return state.rejectDiscovery;
+    },
+    set rejectDiscovery(v: boolean) {
+      state.rejectDiscovery = v;
+    },
+    get discoveryAttempts() {
+      return state.discoveryAttempts;
+    },
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -183,14 +203,29 @@ describe('JwtAbapConnection establishment retry', () => {
     await stub.close();
   });
 
-  // The retry used to call connect(), which runs the establishment as a
-  // joinable transition — so the nested call joined the transition already in
-  // flight, which was itself, and waited forever.
-  it('does not wait on itself when retrying after a token refresh', async () => {
+  // Two hazards live here, and the second replaced the first.
+  //
+  // The retry used to be establishSession calling itself after refreshing, and
+  // an earlier version of it called connect() — which runs the establishment as
+  // a joinable transition, so the nested call joined the one already in flight,
+  // which was itself, and waited forever.
+  //
+  // establishSession no longer refreshes at all: fetchCsrfToken owns that, and
+  // owns it alone (issue #30). So the subject is the same — an establishment
+  // recovers from a 401 by refreshing once and finishing, rather than hanging —
+  // but the owner has moved, and this test follows it.
+  //
+  // The 401 comes from the stub, not from a stubbed fetchCsrfToken. The earlier
+  // version replaced fetchCsrfToken on the instance, which removed the very
+  // method that now does the work, and would pass against a connection that had
+  // no recovery in it at all.
+  it('recovers from a 401 during establishment without waiting on itself', async () => {
     const { JwtAbapConnection } = await import(
       '../../connection/JwtAbapConnection.js'
     );
     let refreshed = 0;
+    stub.rejectDiscovery = true;
+
     const conn = new JwtAbapConnection(
       {
         url: stub.baseUrl,
@@ -204,49 +239,28 @@ describe('JwtAbapConnection establishment retry', () => {
         getToken: async () => 'FRESH',
         refreshToken: async () => {
           refreshed += 1;
+          // The credential is good from here on, which is what a refresh means.
+          stub.rejectDiscovery = false;
           return 'FRESH';
         },
       },
     );
 
-    // First establishment fails with 401, the refresher succeeds, and the retry
-    // must run rather than deadlock.
-    let attempts = 0;
-    (
-      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
-    ).fetchCsrfToken = async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        // A real AxiosError: the retry path checks `instanceof`, so a lookalike
-        // would sail past it and the test would prove nothing.
-        const { AxiosError } = await import('axios');
-        throw new AxiosError(
-          'unauthorized',
-          'ERR_BAD_REQUEST',
-          undefined,
-          null,
-          {
-            status: 401,
-            statusText: 'Unauthorized',
-            data: '',
-            headers: {},
-            // biome-ignore lint/suspicious/noExplicitAny: minimal axios response shape
-            config: {} as any,
-          },
-        );
-      }
-      return 'TOKEN-AFTER-REFRESH';
-    };
-
+    // The window is generous on purpose: the base retries the CSRF fetch
+    // `retryCount` times with `retryDelay` between attempts, so the 401 takes
+    // seconds to surface before the refresh even begins. A tight race here
+    // reports "hung" for a connection that was merely being patient.
     const outcome = await Promise.race([
       conn.connect().then(() => 'settled'),
-      new Promise((r) => setTimeout(() => r('hung'), 2000)),
+      new Promise((r) => setTimeout(() => r('hung'), 15000)),
     ]);
 
     expect(outcome).toBe('settled');
     expect(refreshed).toBe(1);
-    expect(attempts).toBe(2);
-  });
+    // Refused at least once, then fetched again after the refresh.
+    expect(stub.discoveryAttempts).toBeGreaterThanOrEqual(2);
+    expect(conn.isConnected()).toBe(true);
+  }, 20000);
 });
 
 describe('explicit connect is required', () => {

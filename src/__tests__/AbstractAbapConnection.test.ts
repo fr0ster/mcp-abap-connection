@@ -305,6 +305,10 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     const mock = jest.fn().mockRejectedValue(originalError);
     attachMockAxios(conn as unknown as BaseAbapConnection, mock);
 
+    // The rejection is the server's own error, not one of ours. This used to
+    // assert 'JWT token has expired. Please re-authenticate.' — a message
+    // synthesised in place of the AxiosError, which threw away the status and
+    // body a caller needs. Issue #30.
     await expect(
       conn.makeAdtRequest({
         url: '/sap/bc/adt/ddic/domains/zfoo',
@@ -312,8 +316,10 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
         timeout: 30000,
         data: '<x/>',
       }),
-    ).rejects.toThrow('JWT token has expired. Please re-authenticate.');
+    ).rejects.toMatchObject({ response: { status: 401 } });
 
+    // The subject of this test, unchanged: no stale-CSRF retry, and the cached
+    // token and cookies survive untouched.
     expect(mock).toHaveBeenCalledTimes(1);
     expect((conn as any).csrfToken).toBe('stale-token');
     expect((conn as any).cookies).toBe('SAP_SESSIONID_HQ6=dead');
