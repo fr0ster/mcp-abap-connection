@@ -268,20 +268,26 @@ private refreshInFlight?: Promise<boolean>;
 
 **Lifecycle, in full.**
 
-1. **Opening a scope.** Each entry point wraps its body in
-   `this.withRecoveryScope(() => …)`. `withRecoveryScope` opens a new scope **only if none is
-   active**; otherwise it runs the callback in the scope already there. That single rule is what
-   makes nesting work: the outermost operation defines the baseline, and everything beneath it
-   inherits.
+1. **Opening a scope — and the boundary is decided by the kind of entry point, not by whether a
+   scope happens to be active.** The three sites are not peers: one of them starts operations and
+   two of them are the levels an operation descends through.
+
+   - **`makeAdtRequest` always opens a new scope.** It is public, so a call to it *is* a new
+     caller-visible operation — including one made re-entrantly from inside another, which is not
+     exotic: the connection itself invokes caller-supplied callbacks (`logger`,
+     `tokenRefresher.refreshToken()`) while a scope is live, and either may issue a request.
+     Inheriting there would give a genuinely independent request the outer operation's baseline.
+     Worse, the outer operation can finish first and set `active = false` on the scope they
+     share — after which the inner request's own recovery levels each see a dead scope, open one
+     apiece, and the one-refresh guarantee is gone. Raised in review, 2026-08-16.
+   - **`fetchCsrfToken` and `establishSession` inherit a live scope**, because they *are* the
+     recovery levels an operation descends through. Called directly with no scope active — both
+     are `protected` and reachable on their own — they open one, so a bare `connect()` is still
+     an operation with a baseline.
 
    ```ts
-   private withRecoveryScope<T>(fn: () => Promise<T>): Promise<T> {
-     const inherited = this.recoveryScope.getStore();
-     // Inherit only a scope that is still running. A store reached through an
-     // async resource that outlived its operation is stale, and its baseline
-     // describes a credential state that has since moved.
-     if (inherited?.active) return fn();
-
+   /** For the public entry point: this call is its own operation, always. */
+   private inNewRecoveryScope<T>(fn: () => Promise<T>): Promise<T> {
      const scope: IRecoveryScope = {
        baseline: this.tokenGeneration,
        active: true,
@@ -294,14 +300,28 @@ private refreshInFlight?: Promise<boolean>;
        }
      });
    }
+
+   /** For the inner levels: join the operation in progress, or start one. */
+   private inRecoveryScope<T>(fn: () => Promise<T>): Promise<T> {
+     const inherited = this.recoveryScope.getStore();
+     // Only a scope that is still running. A store reached through an async
+     // resource that outlived its operation is stale, and its baseline describes
+     // a credential state that has since moved.
+     if (inherited?.active) return fn();
+     return this.inNewRecoveryScope(fn);
+   }
    ```
 
-2. **The entry points** are the three public or protected methods a caller can start from:
-   `makeAdtRequest`, `fetchCsrfToken` and `establishSession`. Each opens a scope. In the nested
-   case only the outermost actually creates one, so `makeAdtRequest`'s baseline is what the
-   `fetchCsrfToken` three levels down sees — including the one reached through `recoverSession`,
-   because `recoverSession` is called *inside* `makeAdtRequest`'s scope and async context flows
-   through it without `recoverSession` knowing.
+2. **What this makes of each path.** `makeAdtRequest` opens the scope; the `fetchCsrfToken` inside
+   `super.makeAdtRequest` inherits it; so does the one reached through
+   `recoverSession → establishSession`, because `recoverSession` runs *inside* `makeAdtRequest`'s
+   scope and async context flows through it without `recoverSession` knowing.
+
+   **The retry after a refresh calls `super.makeAdtRequest`, not `this.makeAdtRequest`** — the
+   base implementation, which opens no scope. That is load-bearing rather than incidental: a
+   retry is the same operation continuing, and routing it through the override would open a
+   second scope with a baseline taken *after* the refresh, which is exactly the state that reads
+   as "nobody has refreshed yet".
 
 3. **Deciding.** `ensureFreshToken()` takes no argument; it reads the active scope.
 
@@ -365,10 +385,12 @@ private refreshInFlight?: Promise<boolean>;
 | a later `makeAdtRequest` after the renewed token also expires | **1** — its baseline is the current generation, so it refreshes properly |
 | `connect()` alone, 401 on CSRF | **1** — `fetchCsrfToken` refreshes, `establishSession` no longer does |
 | an operation on connection **B** started inside connection **A**'s async context | **each refreshes its own** — B's storage is B's, so B sees no store and opens its own scope |
+| a re-entrant `makeAdtRequest` on the **same** connection, from a callback the connection invoked | **its own scope, its own refresh** — the public entry point never inherits |
 | a stale async context left behind by a finished operation | **treated as a fresh operation** — `active` is false, so its baseline is not inherited |
 
-The third row is the one an instance-level flag gets wrong; the fifth is the one a **static**
-`AsyncLocalStorage` gets wrong, which is what an earlier draft specified.
+The third row is the one an instance-level flag gets wrong. The fifth is the one a **static**
+`AsyncLocalStorage` gets wrong, and the sixth is the one a **uniform inherit-if-active rule** gets
+wrong — both of which earlier drafts of this section specified.
 
 
 ## What breaks
@@ -450,26 +472,36 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
    flag gets wrong, and without it "refresh at most once" could be satisfied by never refreshing
    twice at all.
 8. **Two connections do not share a recovery scope.** Build `A` and `B`, each with its own
-   refresher. Establish both, then start `B.makeAdtRequest(...)` **from inside `A`'s async
-   context** — inside a `.then` of an A request, which is what a caller juggling two systems
-   writes without thinking about it. Both requests 401. Assert **each refresher was called
-   once**: B must not inherit A's baseline, because B compares it against B's own
-   `tokenGeneration` and the two counters describe different credentials. This is the test a
-   static `AsyncLocalStorage` fails.
-9. **A finished operation's async context is not inherited.** Run one operation to completion
-   while retaining a continuation created inside it (an unawaited promise captured in the test),
-   then start a new operation from that continuation. It must refresh on its own account rather
-   than reading the finished operation's baseline — the `active` flag, tested directly, since
-   `AsyncLocalStorage` alone does not give this.
-10. **The `generation` argument reaches the base implementation.** Spy on
+   refresher, and establish both. Then make `A`'s refresher **the re-entrancy point**: when the
+   connection calls `A.tokenRefresher.refreshToken()`, that callback issues
+   `B.makeAdtRequest(...)`. Both requests 401. Assert **each refresher was called exactly once**.
+
+   The hook matters. An earlier draft started B from a `.then` the test attached to A's promise
+   after `makeAdtRequest` returned — which runs in the *caller's* async context, not inside A's
+   scope, so the test would have passed against a static store too and proved nothing. Raised in
+   review, 2026-08-16. `refreshToken` is called by the connection from within the scope, which is
+   what makes it a real re-entrancy point rather than a staged one.
+9. **A re-entrant `makeAdtRequest` on the same connection is its own operation.** Same hook: `A`'s
+   refresher issues a second request on `A`. Assert the second request gets its own refresh —
+   `refreshToken` called twice in total — rather than inheriting the outer baseline and skipping
+   one. This is the test a uniform inherit-if-active rule fails, and it is the reason the public
+   entry point has a different rule from the inner two.
+10. **A finished operation's async context is not inherited.** Run one operation to completion
+   while retaining a continuation created inside it, then start a new operation from that
+   continuation. It must refresh on its own account rather than reading the finished operation's
+   baseline — the `active` flag, tested directly, since `AsyncLocalStorage` alone does not give
+   this.
+11. **The `generation` argument reaches the base implementation.** Spy on
    `AbstractAbapConnection.prototype.fetchCsrfToken` and assert the fourth argument arrives when
    `makeAdtRequest` passes a lease generation — the dropped-parameter defect, which no current
    test would notice because the code compiles and behaves plausibly without it.
 
-Tests 2 and 5–10 are the ones that would have caught these classes of defect; 1 is the one that
-catches this instance. 6 and 7 are a pair on purpose — either alone can be passed by a design that
-is wrong in the other direction — and 8 and 9 are the two ways an operation-scoped baseline can
-be read by something it does not belong to: another connection, or a later moment.
+Tests 2 and 5–11 are the ones that would have caught these classes of defect; 1 is the one that
+catches this instance. They come in pairs on purpose, because each pair pins a boundary from both
+sides and either half alone can be satisfied by a design wrong in the other direction: 6/7 for
+"share a refresh" against "still able to refresh later", and 8/9/10 for the three ways an
+operation-scoped baseline can be read by something it does not belong to — another connection, a
+re-entrant operation, or a later moment.
 
 ## Out of scope
 
