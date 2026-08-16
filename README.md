@@ -220,7 +220,7 @@ const response = await connection.makeAdtRequest({
 
 ### Cloud Usage with Automatic Token Refresh
 
-For automatic token refresh on 401/403 errors, inject `ITokenRefresher`:
+For automatic token refresh on **401** errors, inject `ITokenRefresher`:
 
 ```typescript
 import { JwtAbapConnection, SapConfig } from "@mcp-abap-adt/connection";
@@ -240,7 +240,7 @@ const config: SapConfig = {
   jwtToken: await tokenRefresher.getToken(), // Get initial token
 };
 
-// Create connection with token refresher - 401/403 handled automatically
+// Create connection with token refresher - 401 handled automatically
 const connection = new JwtAbapConnection(config, logger, undefined, tokenRefresher);
 await connection.connect();
 
@@ -252,6 +252,17 @@ const response = await connection.makeAdtRequest({
   url: "/sap/bc/adt/programs/programs/your-program",
 });
 ```
+
+**A 403 is never treated as an expired token.** It means the server
+authenticated the caller and refused the action anyway, so no credential can
+change the answer. It propagates unchanged — `error.response.status` and the
+server's message, which usually names the authorization object — rather than
+being reported as an expired token.
+
+Earlier versions reported both 401 and 403 as
+`JWT token has expired. Please re-authenticate.` and discarded the original
+error. Code matching on that message must branch on `error.response.status`
+instead — which it can now do, since the status is no longer thrown away.
 
 ### Stateful Sessions
 
