@@ -282,7 +282,7 @@ private renewalInFlight?: Promise<boolean>;
      `tokenRefresher.refreshToken()`) while a scope is live, and either may issue a request.
      Inheriting there would give a genuinely independent request the outer operation's baseline,
      and **a stale baseline reads as "already refreshed"**: the inner request sees
-     `tokenGeneration > baseline` from a refresh that happened for somebody else, retries with a
+     a completed renewal that happened for somebody else, retries with a
      token that is not the problem, and never refreshes on its own account. The failure is a
      *skipped* refresh, not a duplicated one. Separately, the outer operation can finish first
      and set `active = false` on the scope they share — after which the inner request's own
@@ -360,29 +360,42 @@ private renewalInFlight?: Promise<boolean>;
    /** Single-flight over the whole credential renewal, session included. */
    private renewalInFlight?: Promise<boolean>;
 
-   private renewCredential(baselineEpoch: number): Promise<boolean> {
+   private renewCredential(
+     baselineEpoch: number,
+     baseline: number,
+   ): Promise<boolean> {
      if (this.renewalInFlight) return this.renewalInFlight;
      // Identity-checked clear, as SessionLifecycle.transition does: a joiner
      // settling late must not clear a renewal somebody started after it.
-     const inFlight = this.performRenewal(baselineEpoch).finally(() => {
+     const inFlight = this.performRenewal(baselineEpoch, baseline).finally(() => {
        if (this.renewalInFlight === inFlight) this.renewalInFlight = undefined;
      });
      this.renewalInFlight = inFlight;
      return inFlight;
    }
 
-   private async performRenewal(baselineEpoch: number): Promise<boolean> {
-     if (!this.tokenRefresher) return false;
-     try {
-       this.currentToken = await this.tokenRefresher.refreshToken();
-       this.tokenGeneration += 1;
-     } catch (error) {
-       this.logger?.error(`[ERROR] JwtAbapConnection - token refresh failed: …`);
-       return false;
+   private async performRenewal(
+     baselineEpoch: number,
+     baseline: number,
+   ): Promise<boolean> {
+     // The token may already be newer than the one that failed — a nested
+     // token-only refresh, below. Then what is missing is the session, and
+     // fetching a second token would answer a question nobody asked.
+     if (this.tokenGeneration <= baseline) {
+       if (!this.tokenRefresher) return false;
+       try {
+         this.currentToken = await this.tokenRefresher.refreshToken();
+         this.tokenGeneration += 1;
+       } catch (error) {
+         this.logger?.error(`[ERROR] JwtAbapConnection - token refresh failed: …`);
+         return false;
+       }
      }
      // The renewed credential cannot keep the old ABAP session.
      this.discardSession();
      await this.recoverSession(baselineEpoch);
+     // Only here: a session now exists that was built with this token.
+     this.recoveredGeneration = this.tokenGeneration;
      return true;
    }
    ```
@@ -402,17 +415,54 @@ private renewalInFlight?: Promise<boolean>;
      // own operation rather than trusting a baseline nobody is standing behind.
      const baseline = scope?.active ? scope.baseline : this.tokenGeneration;
 
-     // 2. Somebody renewed since this operation began, and nothing is in
-     //    flight — so the session is settled as well as the token. Retry.
-     if (this.tokenGeneration > baseline) return true;
+     // 2. A full renewal COMPLETED since this operation began — token and the
+     //    session built with it. Not `tokenGeneration`: see below. Retry.
+     if (this.recoveredGeneration > baseline) return true;
 
      // 3. Nobody has. Renew, and let everyone else join.
-     return this.renewCredential(baselineEpoch);
+     return this.renewCredential(baselineEpoch, baseline);
    }
    ```
 
    Check 1 before check 2 is what closes the window the review found: without it, a joiner that
    sees a newer generation returns "retry now" while the session is mid-rebuild.
+
+   **Check 2 reads `recoveredGeneration`, not `tokenGeneration`, and the difference is the whole
+   invariant.** A draft used `tokenGeneration` and justified it as "the session is settled as
+   well as the token" — which the token-only path below makes false. `fetchCsrfToken` bumps
+   `tokenGeneration` without discarding or re-establishing anything, and the base class calls it
+   polymorphically from inside `super.makeAdtRequest`, so:
+
+   ```
+   makeAdtRequest, baseline 0
+     super.makeAdtRequest
+       this.fetchCsrfToken → token-only refresh, tokenGeneration = 1
+                           → retry still 401
+     outer catch → ensureRecovered()
+                     nothing in flight
+                     tokenGeneration (1) > baseline (0) → "already recovered"
+   ```
+
+   The outer handler retries a request whose session was never rebuilt. Two facts were being
+   carried by one counter. Raised in review, 2026-08-16.
+
+   ```ts
+   /** Bumped by any token refresh, token-only ones included. */
+   private tokenGeneration = 0;
+
+   /**
+    * The `tokenGeneration` a completed session recovery was built for. Only
+    * `performRenewal` moves it, and only after `recoverSession` resolves.
+    */
+   private recoveredGeneration = 0;
+   ```
+
+   A token-only refresh may use its new token freely — that is what it is for — but it must not
+   publish "the session is settled", because it did not settle one. The establishment paths
+   therefore leave `recoveredGeneration` alone even when they go on to establish successfully.
+   That is deliberately conservative: the cost is at most one extra discard-and-recover, which
+   single-flight collapses anyway, and the error it prevents is a **skipped** recovery — the
+   direction that actually breaks callers.
 
    **A joiner must re-check its own epoch before retrying.** The renewal was fenced against the
    *starter's* `baselineEpoch`, not the joiner's, and `recoverSession` yields to a teardown by
@@ -421,9 +471,10 @@ private renewalInFlight?: Promise<boolean>;
    implementation, not an observation about it.
 
    `fetchCsrfToken` and `establishSession` renew the **token** only — they run inside an
-   establishment, so discarding and re-establishing from there would be re-entering the
-   transition they are part of. They call a token-only path; `makeAdtRequest` is the only site
-   that renews the session.
+   establishment, so discarding and re-establishing from there would re-enter the transition they
+   are part of. `makeAdtRequest` is the only site that renews the session, and
+   `recoveredGeneration` is what keeps the two kinds of renewal from being mistaken for each
+   other.
 
 4. **Ending.** The outermost call clears `active` in a `finally`, and that flag — not the store's
    presence — is what marks the operation over.
@@ -443,7 +494,7 @@ private renewalInFlight?: Promise<boolean>;
 
 | case | refreshes |
 |---|---|
-| one `makeAdtRequest`, 401 at CSRF level then at request level then in recovery | **1** — the second and third see `tokenGeneration > baseline` |
+| one `makeAdtRequest`, 401 at CSRF level then at request level then in recovery | **1 renewal** — the CSRF level refreshes the token only; the request level finds `recoveredGeneration` unmoved and runs the one session recovery |
 | two concurrent `makeAdtRequest`, both hit the same expired token | **1** — and one session recovery: the joiner waits for the whole renewal, then retries on the session the winner rebuilt |
 | a later `makeAdtRequest` after the renewed token also expires | **1** — its baseline is the current generation, so it refreshes properly |
 | `connect()` alone, 401 on CSRF | **1** — `fetchCsrfToken` refreshes, `establishSession` no longer does |
@@ -554,7 +605,21 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
    and its renewal, let it settle completely, then start a second operation whose request also
    401s. `refreshToken` is called a **second** time. Without this, "renew at most once" could be
    satisfied by never renewing twice at all.
-8. **Two connections do not share a recovery scope.** Build `A` and `B`, each with its own
+8. **A nested token-only refresh does not pass for a session recovery.** The test for the
+   invariant above, and the one a single counter fails. Establish successfully, then drive a
+   `makeAdtRequest` where:
+
+   - the nested `fetchCsrfToken` inside `super.makeAdtRequest` is answered **401**, so it does
+     its token-only refresh;
+   - its retry is answered **401** as well, so the failure reaches the outer handler;
+   - the outer `makeAdtRequest` must then perform **exactly one** session recovery — spy
+     `recoverSession` — and issue its final retry only **after** that recovery resolves.
+
+   With one counter the outer handler reads the nested refresh as its own and retries a request
+   whose session was never rebuilt, which is a green test suite and a broken connection. Assert
+   the ordering, not just the counts: a recovery that happens *after* the retry satisfies
+   "exactly one" and is still wrong.
+9. **Two connections do not share a recovery scope.** Build `A` and `B`, each with its own
    refresher, and establish both. **Drive `B` through one refresh first**, so `B.tokenGeneration`
    is 1 while `A`'s is 0 — without that divergence the test proves nothing, because equal
    counters make an inherited baseline and an own baseline give the same answer.
@@ -577,8 +642,8 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
    The transport hook is safe **here** because the inner request goes to `B`, whose lifecycle is
    its own: `A` being mid-teardown does not close `B`'s admission. Test 9 cannot borrow this
    placement, for exactly that reason.
-9. **A re-entrant `makeAdtRequest` on the same connection gets its own baseline.** Same idea as
-   8, but the inner request goes to the **same** connection — and that changes where the hook can
+10. **A re-entrant `makeAdtRequest` on the same connection gets its own baseline.** Same idea as
+   9, but the inner request goes to the **same** connection — and that changes where the hook can
    fire, because this connection is mid-teardown for part of the window.
 
    **Not during recovery establishment.** After its refresh the outer operation calls
@@ -608,22 +673,23 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
    6 pins. The draft after it moved to the transport hook and landed in the closed-admission
    window. The requirement is narrow and worth restating plainly: **after the refresh, after
    admission reopens, before the retry, inside the outer scope.**
-10. **A finished operation's async context is not inherited.** Run one operation to completion
+11. **A finished operation's async context is not inherited.** Run one operation to completion
    while retaining a continuation created inside it, then start a new operation from that
    continuation. It must refresh on its own account rather than reading the finished operation's
    baseline — the `active` flag, tested directly, since `AsyncLocalStorage` alone does not give
    this.
-11. **The `generation` argument reaches the base implementation.** Spy on
+12. **The `generation` argument reaches the base implementation.** Spy on
    `AbstractAbapConnection.prototype.fetchCsrfToken` and assert the fourth argument arrives when
    `makeAdtRequest` passes a lease generation — the dropped-parameter defect, which no current
    test would notice because the code compiles and behaves plausibly without it.
 
-Tests 2 and 5–11 are the ones that would have caught these classes of defect; 1 is the one that
+Tests 2 and 5–12 are the ones that would have caught these classes of defect; 1 is the one that
 catches this instance. They come in pairs on purpose, because each pair pins a boundary from both
 sides and either half alone can be satisfied by a design wrong in the other direction: 6/7 for
-"share a refresh" against "still able to refresh later", and 8/9/10 for the three ways an
+"share a renewal" against "still able to renew later", and 9/10/11 for the three ways an
 operation-scoped baseline can be read by something it does not belong to — another connection, a
-re-entrant operation, or a later moment.
+re-entrant operation, or a later moment. 8 stands alone because it pins the one thing the counters
+must never conflate.
 
 **All three of 8, 9 and 10 assert a refresh that would otherwise be *skipped*.** That is worth
 stating because the intuitive failure — "it refreshes too often" — is the one this design cannot
