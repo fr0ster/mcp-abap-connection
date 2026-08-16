@@ -164,15 +164,20 @@ a session recovery.
 
 ### The epoch re-check, as a step rather than a remark
 
-`establishAndCommit` compares `teardownEpoch` against the baseline of the establishment **it**
-runs (`AbstractAbapConnection.ts:298`). A joiner never runs one — it joins somebody else's — so
-that check never fires for it. Without an explicit one, a joiner reads `true` from
-`ensureRecovered` and retries onto a session that a teardown has since discarded. The spec noted
-this and the plan left it as a sentence; raised in review, 2026-08-16.
+`establishAndCommit` compares `teardownEpoch` against its baseline **twice** — before the
+establishment (`AbstractAbapConnection.ts:298`) and again after it
+(`AbstractAbapConnection.ts:334`). Both belong to the establishment that runs. Between the second
+check and the retry there is a gap nothing guards, and a renewal that returned `true` is the
+signal to retry.
 
-The epoch belongs to the **connection**, not to a request: a teardown invalidates *every* request
-in flight, whoever asked for it. So the check is not "did my caller stop" but "has this
-connection been torn down since I began", and it is written at the one place a retry is issued:
+The epoch belongs to the **connection**, not to a request: a teardown invalidates every request
+in flight, whoever asked for it. So this is not "did *my* caller stop" and it is not about
+joiners specifically — the request that started the renewal passes through the same gap. It is:
+**has this connection been torn down between the last lifecycle check and this retry.** An
+earlier draft framed it per-joiner, which reads as if joiners had epochs of their own; raised in
+review, 2026-08-16.
+
+Written at the one place a retry is issued:
 
 ```ts
 const recovered = await this.ensureRecovered(baselineEpoch);
@@ -186,14 +191,29 @@ if (this.teardownEpoch !== baselineEpoch) {
 return super.makeAdtRequest<T, D>(options);
 ```
 
-Same helper and same code as `establishAndCommit`, so the two read alike and a reader meeting the
-second one recognises it.
+Same helper and same shape as `establishAndCommit`, so a reader meeting the second one recognises
+it.
 
-**Test 14:** two requests join one renewal; a teardown is requested while the renewal is in
-flight. After it resolves, **neither** request reaches the transport with a retry — both reject
-`NOT_CONNECTED`, including the one that started the renewal. Assert against the transport mock,
-not only against the rejections: the failure mode is a request that succeeds on a session its
-caller discarded, and a rejection count alone would not see it.
+**Test 14, and the window is the test.** A teardown merely "during the renewal" proves nothing:
+`establishAndCommit`'s own checks catch it, `performRenewal` rejects, `renewalInFlight` rejects,
+and every request fails `NOT_CONNECTED` with or without the new guard. Such a test stays green
+when the guard is deleted, which makes it decoration. Raised in review, 2026-08-16.
+
+The teardown has to land **after** `recoverSession` has passed both its checks and
+`markConnected` has run, and **before** `ensureRecovered` returns:
+
+- wrap `recoverSession`;
+- `await` the original — it resolves, the session is live, admission is open;
+- call the caller-facing teardown (`reset()`) synchronously;
+- return, letting `performRenewal` finish and `ensureRecovered` answer `true`.
+
+Then the renewal reports success and only the new check stands between it and the transport.
+Assert the transport received **no retry**, and that the rejection is `NOT_CONNECTED`. One
+request is enough; a second joiner adds nothing here, since both pass through the same gap.
+
+**Mutation check for this one is mandatory rather than routine:** delete the guard and the
+transport must see the forbidden retry. If it does not, the window was missed and the test is
+back to decoration.
 
 `baselineEpoch` is already captured at the top of `makeAdtRequest`
 (`JwtAbapConnection.ts:146`) and needs no new plumbing; `sessionError` and `ADT_SESSION_ERROR`
