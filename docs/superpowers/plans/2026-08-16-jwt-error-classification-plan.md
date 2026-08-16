@@ -22,8 +22,13 @@ task is "done" with a red tree behind it.
 the method tasks 3 and 4 rewrite. Fixing it afterwards would mean re-reading a method twice.
 
 `JwtAbapConnection.fetchCsrfToken` declares three parameters where the base declares four, and
-calls `super` with three — so `lease.generation`, passed by
-`AbstractAbapConnection.makeAdtRequest` (line 814), is discarded on every JWT connection.
+calls `super` with three — so a `generation` reaching it is discarded.
+
+**Latent, not live.** Both call sites that pass one are gated on basic auth: `shouldRetryCsrf`
+returns `false` for `jwt` (`AbstractAbapConnection.ts:1353`) and `isCachedTokenStale` requires
+`authType === 'basic'` (`:786`), so `:814` never runs for JWT, and `:874` carries the same gate.
+The only site a JWT request reaches, `:1302`, passes no generation. Nothing is broken today; the
+fence would be lost silently the moment either gate widens.
 
 - match the base signature, including `generation?: number`;
 - forward all four to `super.fetchCsrfToken`;
@@ -33,12 +38,12 @@ calls `super` with three — so `lease.generation`, passed by
 **Test 13** (spec numbering): spy `AbstractAbapConnection.prototype.fetchCsrfToken`, drive a
 `makeAdtRequest` that fetches CSRF, assert the fourth argument arrives.
 
-**Drive it through a call site that actually passes one.** Of the three, two do
-(`AbstractAbapConnection.ts:814`, the stale-CSRF retry, and `:874`, the 401-on-GET cookie fetch);
-the third, `:1302`, calls `fetchCsrfToken(requestUrl)` with no generation at all. A test written
-against the initial fetch would assert `undefined` arrives and pass whether the argument is
-forwarded or dropped. Raised in review, 2026-08-16 — a test-authoring detail, but the kind that
-turns a mutation check into a formality.
+**It cannot be driven through a request**, for the reason above: no JWT path reaches a call site
+that passes a generation. So the test calls the protected method directly and pins the
+forwarding, with the reason in its docblock. A test written against the reachable `:1302` path
+would assert `undefined` arrives and pass whether the argument is forwarded or dropped — the
+review's point about which call site to use stands, and the answer turned out to be "none of
+them, from the public API".
 
 **Verify by breaking it:** drop the argument again and watch the new test fail. TypeScript will
 not catch this class of defect — fewer parameters are assignable to more — so the test is the

@@ -100,10 +100,19 @@ protected async fetchCsrfToken(url, retryCount, retryDelay, generation?)
 protected async fetchCsrfToken(url, retryCount = 3, retryDelay = 1000)
 ```
 
-So on **every JWT connection** the lease fence is discarded. TypeScript does not object: a method
-with fewer parameters is assignable to one with more. Nothing about this is JWT-specific and
-nothing about it is intended — it is the kind of thing a rewrite of this method either fixes or
-cements, so it is in scope.
+TypeScript does not object: a method with fewer parameters is assignable to one with more.
+
+**It is latent, not live** — a correction to an earlier draft of this section, which said the
+fence is discarded "on every JWT connection". Checked against the call sites: both that pass a
+generation are gated on basic auth. `shouldRetryCsrf` returns `false` for `jwt` outright
+(`AbstractAbapConnection.ts:1353`) and `isCachedTokenStale` requires `authType === 'basic'`
+(`:786`), so the stale-CSRF retry at `:814` never runs for JWT; the 401-on-GET cookie fetch at
+`:874` carries the same gate. The only site a JWT request reaches, `:1302`, passes no generation
+at all.
+
+So nothing is broken today, and the fence would be lost silently the moment either gate widens.
+It stays in scope because a rewrite of this method either fixes it or cements it, but the test
+for it cannot go through a request — see the plan.
 
 (The override also hardcodes `3` and `1000` where the base reads `CSRF_CONFIG.RETRY_COUNT` and
 `.RETRY_DELAY`. Same values today, so no behaviour change — but it is a second copy of a
