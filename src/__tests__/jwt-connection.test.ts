@@ -416,6 +416,109 @@ describe('JwtAbapConnection.fetchCsrfToken classification', () => {
 });
 
 /**
+ * Test 9, final form: two operations that fail at **both** levels share one
+ * token refresh and one session recovery.
+ *
+ * The other concurrency test drives its 401s at the working request, where
+ * `renewalInFlight` does the collapsing. Here the nested CSRF fetch fails
+ * first, where that promise does not exist yet and the token primitive is what
+ * collapses the refresh.
+ *
+ * The shape is dictated by something worth knowing: a CSRF pre-fetch failure
+ * on a mutation is **deliberately swallowed** by the base
+ * (`AbstractAbapConnection.ts:583-591`, "continue anyway — the retry logic
+ * will handle CSRF token errors"). So a nested CSRF 401 never climbs to the
+ * outer handler by itself, however it is staged; the request proceeds without
+ * a token and fails on its own. The token refresh inside the override is real
+ * and happens regardless, which is what the first-form test pins. This test
+ * therefore fails at both levels in sequence, which is the only way one
+ * operation reaches both collapsing points.
+ */
+describe('JwtAbapConnection nested CSRF failures share one renewal', () => {
+  const config: SapConfig = {
+    url: 'https://sap.example.com',
+    authType: 'jwt',
+    jwtToken: 'jwt-abc',
+    client: '100',
+  };
+  const request = {
+    url: '/sap/bc/adt/ddic/domains/zfoo',
+    method: 'POST' as const,
+    timeout: 30000,
+    data: '<x/>',
+  };
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it('one token refresh and one session recovery for two operations', async () => {
+    const refreshToken = jest.fn(async () => 'FRESH');
+    const conn = new JwtAbapConnection(config, mockLogger, undefined, {
+      getToken: async () => 'FRESH',
+      refreshToken: refreshToken as never,
+    });
+    markConnectedForTest(conn);
+    // No cached CSRF token: a mutation has to fetch one, which is the nested
+    // level this test is about.
+    (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
+
+    const basePrototype = Object.getPrototypeOf(JwtAbapConnection.prototype);
+    let csrfCalls = 0;
+    jest
+      .spyOn(basePrototype as any, 'fetchCsrfToken')
+      .mockImplementation(async () => {
+        csrfCalls += 1;
+        // Two operations × (first attempt + post-refresh retry) = four
+        // refusals. Everything after the recovery succeeds.
+        if (csrfCalls <= 4) {
+          throw new AxiosError('unauthorized', '401', {} as never, null, {
+            status: 401,
+            statusText: '',
+            data: '<html>login</html>',
+            headers: {},
+            config: {} as never,
+          } as never);
+        }
+        return 'CSRF-OK';
+      });
+
+    const recover = jest.spyOn(conn as any, 'recoverSession');
+    let adtCalls = 0;
+    (conn as any).axiosInstance = jest.fn(async (cfg: { url?: string }) => {
+      adtCalls += 1;
+      // One refusal per operation, so both climb to the outer handler; the
+      // retries after the shared recovery succeed.
+      if (adtCalls <= 2) {
+        throw new AxiosError('unauthorized', '401', {} as never, null, {
+          status: 401,
+          statusText: '',
+          data: '<html>login</html>',
+          headers: {},
+          config: {} as never,
+        } as never);
+      }
+      return {
+        status: 200,
+        statusText: 'OK',
+        data: 'ok',
+        headers: {},
+        config: cfg,
+      };
+    });
+
+    const [a, b] = await Promise.all([
+      conn.makeAdtRequest(request),
+      conn.makeAdtRequest(request),
+    ]);
+
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    // Collapsed at both levels: one token fetch, one session rebuild.
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    expect(recover).toHaveBeenCalledTimes(1);
+  }, 20000);
+});
+
+/**
  * The renewal: one per caller-visible operation, session included.
  *
  * These drive `makeAdtRequest`, whose recovery discards the session and
