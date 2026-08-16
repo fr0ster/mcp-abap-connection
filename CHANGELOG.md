@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-08-16
+
+A JWT connection stops answering with an error of its own making. See
+[docs/MIGRATION-4.0.md](docs/MIGRATION-4.0.md).
+
+### Breaking
+
+- **A 403 no longer triggers a token refresh.** It means the server authenticated the caller and
+  refused the action anyway, so a new token is the same caller and cannot change the answer.
+- **`Error('JWT token has expired. Please re-authenticate.')` is gone.** Both a 401 and a 403 were
+  reported with it, and the original `AxiosError` was discarded along with the status and the
+  body. The server's error now reaches the caller unchanged. Code matching on that message must
+  branch on `error.response.status` instead — which it can now do.
+
+### Fixed
+
+- The substring guard meant to let permission failures past matched three literal strings and SAP
+  sends none of them: the type is `ExceptionResourceNoAuthorization`, not `...NoAccess`, and the
+  message reads "not authorized", not "No authorization". The list is deleted rather than
+  extended — it enumerated prose, so the next unlisted wording would have been the same defect
+  ([#30](https://github.com/fr0ster/mcp-abap-connection/issues/30)).
+- A 401 that survives a renewal is now logged at ERROR. The previous log fired only when the
+  renewal never happened, so the case the deleted message was actually about passed silently.
+- `establishSession` no longer refreshes or recurses into itself. `fetchCsrfToken` owns recovery
+  during establishment; a second refresh at the outer level asked the same refresher the same
+  question, and the recursion was unbounded whenever the refresher kept resolving.
+- `JwtAbapConnection.fetchCsrfToken` declared three parameters where the base declares four and
+  called `super` with three, silently dropping the `generation` that fences response effects.
+  TypeScript accepts that — fewer parameters are assignable to more. Latent rather than live:
+  both call sites that pass one are gated on basic auth.
+
+### Changed
+
+- **One credential renewal per caller-visible operation, session included.** Concurrent requests
+  meeting the same expired token now share a single token fetch *and* a single session
+  re-establishment. Previously each ran its own teardown and recovery — and since `recover` and
+  `cleanup` never join, one request's cleanup could tear down the session another had just
+  rebuilt, leaving its retry at a closed door.
+- The renewal decision is made against the credential state the operation started with, carried
+  in a per-connection `AsyncLocalStorage`. A nested token-only refresh no longer passes for a
+  session recovery.
+- A retry is abandoned with `ADT_NOT_CONNECTED` if the connection was torn down between the last
+  lifecycle check and the retry itself.
+- `establishSession` takes its CSRF retry defaults from `CSRF_CONFIG` at all four authentication
+  types instead of repeating `3, 1000` in each.
+
+### Documentation
+
+- New [MIGRATION-4.0.md](docs/MIGRATION-4.0.md), linked from the README and the docs index, which
+  now has an *Upgrading* section — the 2.0 migration guide was in the tree but linked from
+  nowhere but a directory listing.
+- `USAGE.md` gains the classification table; `STATEFUL_SESSION_GUIDE.md` notes that a 401-driven
+  refresh replaces the SAP session and surfaces as `ADT_SESSION_REPLACED` inside a lock window,
+  while a 403 tears down nothing; the README and both examples no longer promise a refresh on
+  403.
+
+### Known
+
+- Whether some BTP setup answers an *invalid* token with 403 rather than 401 is unobserved and
+  tracked in [#32](https://github.com/fr0ster/mcp-abap-connection/issues/32). Preserving the
+  original error is what makes the assumption safe to be wrong about.
+
 ## [3.0.0] - 2026-08-03
 
 Undoes two mistakes from 2.0.0, four days old. Everything else that release

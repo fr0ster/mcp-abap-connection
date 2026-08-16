@@ -82,6 +82,12 @@ Every ADT request issued through `makeAdtRequest` automatically:
 
 This logic is transparent to callers (Builders, handlers, CLI scripts).
 
+On a JWT connection one case is **not** transparent, and cannot be: a 401 that leads to a token
+refresh also replaces the SAP session, because the renewed credential cannot keep the old one.
+Inside a lock window that surfaces as `ADT_SESSION_REPLACED` rather than a request quietly
+continuing on a session your lock is not in. A 403 never does this — it is an authorization
+answer, not a credential one, and nothing is torn down for it.
+
 ---
 
 ## Interaction With ADT Clients

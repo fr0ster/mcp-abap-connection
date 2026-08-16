@@ -15,6 +15,7 @@ mcp-abap-connection/
 │   ├── INSTALLATION.md             # Setup and installation guide
 │   ├── USAGE.md                    # API documentation and examples
 │   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── MIGRATION-4.0.md            # JWT error classification: 401 refreshes, 403 propagates
 │   ├── SCOPE.md                    # What this package does and does not own
 │   ├── STATEFUL_SESSION_GUIDE.md   # Stateful requests and lock windows
 │   └── JWT_AUTH_TOOLS.md           # CLI tool for authentication
@@ -40,6 +41,10 @@ mcp-abap-connection/
 
 ### Core Features
 - 🔑 [JWT Auth Tools](./JWT_AUTH_TOOLS.md) - CLI tool for browser-based authentication
+
+### Upgrading
+- 🧱 [Migrating to 4.0.0](./MIGRATION-4.0.md) - JWT error classification: a 401 refreshes, a 403 propagates with the server's message
+- 🧱 [Migrating to 2.0.0](./MIGRATION-2.0.md) - The explicit session lifecycle: `connect()` is required
 
 ### Version Information
 - 📋 [CHANGELOG](../CHANGELOG.md) - Complete version history, including what the latest release changed

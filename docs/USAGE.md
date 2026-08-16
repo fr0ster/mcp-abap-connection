@@ -676,11 +676,32 @@ For SAP BTP cloud systems. Token refresh is handled by `@mcp-abap-adt/auth-broke
 
 ```typescript
 class JwtAbapConnection extends AbstractAbapConnection {
-  constructor(config: SapConfig, logger?: ILogger | null);
+  constructor(
+    config: SapConfig,
+    logger?: ILogger | null,
+    sessionId?: string,
+    tokenRefresher?: ITokenRefresher,
+  );
   // Note: refreshToken() and canRefreshToken() methods removed in 0.2.0
-  // Use @mcp-abap-adt/auth-broker for token refresh functionality
+  // Token acquisition itself belongs to @mcp-abap-adt/auth-broker
 }
 ```
+
+**How failures are classified** (4.0.0 — see
+[MIGRATION-4.0.md](./MIGRATION-4.0.md)):
+
+| answer | what happens |
+|---|---|
+| **401** | with an injected `ITokenRefresher`, the token is refreshed, the SAP session re-established, and the request retried once. Without one, or when the retry is refused too, the server's error is rethrown |
+| **403** | propagates untouched. The server authenticated the caller and refused the action anyway, so a new token is the same caller — usually the body names the authorization object |
+| anything else | untouched |
+
+The connection never replaces the server's error with one of its own: `error.response.status` and
+`error.response.data` are always what SAP sent. Before 4.0.0 both 401 and 403 were reported as
+`JWT token has expired. Please re-authenticate.` with the original error discarded.
+
+Concurrent requests that meet the same expired token share **one** renewal — a single token fetch
+and a single session re-establishment between them, not one each.
 
 ### `createAbapConnection()` Factory
 

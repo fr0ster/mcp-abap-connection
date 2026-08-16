@@ -113,6 +113,7 @@ This package interacts with external packages **ONLY through interfaces**:
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 4.0.0](./docs/MIGRATION-4.0.md)** - a 401 refreshes the token, a 403 reaches you with the server's message; the synthesised "JWT token has expired" is gone
 - 🚚 **[Migration: the explicit session lifecycle](./docs/MIGRATION-2.0.md)** - `connect()` is now required; start here if you are coming from 1.x
 - 💡 **[Examples](./examples/)** - Working code examples
 
@@ -263,6 +264,7 @@ Earlier versions reported both 401 and 403 as
 `JWT token has expired. Please re-authenticate.` and discarded the original
 error. Code matching on that message must branch on `error.response.status`
 instead — which it can now do, since the status is no longer thrown away.
+See [MIGRATION-4.0.md](./docs/MIGRATION-4.0.md).
 
 ### Stateful Sessions
 
