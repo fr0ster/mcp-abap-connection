@@ -396,6 +396,7 @@ private refreshInFlight?: Promise<boolean>;
 | an operation on connection **B** started inside connection **A**'s async context | **each refreshes its own** — B's storage is B's, so B sees no store and opens its own scope |
 | a re-entrant `makeAdtRequest` on the **same** connection, started after the outer refresh completed | **its own baseline**, so its own 401 can refresh again — where an inherited baseline would have it skip |
 | a re-entrant `makeAdtRequest` started *while* a refresh is in flight | **joins that refresh** — a new scope does not mean a new network call |
+| a re-entrant `makeAdtRequest` started during the recovery *establishment* | **`NOT_CONNECTED`** — `discardSession()` has shut admission until `markConnected`. Pre-existing session behaviour, unchanged here, but it bounds where a test can inject one |
 | a stale async context left behind by a finished operation | **treated as a fresh operation** — `active` is false, so its baseline is not inherited |
 
 The third row is the one an instance-level flag gets wrong. The fifth is the one a **static**
@@ -478,6 +479,11 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
    `makeAdtRequest` calls without awaiting the first, both answered 401. `refreshToken` is called
    **once**, and the second operation retries with the token the first fetched. This is the test
    an instance-level re-entrancy flag would also pass — which is why it comes with the next one.
+
+   Both requests must be **in flight before** either refresh completes, since the winner's
+   `discardSession()` invalidates leases and shuts admission. That is the state being tested, not
+   an obstacle to it, but it decides how the test is written: start both, then release the
+   transport, rather than starting the second after the first has failed.
 7. **An operation that starts after a completed refresh may still refresh.** Establish, drive one
    operation through a 401 and its refresh, let it settle, then start a second operation whose
    request also 401s. `refreshToken` is called a **second** time. This is the case a re-entrancy
@@ -502,10 +508,26 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
    awaited inside `performRefresh`, so an inner request started there waits on
    `refreshInFlight`, which waits on the refresher, which waits on the inner request. Raised in
    review, 2026-08-16, against a draft that specified exactly that.
-9. **A re-entrant `makeAdtRequest` on the same connection gets its own baseline.** Same one-shot
-   transport hook, same moment — inside the outer operation's scope, after its refresh has
-   completed and `tokenGeneration` has reached 1 — but the inner request goes to the **same**
-   connection.
+
+   The transport hook is safe **here** because the inner request goes to `B`, whose lifecycle is
+   its own: `A` being mid-teardown does not close `B`'s admission. Test 9 cannot borrow this
+   placement, for exactly that reason.
+9. **A re-entrant `makeAdtRequest` on the same connection gets its own baseline.** Same idea as
+   8, but the inner request goes to the **same** connection — and that changes where the hook can
+   fire, because this connection is mid-teardown for part of the window.
+
+   **Not during recovery establishment.** After its refresh the outer operation calls
+   `discardSession()`, which is `raiseSessionLost()` → `lifecycle.beginTeardown(…)`
+   (`AbstractAbapConnection.ts:379`), and that shuts admission. An inner `A.makeAdtRequest`
+   started there never reaches the transport: `admitRequest()` throws `NOT_CONNECTED`
+   (`AbstractAbapConnection.ts:550`) and the planned 401 never happens. Raised in review,
+   2026-08-16, against a draft that put the hook exactly there.
+
+   **The window that works** is after `recoverSession()` has resolved — admission reopened by
+   `markConnected`, `tokenGeneration` already 1 — and before the outer operation's
+   `super.makeAdtRequest` retry, with the outer ALS scope still active. In practice: wrap
+   `recoverSession`, call through to the original, start the inner request once it resolves, then
+   return.
 
    Assert: the inner request's 401 produces a **second** refresh (`tokenGeneration` 2), because
    its baseline is 1; and the outer operation, continuing afterwards, does **not** refresh again,
@@ -515,11 +537,12 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
    With an inherited scope the inner request would carry baseline 0, read generation 1 as
    somebody else's refresh, and skip its own — which is the distinction this test exists to draw.
 
-   **Timing is the whole test**, and the earlier draft got it wrong in a way that could not run:
-   it started the inner request from inside the refresher, i.e. *while* the refresh was in
-   flight, and asserted a second network refresh. At that moment the correct behaviour is to join
-   the refresh already running — so the assertion contradicted the single-flight guarantee test 6
-   pins, quite apart from deadlocking. The hook has to fire **after** the refresh resolves.
+   **Timing is the whole test**, and it has now been wrong twice. An earlier draft started the
+   inner request from inside the refresher — *while* the refresh was in flight — and asserted a
+   second network refresh, which both deadlocks and contradicts the single-flight guarantee test
+   6 pins. The draft after it moved to the transport hook and landed in the closed-admission
+   window. The requirement is narrow and worth restating plainly: **after the refresh, after
+   admission reopens, before the retry, inside the outer scope.**
 10. **A finished operation's async context is not inherited.** Run one operation to completion
    while retaining a continuation created inside it, then start a new operation from that
    continuation. It must refresh on its own account rather than reading the finished operation's
