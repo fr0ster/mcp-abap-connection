@@ -213,47 +213,132 @@ effectively is.
 needs its own recovery — a 401 on the ADT request itself is a mid-session expiry that
 `fetchCsrfToken` never sees. But it must not refresh when a nested level just did.
 
+The guard is a monotonic `tokenGeneration` compared against the **baseline the operation started
+with**: a handler that finds the token newer than the one that failed retries with it instead of
+refreshing again. The question is how the baseline reaches a handler three levels down, since
+`recoverSession` sits in between and takes no such parameter.
+
+#### Why not the two options an earlier draft left open
+
+Both were named and neither was chosen, which is not a detail to defer — the choice decides
+whether the thing is correct under concurrent requests. Raised in review, 2026-08-16.
+
+- **An instance-level re-entrancy flag is wrong.** It is per-connection, not per-operation. Two
+  concurrent `makeAdtRequest` calls share the instance, so a flag set by one suppresses a refresh
+  the other genuinely needs — the token expires and the second request fails with a 401 it could
+  have recovered from. It trades an over-refresh bug for an under-refresh bug, which is worse:
+  the first costs round trips, the second costs correctness.
+- **Threading the baseline through `recoverSession`** means changing `recoverSession`,
+  `establishAndCommit` and `establishSession` in `AbstractAbapConnection` — the session lifecycle
+  reworked in #29 — plus every subclass signature, for a concern only the JWT subclass has.
+
+#### The mechanism: an operation-scoped baseline in `AsyncLocalStorage`
+
+`node:async_hooks` carries a value across `await` boundaries and nested calls, and isolates it
+between concurrent operations by construction. That is exactly the shape of the problem: the
+baseline must follow one operation down three call levels without every level's signature
+knowing about it, and without leaking into a sibling operation. Node `>=18` is already the
+engine, and nothing else in the connection layer competes for this mechanism.
+
 ```ts
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+/** What one caller-visible operation knows about the credential it started with. */
+interface IRecoveryScope {
+  /** `tokenGeneration` as it stood when this operation began. */
+  readonly baseline: number;
+}
+
+private static readonly recoveryScope =
+  new AsyncLocalStorage<IRecoveryScope>();
+
+/** Monotonic; incremented once per completed network refresh. */
 private tokenGeneration = 0;
 
-/**
- * True when the caller may retry. Refreshes only if nobody has since
- * `seenGeneration` — a nested handler that already refreshed means the current
- * token is newer than the one that failed, and retrying with it is the whole
- * point. Refreshing again would ask the same refresher the same question and
- * burn a round trip to do it.
- */
-private async ensureFreshToken(seenGeneration: number): Promise<boolean> {
-  if (this.tokenGeneration > seenGeneration) return true;   // someone else did it
-  if (!this.tokenRefresher) return false;
-  try {
-    this.currentToken = await this.tokenRefresher.refreshToken();
-    this.tokenGeneration += 1;
-    return true;
-  } catch (error) {
-    this.logger?.error(`[ERROR] JwtAbapConnection - token refresh failed: ${…}`);
-    return false;
-  }
-}
+/** Single-flight: concurrent callers join this rather than starting a second. */
+private refreshInFlight?: Promise<boolean>;
 ```
 
-Each handler captures `const seen = this.tokenGeneration` **before its attempt** and passes it in.
-`makeAdtRequest` capturing before `super.makeAdtRequest` is what makes the inner
-`fetchCsrfToken`'s refresh visible to it as "already done".
+**Lifecycle, in full.**
 
-**The one path this does not cover by itself** is `makeAdtRequest` → `recoverSession` →
-`establishSession` → `fetchCsrfToken`: that inner `fetchCsrfToken` starts after the refresh, so
-its own captured baseline is the new generation and it would refresh again. Two ways to close it,
-and the plan picks one on the code rather than here:
+1. **Opening a scope.** Each entry point wraps its body in
+   `this.withRecoveryScope(() => …)`. `withRecoveryScope` opens a new scope **only if none is
+   active**; otherwise it runs the callback in the scope already there. That single rule is what
+   makes nesting work: the outermost operation defines the baseline, and everything beneath it
+   inherits.
 
-- thread the operation's baseline generation into the establishment `makeAdtRequest` triggers, or
-- have `makeAdtRequest`'s recovery mark a re-entrancy flag that `ensureFreshToken` honours.
+   ```ts
+   private withRecoveryScope<T>(fn: () => Promise<T>): Promise<T> {
+     const active = JwtAbapConnection.recoveryScope.getStore();
+     if (active) return fn();
+     return JwtAbapConnection.recoveryScope.run(
+       { baseline: this.tokenGeneration },
+       fn,
+     );
+   }
+   ```
 
-**What is fixed here rather than in the plan is the acceptance criterion**, because that is what
-made the earlier draft wrong: it promised a bound and left the checking to a mechanism that could
-not deliver it. Whatever the plan chooses must satisfy the test below — a real 401 driven through
-the real nested path, asserting `refreshToken` was called **exactly once**. No mocking of
-`fetchCsrfToken`, which is how the existing establishment-retry test would let this through.
+2. **The entry points** are the three public or protected methods a caller can start from:
+   `makeAdtRequest`, `fetchCsrfToken` and `establishSession`. Each opens a scope. In the nested
+   case only the outermost actually creates one, so `makeAdtRequest`'s baseline is what the
+   `fetchCsrfToken` three levels down sees — including the one reached through `recoverSession`,
+   because `recoverSession` is called *inside* `makeAdtRequest`'s scope and async context flows
+   through it without `recoverSession` knowing.
+
+3. **Deciding.** `ensureFreshToken()` takes no argument; it reads the active scope.
+
+   ```ts
+   private async ensureFreshToken(): Promise<boolean> {
+     const scope = JwtAbapConnection.recoveryScope.getStore();
+     // No scope means a caller reached a handler by a path that does not open
+     // one. Treat it as its own operation rather than silently sharing another's
+     // baseline.
+     const baseline = scope?.baseline ?? this.tokenGeneration;
+
+     // Somebody already refreshed since this operation began — this operation's
+     // retry will use the newer token, which is the point. Refreshing again asks
+     // the same refresher the same question.
+     if (this.tokenGeneration > baseline) return true;
+
+     if (!this.tokenRefresher) return false;
+
+     // Single-flight: two concurrent operations that both observed the same
+     // failing token share one network refresh instead of racing.
+     this.refreshInFlight ??= this.performRefresh();
+     try {
+       return await this.refreshInFlight;
+     } finally {
+       this.refreshInFlight = undefined;
+     }
+   }
+
+   private async performRefresh(): Promise<boolean> {
+     try {
+       this.currentToken = await this.tokenRefresher!.refreshToken();
+       this.tokenGeneration += 1;
+       return true;
+     } catch (error) {
+       this.logger?.error(`[ERROR] JwtAbapConnection - token refresh failed: …`);
+       return false;
+     }
+   }
+   ```
+
+4. **Ending.** The scope ends when the outermost call returns; `AsyncLocalStorage` needs no
+   teardown and cannot leak into an unrelated request. `tokenGeneration` outlives it deliberately
+   — it is what a *later* operation compares against to decide the token has since been renewed.
+
+**What this gives, per case:**
+
+| case | refreshes |
+|---|---|
+| one `makeAdtRequest`, 401 at CSRF level then at request level then in recovery | **1** — the second and third see `tokenGeneration > baseline` |
+| two concurrent `makeAdtRequest`, both hit the same expired token | **1** — single-flight, and the loser retries with the winner's token |
+| a later `makeAdtRequest` after the renewed token also expires | **1** — its baseline is the current generation, so it refreshes properly |
+| `connect()` alone, 401 on CSRF | **1** — `fetchCsrfToken` refreshes, `establishSession` no longer does |
+
+The third row is the one an instance-level flag gets wrong.
+
 
 ## What breaks
 
@@ -305,19 +390,42 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
 4. **A 401 with a refresher that helps** retries once and succeeds — the existing happy path,
    asserted for call counts so "bounded" is checkable.
 5. **A persistent 401 refreshes exactly once, through the real nested path.** The acceptance
-   test for the guarantee above: drive `makeAdtRequest` against a transport that answers 401 to
-   everything, with a refresher that always resolves, and assert
-   `refreshToken` was called **exactly once** — not "at most twice", not "did not hang".
-   **`fetchCsrfToken` must not be mocked**: mocking it is precisely how the existing
+   test for the guarantee above, and its transport has to be **scripted rather than uniform**: a
+   transport that answers 401 to everything never gets a session established, so `connect()`
+   fails and the request and recovery paths are never reached at all. Raised in review,
+   2026-08-16. The script:
+
+   | # | request | answer |
+   |---|---|---|
+   | 1 | initial CSRF / discovery, during `connect()` | **200**, with a CSRF token — establishment succeeds |
+   | 2 | the ADT request under test | **401** |
+   | 3 | every request of the recovery establishment that follows the refresh | **401** |
+
+   Then assert, in this order of importance: `refreshToken` was called **exactly once** — not
+   "at most twice", not "did not hang"; the rejection carries `response.status === 401`; and the
+   refresher's own call count is read from the mock rather than inferred from timing.
+
+   **`fetchCsrfToken` must not be mocked.** Mocking it is precisely how the existing
    establishment-retry test would let four nested refreshes through, and the nesting is the
-   defect. Assert the rejection carries status 401.
-6. **The `generation` argument reaches the base implementation.** Spy on
+   defect under test.
+6. **Two concurrent operations against the same expired token refresh once between them.** The
+   acceptance test for the concurrency half: establish successfully, then start two
+   `makeAdtRequest` calls without awaiting the first, both answered 401. `refreshToken` is called
+   **once**, and the second operation retries with the token the first fetched. This is the test
+   an instance-level re-entrancy flag would also pass — which is why it comes with the next one.
+7. **An operation that starts after a completed refresh may still refresh.** Establish, drive one
+   operation through a 401 and its refresh, let it settle, then start a second operation whose
+   request also 401s. `refreshToken` is called a **second** time. This is the case a re-entrancy
+   flag gets wrong, and without it "refresh at most once" could be satisfied by never refreshing
+   twice at all.
+8. **The `generation` argument reaches the base implementation.** Spy on
    `AbstractAbapConnection.prototype.fetchCsrfToken` and assert the fourth argument arrives when
    `makeAdtRequest` passes a lease generation — the dropped-parameter defect, which no current
    test would notice because the code compiles and behaves plausibly without it.
 
-Tests 2, 5 and 6 are the ones that would have caught these classes of defect; 1 is the one that
-catches this instance.
+Tests 2, 5, 6, 7 and 8 are the ones that would have caught these classes of defect; 1 is the one
+that catches this instance. 6 and 7 are a pair on purpose: either alone can be passed by a design
+that is wrong in the other direction.
 
 ## Out of scope
 
