@@ -262,8 +262,12 @@ private readonly recoveryScope = new AsyncLocalStorage<IRecoveryScope>();
 /** Monotonic; incremented once per completed network refresh. */
 private tokenGeneration = 0;
 
-/** Single-flight: concurrent callers join this rather than starting a second. */
-private refreshInFlight?: Promise<boolean>;
+/**
+ * Single-flight over the whole credential renewal — token fetch, session
+ * discard and re-establishment. Concurrent callers join this rather than each
+ * running their own teardown/recovery pair.
+ */
+private renewalInFlight?: Promise<boolean>;
 ```
 
 **Lifecycle, in full.**
@@ -332,44 +336,94 @@ private refreshInFlight?: Promise<boolean>;
    second scope with a baseline taken *after* the refresh, which is exactly the state that reads
    as "nobody has refreshed yet".
 
-3. **Deciding.** `ensureFreshToken()` takes no argument; it reads the active scope.
+3. **Deciding — and the unit that is single-flighted is the whole renewal, not the token fetch.**
+
+   Sharing only the token fetch leaves the expensive half racing. After joining one refresh, two
+   operations would each still run their own `discardSession()` + `recoverSession()`, and
+   `SessionLifecycle.transition` says plainly that **`recover` and `cleanup` never join and are
+   never joined** (`SessionLifecycle.ts:228-231`) — each queues on the serializing tail. So two
+   concurrent 401s produce:
+
+   ```
+   cleanup A → recover A → cleanup B → recover B
+   ```
+
+   A's recovery reaches `markConnected` and A leaves `recoverSession` to retry — while B's
+   cleanup, already queued, tears the session back down. A's retry then races a teardown it
+   knows nothing about and can come back `NOT_CONNECTED`, having refreshed nothing wrong.
+   Raised in review, 2026-08-16, against a draft that single-flighted only `performRefresh`.
+
+   So the shared unit is **refresh → discardSession → recoverSession**, and a joiner waits for
+   all three:
 
    ```ts
-   private async ensureFreshToken(): Promise<boolean> {
+   /** Single-flight over the whole credential renewal, session included. */
+   private renewalInFlight?: Promise<boolean>;
+
+   private renewCredential(baselineEpoch: number): Promise<boolean> {
+     if (this.renewalInFlight) return this.renewalInFlight;
+     // Identity-checked clear, as SessionLifecycle.transition does: a joiner
+     // settling late must not clear a renewal somebody started after it.
+     const inFlight = this.performRenewal(baselineEpoch).finally(() => {
+       if (this.renewalInFlight === inFlight) this.renewalInFlight = undefined;
+     });
+     this.renewalInFlight = inFlight;
+     return inFlight;
+   }
+
+   private async performRenewal(baselineEpoch: number): Promise<boolean> {
+     if (!this.tokenRefresher) return false;
+     try {
+       this.currentToken = await this.tokenRefresher.refreshToken();
+       this.tokenGeneration += 1;
+     } catch (error) {
+       this.logger?.error(`[ERROR] JwtAbapConnection - token refresh failed: …`);
+       return false;
+     }
+     // The renewed credential cannot keep the old ABAP session.
+     this.discardSession();
+     await this.recoverSession(baselineEpoch);
+     return true;
+   }
+   ```
+
+   **Deciding whether to renew at all**, in this order — the order is the design, not a detail:
+
+   ```ts
+   private async ensureRecovered(baselineEpoch: number): Promise<boolean> {
+     // 1. A renewal in flight is joined REGARDLESS of generation. A newer token
+     //    is no use while the session it belongs to is still being rebuilt:
+     //    retrying now is how a caller meets a closed admission door.
+     if (this.renewalInFlight) return this.renewalInFlight;
+
      const scope = this.recoveryScope.getStore();
      // No live scope means a caller reached a handler by a path that does not
      // open one, or through a stale async context. Either way, treat it as its
      // own operation rather than trusting a baseline nobody is standing behind.
      const baseline = scope?.active ? scope.baseline : this.tokenGeneration;
 
-     // Somebody already refreshed since this operation began — this operation's
-     // retry will use the newer token, which is the point. Refreshing again asks
-     // the same refresher the same question.
+     // 2. Somebody renewed since this operation began, and nothing is in
+     //    flight — so the session is settled as well as the token. Retry.
      if (this.tokenGeneration > baseline) return true;
 
-     if (!this.tokenRefresher) return false;
-
-     // Single-flight: two concurrent operations that both observed the same
-     // failing token share one network refresh instead of racing.
-     this.refreshInFlight ??= this.performRefresh();
-     try {
-       return await this.refreshInFlight;
-     } finally {
-       this.refreshInFlight = undefined;
-     }
-   }
-
-   private async performRefresh(): Promise<boolean> {
-     try {
-       this.currentToken = await this.tokenRefresher!.refreshToken();
-       this.tokenGeneration += 1;
-       return true;
-     } catch (error) {
-       this.logger?.error(`[ERROR] JwtAbapConnection - token refresh failed: …`);
-       return false;
-     }
+     // 3. Nobody has. Renew, and let everyone else join.
+     return this.renewCredential(baselineEpoch);
    }
    ```
+
+   Check 1 before check 2 is what closes the window the review found: without it, a joiner that
+   sees a newer generation returns "retry now" while the session is mid-rebuild.
+
+   **A joiner must re-check its own epoch before retrying.** The renewal was fenced against the
+   *starter's* `baselineEpoch`, not the joiner's, and `recoverSession` yields to a teardown by
+   comparing against the baseline it was given. A joiner whose caller asked to stop meanwhile
+   must not retry on a session someone else resurrected. This is a requirement on the
+   implementation, not an observation about it.
+
+   `fetchCsrfToken` and `establishSession` renew the **token** only — they run inside an
+   establishment, so discarding and re-establishing from there would be re-entering the
+   transition they are part of. They call a token-only path; `makeAdtRequest` is the only site
+   that renews the session.
 
 4. **Ending.** The outermost call clears `active` in a `finally`, and that flag — not the store's
    presence — is what marks the operation over.
@@ -390,12 +444,12 @@ private refreshInFlight?: Promise<boolean>;
 | case | refreshes |
 |---|---|
 | one `makeAdtRequest`, 401 at CSRF level then at request level then in recovery | **1** — the second and third see `tokenGeneration > baseline` |
-| two concurrent `makeAdtRequest`, both hit the same expired token | **1** — single-flight, and the loser retries with the winner's token |
+| two concurrent `makeAdtRequest`, both hit the same expired token | **1** — and one session recovery: the joiner waits for the whole renewal, then retries on the session the winner rebuilt |
 | a later `makeAdtRequest` after the renewed token also expires | **1** — its baseline is the current generation, so it refreshes properly |
 | `connect()` alone, 401 on CSRF | **1** — `fetchCsrfToken` refreshes, `establishSession` no longer does |
 | an operation on connection **B** started inside connection **A**'s async context | **each refreshes its own** — B's storage is B's, so B sees no store and opens its own scope |
 | a re-entrant `makeAdtRequest` on the **same** connection, started after the outer refresh completed | **its own baseline**, so its own 401 can refresh again — where an inherited baseline would have it skip |
-| a re-entrant `makeAdtRequest` started *while* a refresh is in flight | **joins that refresh** — a new scope does not mean a new network call |
+| a re-entrant `makeAdtRequest` started *while* a renewal is in flight | **joins that renewal** — a new scope does not mean a new network call, and it does not mean a second teardown |
 | a re-entrant `makeAdtRequest` started during the recovery *establishment* | **`NOT_CONNECTED`** — `discardSession()` has shut admission until `markConnected`. Pre-existing session behaviour, unchanged here, but it bounds where a test can inject one |
 | a stale async context left behind by a finished operation | **treated as a fresh operation** — `active` is false, so its baseline is not inherited |
 
@@ -474,21 +528,32 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
    **`fetchCsrfToken` must not be mocked.** Mocking it is precisely how the existing
    establishment-retry test would let four nested refreshes through, and the nesting is the
    defect under test.
-6. **Two concurrent operations against the same expired token refresh once between them.** The
-   acceptance test for the concurrency half: establish successfully, then start two
-   `makeAdtRequest` calls without awaiting the first, both answered 401. `refreshToken` is called
-   **once**, and the second operation retries with the token the first fetched. This is the test
-   an instance-level re-entrancy flag would also pass — which is why it comes with the next one.
+6. **Two concurrent operations share one renewal — token *and* session — and both succeed.**
+   The acceptance test for the concurrency half. Establish successfully, then start two
+   `makeAdtRequest` calls without awaiting the first, both answered 401, and assert **all four**:
 
-   Both requests must be **in flight before** either refresh completes, since the winner's
+   - `refreshToken` called **once**;
+   - the session was recovered **once** — spy `recoverSession`, or count establishment requests
+     at the transport;
+   - both requests retried **after** that recovery completed;
+   - both settled with the expected response, and **neither failed `NOT_CONNECTED`**.
+
+   The last two are what a token-only single-flight fails. It gives the first assertion happily
+   while each operation still runs its own `discardSession()` + `recoverSession()`, which never
+   join — so the second operation's cleanup can tear down the session the first has just
+   rebuilt, and the first's retry meets a closed door. A test asserting only `refreshToken === 1`
+   would have passed on that. Raised in review, 2026-08-16.
+
+   Both requests must be **in flight before** either renewal completes, since the winner's
    `discardSession()` invalidates leases and shuts admission. That is the state being tested, not
    an obstacle to it, but it decides how the test is written: start both, then release the
    transport, rather than starting the second after the first has failed.
-7. **An operation that starts after a completed refresh may still refresh.** Establish, drive one
-   operation through a 401 and its refresh, let it settle, then start a second operation whose
-   request also 401s. `refreshToken` is called a **second** time. This is the case a re-entrancy
-   flag gets wrong, and without it "refresh at most once" could be satisfied by never refreshing
-   twice at all.
+
+7. **An operation that starts after a completed renewal may still renew.** The pair to 6, which
+   an instance-level re-entrancy flag also passes. Establish, drive one operation through a 401
+   and its renewal, let it settle completely, then start a second operation whose request also
+   401s. `refreshToken` is called a **second** time. Without this, "renew at most once" could be
+   satisfied by never renewing twice at all.
 8. **Two connections do not share a recovery scope.** Build `A` and `B`, each with its own
    refresher, and establish both. **Drive `B` through one refresh first**, so `B.tokenGeneration`
    is 1 while `A`'s is 0 — without that divergence the test proves nothing, because equal
@@ -505,8 +570,8 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
    refresh, which is the shape this bug takes.
 
    **Do not use `A.tokenRefresher.refreshToken()` as the hook.** It deadlocks: the refresher is
-   awaited inside `performRefresh`, so an inner request started there waits on
-   `refreshInFlight`, which waits on the refresher, which waits on the inner request. Raised in
+   awaited inside `performRenewal`, so an inner request started there waits on
+   `renewalInFlight`, which waits on the refresher, which waits on the inner request. Raised in
    review, 2026-08-16, against a draft that specified exactly that.
 
    The transport hook is safe **here** because the inner request goes to `B`, whose lifecycle is
