@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { IAdtResponse, ITokenRefresher } from '@mcp-abap-adt/interfaces';
 import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
@@ -18,6 +19,14 @@ function isTokenExpiryCandidate(error: unknown): error is AxiosError {
   return error instanceof AxiosError && error.response?.status === 401;
 }
 
+/** What one caller-visible operation knows about the credential it started with. */
+interface IRecoveryScope {
+  /** `tokenGeneration` as it stood when this operation began. */
+  readonly baseline: number;
+  /** Cleared when the operation that opened this scope returns. */
+  active: boolean;
+}
+
 /**
  * JWT Authentication connection for SAP BTP Cloud systems
  *
@@ -31,6 +40,20 @@ function isTokenExpiryCandidate(error: unknown): error is AxiosError {
 export class JwtAbapConnection extends AbstractAbapConnection {
   private tokenRefresher?: ITokenRefresher;
   private currentToken: string;
+
+  /** Bumped by any token refresh, token-only ones included. */
+  private tokenGeneration = 0;
+
+  /** Single-flight over the token fetch alone. Touches no session state. */
+  private tokenRefreshInFlight?: Promise<boolean>;
+
+  /**
+   * Per connection, deliberately NOT static. `baseline` is compared against
+   * `this.tokenGeneration`, which is instance state — a store shared between
+   * instances would let one connection's operation hand its baseline to
+   * another's, and the comparison would be between unrelated counters.
+   */
+  private readonly recoveryScope = new AsyncLocalStorage<IRecoveryScope>();
 
   constructor(
     config: SapConfig,
@@ -59,23 +82,87 @@ export class JwtAbapConnection extends AbstractAbapConnection {
   }
 
   /**
-   * Refresh the JWT token using the injected tokenRefresher
-   * @returns true if token was refreshed, false if no refresher available
+   * For the public entry point: this call is its own operation, always.
+   *
+   * A re-entrant `makeAdtRequest` — from a logger or a refresher callback the
+   * connection itself invokes while a scope is live — is a new caller-visible
+   * operation. Inheriting there would hand it a baseline from somebody else's
+   * refresh, which reads as "already refreshed for me" and skips a refresh it
+   * needs.
    */
-  private async tryRefreshToken(): Promise<boolean> {
+  private inNewRecoveryScope<T>(fn: () => Promise<T>): Promise<T> {
+    const scope: IRecoveryScope = {
+      baseline: this.tokenGeneration,
+      active: true,
+    };
+    return this.recoveryScope.run(scope, async () => {
+      try {
+        return await fn();
+      } finally {
+        scope.active = false;
+      }
+    });
+  }
+
+  /** For the inner levels: join the operation in progress, or start one. */
+  private inRecoveryScope<T>(fn: () => Promise<T>): Promise<T> {
+    const inherited = this.recoveryScope.getStore();
+    // Only a scope that is still running. A store reached through an async
+    // resource that outlived its operation is stale, and its baseline describes
+    // a credential state that has since moved.
+    if (inherited?.active) return fn();
+    return this.inNewRecoveryScope(fn);
+  }
+
+  /** The baseline this operation is reasoning from. */
+  private currentBaseline(): number {
+    const scope = this.recoveryScope.getStore();
+    // No live scope means a caller reached a handler by a path that does not
+    // open one, or through a stale async context. Either way, treat it as its
+    // own operation rather than trusting a baseline nobody is standing behind.
+    return scope?.active ? scope.baseline : this.tokenGeneration;
+  }
+
+  /**
+   * Fetch a new token, unless somebody already did for this operation.
+   *
+   * Single-flighted so two concurrent handlers — including two nested
+   * `fetchCsrfToken` calls, which is a level `renewalInFlight` cannot reach —
+   * share one network call instead of racing and leaving `currentToken` as
+   * whichever settled last.
+   *
+   * @returns true when the caller may retry.
+   */
+  private refreshTokenOnce(baseline: number): Promise<boolean> {
+    if (this.tokenGeneration > baseline) return Promise.resolve(true);
+    if (this.tokenRefreshInFlight) return this.tokenRefreshInFlight;
     if (!this.tokenRefresher) {
       this.logger?.debug(
         `[DEBUG] JwtAbapConnection - No tokenRefresher available, cannot refresh token`,
       );
-      return false;
+      return Promise.resolve(false);
     }
 
+    // Identity-checked clear, as SessionLifecycle.transition does with its
+    // tail: a joiner settling late must not clear a fetch somebody started
+    // after it.
+    const inFlight = this.performTokenRefresh().finally(() => {
+      if (this.tokenRefreshInFlight === inFlight) {
+        this.tokenRefreshInFlight = undefined;
+      }
+    });
+    this.tokenRefreshInFlight = inFlight;
+    return inFlight;
+  }
+
+  private async performTokenRefresh(): Promise<boolean> {
     try {
       this.logger?.debug(
         `[DEBUG] JwtAbapConnection - Refreshing token via tokenRefresher...`,
       );
-      const newToken = await this.tokenRefresher.refreshToken();
-      this.currentToken = newToken;
+      // biome-ignore lint/style/noNonNullAssertion: refreshTokenOnce checks it
+      this.currentToken = await this.tokenRefresher!.refreshToken();
+      this.tokenGeneration += 1;
       this.logger?.debug(
         `[DEBUG] JwtAbapConnection - Token refreshed successfully`,
       );
@@ -126,6 +213,13 @@ export class JwtAbapConnection extends AbstractAbapConnection {
   async makeAdtRequest<T = any, D = any>(
     options: AbapRequestOptions,
   ): Promise<IAdtResponse<T, D>> {
+    // A public call is its own operation, whatever scope it starts in.
+    return this.inNewRecoveryScope(() => this.attemptRequest<T, D>(options));
+  }
+
+  private async attemptRequest<T, D>(
+    options: AbapRequestOptions,
+  ): Promise<IAdtResponse<T, D>> {
     // Captured before the attempt: a recovery asks "has the caller asked to
     // stop since this request began", not since some later bookkeeping step.
     const baselineEpoch = this.teardownEpoch;
@@ -148,8 +242,7 @@ export class JwtAbapConnection extends AbstractAbapConnection {
           `[DEBUG] JwtAbapConnection.makeAdtRequest - Got 401, attempting token refresh...`,
         );
 
-        // Try to refresh token if tokenRefresher is available
-        if (await this.tryRefreshToken()) {
+        if (await this.refreshTokenOnce(this.currentBaseline())) {
           this.logger?.debug(
             `[DEBUG] JwtAbapConnection.makeAdtRequest - Recovering session after token refresh...`,
           );
@@ -182,6 +275,20 @@ export class JwtAbapConnection extends AbstractAbapConnection {
     /** Fences the response effects; omitted during connect(), which has no lease. */
     generation?: number,
   ): Promise<string> {
+    // An inner level: join the operation in progress, or start one when
+    // reached directly — a bare connect() is still an operation with a
+    // baseline.
+    return this.inRecoveryScope(() =>
+      this.attemptCsrfToken(url, retryCount, retryDelay, generation),
+    );
+  }
+
+  private async attemptCsrfToken(
+    url: string,
+    retryCount: number,
+    retryDelay: number,
+    generation?: number,
+  ): Promise<string> {
     try {
       // Try to fetch CSRF token using parent implementation
       return await super.fetchCsrfToken(
@@ -191,29 +298,10 @@ export class JwtAbapConnection extends AbstractAbapConnection {
         generation,
       );
     } catch (error) {
-      // A 401 here may be an expired token; anything else is not ours to interpret.
-      if (
-        error instanceof AxiosError &&
-        (error.response?.status === 401 || error.response?.status === 403)
-      ) {
-        // Check if this is really an auth error, not a permissions error
-        const responseData = error.response?.data;
-        const responseText =
-          typeof responseData === 'string'
-            ? responseData
-            : JSON.stringify(responseData || '');
-
-        // Don't retry on "No Access" errors
-        if (
-          responseText.includes('ExceptionResourceNoAccess') ||
-          responseText.includes('No authorization') ||
-          responseText.includes('Missing authorization')
-        ) {
-          throw error;
-        }
-
-        // Try to refresh token if tokenRefresher is available
-        if (await this.tryRefreshToken()) {
+      // A 401 here may be an expired token; anything else is not ours to
+      // interpret — a 403 least of all, since a new token is the same caller.
+      if (isTokenExpiryCandidate(error)) {
+        if (await this.refreshTokenOnce(this.currentBaseline())) {
           // Retry CSRF token fetch with new token
           this.logger?.debug(
             `[DEBUG] JwtAbapConnection.fetchCsrfToken - Retrying after token refresh...`,

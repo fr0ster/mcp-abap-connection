@@ -297,3 +297,116 @@ describe('JwtAbapConnection error classification', () => {
     expect(refreshToken).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * `fetchCsrfToken` classifies for itself, and it was very nearly missed.
+ *
+ * The first pass at issue #30 converted `makeAdtRequest` and left this handler
+ * accepting 403 with the substring list intact — and every test written for it
+ * went through `makeAdtRequest` with a cached CSRF token, so none of them came
+ * near this code. The gap was found by reading the file, which is not a method
+ * that scales. These tests are the method that does.
+ */
+describe('JwtAbapConnection.fetchCsrfToken classification', () => {
+  const config: SapConfig = {
+    url: 'https://sap.example.com',
+    authType: 'jwt',
+    jwtToken: 'jwt-abc',
+    client: '100',
+  };
+  const url = 'https://sap.example.com/sap/bc/adt/discovery';
+
+  const basePrototype = Object.getPrototypeOf(JwtAbapConnection.prototype);
+
+  function refuse(status: number, data: string) {
+    return jest.spyOn(basePrototype as any, 'fetchCsrfToken').mockRejectedValue(
+      new AxiosError(
+        `Request failed with status ${status}`,
+        String(status),
+        {} as never,
+        null,
+        {
+          status,
+          statusText: '',
+          data,
+          headers: {},
+          config: {} as never,
+        } as never,
+      ),
+    );
+  }
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it('does not refresh on a 403, and rethrows it', async () => {
+    const refreshToken = jest.fn(async () => 'FRESH');
+    const conn = new JwtAbapConnection(config, mockLogger, undefined, {
+      getToken: async () => 'FRESH',
+      refreshToken,
+    });
+    refuse(403, 'ExceptionResourceNoAuthorization');
+
+    await expect((conn as any).fetchCsrfToken(url)).rejects.toMatchObject({
+      response: { status: 403 },
+    });
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+
+  it('refreshes once on a 401 and retries', async () => {
+    const refreshToken = jest.fn(async () => 'FRESH');
+    const conn = new JwtAbapConnection(config, mockLogger, undefined, {
+      getToken: async () => 'FRESH',
+      refreshToken,
+    });
+    const spy = refuse(401, '<html>login</html>');
+
+    await expect((conn as any).fetchCsrfToken(url)).rejects.toMatchObject({
+      response: { status: 401 },
+    });
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    // The retry happened: the base was asked twice, and gave up after that.
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * Test 9, first form. Two concurrent operations both fail their nested CSRF
+   * fetch; the token primitive has to collapse them into one network refresh.
+   * `renewalInFlight` cannot help at this level — it does not exist until the
+   * failure climbs to the outer handler.
+   */
+  it('two concurrent CSRF fetches share one token refresh', async () => {
+    const refreshToken = jest.fn(async () => 'FRESH');
+    const conn = new JwtAbapConnection(config, mockLogger, undefined, {
+      getToken: async () => 'FRESH',
+      refreshToken,
+    });
+
+    let calls = 0;
+    jest
+      .spyOn(basePrototype as any, 'fetchCsrfToken')
+      .mockImplementation(async () => {
+        calls += 1;
+        // The first attempt of each operation is refused; the retry after the
+        // shared refresh succeeds.
+        if (calls <= 2) {
+          throw new AxiosError('unauthorized', '401', {} as never, null, {
+            status: 401,
+            statusText: '',
+            data: '',
+            headers: {},
+            config: {} as never,
+          } as never);
+        }
+        return 'CSRF-AFTER-REFRESH';
+      });
+
+    const [a, b] = await Promise.all([
+      (conn as any).fetchCsrfToken(url),
+      (conn as any).fetchCsrfToken(url),
+    ]);
+
+    expect(a).toBe('CSRF-AFTER-REFRESH');
+    expect(b).toBe('CSRF-AFTER-REFRESH');
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+  });
+});
