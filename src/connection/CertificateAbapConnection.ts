@@ -69,7 +69,7 @@ export class CertificateAbapConnection extends AbstractAbapConnection {
     const baseUrl = await this.getBaseUrl();
     const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;
     try {
-      const token = await this.fetchCsrfToken(discoveryUrl, 3, 1000);
+      const token = await this.fetchCsrfToken(discoveryUrl);
       this.setCsrfToken(token);
     } catch (error) {
       this.logger?.warn(

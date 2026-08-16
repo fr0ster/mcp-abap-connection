@@ -43,8 +43,9 @@ node examples/jwt-with-token-refresh.js
 
 **What it demonstrates:**
 - Creating connection with token refresher injection
-- Automatic token refresh on 401/403 errors
+- Automatic token refresh on 401 errors
 - Retry logic with refreshed token
+- A 403 propagating untouched, with its status and body intact
 
 ### saml-connection.js
 

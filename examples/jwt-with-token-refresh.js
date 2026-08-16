@@ -4,10 +4,16 @@
  * This example demonstrates how to create a JwtAbapConnection with
  * automatic token refresh using ITokenRefresher from auth-broker.
  *
- * When 401/403 errors occur, the connection automatically:
+ * When a **401** occurs, the connection automatically:
  * 1. Calls tokenRefresher.refreshToken() to get a new token
  * 2. Updates internal token state
- * 3. Retries the failed request with the new token
+ * 3. Re-establishes the SAP session, which the new credential cannot inherit
+ * 4. Retries the failed request
+ *
+ * A **403** is left alone. It means the server authenticated you and refused
+ * the action anyway — an authorization gap, not an expired credential — so it
+ * propagates with its status and the server's message, and a new token would
+ * change nothing.
  */
 
 const { JwtAbapConnection } = require('@mcp-abap-adt/connection');
@@ -68,7 +74,9 @@ async function main() {
   try {
     await connection.connect();
 
-    // This request will automatically refresh token if 401/403 occurs. Note
+    // This request will automatically refresh the token if a 401 occurs. A
+    // 403 arrives as-is — read err.response.status and err.response.data to
+    // see which authorization object the server named. Note
     // that a refresh replaces the SAP session: with a lock window open the
     // request would fail with ADT_SESSION_REPLACED rather than continue on a
     // session your lock is not in.

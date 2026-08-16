@@ -35,7 +35,7 @@ export class BaseAbapConnection extends AbstractAbapConnection {
 
     try {
       // Try to get CSRF token (this will also get cookies)
-      const token = await this.fetchCsrfToken(discoveryUrl, 3, 1000);
+      const token = await this.fetchCsrfToken(discoveryUrl);
       this.setCsrfToken(token);
 
       this.logger?.debug('Successfully connected to SAP system', {
