@@ -33,6 +33,13 @@ calls `super` with three — so `lease.generation`, passed by
 **Test 13** (spec numbering): spy `AbstractAbapConnection.prototype.fetchCsrfToken`, drive a
 `makeAdtRequest` that fetches CSRF, assert the fourth argument arrives.
 
+**Drive it through a call site that actually passes one.** Of the three, two do
+(`AbstractAbapConnection.ts:814`, the stale-CSRF retry, and `:874`, the 401-on-GET cookie fetch);
+the third, `:1302`, calls `fetchCsrfToken(requestUrl)` with no generation at all. A test written
+against the initial fetch would assert `undefined` arrives and pass whether the argument is
+forwarded or dropped. Raised in review, 2026-08-16 — a test-authoring detail, but the kind that
+turns a mutation check into a formality.
+
 **Verify by breaking it:** drop the argument again and watch the new test fail. TypeScript will
 not catch this class of defect — fewer parameters are assignable to more — so the test is the
 only thing standing between it and a silent return.
