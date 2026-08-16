@@ -84,10 +84,32 @@ Its `try` wraps `this.fetchCsrfToken` and nothing else, so the only 401 it can s
 `fetchCsrfToken` has already refreshed for and retried. A second refresh here asks the same
 refresher the same question.
 
-**Test 5** lands here in its first form — a persistent 401 through the real nested path, with the
-scripted transport the spec sets out (establishment succeeds, the ADT request 401s, the recovery
-establishment 401s), asserting the refresher is called once and the rejection carries 401. It is
-strengthened again in task 5 when the full renewal exists. `fetchCsrfToken` is not mocked.
+**Test 5 does not land here.** At this point `makeAdtRequest` and `fetchCsrfToken` still refresh
+independently — there is no generation guard yet — so the spec's scenario produces two refreshes,
+not one:
+
+```
+ADT request → 401
+  makeAdtRequest refreshes                 ← call 1
+  recoverSession → establishSession
+    fetchCsrfToken → 401
+      fetchCsrfToken refreshes             ← call 2
+      retry → 401
+    establishSession rethrows
+```
+
+Removing the recursion bounds the loop; it does not collapse the two handlers. An assertion of
+`refreshToken` called **once** cannot pass before task 5, and a plan that scheduled it here would
+have forced either a red tree or a temporary assertion written to be rewritten. Raised in review,
+2026-08-16.
+
+**What task 3 does prove**, and can: a persistent 401 during `connect()` **terminates** and
+rejects with the original error carrying `status === 401`, rather than recursing. Count the CSRF
+attempts, or spy `establishSession`, and assert it ran once — the recursion is what this task
+removes, so that is what this task's test pins. `fetchCsrfToken` is not mocked.
+
+Test 5 in full — the scripted transport, `refreshToken` exactly once — belongs to task 5, where
+the machinery that makes it true exists.
 
 ---
 
@@ -140,11 +162,45 @@ Check 1 before check 2, or a joiner with a newer generation retries into a close
 Check 2 on `recoveredGeneration`, not `tokenGeneration`, or a nested token-only refresh passes for
 a session recovery.
 
-**A joiner re-checks its own epoch before retrying.** The renewal was fenced against the
-*starter's* `baselineEpoch`. A joiner whose caller asked to stop meanwhile must not retry on a
-session someone else resurrected.
+### The epoch re-check, as a step rather than a remark
 
-**Tests 5 (strengthened), 6, 7, 8, 10, 11, 12.** Two need care and the spec says exactly where:
+`establishAndCommit` compares `teardownEpoch` against the baseline of the establishment **it**
+runs (`AbstractAbapConnection.ts:298`). A joiner never runs one — it joins somebody else's — so
+that check never fires for it. Without an explicit one, a joiner reads `true` from
+`ensureRecovered` and retries onto a session that a teardown has since discarded. The spec noted
+this and the plan left it as a sentence; raised in review, 2026-08-16.
+
+The epoch belongs to the **connection**, not to a request: a teardown invalidates *every* request
+in flight, whoever asked for it. So the check is not "did my caller stop" but "has this
+connection been torn down since I began", and it is written at the one place a retry is issued:
+
+```ts
+const recovered = await this.ensureRecovered(baselineEpoch);
+if (!recovered) throw error;                     // the original, per task 2
+if (this.teardownEpoch !== baselineEpoch) {
+  throw sessionError(
+    ADT_SESSION_ERROR.NOT_CONNECTED,
+    'Retry abandoned: a teardown was requested for this connection',
+  );
+}
+return super.makeAdtRequest<T, D>(options);
+```
+
+Same helper and same code as `establishAndCommit`, so the two read alike and a reader meeting the
+second one recognises it.
+
+**Test 14:** two requests join one renewal; a teardown is requested while the renewal is in
+flight. After it resolves, **neither** request reaches the transport with a retry — both reject
+`NOT_CONNECTED`, including the one that started the renewal. Assert against the transport mock,
+not only against the rejections: the failure mode is a request that succeeds on a session its
+caller discarded, and a rejection count alone would not see it.
+
+`baselineEpoch` is already captured at the top of `makeAdtRequest`
+(`JwtAbapConnection.ts:146`) and needs no new plumbing; `sessionError` and `ADT_SESSION_ERROR`
+need importing into the subclass, which today imports neither.
+
+**Tests 5, 6, 7, 8, 10, 11, 12 and 14.** Test 5 lands here in full rather than being strengthened
+— task 3 could not host it. Two of the others need care and the spec says exactly where:
 
 - **6** — both requests in flight *before* either renewal completes, since the winner's
   `discardSession()` invalidates leases. Asserts four things, not one: refresher once, recovery
@@ -178,7 +234,7 @@ request in a runnable example, so it should answer the question a reader arrives
 ## Task 7 — Verify, then hand over
 
 1. `npm run build && npm test` clean.
-2. **Mutation-check each new test.** For every one of 1–13, break the thing it pins and confirm
+2. **Mutation-check each new test.** For every one of 1–14, break the thing it pins and confirm
    that test — and ideally only that test — goes red. A test that stays green under its own
    mutation is not a test. Run them one at a time; parallel agents reverting each other's
    mutations has corrupted this exercise before.
