@@ -718,26 +718,56 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
    (`AbstractAbapConnection.ts:550`) and the planned 401 never happens. Raised in review,
    2026-08-16, against a draft that put the hook exactly there.
 
-   **The window that works** is after `recoverSession()` has resolved — admission reopened by
-   `markConnected`, `tokenGeneration` already 1 — and before the outer operation's
-   `super.makeAdtRequest` retry, with the outer ALS scope still active. In practice: wrap
-   `recoverSession`, call through to the original, start the inner request once it resolves, then
-   return.
+   **Nor anywhere inside `renewalInFlight`.** Wrapping `recoverSession` looks like it clears the
+   admission problem — `markConnected` has run by then — and deadlocks on the other promise
+   instead:
 
-   Assert: the inner request's 401 produces a **second** refresh (`tokenGeneration` 2), because
-   its baseline is 1; and the outer operation, continuing afterwards, does **not** refresh again,
-   because 2 is greater than its baseline of 0. Two refreshes in total, each belonging to a
-   different operation.
+   ```
+   renewalInFlight
+     performRenewal
+       await wrapped recoverSession
+         await original recoverSession    ← admission is open again
+         await inner makeAdtRequest
+           401 → ensureRecovered
+                   check 1 sees renewalInFlight and joins it
+                   await renewalInFlight  ← waits for the wrapper, which waits for this
+   ```
 
-   With an inherited scope the inner request would carry baseline 0, read generation 1 as
-   somebody else's refresh, and skip its own — which is the distinction this test exists to draw.
+   Check 1 joins an in-flight renewal *regardless of generation*, which is exactly what makes the
+   design correct and exactly what closes this door. Raised in review, 2026-08-16.
 
-   **Timing is the whole test**, and it has now been wrong twice. An earlier draft started the
-   inner request from inside the refresher — *while* the refresh was in flight — and asserted a
-   second network refresh, which both deadlocks and contradicts the single-flight guarantee test
-   6 pins. The draft after it moved to the transport hook and landed in the closed-admission
-   window. The requirement is narrow and worth restating plainly: **after the refresh, after
-   admission reopens, before the retry, inside the outer scope.**
+   **The window that works** needs all five at once:
+
+   - the refresh has happened (`tokenGeneration` is 1);
+   - `recoverSession` has resolved, so admission is open again;
+   - `ensureRecovered` has **returned to the outer handler**, so the `.finally()` on
+     `renewalInFlight` has cleared it and there is nothing to join;
+   - the outer `super.makeAdtRequest` retry has not started;
+   - the outer ALS scope is still active.
+
+   In practice: wrap **`ensureRecovered`**, not `recoverSession` — `await` the original, start
+   the inner request, await it, then return the original's answer to the outer handler. Awaiting
+   the original is what guarantees the third bullet, since `renewCredential` clears the field in
+   a `.finally()` on the very promise it returns.
+
+   If that wrapping proves brittle, the alternative is an explicit seam in production between
+   `await ensureRecovered(...)` and the retry — but the wrap should be tried first, because a
+   seam that exists only to be hooked is a test artefact living in shipped code.
+
+   Assert: the inner request's 401 produces a **second** renewal (`tokenGeneration` 2), because
+   its baseline is 1; and the outer operation, continuing afterwards, does **not** renew again,
+   because `recoveredGeneration` is now greater than its baseline of 0. Two renewals in total,
+   each belonging to a different operation.
+
+   With an inherited scope the inner request would carry baseline 0, read the first renewal as
+   somebody else's, and skip its own — which is the distinction this test exists to draw.
+
+   **Timing is the whole test, and it has now been wrong three times.** Inside the refresher
+   (deadlock, and it contradicted test 6); inside the recovery establishment (closed admission);
+   inside `renewalInFlight` (deadlock again, on the other promise). Each draft fixed the previous
+   objection and landed one layer further out. The window is the intersection of five conditions
+   listed above, and none of them is negotiable — which is itself worth knowing before anyone
+   writes this test.
 12. **A finished operation's async context is not inherited.** Run one operation to completion
    while retaining a continuation created inside it, then start a new operation from that
    continuation. It must refresh on its own account rather than reading the finished operation's
