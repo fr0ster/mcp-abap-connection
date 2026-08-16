@@ -5,7 +5,10 @@
  * Token refresh functionality is handled by auth-broker package.
  */
 
-import type { ITokenRefresher } from '@mcp-abap-adt/interfaces';
+import {
+  ADT_SESSION_ERROR,
+  type ITokenRefresher,
+} from '@mcp-abap-adt/interfaces';
 import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import { CSRF_CONFIG } from '../connection/csrfConfig.js';
@@ -409,4 +412,195 @@ describe('JwtAbapConnection.fetchCsrfToken classification', () => {
     expect(b).toBe('CSRF-AFTER-REFRESH');
     expect(refreshToken).toHaveBeenCalledTimes(1);
   });
+});
+
+/**
+ * The renewal: one per caller-visible operation, session included.
+ *
+ * These drive `makeAdtRequest`, whose recovery discards the session and
+ * re-establishes it. The transport answers discovery so the establishment can
+ * succeed; only the ADT request is scripted.
+ */
+describe('JwtAbapConnection credential renewal', () => {
+  const config: SapConfig = {
+    url: 'https://sap.example.com',
+    authType: 'jwt',
+    jwtToken: 'jwt-abc',
+    client: '100',
+  };
+  const request = {
+    url: '/sap/bc/adt/ddic/domains/zfoo',
+    method: 'POST' as const,
+    timeout: 30000,
+    data: '<x/>',
+  };
+
+  function unauthorized(): AxiosError {
+    return new AxiosError('unauthorized', '401', {} as never, null, {
+      status: 401,
+      statusText: '',
+      data: '<html>login</html>',
+      headers: {},
+      config: {} as never,
+    } as never);
+  }
+
+  function discoveryOk(cfg: { url?: string }) {
+    return {
+      status: 200,
+      statusText: 'OK',
+      data: '<service/>',
+      headers: {
+        'x-csrf-token': 'FRESH-TOKEN',
+        'set-cookie': ['SAP_SESSIONID_STUB_100=S2; Path=/'],
+      },
+      config: cfg,
+    };
+  }
+
+  /**
+   * A connection staged as connected, with a cached CSRF token so a mutation
+   * goes straight out, and a transport whose ADT answers the test scripts.
+   */
+  function staged(
+    refreshToken: jest.Mock,
+    adt: (attempt: number, cfg: { url?: string }) => unknown,
+  ) {
+    const conn = new JwtAbapConnection(config, mockLogger, undefined, {
+      getToken: async () => 'FRESH',
+      refreshToken: refreshToken as unknown as () => Promise<string>,
+    });
+    markConnectedForTest(conn);
+    (conn as any).csrfToken = 'cached-token';
+    (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
+    let adtCalls = 0;
+    const transport = jest.fn(async (cfg: { url?: string }) => {
+      if ((cfg.url ?? '').includes('/discovery')) return discoveryOk(cfg);
+      adtCalls += 1;
+      return adt(adtCalls, cfg);
+    });
+    (conn as any).axiosInstance = transport;
+    return { conn, transport, adtCalls: () => adtCalls };
+  }
+
+  /** Test 5: a persistent 401 renews exactly once, through the real path. */
+  it('a persistent 401 renews once and rejects with the original error', async () => {
+    const refreshToken = jest.fn(async () => 'FRESH');
+    const { conn } = staged(refreshToken, () => {
+      throw unauthorized();
+    });
+
+    await expect(conn.makeAdtRequest(request)).rejects.toMatchObject({
+      response: { status: 401 },
+    });
+
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+  });
+
+  /** Test 6: two concurrent operations share one renewal, and both succeed. */
+  it('two concurrent 401s share one renewal and both retry after it', async () => {
+    const refreshToken = jest.fn(async () => 'FRESH');
+    const { conn } = staged(refreshToken, (attempt, cfg) => {
+      // The first attempt of each operation fails; the retries succeed.
+      if (attempt <= 2) throw unauthorized();
+      return {
+        status: 200,
+        statusText: 'OK',
+        data: 'ok',
+        headers: {},
+        config: cfg,
+      };
+    });
+    const recover = jest.spyOn(conn as any, 'recoverSession');
+
+    const [a, b] = await Promise.all([
+      conn.makeAdtRequest(request),
+      conn.makeAdtRequest(request),
+    ]);
+
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    expect(recover).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Test 8: a nested token-only refresh is not a session recovery.
+   *
+   * `fetchCsrfToken` bumps `tokenGeneration` without rebuilding anything. If
+   * the outer handler read that counter it would conclude a recovery had
+   * happened for it and retry a request whose session was never rebuilt.
+   */
+  it('a token-only refresh does not pass for a session recovery', async () => {
+    const refreshToken = jest.fn(async () => 'FRESH');
+    let conn!: JwtAbapConnection;
+    ({ conn } = staged(refreshToken, (attempt, cfg) => {
+      if (attempt === 1) {
+        // A nested fetchCsrfToken refreshed the token DURING this operation —
+        // after its scope opened, so the operation's baseline is still 0. That
+        // is the whole point: bumping the counter before the call would move
+        // the baseline with it and the test would prove nothing.
+        (conn as any).tokenGeneration = 1;
+        throw unauthorized();
+      }
+      return {
+        status: 200,
+        statusText: 'OK',
+        data: 'ok',
+        headers: {},
+        config: cfg,
+      };
+    }));
+
+    const recover = jest.spyOn(conn as any, 'recoverSession');
+
+    const response = await conn.makeAdtRequest(request);
+
+    expect(response.status).toBe(200);
+    // The session was rebuilt even though the token was already newer.
+    expect(recover).toHaveBeenCalledTimes(1);
+    // And no second token was fetched: only the session was missing.
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Test 14: a teardown between the last lifecycle check and the retry.
+   *
+   * reset() alone would not prove this — it shuts admission synchronously, so
+   * the retry would be refused with or without the guard. The connection has to
+   * be usable again AND carry a moved epoch, which is reset() followed by a
+   * successful connect(): markConnected clears teardownPending without touching
+   * the epoch.
+   */
+  it('does not retry after the caller tore the connection down', async () => {
+    const refreshToken = jest.fn(async () => 'FRESH');
+    const { conn, adtCalls } = staged(refreshToken, (attempt, cfg) => {
+      if (attempt === 1) throw unauthorized();
+      return {
+        status: 200,
+        statusText: 'OK',
+        data: 'ok',
+        headers: {},
+        config: cfg,
+      };
+    });
+
+    const original = (conn as any).ensureRecovered.bind(conn);
+    (conn as any).ensureRecovered = async (epoch: number) => {
+      const answer = await original(epoch);
+      // The renewal is done and renewalInFlight is cleared. Now the caller
+      // discards the connection and it is brought back up: admission open,
+      // epoch moved.
+      conn.reset();
+      await conn.connect();
+      return answer;
+    };
+
+    await expect(conn.makeAdtRequest(request)).rejects.toMatchObject({
+      code: ADT_SESSION_ERROR.NOT_CONNECTED,
+    });
+
+    // The forbidden retry never reached the transport: one ADT attempt only.
+    expect(adtCalls()).toBe(1);
+  }, 20000);
 });

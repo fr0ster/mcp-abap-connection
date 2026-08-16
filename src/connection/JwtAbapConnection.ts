@@ -1,8 +1,13 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { IAdtResponse, ITokenRefresher } from '@mcp-abap-adt/interfaces';
+import {
+  ADT_SESSION_ERROR,
+  type IAdtResponse,
+  type ITokenRefresher,
+} from '@mcp-abap-adt/interfaces';
 import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
+import { sessionError } from '../session/SessionLifecycle.js';
 import type { AbapRequestOptions } from './AbapConnection.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
 import { CSRF_CONFIG } from './csrfConfig.js';
@@ -46,6 +51,27 @@ export class JwtAbapConnection extends AbstractAbapConnection {
 
   /** Single-flight over the token fetch alone. Touches no session state. */
   private tokenRefreshInFlight?: Promise<boolean>;
+
+  /**
+   * The `tokenGeneration` a completed session recovery was built for. Only
+   * `performRenewal` moves it, and only after `recoverSession` resolves.
+   *
+   * Separate from `tokenGeneration` because a token-only refresh — which
+   * `fetchCsrfToken` does, from inside an establishment — bumps that counter
+   * without rebuilding anything. Reading it as "the session is settled" made
+   * the outer handler retry a request whose session was never rebuilt.
+   */
+  private recoveredGeneration = 0;
+
+  /**
+   * Single-flight over the whole credential renewal, session included.
+   *
+   * Sharing only the token fetch leaves the expensive half racing: `recover`
+   * and `cleanup` never join (`SessionLifecycle.transition`), so two concurrent
+   * renewals queue as cleanup A → recover A → cleanup B → recover B, and A's
+   * retry meets a session B has just torn down.
+   */
+  private renewalInFlight?: Promise<boolean>;
 
   /**
    * Per connection, deliberately NOT static. `baseline` is compared against
@@ -176,6 +202,80 @@ export class JwtAbapConnection extends AbstractAbapConnection {
   }
 
   /**
+   * Renew the credential and the session it belongs to, once, shared.
+   */
+  private renewCredential(
+    baselineEpoch: number,
+    baseline: number,
+  ): Promise<boolean> {
+    if (this.renewalInFlight) return this.renewalInFlight;
+    // Identity-checked clear, as SessionLifecycle.transition does with its
+    // tail: a joiner settling late must not clear a renewal somebody started
+    // after it.
+    const inFlight = this.performRenewal(baselineEpoch, baseline).finally(
+      () => {
+        if (this.renewalInFlight === inFlight) this.renewalInFlight = undefined;
+      },
+    );
+    this.renewalInFlight = inFlight;
+    return inFlight;
+  }
+
+  private async performRenewal(
+    baselineEpoch: number,
+    baseline: number,
+  ): Promise<boolean> {
+    // Shared with the token-only path, and a no-op when the token is already
+    // newer than the one that failed — then what is missing is the session, and
+    // a second fetch answers a question nobody asked.
+    if (!(await this.refreshTokenOnce(baseline))) return false;
+
+    this.logger?.debug(
+      `[DEBUG] JwtAbapConnection - Recovering session after token refresh...`,
+    );
+    // The renewed credential cannot keep the old ABAP session, so this is a
+    // session-lost teardown — internal, or it would cancel the very recovery it
+    // is setting up. reset() would be the caller-origin one.
+    this.discardSession();
+    // Re-establish before retrying: the retry goes through admission, and a
+    // discarded session admits nothing.
+    await this.recoverSession(baselineEpoch);
+    // Only here: a session now exists that was built with this token.
+    this.recoveredGeneration = this.tokenGeneration;
+    return true;
+  }
+
+  /**
+   * May this operation retry?
+   *
+   * The order of the checks is the design, not style.
+   */
+  private async ensureRecovered(baselineEpoch: number): Promise<boolean> {
+    // 1. A renewal in flight is joined REGARDLESS of generation. A newer token
+    //    is no use while the session it belongs to is still being rebuilt:
+    //    retrying now is how a caller meets a closed admission door.
+    //
+    //    This overlaps check 2 as the counters stand — `recoveredGeneration`
+    //    only moves after `recoverSession` resolves, so check 2 cannot report a
+    //    rebuild that has not finished, and removing either guard alone leaves
+    //    the concurrency test green. Both are kept on purpose: this one states
+    //    the rule ("never decide anything while a renewal is running") without
+    //    depending on when some other counter happens to move, and it is what
+    //    keeps the invariant true if check 2's counter is ever changed.
+    if (this.renewalInFlight) return this.renewalInFlight;
+
+    const baseline = this.currentBaseline();
+
+    // 2. A full renewal COMPLETED since this operation began — token, and the
+    //    session built with it. Not `tokenGeneration`: that moves on a
+    //    token-only refresh, which rebuilds nothing.
+    if (this.recoveredGeneration > baseline) return true;
+
+    // 3. Nobody has. Renew, and let everyone else join.
+    return this.renewCredential(baselineEpoch, baseline);
+  }
+
+  /**
    * Establishes the session for this auth type. Called by
    * AbstractAbapConnection.connect(), which owns the lifecycle around it.
    */
@@ -242,17 +342,19 @@ export class JwtAbapConnection extends AbstractAbapConnection {
           `[DEBUG] JwtAbapConnection.makeAdtRequest - Got 401, attempting token refresh...`,
         );
 
-        if (await this.refreshTokenOnce(this.currentBaseline())) {
-          this.logger?.debug(
-            `[DEBUG] JwtAbapConnection.makeAdtRequest - Recovering session after token refresh...`,
-          );
-          // The renewed credential cannot keep the old ABAP session, so this is
-          // a session-lost teardown — internal, or it would cancel the very
-          // recovery it is setting up. reset() would be the caller-origin one.
-          this.discardSession();
-          // Re-establish before retrying: the retry goes through admission, and
-          // a discarded session admits nothing.
-          await this.recoverSession(baselineEpoch);
+        if (await this.ensureRecovered(baselineEpoch)) {
+          // A renewal this operation joined was fenced against the STARTER's
+          // baseline, not this one's, and establishAndCommit's own epoch checks
+          // belong to the establishment that ran. Between the last of them and
+          // this retry there is a gap nothing else watches: the connection can
+          // be torn down by its caller and made usable again, and a retry would
+          // then go out on a session that caller discarded.
+          if (this.teardownEpoch !== baselineEpoch) {
+            throw sessionError(
+              ADT_SESSION_ERROR.NOT_CONNECTED,
+              'Retry abandoned: a teardown was requested for this connection',
+            );
+          }
           return super.makeAdtRequest<T, D>(options);
         }
 
