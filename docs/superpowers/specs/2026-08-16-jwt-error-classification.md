@@ -293,10 +293,14 @@ private renewalInFlight?: Promise<boolean>;
      refresh is already in flight it still joins it — single-flight is about the network, scope
      is about which credential state an operation is reasoning from. The two are independent and
      an earlier draft's test conflated them.
-   - **`fetchCsrfToken` and `establishSession` inherit a live scope**, because they *are* the
-     recovery levels an operation descends through. Called directly with no scope active — both
-     are `protected` and reachable on their own — they open one, so a bare `connect()` is still
-     an operation with a baseline.
+   - **`fetchCsrfToken` inherits a live scope**, because it *is* the recovery level an
+     establishment descends through. Called with no scope active — it is `protected` and
+     reachable through a bare `connect()` — it opens one, so an establishment is still an
+     operation with a baseline.
+   - **`establishSession` takes no part in this.** It renews nothing (rule 1), so it needs no
+     baseline: whatever scope it runs in belongs to whoever called it, and the `fetchCsrfToken`
+     beneath it either inherits that or opens its own. Giving it a scope of its own would be a
+     third entry point that reads as significant and is not.
 
    ```ts
    /** For the public entry point: this call is its own operation, always. */
@@ -397,8 +401,12 @@ private renewalInFlight?: Promise<boolean>;
    }
    ```
 
-   `fetchCsrfToken` and `establishSession` call **only** `refreshTokenOnce` and retry.
-   `performRenewal` calls it too, and then does the session half alone. The layering is what
+   **`fetchCsrfToken` is the only caller of `refreshTokenOnce` on the establishment side** — one
+   refresh, one retry. `establishSession` calls neither: its catch logs and rethrows, per rule 1
+   above. Two earlier sentences here named both, contradicting that rule; raised in review,
+   2026-08-16.
+
+   `performRenewal` calls `refreshTokenOnce` too, and then does the session half alone. The layering is what
    makes it deadlock-free: the token primitive never touches session state, so waiting on it from
    inside an establishment waits on a network call and nothing else.
 
@@ -508,11 +516,20 @@ private renewalInFlight?: Promise<boolean>;
    must not retry on a session someone else resurrected. This is a requirement on the
    implementation, not an observation about it.
 
-   `fetchCsrfToken` and `establishSession` renew the **token** only — they run inside an
-   establishment, so discarding and re-establishing from there would re-enter the transition they
-   are part of. `makeAdtRequest` is the only site that renews the session, and
+   **`fetchCsrfToken` renews the token only.** It runs inside an establishment, so discarding and
+   re-establishing from there would re-enter the transition it is part of. `establishSession`
+   renews nothing at all — it logs and rethrows what `fetchCsrfToken` has already tried and
+   failed to fix. `makeAdtRequest` is the only site that renews the session, and
    `recoveredGeneration` is what keeps the two kinds of renewal from being mistaken for each
    other.
+
+   So each of the three has exactly one job, and no two of them overlap:
+
+   | site | on a 401 |
+   |---|---|
+   | `fetchCsrfToken` | `refreshTokenOnce`, one retry, then give up |
+   | `establishSession` | log, rethrow — no refresh, no retry, no recursion |
+   | `makeAdtRequest` | `ensureRecovered`, which is the full renewal |
 
 4. **Ending.** The outermost call clears `active` in a `finally`, and that flag — not the store's
    presence — is what marks the operation over.
@@ -740,11 +757,20 @@ re-entrant operation, or a later moment. 8 and 9 stand on their own: 8 pins the 
 counters must never conflate, and 9 covers the level 6 cannot reach, since a 401 at the working
 request and a 401 in the nested CSRF fetch travel different paths to the same refresher.
 
-**All three of 8, 9 and 10 assert a refresh that would otherwise be *skipped*.** That is worth
-stating because the intuitive failure — "it refreshes too often" — is the one this design cannot
-have: single-flight collapses concurrent refreshes, and a wrong baseline can only ever make an
-operation believe somebody has already refreshed for it. A test suite written against the
-intuitive failure would pass on a broken implementation.
+**The suite looks for both failure directions, and it is worth knowing which test looks for
+which** — an earlier version of this paragraph claimed they all looked for one, which is wrong
+about half of them. Raised in review, 2026-08-16.
+
+- **Too few** — a renewal that should have happened and did not. Tests 8, 10, 11 and 12: a stale
+  or borrowed baseline reads as "somebody already did this for me", and the operation retries on
+  a credential or a session that was never fixed. This is the quiet direction, and the one that
+  reaches a caller as `NOT_CONNECTED` or a second 401.
+- **Too many** — duplicated network work. Tests 6, 7 and 9: two operations that should share one
+  renewal each doing their own, at either layer. Loud in a log, cheap to miss in an assertion
+  that only checks the end state.
+
+A suite aimed at one direction passes on an implementation broken in the other, which is why
+6/7 and 8/9 are written as pairs rather than as single tests with two expectations.
 
 ## Out of scope
 
