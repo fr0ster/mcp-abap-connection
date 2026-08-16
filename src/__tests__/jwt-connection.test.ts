@@ -5,6 +5,7 @@
  * Token refresh functionality is handled by auth-broker package.
  */
 
+import { AsyncResource } from 'node:async_hooks';
 import {
   ADT_SESSION_ERROR,
   type ITokenRefresher,
@@ -603,4 +604,253 @@ describe('JwtAbapConnection credential renewal', () => {
     // The forbidden retry never reached the transport: one ADT attempt only.
     expect(adtCalls()).toBe(1);
   }, 20000);
+});
+
+/**
+ * The operation-scope boundaries.
+ *
+ * These are the tests the AsyncLocalStorage design exists for: which credential
+ * state an operation reasons from, and who may read whose baseline. All of them
+ * assert a renewal that would otherwise be **skipped** — a stale or borrowed
+ * baseline reads as "somebody already did this for me", never as "do it twice".
+ */
+describe('JwtAbapConnection operation scope', () => {
+  const config: SapConfig = {
+    url: 'https://sap.example.com',
+    authType: 'jwt',
+    jwtToken: 'jwt-abc',
+    client: '100',
+  };
+  const request = {
+    url: '/sap/bc/adt/ddic/domains/zfoo',
+    method: 'POST' as const,
+    timeout: 30000,
+    data: '<x/>',
+  };
+
+  function unauthorized(): AxiosError {
+    return new AxiosError('unauthorized', '401', {} as never, null, {
+      status: 401,
+      statusText: '',
+      data: '<html>login</html>',
+      headers: {},
+      config: {} as never,
+    } as never);
+  }
+
+  function ok(cfg: { url?: string }) {
+    return {
+      status: 200,
+      statusText: 'OK',
+      data: 'ok',
+      headers: {},
+      config: cfg,
+    };
+  }
+
+  function discoveryOk(cfg: { url?: string }) {
+    return {
+      status: 200,
+      statusText: 'OK',
+      data: '<service/>',
+      headers: {
+        'x-csrf-token': 'FRESH-TOKEN',
+        'set-cookie': ['SAP_SESSIONID_STUB_100=S2; Path=/'],
+      },
+      config: cfg,
+    };
+  }
+
+  function staged(
+    refreshToken: jest.Mock,
+    adt: (attempt: number, cfg: { url?: string }) => unknown,
+  ) {
+    const conn = new JwtAbapConnection(config, mockLogger, undefined, {
+      getToken: async () => 'FRESH',
+      refreshToken: refreshToken as unknown as () => Promise<string>,
+    });
+    markConnectedForTest(conn);
+    (conn as any).csrfToken = 'cached-token';
+    (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
+    let adtCalls = 0;
+    (conn as any).axiosInstance = jest.fn(async (cfg: { url?: string }) => {
+      if ((cfg.url ?? '').includes('/discovery')) return discoveryOk(cfg);
+      adtCalls += 1;
+      return adt(adtCalls, cfg);
+    });
+    return conn;
+  }
+
+  /**
+   * Test 7, the pair to the concurrency test: an operation that starts AFTER a
+   * completed renewal must be able to renew again. Without this, "renew at most
+   * once" could be satisfied by never renewing twice at all — which is what an
+   * instance-level re-entrancy flag would do.
+   */
+  it('an operation starting after a completed renewal may renew again', async () => {
+    const refreshToken = jest.fn(async () => 'FRESH');
+    const conn = staged(refreshToken, (attempt, cfg) =>
+      // Attempts 1 and 3 are the two operations' first tries; 2 and 4 their
+      // retries.
+      attempt === 1 || attempt === 3
+        ? (() => {
+            throw unauthorized();
+          })()
+        : ok(cfg),
+    );
+
+    await conn.makeAdtRequest(request);
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+
+    // A second operation, started after the first settled completely.
+    await conn.makeAdtRequest(request);
+    expect(refreshToken).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * Test 11: a re-entrant `makeAdtRequest` on the same connection is its own
+   * operation, with its own baseline.
+   *
+   * The hook has to fire after the renewal has completed and `renewalInFlight`
+   * has cleared, but before the outer retry — wrapping `ensureRecovered` is the
+   * only window that satisfies all of it. Inside the refresher deadlocks;
+   * inside the recovery establishment meets a closed admission door.
+   */
+  it('a re-entrant request on the same connection gets its own baseline', async () => {
+    const refreshToken = jest.fn(async () => 'FRESH');
+    const conn = staged(refreshToken, (attempt, cfg) =>
+      // 1: outer first try. 2: the inner request. 3: the inner retry.
+      // 4: the outer retry.
+      attempt === 1 || attempt === 2
+        ? (() => {
+            throw unauthorized();
+          })()
+        : ok(cfg),
+    );
+
+    const original = (conn as any).ensureRecovered.bind(conn);
+    let hooked = false;
+    (conn as any).ensureRecovered = async (epoch: number) => {
+      const answer = await original(epoch);
+      if (!hooked) {
+        hooked = true;
+        // Inside the outer operation's scope, after its renewal completed.
+        await conn.makeAdtRequest(request);
+      }
+      return answer;
+    };
+
+    await conn.makeAdtRequest(request);
+
+    // Two renewals: the outer one, and the inner one which carries a baseline
+    // taken after it. With an inherited scope the inner would have read the
+    // outer's renewal as its own and skipped a renewal it needed.
+    expect(refreshToken).toHaveBeenCalledTimes(2);
+  }, 20000);
+
+  /**
+   * Test 10: two connections do not share a recovery scope.
+   *
+   * Driven through `fetchCsrfToken`, and that is the point. `makeAdtRequest`
+   * always opens a NEW scope, so a re-entrant request never inherits anything
+   * whatever the store is — a version of this test written against it passed
+   * with a static store and proved nothing. `fetchCsrfToken` is the handler
+   * that *inherits*, so it is the only place the store's ownership shows.
+   *
+   * The generations must also diverge, or an inherited baseline and an own
+   * baseline give the same answer.
+   */
+  it('two connections do not share a recovery scope', async () => {
+    const refreshB = jest.fn(async () => 'FRESH-B');
+    const a = new JwtAbapConnection(config, mockLogger, undefined, {
+      getToken: async () => 'FRESH-A',
+      refreshToken: jest.fn(async () => 'FRESH-A') as never,
+    });
+    const b = new JwtAbapConnection(config, mockLogger, undefined, {
+      getToken: async () => 'FRESH-B',
+      refreshToken: refreshB as never,
+    });
+
+    // Diverge: B has already refreshed once, A has not.
+    (b as any).tokenGeneration = 1;
+
+    const basePrototype = Object.getPrototypeOf(JwtAbapConnection.prototype);
+    let csrfCalls = 0;
+    jest
+      .spyOn(basePrototype as any, 'fetchCsrfToken')
+      .mockImplementation(async () => {
+        csrfCalls += 1;
+        if (csrfCalls === 1) throw unauthorized();
+        return 'CSRF';
+      });
+
+    // Inside A's live scope, whose baseline is 0.
+    await (a as any).inNewRecoveryScope(async () => {
+      await (b as any).fetchCsrfToken('https://sap.example.com/x');
+    });
+
+    // B renewed on its own account. Under a shared store it would have read
+    // A's baseline of 0, seen its own generation of 1 as greater, and skipped
+    // the refresh it needed.
+    expect(refreshB).toHaveBeenCalledTimes(1);
+    jest.restoreAllMocks();
+  });
+
+  /**
+   * Test 12: a finished operation's async context is not inherited.
+   *
+   * `AsyncLocalStorage` propagates its store into every async resource created
+   * inside `run()`, and such a resource can outlive the callback. `active` is
+   * what makes a stale store visibly stale. Driven through `fetchCsrfToken`
+   * for the same reason as test 10.
+   */
+  it("a finished operation's async context is not inherited", async () => {
+    const refreshToken = jest.fn(async () => 'FRESH');
+    const conn = new JwtAbapConnection(config, mockLogger, undefined, {
+      getToken: async () => 'FRESH',
+      refreshToken: refreshToken as never,
+    });
+
+    const basePrototype = Object.getPrototypeOf(JwtAbapConnection.prototype);
+    let csrfCalls = 0;
+    jest
+      .spyOn(basePrototype as any, 'fetchCsrfToken')
+      .mockImplementation(async () => {
+        csrfCalls += 1;
+        // The continuation's first attempt fails, so it has to decide whether
+        // to refresh — which is the decision under test.
+        if (csrfCalls === 2) throw unauthorized();
+        return 'CSRF';
+      });
+
+    let escaped!: () => Promise<unknown>;
+    let seenStore: { active: boolean } | undefined;
+
+    await (conn as any).inNewRecoveryScope(async () => {
+      seenStore = (conn as any).recoveryScope.getStore();
+      // Bound explicitly: this is how a callback keeps the store after its
+      // operation has returned. A plain `.then()` did not reproduce it here,
+      // and a test that cannot stage the hazard cannot pin the guard.
+      escaped = AsyncResource.bind(() =>
+        (conn as any).fetchCsrfToken('https://sap.example.com/x'),
+      );
+      await (conn as any).fetchCsrfToken('https://sap.example.com/x');
+    });
+
+    // The store outlived its operation, and is marked finished.
+    expect(seenStore).toBeDefined();
+    expect(seenStore?.active).toBe(false);
+
+    // Somebody moved the token after that operation began.
+    (conn as any).tokenGeneration = 1;
+
+    await escaped();
+
+    // The continuation still sees the finished scope's store, but `active` is
+    // false — so it took its own baseline of 1, found nothing newer, and
+    // refreshed. Inheriting the stale baseline of 0 would have read the
+    // generation as somebody else's refresh and skipped this one.
+    expect(refreshToken).toHaveBeenCalledTimes(1);
+    jest.restoreAllMocks();
+  });
 });

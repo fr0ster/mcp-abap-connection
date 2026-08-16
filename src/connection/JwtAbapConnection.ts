@@ -140,7 +140,15 @@ export class JwtAbapConnection extends AbstractAbapConnection {
     return this.inNewRecoveryScope(fn);
   }
 
-  /** The baseline this operation is reasoning from. */
+  /**
+   * The baseline this operation is reasoning from.
+   *
+   * The `active` check here and the one in `inRecoveryScope` OVERLAP: each
+   * compensates for the other, and the stale-context test only fails when both
+   * are removed. Kept as two because they answer different questions — "may I
+   * join this scope" and "may I trust this baseline" — and a reader who finds
+   * one redundant would be deleting half a guarantee.
+   */
   private currentBaseline(): number {
     const scope = this.recoveryScope.getStore();
     // No live scope means a caller reached a handler by a path that does not
@@ -355,7 +363,19 @@ export class JwtAbapConnection extends AbstractAbapConnection {
               'Retry abandoned: a teardown was requested for this connection',
             );
           }
-          return super.makeAdtRequest<T, D>(options);
+          try {
+            return await super.makeAdtRequest<T, D>(options);
+          } catch (retryError) {
+            // A 401 that survived a renewal is the case the deleted message
+            // was about, and it only shows up here — the log below fires when
+            // the renewal never happened, which is a different fact.
+            if (isTokenExpiryCandidate(retryError)) {
+              this.logger?.error(
+                '[ERROR] JwtAbapConnection.makeAdtRequest - 401 persists after a credential renewal; the credential may need re-authentication',
+              );
+            }
+            throw retryError;
+          }
         }
 
         this.logger?.error(
@@ -408,7 +428,21 @@ export class JwtAbapConnection extends AbstractAbapConnection {
           this.logger?.debug(
             `[DEBUG] JwtAbapConnection.fetchCsrfToken - Retrying after token refresh...`,
           );
-          return super.fetchCsrfToken(url, retryCount, retryDelay, generation);
+          try {
+            return await super.fetchCsrfToken(
+              url,
+              retryCount,
+              retryDelay,
+              generation,
+            );
+          } catch (retryError) {
+            if (isTokenExpiryCandidate(retryError)) {
+              this.logger?.error(
+                '[ERROR] JwtAbapConnection.fetchCsrfToken - 401 persists after a token refresh; the credential may need re-authentication',
+              );
+            }
+            throw retryError;
+          }
         }
 
         this.logger?.error(
