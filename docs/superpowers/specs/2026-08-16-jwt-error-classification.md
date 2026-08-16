@@ -276,10 +276,19 @@ private refreshInFlight?: Promise<boolean>;
      caller-visible operation — including one made re-entrantly from inside another, which is not
      exotic: the connection itself invokes caller-supplied callbacks (`logger`,
      `tokenRefresher.refreshToken()`) while a scope is live, and either may issue a request.
-     Inheriting there would give a genuinely independent request the outer operation's baseline.
-     Worse, the outer operation can finish first and set `active = false` on the scope they
-     share — after which the inner request's own recovery levels each see a dead scope, open one
-     apiece, and the one-refresh guarantee is gone. Raised in review, 2026-08-16.
+     Inheriting there would give a genuinely independent request the outer operation's baseline,
+     and **a stale baseline reads as "already refreshed"**: the inner request sees
+     `tokenGeneration > baseline` from a refresh that happened for somebody else, retries with a
+     token that is not the problem, and never refreshes on its own account. The failure is a
+     *skipped* refresh, not a duplicated one. Separately, the outer operation can finish first
+     and set `active = false` on the scope they share — after which the inner request's own
+     recovery levels each see a dead scope, open one apiece, and the guarantee goes in the other
+     direction. Raised in review, 2026-08-16.
+
+     A new scope buys the inner request a **later baseline**, not a guaranteed network call. If a
+     refresh is already in flight it still joins it — single-flight is about the network, scope
+     is about which credential state an operation is reasoning from. The two are independent and
+     an earlier draft's test conflated them.
    - **`fetchCsrfToken` and `establishSession` inherit a live scope**, because they *are* the
      recovery levels an operation descends through. Called directly with no scope active — both
      are `protected` and reachable on their own — they open one, so a bare `connect()` is still
@@ -385,12 +394,15 @@ private refreshInFlight?: Promise<boolean>;
 | a later `makeAdtRequest` after the renewed token also expires | **1** — its baseline is the current generation, so it refreshes properly |
 | `connect()` alone, 401 on CSRF | **1** — `fetchCsrfToken` refreshes, `establishSession` no longer does |
 | an operation on connection **B** started inside connection **A**'s async context | **each refreshes its own** — B's storage is B's, so B sees no store and opens its own scope |
-| a re-entrant `makeAdtRequest` on the **same** connection, from a callback the connection invoked | **its own scope, its own refresh** — the public entry point never inherits |
+| a re-entrant `makeAdtRequest` on the **same** connection, started after the outer refresh completed | **its own baseline**, so its own 401 can refresh again — where an inherited baseline would have it skip |
+| a re-entrant `makeAdtRequest` started *while* a refresh is in flight | **joins that refresh** — a new scope does not mean a new network call |
 | a stale async context left behind by a finished operation | **treated as a fresh operation** — `active` is false, so its baseline is not inherited |
 
 The third row is the one an instance-level flag gets wrong. The fifth is the one a **static**
 `AsyncLocalStorage` gets wrong, and the sixth is the one a **uniform inherit-if-active rule** gets
-wrong — both of which earlier drafts of this section specified.
+wrong — both of which earlier drafts of this section specified. The seventh is there to keep the
+sixth honest: scope and single-flight answer different questions, and a test that treats "new
+scope" as "new refresh" contradicts the concurrency guarantee two rows above.
 
 
 ## What breaks
@@ -472,20 +484,42 @@ New tests in `src/__tests__/jwt-connection.test.ts`, each named for the fact it 
    flag gets wrong, and without it "refresh at most once" could be satisfied by never refreshing
    twice at all.
 8. **Two connections do not share a recovery scope.** Build `A` and `B`, each with its own
-   refresher, and establish both. Then make `A`'s refresher **the re-entrancy point**: when the
-   connection calls `A.tokenRefresher.refreshToken()`, that callback issues
-   `B.makeAdtRequest(...)`. Both requests 401. Assert **each refresher was called exactly once**.
+   refresher, and establish both. **Drive `B` through one refresh first**, so `B.tokenGeneration`
+   is 1 while `A`'s is 0 — without that divergence the test proves nothing, because equal
+   counters make an inherited baseline and an own baseline give the same answer.
 
-   The hook matters. An earlier draft started B from a `.then` the test attached to A's promise
-   after `makeAdtRequest` returned — which runs in the *caller's* async context, not inside A's
-   scope, so the test would have passed against a static store too and proved nothing. Raised in
-   review, 2026-08-16. `refreshToken` is called by the connection from within the scope, which is
-   what makes it a real re-entrancy point rather than a staged one.
-9. **A re-entrant `makeAdtRequest` on the same connection is its own operation.** Same hook: `A`'s
-   refresher issues a second request on `A`. Assert the second request gets its own refresh —
-   `refreshToken` called twice in total — rather than inheriting the outer baseline and skipping
-   one. This is the test a uniform inherit-if-active rule fails, and it is the reason the public
-   entry point has a different rule from the inner two.
+   Then: `A`'s request 401s and `A` refreshes. During `A`'s recovery establishment a **one-shot
+   transport hook** fires — the mocked HTTP layer is under test control, so this runs inside
+   `A`'s scope and *after* `A`'s refresh — and it starts `B.makeAdtRequest(...)`, which also
+   401s.
+
+   Assert **`B`'s refresher was called a second time**. Under a shared store `B` would inherit
+   `A`'s baseline of 0, see its own generation 1 as "greater", conclude a refresh had already
+   happened for it, and retry with the same stale token instead of refreshing — a *skipped*
+   refresh, which is the shape this bug takes.
+
+   **Do not use `A.tokenRefresher.refreshToken()` as the hook.** It deadlocks: the refresher is
+   awaited inside `performRefresh`, so an inner request started there waits on
+   `refreshInFlight`, which waits on the refresher, which waits on the inner request. Raised in
+   review, 2026-08-16, against a draft that specified exactly that.
+9. **A re-entrant `makeAdtRequest` on the same connection gets its own baseline.** Same one-shot
+   transport hook, same moment — inside the outer operation's scope, after its refresh has
+   completed and `tokenGeneration` has reached 1 — but the inner request goes to the **same**
+   connection.
+
+   Assert: the inner request's 401 produces a **second** refresh (`tokenGeneration` 2), because
+   its baseline is 1; and the outer operation, continuing afterwards, does **not** refresh again,
+   because 2 is greater than its baseline of 0. Two refreshes in total, each belonging to a
+   different operation.
+
+   With an inherited scope the inner request would carry baseline 0, read generation 1 as
+   somebody else's refresh, and skip its own — which is the distinction this test exists to draw.
+
+   **Timing is the whole test**, and the earlier draft got it wrong in a way that could not run:
+   it started the inner request from inside the refresher, i.e. *while* the refresh was in
+   flight, and asserted a second network refresh. At that moment the correct behaviour is to join
+   the refresh already running — so the assertion contradicted the single-flight guarantee test 6
+   pins, quite apart from deadlocking. The hook has to fire **after** the refresh resolves.
 10. **A finished operation's async context is not inherited.** Run one operation to completion
    while retaining a continuation created inside it, then start a new operation from that
    continuation. It must refresh on its own account rather than reading the finished operation's
@@ -502,6 +536,12 @@ sides and either half alone can be satisfied by a design wrong in the other dire
 "share a refresh" against "still able to refresh later", and 8/9/10 for the three ways an
 operation-scoped baseline can be read by something it does not belong to — another connection, a
 re-entrant operation, or a later moment.
+
+**All three of 8, 9 and 10 assert a refresh that would otherwise be *skipped*.** That is worth
+stating because the intuitive failure — "it refreshes too often" — is the one this design cannot
+have: single-flight collapses concurrent refreshes, and a wrong baseline can only ever make an
+operation believe somebody has already refreshed for it. A test suite written against the
+intuitive failure would pass on a broken implementation.
 
 ## Out of scope
 
