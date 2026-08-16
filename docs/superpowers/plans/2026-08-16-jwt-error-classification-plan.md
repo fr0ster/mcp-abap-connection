@@ -133,9 +133,17 @@ Add, in this order — each compiles and the suite stays green:
 not clear a promise somebody started after it. Flagged in the spec's approval as the thing most
 likely to be simplified away; it is not a nicety.
 
-**Test 9:** two concurrent requests both answered 401 at the **nested `fetchCsrfToken`**;
-`refreshToken` called once. This is the level `renewalInFlight` cannot reach, since it does not
-exist until the failure climbs to the outer handler.
+**Test 9, first form.** The spec's Test 9 has two halves — one shared token refresh at the CSRF
+level, and one shared session recovery after the failures climb to the outer handlers. Only the
+lower half can be green here, because `renewalInFlight` does not exist yet: if the CSRF retries
+also 401ed, the old outer handlers would each recover independently and the tree would go red.
+
+So at task 4 the transport answers **401 to each nested `fetchCsrfToken`, then succeeds on the
+retry**. Assert `refreshToken` called **once** across the two concurrent requests. That pins the
+token primitive, which is this task's subject, and nothing it cannot yet deliver.
+
+Its second half lands in task 5, and is listed there so it cannot be forgotten. Raised in review,
+2026-08-16, against a plan that scheduled the whole test here and then omitted it from task 5.
 
 ---
 
@@ -234,12 +242,18 @@ was missed again and the test is back to decoration.
 (`JwtAbapConnection.ts:146`) and needs no new plumbing; `sessionError` and `ADT_SESSION_ERROR`
 need importing into the subclass, which today imports neither.
 
-**Tests 5, 6, 7, 8, 10, 11, 12 and 14.** Test 5 lands here in full rather than being strengthened
-— task 3 could not host it. Two of the others need care and the spec says exactly where:
+**Tests 5, 6, 7, 8, 9 (strengthened), 10, 11, 12 and 14.** Test 5 lands here in full rather than
+being strengthened — task 3 could not host it. Three need care:
 
+- **9** — now the whole scenario: both nested CSRF retries 401 **again**, both failures climb to
+  their outer handlers. Assert one token refresh (as before) **and** one session recovery, and
+  that both requests end with the response the final retries fetch. The second half is the part
+  task 4 could not carry.
 - **6** — both requests in flight *before* either renewal completes, since the winner's
   `discardSession()` invalidates leases. Asserts four things, not one: refresher once, recovery
-  once, both retried after it, neither `NOT_CONNECTED`.
+  once, both retried after it, neither `NOT_CONNECTED`. It differs from 9 in where the 401 lands
+  — at the working request rather than in the nested CSRF fetch — and the two reach the same
+  refresher by different paths, which is why both exist.
 - **11** — the hook goes on **`ensureRecovered`**, not `recoverSession`: `await` the original,
   start the inner request, await it, then return. Three earlier attempts landed inside the
   refresher, inside the recovery establishment, and inside `renewalInFlight`; the spec lists the
