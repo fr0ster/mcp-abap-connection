@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`connect()` now opens a session instead of only collecting a token.** The establishing CSRF
+  fetch went out stateless, and an on-prem server answers that with `sap-XSRF_*` and no
+  `SAP_SESSIONID`. A later switch to stateful then yields a `sap-contextid` marked `ANON` that
+  survives exactly **one** request — and that one request is the LOCK, which comes back `200` with
+  a handle the write after it cannot use: `400 Session not found`, object half-edited, cleanup
+  unlock refused with `ADT_NOT_CONNECTED`. Asked statefully, the same server issues `SAP_SESSIONID`
+  and the session holds (5 of 5 fresh connections against S/4HANA on-prem; without the header the
+  same request produced both outcomes minutes apart). Not sent when `skipSessionType` is set — on
+  BASIS 7.40 that header is itself what breaks locking, and that contract wins.
+
+- **A connection the server gave no session now says so.** `sessionFingerprint()` tracks
+  `SAP_SESSIONID*` only, so a server that issued none leaves it **empty** — and an empty
+  fingerprint can never be classified `replaced`: `observe()` returns `established` or `unchanged`
+  forever, `applyIdentityPolicy()` never fires, `getSessionIdentity()` names nothing. Every guard
+  built on session identity was then holding a session it could not see. `connect()` logs a
+  warning rather than throwing: such a connection still serves stateless reads, and only a lock
+  taken over it is dead on arrival. Excluding `sap-XSRF_*` from the identity stays as it is — it
+  rotates within one session, which is why it was excluded in 2.0.0.
+
 ## [4.0.0] - 2026-08-16
 
 A JWT connection stops answering with an error of its own making. See

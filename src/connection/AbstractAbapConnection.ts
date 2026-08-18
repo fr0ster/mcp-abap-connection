@@ -47,6 +47,13 @@ abstract class AbstractAbapConnection
   private sessionMode: 'stateless' | 'stateful' = 'stateless';
   private skipSessionType: boolean;
   /**
+   * True only while establishSession() runs, which is the one fetch that has to
+   * OPEN a session rather than borrow a token from one. A mid-conversation
+   * refresh must not be mistaken for it: that one has to leave the session type
+   * exactly as the caller set it.
+   */
+  private establishingSession = false;
+  /**
    * When true, requests are treated as part of an uninterruptible critical
    * section (e.g. a lock → modify → unlock chain). In this state a short
    * per-request timeout must NOT abort the request mid-flight, because
@@ -309,7 +316,12 @@ abstract class AbstractAbapConnection
     // makes the new fingerprint `established`, which is what it is.
     this.lifecycle.forgetIdentity();
     try {
-      await this.establishSession();
+      this.establishingSession = true;
+      try {
+        await this.establishSession();
+      } finally {
+        this.establishingSession = false;
+      }
     } catch (error) {
       // A failed establishment leaves debris that poisons the next attempt: the
       // 401 that rejected us may still have carried a Set-Cookie, and every
@@ -346,7 +358,23 @@ abstract class AbstractAbapConnection
     // establishSession() throws on failure, so reaching here means a session
     // exists. There is no third outcome: no "connected but unusable", no
     // resolved promise over an empty jar.
-    this.lifecycle.markConnected(this.sessionFingerprint());
+    const fingerprint = this.sessionFingerprint();
+
+    // Except in one shape, which is why this says so out loud. A server that
+    // issued no SAP_SESSIONID leaves the fingerprint EMPTY, and an empty
+    // fingerprint can never be classified `replaced` — observe() returns
+    // `established` or `unchanged` forever, so applyIdentityPolicy() never
+    // fires and getSessionIdentity() names nothing. Every guard downstream is
+    // then holding a session it cannot see. It is not fatal — the connection
+    // may still work for stateless reads — but a lock taken over it is dead
+    // the moment it is issued, and that must not be discovered in silence.
+    if (fingerprint.size === 0 && !this.skipSessionType) {
+      this.logger?.warn(
+        'Connected, but the server issued no SAP_SESSIONID: session identity is untracked and any lock taken over this connection may be dead on arrival',
+      );
+    }
+
+    this.lifecycle.markConnected(fingerprint);
   }
 
   /** The teardown epoch, for a recovery to capture before it starts. */
@@ -999,6 +1027,20 @@ abstract class AbstractAbapConnection
         // path must not be the exception.
         if (this.sessionId) {
           headers['sap-adt-connection-id'] = this.sessionId;
+        }
+
+        // The establishing fetch must OPEN a session, not merely borrow a token.
+        // Asked statelessly, an on-prem server answers with sap-XSRF_* and no
+        // SAP_SESSIONID; a later switch to stateful then yields a `sap-contextid`
+        // marked ANON that survives exactly one request. The LOCK is that one
+        // request — it returns 200 with a handle, and the write after it dies on
+        // `400 Session not found` with the object half-edited. Asked statefully,
+        // the same server issues SAP_SESSIONID and the session holds.
+        //
+        // Not sent when skipSessionType is set: on BASIS 7.40 the stateful header
+        // is what breaks locking, and that contract wins over this one.
+        if (this.establishingSession && !this.skipSessionType) {
+          headers['x-sap-adt-sessiontype'] = 'stateful';
         }
 
         // Always add cookies if available - they are needed for session continuity
