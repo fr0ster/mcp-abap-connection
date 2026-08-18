@@ -51,6 +51,16 @@ async function startStub(): Promise<Stub> {
       res.end('<service/>');
       return;
     }
+    // Actually slow, so "does not wait for an in-flight request" tests the
+    // claim rather than the absence of I/O in disconnect(): every route used to
+    // answer instantly, which made the ordering hold for the wrong reason.
+    if (url.includes('/slow')) {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('');
+      }, 300);
+      return;
+    }
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('');
   });

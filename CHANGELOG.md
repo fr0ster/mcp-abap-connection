@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`disconnect()` ends the session on the server, not only in the client.** Dropping the cookie
+  left the ABAP session alive until its own timeout — default `http/security_session_timeout`,
+  1800 s — so a process that connects repeatedly left one behind every time. Measured on S/4HANA
+  on-prem: 25 connects in a row with the logoff, 24–25 of them were given a session; without it,
+  2. The server-side view is unambiguous — SM04 showed 25 HTTP sessions for the same user, one per
+  `connect()`, each holding ~12.8 MB, all of them opened by `P=/sap/bc/adt/discovery`, which is the
+  establishing call.
+
+  It surfaces as anything but a session problem: once the server stops issuing sessions it still
+  authenticates every request, so stateless reads and writes keep working and only the
+  lock-bound write fails — `200` for the LOCK, a handle, then `400 Session not found` on the next
+  request and a half-edited object.
+
+  ICF rather than ADT because ADT publishes no session-close: its discovery document lists none on
+  any reachable system — on-prem, cloud, or legacy — and the ADT logon is the discovery call
+  itself. Best effort and never throwing: `disconnect()` must always settle, and a session we
+  could not close beats a teardown that hangs.
+
+  How many sessions a system tolerates is the server's business and is not guessed at here. Using
+  few connections, and reusing them, stays the consumer's decision.
+
+- **A connection the server gave no session now warns.** `sessionFingerprint()` tracks
+  `SAP_SESSIONID*` only, so a server that issued none leaves it empty — and an empty fingerprint
+  can never be classified `replaced`: `observe()` returns `established` or `unchanged` forever,
+  `applyIdentityPolicy()` never fires, `getSessionIdentity()` names nothing. Refusing to connect
+  would be the honest answer and is deliberately not done yet: whether cloud ABAP issues this
+  cookie is unverified, and a rule that wrong would break every cloud consumer to fix an on-prem
+  fault.
+
+### Tests
+
+- The stub in `sessionComposition.test.ts` answered every route instantly, `/sap/bc/adt/slow`
+  included, so *does not wait for an in-flight request* held whenever `disconnect()` performed no
+  I/O rather than because the teardown declined to wait. That route now takes 300 ms and the test
+  asserts what its name says.
+
 ## [4.0.0] - 2026-08-16
 
 A JWT connection stops answering with an error of its own making. See

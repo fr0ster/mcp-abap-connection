@@ -23,6 +23,12 @@ import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 
 /**
+ * The platform's session logoff. Not an ADT path — ADT has no session-close of
+ * its own, and its logon is the discovery call.
+ */
+const ICF_LOGOFF_PATH = '/sap/public/bc/icf/logoff';
+
+/**
  * Declares the capabilities explicitly rather than satisfying them by accident.
  * `AbapConnection` is the base contract every transport honours; these two are
  * the HTTP session's own, and naming them means a signature that drifts from
@@ -219,7 +225,14 @@ abstract class AbstractAbapConnection
    * (see `SessionLifecycle.isCurrent`) keeps their results from reaching this
    * connection afterwards.
    *
-   * Sends no ADT session-close — see the design's D2.
+   * Ends the ABAP session on the server before clearing anything locally.
+   * Dropping the cookie is not closing the session: the server keeps it until
+   * its own timeout, and a process that connects repeatedly leaves one behind
+   * every time. Measured on S/4HANA on-prem, 25 connects in a row: with the
+   * logoff, 24–25 of them were given a session; without it, 2. A connection
+   * that gets no session still answers `200` to a LOCK and hands back a handle
+   * the next request cannot use, so the leak surfaces as a half-written object
+   * rather than as anything about sessions.
    */
   async disconnect(): Promise<void> {
     // Synchronous, at the call: admission shuts and the generation moves before
@@ -227,9 +240,48 @@ abstract class AbstractAbapConnection
     // requests still going through while this waits its turn.
     this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
     await this.lifecycle.transition('disconnect', async () => {
+      await this.terminateServerSession();
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
+  }
+
+  /**
+   * Asks the server to end the session, best effort.
+   *
+   * ICF rather than ADT because ADT publishes no such endpoint: its discovery
+   * document lists none on any reachable system — on-prem, cloud, or legacy —
+   * and the ADT logon is the discovery call itself. `/sap/public/bc/icf/logoff`
+   * is the platform's own, and answers `200` while expiring the session cookie.
+   *
+   * Never throws and never delays a teardown past its timeout: `disconnect()`
+   * must always settle, and a session we could not close is strictly better
+   * than a teardown that hangs. The local state is cleared either way — the
+   * caller is disconnected whatever the server did with the request.
+   */
+  private async terminateServerSession(): Promise<void> {
+    if (!this.cookies) {
+      return;
+    }
+
+    try {
+      await this.getAxiosInstance()({
+        method: 'GET',
+        url: `${this.baseUrl}${ICF_LOGOFF_PATH}`,
+        headers: {
+          ...(await this.getAuthHeaders()),
+          Cookie: this.cookies,
+        },
+        timeout: getTimeout('default'),
+      });
+      this.logger?.debug('Server session ended');
+    } catch (error) {
+      // Includes the case where the session was already gone, which is the
+      // outcome we wanted anyway.
+      this.logger?.debug(
+        `Could not end the server session: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   isConnected(): boolean {
@@ -343,10 +395,26 @@ abstract class AbstractAbapConnection
       );
     }
 
-    // establishSession() throws on failure, so reaching here means a session
-    // exists. There is no third outcome: no "connected but unusable", no
-    // resolved promise over an empty jar.
-    this.lifecycle.markConnected(this.sessionFingerprint());
+    // The session IS the SAP_SESSIONID the server issued; our own session id is
+    // a conversation label we generate and says nothing about what exists on
+    // the other side. An empty fingerprint therefore means the server opened no
+    // session — on-prem it answers with `sap-XSRF_*` instead once enough
+    // sessions are already open for the user — and such a connection still gets
+    // `200` for a LOCK and hands back a handle the next request cannot use.
+    //
+    // Refusing to connect at all would be the honest answer, and is deliberately
+    // NOT done here: whether a cloud ABAP system issues this cookie is unverified
+    // (its ADT endpoint rejects the bearer we can obtain), and a rule that wrong
+    // would break every cloud consumer to fix an on-prem fault. Warned, pending
+    // that evidence.
+    const fingerprint = this.sessionFingerprint();
+    if (fingerprint.size === 0 && !this.skipSessionType) {
+      this.logger?.warn(
+        'Connected, but the server issued no SAP_SESSIONID: session identity is untracked and any lock taken over this connection may be dead on arrival',
+      );
+    }
+
+    this.lifecycle.markConnected(fingerprint);
   }
 
   /** The teardown epoch, for a recovery to capture before it starts. */
