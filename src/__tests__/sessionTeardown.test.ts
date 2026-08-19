@@ -489,6 +489,55 @@ describe('disconnect ends the server session', () => {
     await patient;
   });
 
+  /**
+   * The logoff ends the session a lock chain is running on, so sending it mid
+   * chain leaves the object locked and inactive — the damage this whole change
+   * exists to prevent, caused by the change itself. `beginCriticalSection()` is
+   * how a caller says that chain must not be cut, and it is honoured here as it
+   * already is for timeouts.
+   */
+  it('defers the logoff while a critical section is open', async () => {
+    const logger = makeLogger();
+    const conn = new BaseAbapConnection(baseConfig, logger);
+    const seen: Seen[] = [];
+    attachMockAxios(conn, seen);
+
+    await conn.connect();
+    conn.beginCriticalSection();
+    await conn.disconnect({ deadlineMs: 1000 });
+
+    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('critical section'),
+    );
+    // The caller asked to disconnect, and is disconnected.
+    expect(conn.isConnected()).toBe(false);
+  });
+
+  it('releases the deferred session once the chain has finished', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    attachMockAxios(conn, seen);
+
+    await conn.connect();
+    conn.beginCriticalSection();
+    await conn.disconnect({ deadlineMs: 1000 });
+    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(0);
+
+    conn.endCriticalSection();
+    // clearSessionState() dropped the axios instance with the first teardown.
+    attachMockAxios(conn, seen, async () => ({
+      status: 200,
+      data: '',
+      headers: {},
+    }));
+    await conn.disconnect({ deadlineMs: 1000 });
+
+    const logoffs = seen.filter((r) => r.url.includes('/logoff'));
+    expect(logoffs).toHaveLength(1);
+    expect(logoffs[0].headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
+  });
+
   it('sends nothing when there is no session to end', async () => {
     const conn = new BaseAbapConnection(baseConfig, makeLogger());
     const seen: Seen[] = [];

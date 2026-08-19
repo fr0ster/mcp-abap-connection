@@ -396,6 +396,24 @@ abstract class AbstractAbapConnection
       return;
     }
 
+    // A lock → modify → unlock chain is mid-flight, and the logoff would end the
+    // session it is running on: the unlock would fail against a session that no
+    // longer exists and the object would stay locked and inactive — the exact
+    // damage this release exists to prevent, caused by the release itself.
+    // `beginCriticalSection()` is how a caller says that chain must not be cut,
+    // and it is honoured here as it is for timeouts.
+    //
+    // The local teardown still happens — the caller asked to disconnect — and
+    // the session is recorded as still owed, so calling disconnect() again once
+    // the chain has finished releases it. Deferred rather than dropped.
+    if (this.inCriticalSection) {
+      this.owedReleaseCookies = cookies;
+      this.logger?.warn(
+        'disconnect() during a critical section: the server session is left open, because ending it would break the lock chain in flight. Call disconnect() again once it has finished to release the session.',
+      );
+      return;
+    }
+
     // A release already on its way is the release still owed. Opening a second
     // one would ask the server to close a session the first request is closing,
     // which at best wastes a round trip and at worst reports a failure about a
