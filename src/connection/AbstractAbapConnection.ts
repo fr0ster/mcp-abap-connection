@@ -262,12 +262,14 @@ abstract class AbstractAbapConnection
    * dropped the cookie. Generation fencing (see `SessionLifecycle.isCurrent`)
    * keeps their results from reaching this connection either way.
    *
-   * @param options.deadlineMs How long to spend ending the server session,
-   *   measured from this call and including time spent queued behind another
-   *   transition. Defaults to `SAP_RELEASE_DEADLINE_MS` (5 s). **`0` means do
-   *   not wait**: the logoff is still sent, because closing what we opened is
-   *   not conditional, but its answer is not awaited and nothing is reported
-   *   about it. Must be finite and non-negative.
+   * @param options.deadlineMs How long to spend telling the server, measured
+   *   from this call and including time spent queued behind another transition.
+   *   **Defaults to `SAP_RELEASE_DEADLINE_MS`, which is `0` — do not wait.**
+   *   Waiting is for steps whose successor needs the server to have caught up;
+   *   a teardown has none. The logoff is still sent at `0`, because saying so
+   *   is not conditional on caring when it lands; its outcome is logged when it
+   *   arrives rather than awaited. Pass a positive value to bound a wait you
+   *   have chosen to take. Must be finite and non-negative.
    */
   async disconnect(options?: { deadlineMs?: number }): Promise<void> {
     // Validated before anything is torn down, so a caller that got this wrong
@@ -345,9 +347,17 @@ abstract class AbstractAbapConnection
     const send = this.getAxiosInstance()(request);
 
     if (budgetMs === 0) {
-      // Detached, and the rejection swallowed: an unhandled one would crash a
-      // process for a teardown the caller explicitly declined to wait for.
-      void send.catch(() => undefined);
+      // Detached — but still reported when it lands, because "nobody is waiting
+      // on it" is not the same as "nobody wants to know". The rejection is
+      // swallowed here: an unhandled one would crash a process over a teardown
+      // the caller declined to wait for.
+      void send.then(
+        () => this.logger?.debug('Server session released'),
+        (error: unknown) =>
+          this.logger?.debug(
+            `Could not release the server session: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+      );
       return;
     }
 

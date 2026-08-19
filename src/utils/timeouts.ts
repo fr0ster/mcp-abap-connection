@@ -43,14 +43,20 @@ export function getCriticalSectionTimeout(): number {
 }
 
 /**
- * How long `disconnect()` may spend ending the session on the server.
+ * How long `disconnect()` may spend telling the server the session is done.
  *
- * Its own knob rather than `getTimeout('default')` (45 s): this bounds a
- * best-effort GET issued while a teardown is on the serializing tail, where
- * every later connect or disconnect queues behind it. A logoff that has not
- * answered in a few seconds is not going to, and a caller who wants a different
- * bound passes `deadlineMs` — see `ISessionLifecycleAware.disconnect`.
+ * **Zero by default: after a disconnect nothing waits on the answer.** Waiting
+ * is for steps whose successor depends on the server having caught up — lock,
+ * update, unlock, activate, each needing the one before it to have landed.
+ * A teardown has no successor: the session is marked unneeded, the server
+ * reclaims it whenever it reclaims it, and a caller blocked on that round trip
+ * has bought nothing while holding up the serializing tail, where every later
+ * connect and disconnect queues behind it.
+ *
+ * The knob exists for a caller that wants a bounded wait anyway — a test
+ * asserting the logoff landed, a script that would rather see the failure —
+ * and is theirs to set per call via `ISessionLifecycleAware.disconnect`.
  */
 export function getReleaseDeadline(): number {
-  return parseInt(process.env.SAP_RELEASE_DEADLINE_MS || '5000', 10);
+  return parseInt(process.env.SAP_RELEASE_DEADLINE_MS || '0', 10);
 }

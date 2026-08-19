@@ -144,6 +144,36 @@ describe('disconnect ends the server session', () => {
   });
 
   /**
+   * The default is not to wait, and that is the point rather than a tuning
+   * choice: waiting is for steps whose successor needs the server to have
+   * caught up — lock, update, unlock, activate. A teardown has no successor.
+   */
+  it('does not wait by default, even if the logoff never answers', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    attachMockAxios(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff')) {
+        // Never answers at all.
+        await new Promise<never>(() => undefined);
+      }
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': ['SAP_SESSIONID_E19_100=abc%3d; path=/'],
+        },
+      };
+    });
+
+    await conn.connect();
+    await conn.disconnect();
+
+    expect(seen.some((r) => r.url.includes('/logoff'))).toBe(true);
+    expect(conn.isConnected()).toBe(false);
+  });
+
+  /**
    * The deadline is the caller's instrument, and it was published before this
    * code existed: `ISessionLifecycleAware.disconnect` documents `deadlineMs`,
    * `0` included. While disconnect() did no I/O, ignoring it cost nothing — a

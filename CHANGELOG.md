@@ -9,13 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`disconnect()` ends the session on the server, not only in the client.** Dropping the cookie
+- **`disconnect()` tells the server the session is done, not only the client.** Dropping the cookie
   left the ABAP session alive until its own timeout — default `http/security_session_timeout`,
   1800 s — so a process that connects repeatedly left one behind every time. Measured on S/4HANA
   on-prem: 25 connects in a row with the logoff, 24–25 of them were given a session; without it,
   2. The server-side view is unambiguous — SM04 showed 25 HTTP sessions for the same user, one per
   `connect()`, each holding ~12.8 MB, all of them opened by `P=/sap/bc/adt/discovery`, which is the
   establishing call.
+
+  The logoff says the session is no longer needed; **when the server reclaims it is the
+  server's business** — possibly not until the next `connect()` asks for one — and nothing
+  here waits on that or depends on it. So `disconnect()` **does not wait by default**:
+  waiting is for steps whose successor needs the server to have caught up, and a teardown
+  has no successor. A caller that wants a bounded wait passes it —
+  `disconnect({ deadlineMs })`, the parameter `ISessionLifecycleAware` has published all
+  along and which nothing implemented; the default comes from `SAP_RELEASE_DEADLINE_MS`,
+  which is `0`. A malformed value throws before anything is torn down rather than being
+  repaired into a default.
 
   It surfaces as anything but a session problem: once the server stops issuing sessions it still
   authenticates every request, so stateless reads and writes keep working and only the
