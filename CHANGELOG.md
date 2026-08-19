@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed — BREAKING
+
+- **`reset()` is gone**, from `AbstractAbapConnection` and `RfcAbapConnection`. There is no
+  local-only discard, because there is no local-only session: the session lives on the server,
+  and dropping the cookie leaves it there. The lifecycle is `connect()` / `disconnect()`,
+  repeatable, and both say what they do to the server.
+
+  It carried nothing `disconnect()` lacks — it cleared the fingerprint at the start of teardown
+  rather than at its end, did not join the transition tail, and returned `void`. That last one
+  is the point: a teardown that reports nothing cannot tell the caller whether the session was
+  released, which is the whole subject of this release.
+
+  No callers outside tests, and it is in neither `IAbapConnection` nor `ISessionLifecycleAware`,
+  so consumers programming against the published contracts are unaffected. `RfcAbapConnection`
+  keeps `close()`, which is its own teardown and always was.
+
+  **Migration:** `conn.reset()` → `await conn.disconnect()`, and `connect()` again to carry on —
+  the connection is reusable. A caller that does not want to wait simply does not `await` it,
+  which is what `reset()` was really used for.
+
 ### Fixed
 
 - **`disconnect()` tells the server the session is done, not only the client.** Dropping the cookie
