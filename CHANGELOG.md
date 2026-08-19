@@ -140,6 +140,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and keep separate deadlines; a critical section defers it; and a malformed
   `SAP_RELEASE_DEADLINE_MS` refuses construction.
 
+### Fixed
+
+- **A hung release no longer charges every later `disconnect()` its full deadline.** The wait was
+  on every release in flight, and the logoff carries no request timeout by design — so one that
+  never answers stays outstanding for ever and each later caller spent its whole budget on a
+  request nobody can finish (measured: 2002 ms for a `deadlineMs: 2000` whose own logoff had
+  already answered). A caller now waits only on what its own call dispatched, plus an in-flight
+  release for the session it is itself disconnecting. Joining one still avoids a duplicate
+  request; it no longer means waiting for it.
+
+- **A release that keeps failing is given up on, with a warning.** Every owed session was retried
+  on every teardown, so against a server that refuses the logoff — a proxy in the way, a 404, the
+  network down — twenty reconnect cycles cost 210 requests, and the cookies being retried named
+  sessions that had idled out server-side long before. Three attempts, then the session is left to
+  the system's own timeout and the log says so.
+
+- **Building a logoff request cannot take the other owed sessions down with it.** Assembling the
+  auth header can throw on its own — a Kerberos connection with no cookie and no token does — and
+  that escaped a teardown documented never to throw, leaving `clearSessionState()` and
+  `markDisconnected()` unrun.
+
 ### Changed — BREAKING
 
 - **`connect()` fails when the server opened no session**, instead of warning and handing back a

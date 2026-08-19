@@ -203,6 +203,87 @@ describe('every session of a reconnect cycle is released', () => {
     expect(logoffs[1].headers.Cookie).toContain('S2');
   });
 
+  /**
+   * The logoff carries no request timeout by design, so one that never answers
+   * stays outstanding for ever. Waiting on every release in flight therefore
+   * charged each later caller its whole deadline for a request nobody can
+   * finish — measured at 2002 ms for a `deadlineMs: 2000` whose own logoff had
+   * already answered.
+   */
+  it('does not spend a caller’s deadline on a release that never answers', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    let session = 0;
+    surviving(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff')) {
+        // The first session's logoff hangs; the second's answers at once.
+        if (String(cfg.headers?.Cookie ?? '').includes('S1')) {
+          await new Promise<never>(() => undefined);
+        }
+        return { status: 200, data: '', headers: {} };
+      }
+      session += 1;
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': [`SAP_SESSIONID_STUB_100=S${session}%3d; path=/`],
+        },
+      };
+    });
+
+    await conn.connect();
+    await conn.disconnect();
+    await conn.connect();
+
+    const startedAt = Date.now();
+    await conn.disconnect({ deadlineMs: 2000 });
+    const spent = Date.now() - startedAt;
+
+    // Its own release answered, so it had no reason to wait at all.
+    expect(spent).toBeLessThan(1000);
+  });
+
+  /**
+   * A server that refuses the logoff — a proxy in the way, a 404, the network
+   * down — cannot be fixed by asking again for ever. Retrying every owed session
+   * on every teardown cost n(n+1)/2 requests: 210 of them over twenty reconnect
+   * cycles, naming sessions that had idled out server-side long before.
+   */
+  it('stops retrying a release that keeps failing, and says so', async () => {
+    const logger = makeLogger();
+    const conn = new BaseAbapConnection(baseConfig, logger);
+    const seen: Seen[] = [];
+    let session = 0;
+    surviving(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff')) {
+        throw new Error('logoff is not reachable');
+      }
+      session += 1;
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': [`SAP_SESSIONID_STUB_100=S${session}%3d; path=/`],
+        },
+      };
+    });
+
+    for (let cycle = 0; cycle < 8; cycle++) {
+      await conn.connect();
+      await conn.disconnect({ deadlineMs: 1000 });
+    }
+
+    const logoffs = seen.filter((r) => r.url.includes('/logoff'));
+    // Three attempts per session at most, not one per session per teardown.
+    expect(logoffs.length).toBeLessThanOrEqual(8 * 3);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Giving up on releasing a server session'),
+    );
+  });
+
   it('keeps one session owed while another is released', async () => {
     const conn = new BaseAbapConnection(baseConfig, makeLogger());
     const seen: Seen[] = [];

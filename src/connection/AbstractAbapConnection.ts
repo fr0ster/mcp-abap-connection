@@ -121,7 +121,18 @@ abstract class AbstractAbapConnection
    * this connection opened and has not managed to close, so the set growing is
    * the leak becoming visible rather than a leak of its own.
    */
-  private readonly owedReleaseCookies = new Set<string>();
+  private readonly owedReleaseCookies = new Map<string, number>();
+  /**
+   * How many times a release may be attempted before the session is left to its
+   * own timeout.
+   *
+   * Retrying for ever is worse than giving up: every `disconnect()` re-fires a
+   * logoff for every owed session, so against a server that refuses them — a
+   * proxy in the way, a 404, the network down — twenty reconnects cost two
+   * hundred and ten requests, and the cookies being retried name sessions that
+   * idled out server-side long ago. Three attempts, then say so and stop.
+   */
+  private static readonly RELEASE_ATTEMPTS = 3;
   /**
    * Releases on their way, keyed by the session they belong to.
    *
@@ -364,15 +375,18 @@ abstract class AbstractAbapConnection
     // would be the first caller's wait imposed on everyone: a caller passing
     // `0` would sit through another's 30-second budget, which is the one thing
     // the parameter exists to prevent.
+    let releases: Promise<void>[] = [];
     await this.lifecycle.transition('disconnect', async () => {
-      await this.startServerSessionRelease();
+      releases = await this.startServerSessionRelease();
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
 
-    // Each caller then waits its own budget, measured from its own call.
+    // Each caller then waits its own budget, measured from its own call, on the
+    // releases its own call is responsible for.
     await this.awaitReleaseWithin(
       Math.max(0, deadlineMs - (Date.now() - startedAt)),
+      releases,
     );
   }
 
@@ -401,16 +415,16 @@ abstract class AbstractAbapConnection
    * because this runs inside the joined transition while the waiting is each
    * caller's own.
    */
-  private async startServerSessionRelease(): Promise<void> {
+  private async startServerSessionRelease(): Promise<Promise<void>[]> {
     // The live session on the first call. On a repeat there is none, and what
     // is left to do is whatever earlier calls did not finish. Without either
     // there is nothing to close — and no permission to close anything, since
     // holding the cookie is the whole permission.
-    if (this.cookies) {
-      this.owedReleaseCookies.add(this.cookies);
+    if (this.cookies && !this.owedReleaseCookies.has(this.cookies)) {
+      this.owedReleaseCookies.set(this.cookies, 0);
     }
     if (this.owedReleaseCookies.size === 0) {
-      return;
+      return [];
     }
 
     // A lock → modify → unlock chain is mid-flight, and the logoff would end the
@@ -427,31 +441,62 @@ abstract class AbstractAbapConnection
       this.logger?.warn(
         'disconnect() during a critical section: the server session is left open, because ending it would break the lock chain in flight. Call disconnect() again once it has finished to release the session.',
       );
-      return;
+      return [];
     }
 
-    for (const cookies of [...this.owedReleaseCookies]) {
+    // What THIS call is waiting on — dispatched now or already on its way for a
+    // session it still owes. Not every release in flight: one that never answers
+    // stays in the map for ever, and waiting on it would charge every later
+    // disconnect its full deadline for a request nobody can finish.
+    const mine: Promise<void>[] = [];
+    // The session this call is disconnecting, told apart from ones earlier calls
+    // left owed. Joining an in-flight release avoids a duplicate request; WAITING
+    // on someone else's is what charged a caller for a request nobody can finish.
+    const currentSession = this.cookies;
+
+    for (const cookies of [...this.owedReleaseCookies.keys()]) {
       // A release already on its way FOR THIS SESSION is the release still
       // owed; opening a second would ask the server to close a session the
       // first request is closing. One in flight for a different session says
       // nothing about this one — treating it as if it did meant the second
       // session of a reconnect was never released at all.
-      if (this.releasesInFlight.has(cookies)) {
+      const alreadyFlying = this.releasesInFlight.get(cookies);
+      if (alreadyFlying) {
+        // Only if it is this call's own session: an older one may hang for ever,
+        // and the logoff carries no timeout by design.
+        if (cookies === currentSession) {
+          mine.push(alreadyFlying);
+        }
         continue;
       }
+
+      const attempts = (this.owedReleaseCookies.get(cookies) ?? 0) + 1;
+      this.owedReleaseCookies.set(cookies, attempts);
 
       // No `timeout` here, at any budget. Whatever the caller allowed themselves
       // to wait, the request must be allowed to finish: this is the one request
       // whose whole purpose is to reach the server, and killing it is the failure
       // it exists to prevent.
-      const send = this.getAxiosInstance()({
-        method: 'GET' as const,
-        url: `${this.baseUrl}${ICF_LOGOFF_PATH}`,
-        headers: {
-          ...(await this.getAuthHeaders()),
-          Cookie: cookies,
-        },
-      });
+      let send: Promise<unknown>;
+      try {
+        send = this.getAxiosInstance()({
+          method: 'GET' as const,
+          url: `${this.baseUrl}${ICF_LOGOFF_PATH}`,
+          headers: {
+            ...(await this.getAuthHeaders()),
+            Cookie: cookies,
+          },
+        });
+      } catch (error) {
+        // Building the request can fail on its own — a Kerberos connection with
+        // no cookie and no token throws while assembling the header. It must not
+        // take the other owed sessions down with it, and it must not escape a
+        // teardown that is documented never to throw.
+        this.logger?.debug(
+          `Could not start a session release: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        continue;
+      }
 
       // Reported whenever it lands, waited for or not: "nobody is waiting on it"
       // is not "nobody wants to know". Attached before any await so a rejection
@@ -469,15 +514,25 @@ abstract class AbstractAbapConnection
         },
         (error: unknown) => {
           // It stays owed: the release did not complete, and the contract says
-          // calling again performs what is still owed.
+          // calling again performs what is still owed — until the attempts run
+          // out, after which retrying costs requests and cannot succeed anyway.
           this.releasesInFlight.delete(cookies);
           this.logger?.debug(
             `Could not release the server session: ${error instanceof Error ? error.message : String(error)}`,
           );
+          if (attempts >= AbstractAbapConnection.RELEASE_ATTEMPTS) {
+            this.owedReleaseCookies.delete(cookies);
+            this.logger?.warn(
+              `Giving up on releasing a server session after ${attempts} attempts; it stays open until the system's own session timeout`,
+            );
+          }
         },
       );
       this.releasesInFlight.set(cookies, settled);
+      mine.push(settled);
     }
+
+    return mine;
   }
 
   /**
@@ -487,14 +542,18 @@ abstract class AbstractAbapConnection
    * the request carries on to the server. Each caller of `disconnect()` gets
    * its own, so one caller's patience is never charged to another's.
    */
-  private async awaitReleaseWithin(budgetMs: number): Promise<void> {
-    // Every release on its way, not one of them: after a reconnect there can be
-    // more than one outstanding, and a caller waiting for "the release" means
-    // the ones this connection still owes.
-    const settled = Promise.all([...this.releasesInFlight.values()]);
-    if (this.releasesInFlight.size === 0 || budgetMs === 0) {
+  private async awaitReleaseWithin(
+    budgetMs: number,
+    releases: Promise<void>[],
+  ): Promise<void> {
+    // Only what this call started or joined. Waiting on every release in flight
+    // charged a caller for one that may never answer — the logoff carries no
+    // timeout by design, so a hung one stays outstanding for ever and every
+    // later disconnect() spent its whole deadline on it.
+    if (releases.length === 0 || budgetMs === 0) {
       return;
     }
+    const settled = Promise.all(releases);
 
     // `unref` so a process that is otherwise done does not stay alive for the
     // timer, and cleared when the release wins the race.
