@@ -104,17 +104,18 @@ answer, not a credential one, and nothing is torn down for it.
 
 ## Troubleshooting
 
-- **CSRF token errors**: discard the session and establish a new one. `reset()`
-  does that, but it lives on the HTTP connection classes and is **not** on the
-  `IAbapConnection` type `createAbapConnection()` returns — reach it through a
-  concrete type:
+- **CSRF token errors**: discard the session and establish a new one. That is
+  `disconnect()` followed by `connect()` — there is no local-only discard, because
+  dropping the cookie leaves the ABAP session open on the server. Both live on
+  the HTTP connection classes and are **not** on the `IAbapConnection` type
+  `createAbapConnection()` returns — reach them through a concrete type:
 
   ```ts
   import { BaseAbapConnection } from '@mcp-abap-adt/connection';
 
   const connection = new BaseAbapConnection(config, logger);
-  connection.reset();          // queues the cleanup; refuses requests meanwhile
-  await connection.connect();  // a new session, explicitly
+  await connection.disconnect(); // ends the session on the server, then clears
+  await connection.connect(); // a new session, explicitly
   ```
 - **Session expired**: reauthenticate to obtain a new session.
 - **Multiple connections**: each `createAbapConnection` instance maintains its own cookie jar; share the instance if you need continuity.

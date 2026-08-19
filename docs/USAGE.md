@@ -447,13 +447,19 @@ await connection.makeAdtRequest({ method: 'POST', url: '...' });
 connection.setSessionType('stateless');
 ```
 
-### Connection Reset
+### Starting Over
 
-Reset connection state (clears cookies, CSRF token):
+There is no local-only reset. Discarding the cookie does not end the ABAP
+session — the server keeps it until its own timeout, and sessions are limited
+per user — so starting over means telling the server, then connecting again:
 
 ```typescript
-connection.reset();
+await connection.disconnect(); // ends the session on the server too
+await connection.connect(); // a new one, explicitly
 ```
+
+A connection that was connected must be disconnected, which is why this belongs
+in a `finally`. `disconnect()` never throws, so it is safe there.
 
 ## Custom Logging
 
@@ -577,7 +583,7 @@ interface AbapConnection {
 }
 ```
 
-Anything beyond that is **not** on the contract. `reset()`, `getSessionMode()`
+Anything beyond that is **not** on the contract. `getSessionMode()`
 and the session lifecycle (`disconnect()`, `isConnected()`,
 `getSessionIdentity()`) live on the HTTP
 connection classes; `RfcAbapConnection` has some of them and not others, so
