@@ -77,7 +77,7 @@ describe('a connection the server gave no session says so', () => {
    * caller cannot avoid this by being frugal, and the only reliable signal is
    * whether this connect got a session.
    */
-  it('refuses to connect on basic auth when the server issued no SAP_SESSIONID', async () => {
+  it('refuses to connect when the server issued no SAP_SESSIONID', async () => {
     const conn = new BaseAbapConnection(baseConfig, makeLogger());
     // What an on-prem server answers when it will not open a session: the CSRF
     // cookie, and nothing to hold a lock against.
@@ -90,9 +90,33 @@ describe('a connection the server gave no session says so', () => {
       },
     }));
 
-    await expect(conn.connect()).rejects.toThrow(/no session/);
+    await expect(conn.connect()).rejects.toThrow(/opened no ABAP session/);
     expect(conn.isConnected()).toBe(false);
     expect(conn.getSessionIdentity()).toBeNull();
+  });
+
+  // The message is the whole point: this is reported so the caller can decide,
+  // and it cannot decide from "NOT_CONNECTED" alone. It has to say what the
+  // server did, what still works, what does not, and who is expected to act.
+  it('says what happened, what it costs, and whose call it is', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    attachMockAxios(conn, [], async () => ({
+      status: 200,
+      data: '<service/>',
+      headers: {
+        'x-csrf-token': 'TOKEN',
+        'set-cookie': ['sap-XSRF_STUB_100=xyz; path=/'],
+      },
+    }));
+
+    const error = await conn.connect().catch((e: Error) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toMatch(/SAP_SESSIONID/); // what was missing
+    expect(message).toMatch(/lock/i); // what it costs
+    expect(message).toMatch(/limited per user/); // the likely cause
+    expect(message).toMatch(/does not retry/); // whose call it is
   });
 
   it('stays quiet when a session was established', async () => {

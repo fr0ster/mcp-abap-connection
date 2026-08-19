@@ -225,7 +225,12 @@ describe('JwtAbapConnection error classification', () => {
     // them the mutation first fetches a token, and that fetch retries with
     // delays — the test then times out somewhere that is not its subject.
     (conn as any).csrfToken = 'cached-token';
+    // Both halves of what a server that opened a session leaves behind: the
+    // header to send back, and the store the identity is derived from. Seeding
+    // only the header modelled a system that issues no session at all, which
+    // establishment now refuses — correctly, and not what these tests are about.
     (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
+    (conn as any).cookieStore.set('SAP_SESSIONID_STUB_100', 'S1');
     // Discovery answers; only the ADT request fails. A transport that rejected
     // everything would make the recovery establishment retry with delays too,
     // and the test would time out in the session layer rather than say
@@ -459,7 +464,12 @@ describe('JwtAbapConnection nested CSRF failures share one renewal', () => {
     markConnectedForTest(conn);
     // No cached CSRF token: a mutation has to fetch one, which is the nested
     // level this test is about.
+    // Both halves of what a server that opened a session leaves behind: the
+    // header to send back, and the store the identity is derived from. Seeding
+    // only the header modelled a system that issues no session at all, which
+    // establishment now refuses — correctly, and not what these tests are about.
     (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
+    (conn as any).cookieStore.set('SAP_SESSIONID_STUB_100', 'S1');
 
     const basePrototype = Object.getPrototypeOf(JwtAbapConnection.prototype);
     let csrfCalls = 0;
@@ -576,7 +586,12 @@ describe('JwtAbapConnection credential renewal', () => {
     });
     markConnectedForTest(conn);
     (conn as any).csrfToken = 'cached-token';
+    // Both halves of what a server that opened a session leaves behind: the
+    // header to send back, and the store the identity is derived from. Seeding
+    // only the header modelled a system that issues no session at all, which
+    // establishment now refuses — correctly, and not what these tests are about.
     (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
+    (conn as any).cookieStore.set('SAP_SESSIONID_STUB_100', 'S1');
     let adtCalls = 0;
     const transport = jest.fn(async (cfg: { url?: string }) => {
       if ((cfg.url ?? '').includes('/discovery')) return discoveryOk(cfg);
@@ -803,7 +818,12 @@ describe('JwtAbapConnection operation scope', () => {
     });
     markConnectedForTest(conn);
     (conn as any).csrfToken = 'cached-token';
+    // Both halves of what a server that opened a session leaves behind: the
+    // header to send back, and the store the identity is derived from. Seeding
+    // only the header modelled a system that issues no session at all, which
+    // establishment now refuses — correctly, and not what these tests are about.
     (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
+    (conn as any).cookieStore.set('SAP_SESSIONID_STUB_100', 'S1');
     let adtCalls = 0;
     (conn as any).axiosInstance = jest.fn(async (cfg: { url?: string }) => {
       if ((cfg.url ?? '').includes('/discovery')) return discoveryOk(cfg);

@@ -608,23 +608,28 @@ abstract class AbstractAbapConnection
     // session. Reported with its cause; recovering is the caller's call, and
     // nothing here retries on anyone's behalf.
     //
-    // Basic auth only, for now. Whether a cloud ABAP system issues this cookie
-    // is unverified — its ADT endpoint answers the bearer obtainable here with
-    // `401` — and a rule that wrong would break every cloud consumer to fix an
-    // on-prem fault. The other transports keep the warning until that is known.
+    // Reported, not decided on. A session that was not opened is a condition on
+    // the server, and what to do about it — wait, retry, release sessions this
+    // user still holds, carry on read-only over a fresh connection — depends on
+    // things only the caller knows. So it is raised where the caller can catch
+    // it, with enough in the message to act on, and nothing is retried here.
+    //
+    // Every transport, not only basic: splitting by authentication type would
+    // encode a guess about cloud ABAP, whose ADT endpoint would not answer the
+    // bearer obtainable here, so the question stayed open. If a cloud system
+    // turns out to hold sessions without issuing this cookie, this is the rule
+    // to revisit — and it will say so loudly rather than fail quietly.
     const fingerprint = this.sessionFingerprint();
     if (fingerprint.size === 0 && !this.skipSessionType) {
-      if (this.config.authType === 'basic') {
-        this.invalidateSession();
-        this.lifecycle.forgetIdentity();
-        this.lifecycle.markDisconnected();
-        throw sessionError(
-          ADT_SESSION_ERROR.NOT_CONNECTED,
-          'The server issued no session (no SAP_SESSIONID cookie): it authenticated the request but opened no ABAP session, which happens when it will not open another one for this user. A lock taken over such a connection is dead the moment it is issued.',
-        );
-      }
-      this.logger?.warn(
-        'Connected, but the server issued no SAP_SESSIONID: session identity is untracked and any lock taken over this connection may be dead on arrival',
+      this.invalidateSession();
+      this.lifecycle.forgetIdentity();
+      this.lifecycle.markDisconnected();
+      throw sessionError(
+        ADT_SESSION_ERROR.NOT_CONNECTED,
+        'The server authenticated the request but opened no ABAP session: no SAP_SESSIONID cookie came back, and a system that issues none has none — the session list shows nothing for such a connection. ' +
+          'Stateless reads would still work over it, but a lock, and any write under that lock, is dead the moment it is issued. ' +
+          'The usual cause is the system declining to open another session for this user: they are limited per user, shared with every other tool logged on as them, and released either by disconnecting or by their own idle timeout. ' +
+          'Whether to wait, retry, or release sessions this user still holds is yours to decide — this library does not retry on your behalf.',
       );
     }
 

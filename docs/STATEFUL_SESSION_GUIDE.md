@@ -102,6 +102,35 @@ answer, not a credential one, and nothing is torn down for it.
 
 ---
 
+## A Lock Lives In The Session
+
+Locks are held by the ABAP session, not by the connection object. So a lock
+handle outlives nothing the session does not: lose the session and every handle
+taken in it is dead, whether or not this client noticed.
+
+Two ways to lose one, and they are different problems:
+
+- **The server never opened one.** `connect()` refuses in that case rather than
+  handing back a connection whose first lock would be dead on arrival. Sessions
+  are limited per user and shared with every other tool logged on as them, so
+  this says nothing about your code — it says the system would not open another
+  one right now.
+- **It timed out while you were quiet.** The timeout is an idle one, and it is
+  the *silence* that spends it, not the elapsed time. Measured on an on-prem
+  system with a 30-minute window: a small request once a minute kept one session
+  alive for 45 minutes with its identity unchanged, straight past the mark.
+
+So a long chain under a lock is safe while it is doing something, and at risk
+while it waits. **Any request in the session resets the window** — a poll, a
+read, a status check. There is deliberately no keepalive timer in this package:
+holding a session alive means holding a scarce, shared slot, and deciding to do
+that belongs to the caller who knows why the session is worth keeping.
+
+The server never tells the client how long it has: the session cookie carries no
+expiry and no response header mentions one. The only honest signals are the ones
+you get by asking — `getSessionIdentity()` for which session you are in, and
+`ADT_SESSION_REPLACED` when the one you were in is gone.
+
 ## Troubleshooting
 
 - **CSRF token errors**: discard the session and establish a new one. That is

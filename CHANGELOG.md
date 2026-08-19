@@ -127,13 +127,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and keep separate deadlines; a critical section defers it; and a malformed
   `SAP_RELEASE_DEADLINE_MS` refuses construction.
 
-### Known
+### Changed — BREAKING
 
-- **`connect()` warns rather than fails when the server issued no session.** A busy system can
-  hand back a connection with no `SAP_SESSIONID`, and every lock taken over it is dead on
-  arrival. Refusing to connect is the honest answer, and waits on evidence about cloud ABAP —
-  whose ADT endpoint answers the bearer obtainable here with `401` and `www-authenticate: Basic`,
-  so the question could not be settled either way.
+- **`connect()` fails when the server opened no session**, instead of warning and handing back a
+  connection whose first lock would be dead on arrival. Locks are held by the ABAP session, so a
+  connection without one can read but can hold nothing; the failure used to surface a request
+  later, as `400 Session not found` with the object half-edited.
+
+  Verified rather than inferred: a connection that received no `SAP_SESSIONID` was held open
+  against an on-prem system and the session list showed **nothing** for it, while one that
+  received the cookie appeared there. No cookie, no session.
+
+  Reported, not decided on. The message says what the server did, what still works, what does
+  not, the usual cause — sessions are limited per user and shared with every other tool logged on
+  as them — and that nothing is retried here, because whether to wait, retry, or release sessions
+  the user still holds depends on what only the caller knows.
+
+  Every transport, not only basic: splitting by authentication type would encode a guess about
+  cloud ABAP, whose ADT endpoint would not answer the bearer obtainable here. If a cloud system
+  turns out to hold sessions without issuing this cookie, this is the rule to revisit.
+
+### Documentation
+
+- **`STATEFUL_SESSION_GUIDE.md` gains "A Lock Lives In The Session".** That a lock dies with the
+  session that took it; that the timeout is an idle one, spent by silence rather than by elapsed
+  time — one small request a minute kept a session alive for 45 minutes past a 30-minute window,
+  identity unchanged; and that any request in the session resets it, which is why this package
+  holds no keepalive timer. Holding a session alive holds a scarce shared slot, and that is the
+  caller's decision to make.
 
 ## [4.0.0] - 2026-08-16
 
