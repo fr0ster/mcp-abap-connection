@@ -18,7 +18,11 @@ import {
   SessionLifecycle,
   sessionError,
 } from '../session/SessionLifecycle.js';
-import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
+import {
+  getCriticalSectionTimeout,
+  getReleaseDeadline,
+  getTimeout,
+} from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 
@@ -33,6 +37,22 @@ const ICF_LOGOFF_PATH = '/sap/public/bc/icf/logoff';
  * `AbapConnection` is the base contract every transport honours; these two are
  * the HTTP session's own, and naming them means a signature that drifts from
  * the published contract fails to compile here instead of at the consumer.
+ *
+ * **This gives the consumer instruments; it does not decide for it.** `connect()`
+ * opens one session and `disconnect()` closes it. How many connections to hold,
+ * how long to hold them and when to let go stays with the caller — there are no
+ * thresholds here, no pooling and no eviction, because none of that is knowable
+ * from inside a single connection. A session this one did not open is not its
+ * business: the session limit is per user and the pool is shared, so a SAP GUI
+ * logon of the same user sits in the same list.
+ *
+ * **Nothing the server decides is treated as something to count on.** Whether it
+ * issues a session cookie, whether it still holds a session it issued, how many
+ * it will tolerate, how fast it answers a logoff — all of that is its own and
+ * may differ by system and release. So each is observed and reported, never
+ * relied upon: the logoff is best effort under a bound the caller sets, a
+ * missing session cookie is a warning rather than a rule, and no code here
+ * counts sessions or predicts the next answer from the last one.
  */
 abstract class AbstractAbapConnection
   implements AbapConnection, ISessionLifecycleAware
@@ -216,65 +236,124 @@ abstract class AbstractAbapConnection
   /**
    * Tears the session down. Never throws, and always settles.
    *
-   * It waits for NOTHING. Deciding when to disconnect is the caller's, and so is
-   * preparing for it — finishing chains, releasing locks. Waiting here on a
-   * request whose caller chose no timeout is what made a teardown unbounded, and
-   * an unbounded teardown blocks every later transition on the serialized tail.
+   * Tells the server the session is no longer needed, then clears the local
+   * state. **When the server actually reclaims it is the server's business** —
+   * possibly not until the next connect asks it for one — and nothing here
+   * waits for that or depends on it. What matters is that the session stops
+   * being counted against the user, which dropping the cookie alone does not
+   * achieve: the server keeps it until its own timeout, so a process that
+   * connects repeatedly leaves one behind every time. Measured on S/4HANA on-prem, 25 connects in a row: with the logoff,
+   * 24-25 of them were given a session; without it, 2. A connection that gets
+   * no session still answers `200` to a LOCK and hands back a handle the next
+   * request cannot use, so the leak surfaces as a half-written object rather
+   * than as anything about sessions.
    *
-   * Requests already in flight run to completion untouched. Generation fencing
-   * (see `SessionLifecycle.isCurrent`) keeps their results from reaching this
-   * connection afterwards.
+   * **The logoff is the only thing waited for**, under `deadlineMs`, and
+   * deciding that bound is the caller's — see the parameter. Nothing else is
+   * waited for: finishing chains and releasing locks stay the caller's to do
+   * before calling, and waiting here on a request whose caller chose no timeout
+   * is what made a teardown unbounded, which blocks every later transition on
+   * the serialized tail.
    *
-   * Ends the ABAP session on the server before clearing anything locally.
-   * Dropping the cookie is not closing the session: the server keeps it until
-   * its own timeout, and a process that connects repeatedly leaves one behind
-   * every time. Measured on S/4HANA on-prem, 25 connects in a row: with the
-   * logoff, 24–25 of them were given a session; without it, 2. A connection
-   * that gets no session still answers `200` to a LOCK and hands back a handle
-   * the next request cannot use, so the leak surfaces as a half-written object
-   * rather than as anything about sessions.
+   * **Requests already in flight are not waited for, and the logoff ends the
+   * session they are running on** — so they will start failing against a
+   * session that no longer exists. That is the caller having asked to
+   * disconnect, not a race, and it is a change from the version that only
+   * dropped the cookie. Generation fencing (see `SessionLifecycle.isCurrent`)
+   * keeps their results from reaching this connection either way.
+   *
+   * @param options.deadlineMs How long to spend ending the server session,
+   *   measured from this call and including time spent queued behind another
+   *   transition. Defaults to `SAP_RELEASE_DEADLINE_MS` (5 s). **`0` means do
+   *   not wait**: the logoff is still sent, because closing what we opened is
+   *   not conditional, but its answer is not awaited and nothing is reported
+   *   about it. Must be finite and non-negative.
    */
-  async disconnect(): Promise<void> {
+  async disconnect(options?: { deadlineMs?: number }): Promise<void> {
+    // Validated before anything is torn down, so a caller that got this wrong
+    // still holds the connection it had. Not a violation of "always settles":
+    // that promise is about work this method could not finish, and this is a
+    // bad argument, which is the caller's bug and worth naming rather than
+    // quietly repairing into a default.
+    const deadlineMs = options?.deadlineMs ?? getReleaseDeadline();
+    if (!Number.isFinite(deadlineMs) || deadlineMs < 0) {
+      throw new TypeError(
+        `disconnect(): deadlineMs must be finite and non-negative, got ${deadlineMs}`,
+      );
+    }
+    // Started HERE, because the contract measures the deadline from the call
+    // and the transition below may sit in a queue first. A budget that started
+    // when the callback ran would give a queued teardown its full allowance
+    // again, which is the one thing the caller was bounding.
+    const startedAt = Date.now();
+
     // Synchronous, at the call: admission shuts and the generation moves before
     // anything is queued, so a caller who has asked to disconnect cannot have
     // requests still going through while this waits its turn.
     this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
     await this.lifecycle.transition('disconnect', async () => {
-      await this.terminateServerSession();
+      await this.terminateServerSession(
+        Math.max(0, deadlineMs - (Date.now() - startedAt)),
+      );
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
   }
 
   /**
-   * Asks the server to end the session, best effort.
+   * Tells the server this session is no longer needed. Best effort, and the
+   * answer is not depended on: whether and when the server frees it is its own
+   * affair.
    *
    * ICF rather than ADT because ADT publishes no such endpoint: its discovery
    * document lists none on any reachable system — on-prem, cloud, or legacy —
    * and the ADT logon is the discovery call itself. `/sap/public/bc/icf/logoff`
    * is the platform's own, and answers `200` while expiring the session cookie.
    *
-   * Never throws and never delays a teardown past its timeout: `disconnect()`
-   * must always settle, and a session we could not close is strictly better
-   * than a teardown that hangs. The local state is cleared either way — the
-   * caller is disconnected whatever the server did with the request.
+   * **Closes only the session this connection holds a cookie for, and never
+   * reasons about how many exist.** The limit is per user and the pool is
+   * shared — a SAP GUI logon of the same user sits in the same SM04 list. A
+   * connector that counted sessions, or tidied up ones it did not open, would
+   * eventually close somebody's GUI. Holding the cookie is the whole
+   * permission, and it is why this returns early without one.
+   *
+   * Never throws: `disconnect()` must always settle, and a session we could not
+   * close is strictly better than a teardown that hangs. The local state is
+   * cleared either way — the caller is disconnected whatever the server did.
+   *
+   * @param budgetMs What is left of the caller's deadline. `0` sends the logoff
+   *   and does not await it: closing what we opened is not conditional, but the
+   *   caller asked not to wait, so nothing is reported about the outcome.
    */
-  private async terminateServerSession(): Promise<void> {
+  private async terminateServerSession(budgetMs: number): Promise<void> {
     if (!this.cookies) {
       return;
     }
 
+    const request = {
+      method: 'GET' as const,
+      url: `${this.baseUrl}${ICF_LOGOFF_PATH}`,
+      headers: {
+        ...(await this.getAuthHeaders()),
+        Cookie: this.cookies,
+      },
+      // Bounded by whatever the caller left, never by this method's own idea of
+      // patience. With no budget the request still goes out; axios is simply
+      // not given a deadline to enforce, because nobody is waiting on it.
+      ...(budgetMs > 0 ? { timeout: budgetMs } : {}),
+    };
+    const send = this.getAxiosInstance()(request);
+
+    if (budgetMs === 0) {
+      // Detached, and the rejection swallowed: an unhandled one would crash a
+      // process for a teardown the caller explicitly declined to wait for.
+      void send.catch(() => undefined);
+      return;
+    }
+
     try {
-      await this.getAxiosInstance()({
-        method: 'GET',
-        url: `${this.baseUrl}${ICF_LOGOFF_PATH}`,
-        headers: {
-          ...(await this.getAuthHeaders()),
-          Cookie: this.cookies,
-        },
-        timeout: getTimeout('default'),
-      });
-      this.logger?.debug('Server session ended');
+      await send;
+      this.logger?.debug('Server session released');
     } catch (error) {
       // Includes the case where the session was already gone, which is the
       // outcome we wanted anyway.

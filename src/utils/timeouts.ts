@@ -41,3 +41,16 @@ export function getTimeout(
 export function getCriticalSectionTimeout(): number {
   return parseInt(process.env.SAP_TIMEOUT_CRITICAL || '600000', 10);
 }
+
+/**
+ * How long `disconnect()` may spend ending the session on the server.
+ *
+ * Its own knob rather than `getTimeout('default')` (45 s): this bounds a
+ * best-effort GET issued while a teardown is on the serializing tail, where
+ * every later connect or disconnect queues behind it. A logoff that has not
+ * answered in a few seconds is not going to, and a caller who wants a different
+ * bound passes `deadlineMs` — see `ISessionLifecycleAware.disconnect`.
+ */
+export function getReleaseDeadline(): number {
+  return parseInt(process.env.SAP_RELEASE_DEADLINE_MS || '5000', 10);
+}
