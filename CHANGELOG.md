@@ -44,8 +44,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has no successor. A caller that wants a bounded wait passes it —
   `disconnect({ deadlineMs })`, the parameter `ISessionLifecycleAware` has published all
   along and which nothing implemented; the default comes from `SAP_RELEASE_DEADLINE_MS`,
-  which is `0`. A malformed value throws before anything is torn down rather than being
-  repaired into a default.
+  which is `0`.
+
+  **The deadline bounds the wait, never the request.** When it expires the waiting stops and
+  the logoff carries on to the server — the contract's word is *detach*. Handed to axios as a
+  request timeout instead, it would abort the socket and cancel the very release it was waiting
+  for: `deadlineMs: 200` against a server answering in 500 ms left the session open, and the
+  default of `0` was more reliable than any small positive value.
+
+  **Each caller waits its own deadline.** Concurrent disconnects join one transition and share
+  its promise, so a wait placed inside it was the first caller's wait imposed on everyone — a
+  caller passing `0` sat through another's 30-second budget, the one guarantee the parameter
+  exists to make. The transition now carries only what must happen once: dispatching the logoff
+  and clearing the local state.
+
+  **A repeat call finishes what is still owed**, as `ISessionLifecycleAware` promises. It could
+  not: `clearSessionState()` drops the cookies, so a second call found nothing to send and the
+  session lived out its 1800 s. The cookies of an incomplete release are kept aside for exactly
+  that retry and dropped as soon as one succeeds; a release already on its way is joined rather
+  than duplicated.
+
+  **The logoff does not cut a lock chain in flight.** It ends the session that chain is running
+  on, so a consumer's `finally` firing on shutdown mid-unlock would leave the object locked and
+  inactive — the damage this release exists to prevent, caused by the release itself.
+  `beginCriticalSection()` is honoured here as it already is for timeouts: the local teardown
+  still happens, the session is recorded as still owed, and calling `disconnect()` again once
+  the chain has finished releases it.
+
+- **A malformed `SAP_RELEASE_DEADLINE_MS` is refused at construction, not at teardown.** It
+  reached `parseInt`, came out `NaN`, and threw from **every** `disconnect()` in the process —
+  blaming a `deadlineMs` argument nobody had passed. It is a startup fault: the same on every
+  call, not the caller's argument, and worth refusing a connection over. `Number()` rather than
+  `parseInt()`, which read `"5s"` as `5` and travelled on as a silently wrong bound.
+
+  And `disconnect()` no longer throws at all, which is what it and the interface both promise.
+  Its place is a `finally` — a connection that was connected must be disconnected — and an
+  exception raised there replaces the error that sent the caller into it. A nonsense per-call
+  `deadlineMs` is reported and the default used instead.
 
   It surfaces as anything but a session problem: once the server stops issuing sessions it still
   authenticates every request, so stateless reads and writes keep working and only the
@@ -68,12 +103,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cookie is unverified, and a rule that wrong would break every cloud consumer to fix an on-prem
   fault.
 
+### Documentation
+
+- **The guides stop recommending `reset()`**, which this release removes. `USAGE.md` had a
+  runnable `connection.reset()` under *Connection Reset*, `STATEFUL_SESSION_GUIDE.md` offered it
+  as the remedy for CSRF errors, and `MIGRATION-2.0.md` described its teardown — anyone following
+  them got `connection.reset is not a function`. They now say what replaces it and why: starting
+  over means telling the server, and dropping a cookie does not.
+- A doc block left dangling by the same removal had `close()` in `RfcAbapConnection` documented as
+  "Reset the connection … Provides interface compatibility with HTTP connections" — an API that no
+  longer exists.
+
 ### Tests
 
 - The stub in `sessionComposition.test.ts` answered every route instantly, `/sap/bc/adt/slow`
   included, so *does not wait for an in-flight request* held whenever `disconnect()` performed no
   I/O rather than because the teardown declined to wait. That route now takes 300 ms and the test
   asserts what its name says.
+- `sessionTeardown.test.ts` covers the teardown contract from the caller's side: the logoff goes
+  out with the session cookies and without a request timeout at any budget; it is detached rather
+  than aborted when a deadline expires; a failing logoff still disconnects; a repeat call re-sends
+  what is owed and sends nothing once it succeeded; two concurrent disconnects share one logoff
+  and keep separate deadlines; a critical section defers it; and a malformed
+  `SAP_RELEASE_DEADLINE_MS` refuses construction.
+
+### Known
+
+- **`connect()` warns rather than fails when the server issued no session.** A busy system can
+  hand back a connection with no `SAP_SESSIONID`, and every lock taken over it is dead on
+  arrival. Refusing to connect is the honest answer, and waits on evidence about cloud ABAP —
+  whose ADT endpoint answers the bearer obtainable here with `401` and `www-authenticate: Basic`,
+  so the question could not be settled either way.
 
 ## [4.0.0] - 2026-08-16
 
