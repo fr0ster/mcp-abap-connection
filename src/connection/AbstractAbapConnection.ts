@@ -33,6 +33,27 @@ import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 const ICF_LOGOFF_PATH = '/sap/public/bc/icf/logoff';
 
 /**
+ * The configured default release deadline, refused at construction if it is not
+ * a number. `parseInt` alone would not do: it answers `NaN` for `"abc"` and `5`
+ * for `"5s"`, and both used to travel all the way to a teardown — the first as
+ * a throw from every `disconnect()` in the process, the second as a silently
+ * wrong bound nobody asked for.
+ */
+function readReleaseDeadline(): number {
+  const raw = process.env.SAP_RELEASE_DEADLINE_MS;
+  if (raw === undefined || raw.trim() === '') {
+    return getReleaseDeadline();
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new TypeError(
+      `SAP_RELEASE_DEADLINE_MS must be a finite, non-negative number of milliseconds, got ${JSON.stringify(raw)}`,
+    );
+  }
+  return value;
+}
+
+/**
  * Declares the capabilities explicitly rather than satisfying them by accident.
  * `AbapConnection` is the base contract every transport honours; these two are
  * the HTTP session's own, and naming them means a signature that drifts from
@@ -84,6 +105,8 @@ abstract class AbstractAbapConnection
   private inCriticalSection = false;
   /** Reference count for nested beginCriticalSection()/endCriticalSection() pairs. */
   private criticalSectionDepth = 0;
+  /** The default release deadline, validated once at construction. */
+  private readonly releaseDeadlineMs: number;
 
   protected constructor(
     private readonly config: SapConfig,
@@ -91,6 +114,14 @@ abstract class AbstractAbapConnection
     sessionId?: string,
     options?: { skipSessionType?: boolean },
   ) {
+    // Read and checked HERE, once, because the only other place it could be
+    // checked is disconnect() — and disconnect() belongs in a `finally`, where
+    // throwing replaces the error that sent the caller there. A misconfigured
+    // environment is a startup fault: it is the same on every call, it is not
+    // the caller's argument, and it is worth refusing a connection over rather
+    // than discovering at teardown.
+    this.releaseDeadlineMs = readReleaseDeadline();
+
     this.skipSessionType = options?.skipSessionType ?? false;
     // Generate sessionId (used for sap-adt-connection-id header)
     this.sessionId = sessionId || randomUUID();
@@ -269,20 +300,30 @@ abstract class AbstractAbapConnection
    *   a teardown has none. The logoff is still sent at `0`, because saying so
    *   is not conditional on caring when it lands; its outcome is logged when it
    *   arrives rather than awaited. Pass a positive value to bound a wait you
-   *   have chosen to take. Must be finite and non-negative.
+   *   have chosen to take. Anything that is not a finite, non-negative number
+   *   is reported and the default used instead — this method is called from a
+   *   `finally`, where throwing would replace the error that sent the caller
+   *   there. The configured default is checked once, at construction, so a
+   *   misconfigured `SAP_RELEASE_DEADLINE_MS` fails before a connection exists
+   *   rather than at every teardown.
    */
   async disconnect(options?: { deadlineMs?: number }): Promise<void> {
-    // Validated before anything is torn down, so a caller that got this wrong
-    // still holds the connection it had. Not a violation of "always settles":
-    // that promise is about work this method could not finish, and this is a
-    // bad argument, which is the caller's bug and worth naming rather than
-    // quietly repairing into a default.
-    const deadlineMs = options?.deadlineMs ?? getReleaseDeadline();
-    if (!Number.isFinite(deadlineMs) || deadlineMs < 0) {
-      throw new TypeError(
-        `disconnect(): deadlineMs must be finite and non-negative, got ${deadlineMs}`,
+    // Nothing here throws, including on a bad argument. This method's place is
+    // a `finally` — a connection that was connected must be disconnected — and
+    // an exception raised there replaces the error that sent the caller into it.
+    // A nonsense deadline is reported and the configured default used instead,
+    // because refusing to release the session is a worse answer to a bad number
+    // than releasing it on the default schedule.
+    const requested = options?.deadlineMs;
+    const valid =
+      requested === undefined || (Number.isFinite(requested) && requested >= 0);
+    if (!valid) {
+      this.logger?.warn(
+        `disconnect(): ignoring deadlineMs=${requested}, which is not a finite, non-negative number; using ${this.releaseDeadlineMs}`,
       );
     }
+    const deadlineMs =
+      valid && requested !== undefined ? requested : this.releaseDeadlineMs;
     // Started HERE, because the contract measures the deadline from the call
     // and the transition below may sit in a queue first. A budget that started
     // when the callback ran would give a queued teardown its full allowance

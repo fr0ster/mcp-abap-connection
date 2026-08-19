@@ -227,18 +227,46 @@ describe('disconnect ends the server session', () => {
     expect(logoff?.timeout).toBeLessThanOrEqual(250);
   });
 
+  // Its place is a `finally`, so it does not throw there — an exception raised
+  // in a cleanup path replaces the error that sent the caller into it. A bad
+  // number is reported and the default used: refusing to release the session is
+  // a worse answer to it than releasing it on the default schedule.
   it.each([[-1], [Number.NaN], [Number.POSITIVE_INFINITY]])(
-    'refuses a deadlineMs of %p before tearing anything down',
+    'reports a deadlineMs of %p and disconnects anyway',
     async (deadlineMs) => {
-      const conn = new BaseAbapConnection(baseConfig, makeLogger());
-      attachMockAxios(conn, []);
+      const logger = makeLogger();
+      const conn = new BaseAbapConnection(baseConfig, logger);
+      const seen: Seen[] = [];
+      attachMockAxios(conn, seen);
       await conn.connect();
 
-      await expect(conn.disconnect({ deadlineMs })).rejects.toThrow(TypeError);
-      // Still the caller's connection: nothing was torn down on a bad argument.
-      expect(conn.isConnected()).toBe(true);
+      await expect(conn.disconnect({ deadlineMs })).resolves.toBeUndefined();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('deadlineMs'),
+      );
+      expect(conn.isConnected()).toBe(false);
+      expect(seen.some((r) => r.url.includes('/logoff'))).toBe(true);
     },
   );
+
+  it('refuses to construct on a malformed SAP_RELEASE_DEADLINE_MS', () => {
+    // The startup fault it is: same on every call, nobody's argument, and
+    // discovered at teardown otherwise — in the `finally` of every consumer.
+    const previous = process.env.SAP_RELEASE_DEADLINE_MS;
+    process.env.SAP_RELEASE_DEADLINE_MS = 'abc';
+    try {
+      expect(() => new BaseAbapConnection(baseConfig, makeLogger())).toThrow(
+        /SAP_RELEASE_DEADLINE_MS/,
+      );
+    } finally {
+      if (previous === undefined) {
+        process.env.SAP_RELEASE_DEADLINE_MS = undefined;
+        delete process.env.SAP_RELEASE_DEADLINE_MS;
+      } else {
+        process.env.SAP_RELEASE_DEADLINE_MS = previous;
+      }
+    }
+  });
 
   /**
    * "measured from this call and including any time spent queued behind another
