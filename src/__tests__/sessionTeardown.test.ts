@@ -284,6 +284,99 @@ describe('every session of a reconnect cycle is released', () => {
     );
   });
 
+  /**
+   * A concurrent disconnect JOINS the transition, and `SessionLifecycle` hands a
+   * joiner the existing promise without running its callback — so anything the
+   * callback computes is invisible to it. A joiner that asked for a 30-second
+   * budget was returning the moment the logoff had been dispatched, never
+   * waiting for it to land.
+   *
+   * Deliberately the SECOND caller who is patient: with the patient one first,
+   * this passes either way.
+   */
+  it('a joining caller waits for the release it asked about', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    let releaseLogoff: (() => void) | undefined;
+    let landed = false;
+    surviving(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff')) {
+        await new Promise<void>((resolve) => {
+          releaseLogoff = () => {
+            landed = true;
+            resolve();
+          };
+        });
+        return { status: 200, data: '', headers: {} };
+      }
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': ['SAP_SESSIONID_STUB_100=S1%3d; path=/'],
+        },
+      };
+    });
+
+    await conn.connect();
+
+    const impatient = conn.disconnect({ deadlineMs: 0 });
+    const patient = conn.disconnect({ deadlineMs: 30_000 });
+
+    await impatient;
+    expect(landed).toBe(false);
+
+    let patientDone = false;
+    void patient.then(() => {
+      patientDone = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    // Still waiting: its budget was for the logoff to land, and it has not.
+    expect(patientDone).toBe(false);
+
+    releaseLogoff?.();
+    await patient;
+    expect(landed).toBe(true);
+  });
+
+  /**
+   * The attempt limit lives on both failure paths or on neither. A request that
+   * cannot even be built never reaches the rejection handler, so counting the
+   * attempt there and giving up only here left that path retrying for ever —
+   * the cost the limit was added to stop.
+   */
+  it('gives up too when the request cannot be built at all', async () => {
+    const logger = makeLogger();
+    const conn = new BaseAbapConnection(baseConfig, logger);
+    const seen: Seen[] = [];
+    surviving(conn, seen, async () => ({
+      status: 200,
+      data: '<service/>',
+      headers: {
+        'x-csrf-token': 'TOKEN',
+        'set-cookie': ['SAP_SESSIONID_STUB_100=S1%3d; path=/'],
+      },
+    }));
+
+    await conn.connect();
+    // Assembling the header throws, as a Kerberos connection with no cookie and
+    // no token does.
+    (conn as any).getAuthHeaders = async () => {
+      throw new Error('no credential to build a header from');
+    };
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await conn.disconnect({ deadlineMs: 100 });
+    }
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Giving up on releasing a server session'),
+    );
+    // Dropped rather than kept for ever.
+    expect((conn as any).owedReleaseCookies.size).toBe(0);
+  });
+
   it('keeps one session owed while another is released', async () => {
     const conn = new BaseAbapConnection(baseConfig, makeLogger());
     const seen: Seen[] = [];

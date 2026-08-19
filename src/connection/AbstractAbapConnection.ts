@@ -108,18 +108,21 @@ abstract class AbstractAbapConnection
   /** The default release deadline, validated once at construction. */
   private readonly releaseDeadlineMs: number;
   /**
-   * Sessions whose release has not completed, by the cookies that identify
-   * them, kept so a repeat `disconnect()` can finish them. `clearSessionState()`
-   * drops the live cookies as it must — the caller is disconnected — but
-   * dropping the only thing that could close the session would make the
-   * documented retry a no-op.
+   * Sessions this connection opened and has not managed to close, keyed by the
+   * cookies that identify them, with the number of release attempts spent so
+   * far. `clearSessionState()` drops the live cookies as it must — the caller is
+   * disconnected — but dropping the only thing that could close the session
+   * would make the documented retry a no-op.
    *
-   * A set rather than one slot because more than one can be outstanding: the
-   * default deadline is `0`, so a release is routinely still in flight when the
-   * next `connect()` happens, and one slot meant the newer session overwrote
-   * the older one and the older was never released. Each entry is one session
-   * this connection opened and has not managed to close, so the set growing is
-   * the leak becoming visible rather than a leak of its own.
+   * More than one can be outstanding: the default deadline is `0`, so a release
+   * is routinely still in flight when the next `connect()` happens, and a single
+   * slot meant the newer session overwrote the older and the older was never
+   * released.
+   *
+   * An entry leaves on a release that succeeded, or once `RELEASE_ATTEMPTS` are
+   * spent — after which the session is left to the system's own timeout,
+   * because a server refusing the logoff will refuse the next one too, and the
+   * cookie names a session that idles out anyway.
    */
   private readonly owedReleaseCookies = new Map<string, number>();
   /**
@@ -375,12 +378,28 @@ abstract class AbstractAbapConnection
     // would be the first caller's wait imposed on everyone: a caller passing
     // `0` would sit through another's 30-second budget, which is the one thing
     // the parameter exists to prevent.
+    // Captured HERE, before the transition and before anything is cleared,
+    // because a concurrent disconnect JOINS the transition and its callback is
+    // never run for the joiner — so a joiner learns nothing from inside it. The
+    // session it wanted released is the one it could see when it called.
+    const mySession = this.cookies;
+
     let releases: Promise<void>[] = [];
     await this.lifecycle.transition('disconnect', async () => {
       releases = await this.startServerSessionRelease();
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
+
+    // Whatever this call dispatched, plus the release of the session it was
+    // disconnecting — which is how a joiner, and a repeat call made while an
+    // earlier release is still on its way, wait for the thing they asked about.
+    const owedToMe = mySession
+      ? this.releasesInFlight.get(mySession)
+      : undefined;
+    if (owedToMe && !releases.includes(owedToMe)) {
+      releases.push(owedToMe);
+    }
 
     // Each caller then waits its own budget, measured from its own call, on the
     // releases its own call is responsible for.
@@ -449,10 +468,6 @@ abstract class AbstractAbapConnection
     // stays in the map for ever, and waiting on it would charge every later
     // disconnect its full deadline for a request nobody can finish.
     const mine: Promise<void>[] = [];
-    // The session this call is disconnecting, told apart from ones earlier calls
-    // left owed. Joining an in-flight release avoids a duplicate request; WAITING
-    // on someone else's is what charged a caller for a request nobody can finish.
-    const currentSession = this.cookies;
 
     for (const cookies of [...this.owedReleaseCookies.keys()]) {
       // A release already on its way FOR THIS SESSION is the release still
@@ -460,13 +475,13 @@ abstract class AbstractAbapConnection
       // first request is closing. One in flight for a different session says
       // nothing about this one — treating it as if it did meant the second
       // session of a reconnect was never released at all.
-      const alreadyFlying = this.releasesInFlight.get(cookies);
-      if (alreadyFlying) {
-        // Only if it is this call's own session: an older one may hang for ever,
-        // and the logoff carries no timeout by design.
-        if (cookies === currentSession) {
-          mine.push(alreadyFlying);
-        }
+      // A release already on its way for THIS session is the release still owed;
+      // opening a second would ask the server to close a session the first
+      // request is closing. Joining it is not waiting for it: whether this
+      // caller waits is decided by disconnect(), from the session it called
+      // about, because an older one may hang for ever — the logoff carries no
+      // request timeout by design.
+      if (this.releasesInFlight.has(cookies)) {
         continue;
       }
 
@@ -495,6 +510,19 @@ abstract class AbstractAbapConnection
         this.logger?.debug(
           `Could not start a session release: ${error instanceof Error ? error.message : String(error)}`,
         );
+        // Counted like any other failure. A build that throws deterministically
+        // never reaches the rejection handler, so without this the attempt limit
+        // would not apply on this path at all and the session would be retried
+        // for ever — the cost the limit exists to stop.
+        this.giveUpIfExhausted(cookies, attempts);
+        continue;
+      }
+
+      // Re-checked after the await: an in-flight release for a LATER key can
+      // land while this iteration is assembling its request, and its success
+      // handler drops the key. Sending then would ask the server to close a
+      // session already closed, and would put the key back as owed.
+      if (!this.owedReleaseCookies.has(cookies)) {
         continue;
       }
 
@@ -520,12 +548,7 @@ abstract class AbstractAbapConnection
           this.logger?.debug(
             `Could not release the server session: ${error instanceof Error ? error.message : String(error)}`,
           );
-          if (attempts >= AbstractAbapConnection.RELEASE_ATTEMPTS) {
-            this.owedReleaseCookies.delete(cookies);
-            this.logger?.warn(
-              `Giving up on releasing a server session after ${attempts} attempts; it stays open until the system's own session timeout`,
-            );
-          }
+          this.giveUpIfExhausted(cookies, attempts);
         },
       );
       this.releasesInFlight.set(cookies, settled);
@@ -533,6 +556,23 @@ abstract class AbstractAbapConnection
     }
 
     return mine;
+  }
+
+  /**
+   * Drops a session from the owed list once its attempts are spent, and says so.
+   *
+   * Both failure paths end here — a request that came back an error, and one
+   * that could not be built at all — because a limit applied on only one of them
+   * is not a limit.
+   */
+  private giveUpIfExhausted(cookies: string, attempts: number): void {
+    if (attempts < AbstractAbapConnection.RELEASE_ATTEMPTS) {
+      return;
+    }
+    this.owedReleaseCookies.delete(cookies);
+    this.logger?.warn(
+      `Giving up on releasing a server session after ${attempts} attempts; it stays open until the system's own session timeout`,
+    );
   }
 
   /**

@@ -150,6 +150,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release for the session it is itself disconnecting. Joining one still avoids a duplicate
   request; it no longer means waiting for it.
 
+- **A joining `disconnect()` waits for the release it asked about.** Concurrent calls join one
+  transition, and a joiner is handed the existing promise without its callback being run — so
+  anything computed inside it was invisible to the joiner, and one asking for a 30-second budget
+  returned as soon as the logoff had been dispatched. The session to wait for is now taken before
+  the transition, from what the caller could see when it called.
+
 - **A release that keeps failing is given up on, with a warning.** Every owed session was retried
   on every teardown, so against a server that refuses the logoff — a proxy in the way, a 404, the
   network down — twenty reconnect cycles cost 210 requests, and the cookies being retried named
@@ -159,7 +165,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Building a logoff request cannot take the other owed sessions down with it.** Assembling the
   auth header can throw on its own — a Kerberos connection with no cookie and no token does — and
   that escaped a teardown documented never to throw, leaving `clearSessionState()` and
-  `markDisconnected()` unrun.
+  `markDisconnected()` unrun. Such a failure counts as an attempt like any other: it never reaches
+  the rejection handler, so a limit applied only there would not apply on this path at all.
+
+- **A session released while a teardown is walking its list is not asked to close twice.** The
+  loop iterates a snapshot and awaits per entry, so a release landing meanwhile could have its key
+  removed and then re-added by the very iteration that followed it.
 
 ### Changed — BREAKING
 
