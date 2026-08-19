@@ -445,6 +445,50 @@ describe('disconnect ends the server session', () => {
     releaseLogoff?.();
   });
 
+  /**
+   * Concurrent disconnects join one transition and are handed the same promise,
+   * so a wait placed inside it would be the first caller's wait imposed on
+   * everyone: a caller passing `0` would sit through another's long budget,
+   * which is the one thing the parameter exists to prevent. The work happens
+   * once; the waiting is each caller's own.
+   */
+  it('does not charge one caller with another caller’s deadline', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    let releaseLogoff: (() => void) | undefined;
+    attachMockAxios(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff')) {
+        await new Promise<void>((resolve) => {
+          releaseLogoff = resolve;
+        });
+      }
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+        },
+      };
+    });
+
+    await conn.connect();
+
+    const patient = conn.disconnect({ deadlineMs: 30_000 });
+    const impatient = conn.disconnect({ deadlineMs: 0 });
+
+    // The one that asked not to wait does not, even though a 30 s wait is in
+    // progress next to it. Without its own budget this would hang until the
+    // test times out.
+    await impatient;
+    expect(conn.isConnected()).toBe(false);
+    // And one logoff for both.
+    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
+
+    releaseLogoff?.();
+    await patient;
+  });
+
   it('sends nothing when there is no session to end', async () => {
     const conn = new BaseAbapConnection(baseConfig, makeLogger());
     const seen: Seen[] = [];

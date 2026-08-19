@@ -343,13 +343,22 @@ abstract class AbstractAbapConnection
     // anything is queued, so a caller who has asked to disconnect cannot have
     // requests still going through while this waits its turn.
     this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
+    // The transition carries the work that must happen once — dispatching the
+    // logoff and clearing the local state — and NOT the waiting. Concurrent
+    // disconnects join it and are handed the same promise, so a wait inside it
+    // would be the first caller's wait imposed on everyone: a caller passing
+    // `0` would sit through another's 30-second budget, which is the one thing
+    // the parameter exists to prevent.
     await this.lifecycle.transition('disconnect', async () => {
-      await this.terminateServerSession(
-        Math.max(0, deadlineMs - (Date.now() - startedAt)),
-      );
+      await this.startServerSessionRelease();
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
+
+    // Each caller then waits its own budget, measured from its own call.
+    await this.awaitReleaseWithin(
+      Math.max(0, deadlineMs - (Date.now() - startedAt)),
+    );
   }
 
   /**
@@ -373,14 +382,11 @@ abstract class AbstractAbapConnection
    * close is strictly better than a teardown that hangs. The local state is
    * cleared either way — the caller is disconnected whatever the server did.
    *
-   * @param budgetMs What is left of the caller's deadline. It bounds **the
-   *   wait**, never the request: the contract says the deadline is how long to
-   *   wait for the release *before detaching it*, and a deadline handed to
-   *   axios would instead abort the socket on expiry — cancelling the very
-   *   release it was waiting for and leaving the session open. `0` sends the
-   *   logoff and does not wait at all.
+   * Dispatches only — waiting is {@link awaitReleaseWithin}, and it is separate
+   * because this runs inside the joined transition while the waiting is each
+   * caller's own.
    */
-  private async terminateServerSession(budgetMs: number): Promise<void> {
+  private async startServerSessionRelease(): Promise<void> {
     // The live cookies on the first call; on a repeat, the ones kept from a
     // release that did not complete. Without either there is nothing owed and
     // nothing to close — and no permission to close anything, since holding the
@@ -434,22 +440,31 @@ abstract class AbstractAbapConnection
       );
       this.releaseInFlight = settled;
     }
+  }
 
-    if (budgetMs === 0) {
+  /**
+   * Waits up to `budgetMs` for a release already on its way, then detaches.
+   *
+   * Detaching, not cancelling: when the budget runs out this stops waiting and
+   * the request carries on to the server. Each caller of `disconnect()` gets
+   * its own, so one caller's patience is never charged to another's.
+   */
+  private async awaitReleaseWithin(budgetMs: number): Promise<void> {
+    const settled = this.releaseInFlight;
+    if (!settled || budgetMs === 0) {
       return;
     }
 
-    // Detaching, not cancelling: when the budget runs out this stops waiting
-    // and the request carries on to the server. `unref` so a process that is
-    // otherwise done does not stay alive for the timer.
+    // `unref` so a process that is otherwise done does not stay alive for the
+    // timer, and cleared when the release wins the race.
     let expire: NodeJS.Timeout | undefined;
     const deadline = new Promise<void>((resolve) => {
       expire = setTimeout(resolve, budgetMs);
       expire.unref?.();
     });
 
-    // `settled` never rejects — its handlers are attached above — so this needs
-    // no catch to keep "never throws" true.
+    // `settled` never rejects — its handlers are attached at dispatch — so this
+    // needs no catch to keep "never throws" true.
     await Promise.race([settled, deadline]);
     if (expire) {
       clearTimeout(expire);
