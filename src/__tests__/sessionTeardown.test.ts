@@ -133,6 +133,180 @@ describe('a connection the server gave no session says so', () => {
   });
 });
 
+/**
+ * The lifecycle is create → connect → disconnect → connect → disconnect, and
+ * every session in it has to be released, not only the first.
+ *
+ * The default deadline is `0`, so `disconnect()` does not wait for the logoff —
+ * which means a release is routinely still in flight when the next `connect()`
+ * happens. That is the normal path, not an edge case, and a release keyed to
+ * nothing in particular made it a leak: the in-flight one for session A was
+ * taken for "the release still owed", so session B's logoff was never sent.
+ */
+describe('every session of a reconnect cycle is released', () => {
+  /** A double that survives clearSessionState(), as a reconnect requires. */
+  function surviving(
+    conn: BaseAbapConnection,
+    seen: Seen[],
+    answer: (cfg: any) => Promise<any>,
+  ): void {
+    const instance = async (cfg: any) => {
+      seen.push({
+        url: cfg.url,
+        method: cfg.method,
+        headers: cfg.headers ?? {},
+        timeout: cfg.timeout,
+      });
+      return answer(cfg);
+    };
+    (instance as any).interceptors = {
+      request: { clear: jest.fn() },
+      response: { clear: jest.fn() },
+    };
+    Object.defineProperty(conn, 'axiosInstance', {
+      get: () => instance,
+      set: () => undefined,
+      configurable: true,
+    });
+  }
+
+  it('sends a logoff for the second session while the first still hangs', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    let session = 0;
+    surviving(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff')) {
+        // Never answers: the first release stays in flight across the reconnect.
+        await new Promise<never>(() => undefined);
+      }
+      session += 1;
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': [`SAP_SESSIONID_STUB_100=S${session}%3d; path=/`],
+        },
+      };
+    });
+
+    await conn.connect();
+    await conn.disconnect();
+    await conn.connect();
+    await conn.disconnect();
+
+    const logoffs = seen.filter((r) => r.url.includes('/logoff'));
+    expect(logoffs).toHaveLength(2);
+    // Each carried its own session, which is what proves they are two releases
+    // and not the same one sent twice.
+    expect(logoffs[0].headers.Cookie).toContain('S1');
+    expect(logoffs[1].headers.Cookie).toContain('S2');
+  });
+
+  it('keeps one session owed while another is released', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    let session = 0;
+    surviving(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff')) {
+        // The first session's release fails; the second's succeeds.
+        if (String(cfg.headers?.Cookie ?? '').includes('S1')) {
+          throw new Error('network is down');
+        }
+        return { status: 200, data: '', headers: {} };
+      }
+      session += 1;
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': [`SAP_SESSIONID_STUB_100=S${session}%3d; path=/`],
+        },
+      };
+    });
+
+    // A deadline so each release has settled before the next step, which is
+    // what makes the sequence deterministic rather than timing-dependent.
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 1000 });
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 1000 });
+
+    const before = seen.filter((r) => r.url.includes('/logoff')).length;
+    await conn.disconnect({ deadlineMs: 1000 });
+    const retried = seen.filter((r) => r.url.includes('/logoff')).slice(before);
+
+    // S2 was released, so nothing is owed for it. S1 was not, so it is retried
+    // — a success for one session must not discard what is owed for another.
+    expect(retried).toHaveLength(1);
+    expect(retried[0].headers.Cookie).toContain('S1');
+  });
+
+  it('retries every session still owed, not just the last', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    let session = 0;
+    let logoffWorks = false;
+    surviving(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff')) {
+        if (!logoffWorks) throw new Error('network is down');
+        return { status: 200, data: '', headers: {} };
+      }
+      session += 1;
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': [`SAP_SESSIONID_STUB_100=S${session}%3d; path=/`],
+        },
+      };
+    });
+
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 1000 });
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 1000 });
+
+    // Two sessions owed, neither released. The server comes back.
+    logoffWorks = true;
+    const before = seen.filter((r) => r.url.includes('/logoff')).length;
+    await conn.disconnect({ deadlineMs: 1000 });
+    const retried = seen.filter((r) => r.url.includes('/logoff')).slice(before);
+
+    expect(retried).toHaveLength(2);
+    expect(retried.map((r) => r.headers.Cookie).join(' ')).toContain('S1');
+    expect(retried.map((r) => r.headers.Cookie).join(' ')).toContain('S2');
+  });
+
+  it('does not re-send a release already on its way for the same session', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    surviving(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff')) {
+        await new Promise<never>(() => undefined);
+      }
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': ['SAP_SESSIONID_STUB_100=same%3d; path=/'],
+        },
+      };
+    });
+
+    await conn.connect();
+    await conn.disconnect();
+    // Nothing reconnected, so there is no second session to close: the repeat
+    // joins the release already going rather than asking twice.
+    await conn.disconnect();
+
+    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
+  });
+});
+
 describe('disconnect ends the server session', () => {
   it('calls the logoff endpoint with the session cookies', async () => {
     const conn = new BaseAbapConnection(baseConfig, makeLogger());

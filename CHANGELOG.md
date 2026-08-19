@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every session of a reconnect cycle is released, not only the first.** A release already on
+  its way was treated as "the release still owed" whoever it belonged to, so an in-flight logoff
+  for a previous session suppressed the current one's entirely: `connect → disconnect → connect →
+  disconnect` sent **one** logoff and left the second session open. Not an edge case — the
+  default deadline is `0`, so `disconnect()` does not wait for the logoff and a release is
+  routinely still in flight when the next `connect()` happens, which made this the normal path on
+  any server that does not answer instantly. Releases are now keyed by the session they belong
+  to, and both completion handlers clear by that key, so a late answer about one session cannot
+  discard what is owed for another. Sessions still owed are kept as a set rather than one slot,
+  because more than one can be outstanding and the older was being overwritten.
+
 ### Removed — BREAKING
 
 - **`reset()` is gone**, from `AbstractAbapConnection` and `RfcAbapConnection`. There is no
