@@ -595,13 +595,34 @@ abstract class AbstractAbapConnection
     // sessions are already open for the user — and such a connection still gets
     // `200` for a LOCK and hands back a handle the next request cannot use.
     //
-    // Refusing to connect at all would be the honest answer, and is deliberately
-    // NOT done here: whether a cloud ABAP system issues this cookie is unverified
-    // (its ADT endpoint rejects the bearer we can obtain), and a rule that wrong
-    // would break every cloud consumer to fix an on-prem fault. Warned, pending
-    // that evidence.
+    // "No cookie" and "no session" are the same thing, checked rather than
+    // assumed: a connection that got none was held open against an on-prem
+    // system and SM04 listed nothing for it, while a connection that got one
+    // appeared there. So the cookie's absence is the server saying it opened
+    // nothing, not merely declining to name what it opened.
+    //
+    // Which is why this refuses to connect rather than warning. There is no
+    // count to plan around — the same system allowed 21 sessions one day and
+    // refused an eleventh the next — so a caller cannot avoid the condition by
+    // being frugal, and the only reliable signal is whether THIS connect got a
+    // session. Reported with its cause; recovering is the caller's call, and
+    // nothing here retries on anyone's behalf.
+    //
+    // Basic auth only, for now. Whether a cloud ABAP system issues this cookie
+    // is unverified — its ADT endpoint answers the bearer obtainable here with
+    // `401` — and a rule that wrong would break every cloud consumer to fix an
+    // on-prem fault. The other transports keep the warning until that is known.
     const fingerprint = this.sessionFingerprint();
     if (fingerprint.size === 0 && !this.skipSessionType) {
+      if (this.config.authType === 'basic') {
+        this.invalidateSession();
+        this.lifecycle.forgetIdentity();
+        this.lifecycle.markDisconnected();
+        throw sessionError(
+          ADT_SESSION_ERROR.NOT_CONNECTED,
+          'The server issued no session (no SAP_SESSIONID cookie): it authenticated the request but opened no ABAP session, which happens when it will not open another one for this user. A lock taken over such a connection is dead the moment it is issued.',
+        );
+      }
       this.logger?.warn(
         'Connected, but the server issued no SAP_SESSIONID: session identity is untracked and any lock taken over this connection may be dead on arrival',
       );

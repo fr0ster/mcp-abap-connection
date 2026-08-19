@@ -66,9 +66,19 @@ function attachMockAxios(
 }
 
 describe('a connection the server gave no session says so', () => {
-  it('warns when the server issued no SAP_SESSIONID', async () => {
-    const logger = makeLogger();
-    const conn = new BaseAbapConnection(baseConfig, logger);
+  /**
+   * The cookie's absence is the server saying it opened nothing, and that was
+   * checked rather than assumed: a connection that got no cookie was held open
+   * against an on-prem system and SM04 listed nothing for it, while one that
+   * got a cookie appeared there.
+   *
+   * So it is a failed connect. There is no count to plan around — the same
+   * system allowed 21 sessions one day and refused an eleventh the next — so a
+   * caller cannot avoid this by being frugal, and the only reliable signal is
+   * whether this connect got a session.
+   */
+  it('refuses to connect on basic auth when the server issued no SAP_SESSIONID', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
     // What an on-prem server answers when it will not open a session: the CSRF
     // cookie, and nothing to hold a lock against.
     attachMockAxios(conn, [], async () => ({
@@ -80,11 +90,8 @@ describe('a connection the server gave no session says so', () => {
       },
     }));
 
-    await conn.connect();
-
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('no SAP_SESSIONID'),
-    );
+    await expect(conn.connect()).rejects.toThrow(/no session/);
+    expect(conn.isConnected()).toBe(false);
     expect(conn.getSessionIdentity()).toBeNull();
   });
 
