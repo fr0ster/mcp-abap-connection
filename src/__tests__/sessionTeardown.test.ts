@@ -43,7 +43,7 @@ function attachMockAxios(
     data: '<service/>',
     headers: {
       'x-csrf-token': 'TOKEN',
-      'set-cookie': ['SAP_SESSIONID_E19_100=abc%3d; path=/'],
+      'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
     },
   }),
 ): void {
@@ -76,7 +76,7 @@ describe('a connection the server gave no session says so', () => {
       data: '<service/>',
       headers: {
         'x-csrf-token': 'TOKEN',
-        'set-cookie': ['sap-XSRF_E19_100=xyz; path=/'],
+        'set-cookie': ['sap-XSRF_STUB_100=xyz; path=/'],
       },
     }));
 
@@ -115,7 +115,7 @@ describe('disconnect ends the server session', () => {
       r.url.includes('/sap/public/bc/icf/logoff'),
     );
     expect(logoff).toBeDefined();
-    expect(logoff?.headers.Cookie).toContain('SAP_SESSIONID_E19_100');
+    expect(logoff?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
   });
 
   it('disconnects anyway when the logoff fails', async () => {
@@ -132,7 +132,7 @@ describe('disconnect ends the server session', () => {
         data: '<service/>',
         headers: {
           'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_E19_100=abc%3d; path=/'],
+          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
         },
       };
     });
@@ -161,7 +161,7 @@ describe('disconnect ends the server session', () => {
         data: '<service/>',
         headers: {
           'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_E19_100=abc%3d; path=/'],
+          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
         },
       };
     });
@@ -197,7 +197,7 @@ describe('disconnect ends the server session', () => {
         data: '<service/>',
         headers: {
           'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_E19_100=abc%3d; path=/'],
+          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
         },
       };
     });
@@ -236,7 +236,7 @@ describe('disconnect ends the server session', () => {
         data: '<service/>',
         headers: {
           'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_E19_100=abc%3d; path=/'],
+          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
         },
       };
     });
@@ -325,7 +325,7 @@ describe('disconnect ends the server session', () => {
         data: '<service/>',
         headers: {
           'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_E19_100=abc%3d; path=/'],
+          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
         },
       };
     });
@@ -356,6 +356,93 @@ describe('disconnect ends the server session', () => {
     // The budget was gone before the callback ran, so the logoff went out
     // detached — no deadline handed to axios, and nothing awaited.
     expect(logoff?.timeout).toBeUndefined();
+  });
+
+  /**
+   * "A repeat call performs whatever is still owed — a transport release that
+   * did not complete" — ISessionLifecycleAware.disconnect. clearSessionState()
+   * drops the live cookies as it must, so the ones a failed release still needs
+   * are kept aside; otherwise the documented way to finish the job sends
+   * nothing and the session lives out its 1800 s.
+   */
+  it('re-sends the logoff when the first one failed', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    let failLogoff = true;
+    attachMockAxios(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff') && failLogoff) {
+        throw new Error('network is down');
+      }
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+        },
+      };
+    });
+
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 1000 });
+    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
+
+    failLogoff = false;
+    // clearSessionState() drops the axios instance, so the double has to be put
+    // back — otherwise the retry goes out over a real one and this asserts
+    // nothing. The cookies it needs are the connection's own to remember.
+    attachMockAxios(conn, seen, async () => ({
+      status: 200,
+      data: '',
+      headers: {},
+    }));
+    await conn.disconnect({ deadlineMs: 1000 });
+
+    const logoffs = seen.filter((r) => r.url.includes('/logoff'));
+    expect(logoffs).toHaveLength(2);
+    // Still the session's own cookie: the permission to close it is holding it.
+    expect(logoffs[1].headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
+  });
+
+  it('sends nothing on a repeat call when the first logoff succeeded', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    attachMockAxios(conn, seen);
+
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 1000 });
+    await conn.disconnect({ deadlineMs: 1000 });
+
+    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
+  });
+
+  it('joins a release still in flight instead of opening a second', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    let releaseLogoff: (() => void) | undefined;
+    attachMockAxios(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff')) {
+        await new Promise<void>((resolve) => {
+          releaseLogoff = resolve;
+        });
+      }
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+        },
+      };
+    });
+
+    await conn.connect();
+    // Detaches while the logoff is still on its way.
+    await conn.disconnect({ deadlineMs: 20 });
+    await conn.disconnect({ deadlineMs: 20 });
+
+    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
+    releaseLogoff?.();
   });
 
   it('sends nothing when there is no session to end', async () => {

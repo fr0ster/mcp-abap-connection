@@ -107,6 +107,15 @@ abstract class AbstractAbapConnection
   private criticalSectionDepth = 0;
   /** The default release deadline, validated once at construction. */
   private readonly releaseDeadlineMs: number;
+  /**
+   * The cookies of a session whose release has not completed, kept so a repeat
+   * `disconnect()` can finish it. `clearSessionState()` drops the live cookies
+   * as it must — the caller is disconnected — but dropping the only thing that
+   * could close the session would make the documented retry a no-op.
+   */
+  private owedReleaseCookies: string | null = null;
+  /** A release already on its way, so a repeat call joins it instead of opening a second. */
+  private releaseInFlight: Promise<void> | null = null;
 
   protected constructor(
     private readonly config: SapConfig,
@@ -372,34 +381,59 @@ abstract class AbstractAbapConnection
    *   logoff and does not wait at all.
    */
   private async terminateServerSession(budgetMs: number): Promise<void> {
-    if (!this.cookies) {
+    // The live cookies on the first call; on a repeat, the ones kept from a
+    // release that did not complete. Without either there is nothing owed and
+    // nothing to close — and no permission to close anything, since holding the
+    // cookie is the whole permission.
+    const cookies = this.cookies ?? this.owedReleaseCookies;
+    if (!cookies) {
       return;
     }
 
-    // No `timeout` here, at any budget. Whatever the caller allowed themselves
-    // to wait, the request must be allowed to finish: this is the one request
-    // whose whole purpose is to reach the server, and killing it is the failure
-    // it exists to prevent.
-    const send = this.getAxiosInstance()({
-      method: 'GET' as const,
-      url: `${this.baseUrl}${ICF_LOGOFF_PATH}`,
-      headers: {
-        ...(await this.getAuthHeaders()),
-        Cookie: this.cookies,
-      },
-    });
+    // A release already on its way is the release still owed. Opening a second
+    // one would ask the server to close a session the first request is closing,
+    // which at best wastes a round trip and at worst reports a failure about a
+    // session that was released a moment later.
+    let settled = this.releaseInFlight;
 
-    // Reported whenever it lands, waited for or not: "nobody is waiting on it"
-    // is not "nobody wants to know". Attached before any await so a rejection
-    // always has a handler — an unhandled one would crash a process over a
-    // teardown the caller declined to wait for.
-    const settled = send.then(
-      () => this.logger?.debug('Server session released'),
-      (error: unknown) =>
-        this.logger?.debug(
-          `Could not release the server session: ${error instanceof Error ? error.message : String(error)}`,
-        ),
-    );
+    if (!settled) {
+      this.owedReleaseCookies = cookies;
+
+      // No `timeout` here, at any budget. Whatever the caller allowed themselves
+      // to wait, the request must be allowed to finish: this is the one request
+      // whose whole purpose is to reach the server, and killing it is the failure
+      // it exists to prevent.
+      const send = this.getAxiosInstance()({
+        method: 'GET' as const,
+        url: `${this.baseUrl}${ICF_LOGOFF_PATH}`,
+        headers: {
+          ...(await this.getAuthHeaders()),
+          Cookie: cookies,
+        },
+      });
+
+      // Reported whenever it lands, waited for or not: "nobody is waiting on it"
+      // is not "nobody wants to know". Attached before any await so a rejection
+      // always has a handler — an unhandled one would crash a process over a
+      // teardown the caller declined to wait for.
+      settled = send.then(
+        () => {
+          // Nothing owed any more, so a repeat disconnect() sends nothing.
+          this.owedReleaseCookies = null;
+          this.releaseInFlight = null;
+          this.logger?.debug('Server session released');
+        },
+        (error: unknown) => {
+          // The cookies stay: the release did not complete, and the contract
+          // says calling again performs what is still owed.
+          this.releaseInFlight = null;
+          this.logger?.debug(
+            `Could not release the server session: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        },
+      );
+      this.releaseInFlight = settled;
+    }
 
     if (budgetMs === 0) {
       return;
@@ -664,7 +698,7 @@ abstract class AbstractAbapConnection
   /**
    * Whether the server is telling us the session it was given no longer exists.
    *
-   * The E19 shape was HTTP 400 with "Session not found", answered in ~60 ms
+   * One on-prem system answered HTTP 400 with "Session not found", answered in ~60 ms
    * with the cookie present — which is why identity comparison cannot see this:
    * the cookie, and therefore the fingerprint, is completely unchanged. The
    * exact match is landscape-specific and is one of the live probes this design

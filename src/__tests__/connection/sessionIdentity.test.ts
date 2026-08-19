@@ -41,7 +41,7 @@ async function startStub(): Promise<Stub> {
       return;
     }
     if (state.deadSession) {
-      // The E19 shape: the cookie is untouched, only the answer tells.
+      // The observed shape: the cookie is untouched, only the answer tells.
       res.writeHead(400, {
         'content-type': 'text/html',
       });
