@@ -364,53 +364,61 @@ abstract class AbstractAbapConnection
    * close is strictly better than a teardown that hangs. The local state is
    * cleared either way — the caller is disconnected whatever the server did.
    *
-   * @param budgetMs What is left of the caller's deadline. `0` sends the logoff
-   *   and does not await it: closing what we opened is not conditional, but the
-   *   caller asked not to wait, so nothing is reported about the outcome.
+   * @param budgetMs What is left of the caller's deadline. It bounds **the
+   *   wait**, never the request: the contract says the deadline is how long to
+   *   wait for the release *before detaching it*, and a deadline handed to
+   *   axios would instead abort the socket on expiry — cancelling the very
+   *   release it was waiting for and leaving the session open. `0` sends the
+   *   logoff and does not wait at all.
    */
   private async terminateServerSession(budgetMs: number): Promise<void> {
     if (!this.cookies) {
       return;
     }
 
-    const request = {
+    // No `timeout` here, at any budget. Whatever the caller allowed themselves
+    // to wait, the request must be allowed to finish: this is the one request
+    // whose whole purpose is to reach the server, and killing it is the failure
+    // it exists to prevent.
+    const send = this.getAxiosInstance()({
       method: 'GET' as const,
       url: `${this.baseUrl}${ICF_LOGOFF_PATH}`,
       headers: {
         ...(await this.getAuthHeaders()),
         Cookie: this.cookies,
       },
-      // Bounded by whatever the caller left, never by this method's own idea of
-      // patience. With no budget the request still goes out; axios is simply
-      // not given a deadline to enforce, because nobody is waiting on it.
-      ...(budgetMs > 0 ? { timeout: budgetMs } : {}),
-    };
-    const send = this.getAxiosInstance()(request);
+    });
+
+    // Reported whenever it lands, waited for or not: "nobody is waiting on it"
+    // is not "nobody wants to know". Attached before any await so a rejection
+    // always has a handler — an unhandled one would crash a process over a
+    // teardown the caller declined to wait for.
+    const settled = send.then(
+      () => this.logger?.debug('Server session released'),
+      (error: unknown) =>
+        this.logger?.debug(
+          `Could not release the server session: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+    );
 
     if (budgetMs === 0) {
-      // Detached — but still reported when it lands, because "nobody is waiting
-      // on it" is not the same as "nobody wants to know". The rejection is
-      // swallowed here: an unhandled one would crash a process over a teardown
-      // the caller declined to wait for.
-      void send.then(
-        () => this.logger?.debug('Server session released'),
-        (error: unknown) =>
-          this.logger?.debug(
-            `Could not release the server session: ${error instanceof Error ? error.message : String(error)}`,
-          ),
-      );
       return;
     }
 
-    try {
-      await send;
-      this.logger?.debug('Server session released');
-    } catch (error) {
-      // Includes the case where the session was already gone, which is the
-      // outcome we wanted anyway.
-      this.logger?.debug(
-        `Could not end the server session: ${error instanceof Error ? error.message : String(error)}`,
-      );
+    // Detaching, not cancelling: when the budget runs out this stops waiting
+    // and the request carries on to the server. `unref` so a process that is
+    // otherwise done does not stay alive for the timer.
+    let expire: NodeJS.Timeout | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      expire = setTimeout(resolve, budgetMs);
+      expire.unref?.();
+    });
+
+    // `settled` never rejects — its handlers are attached above — so this needs
+    // no catch to keep "never throws" true.
+    await Promise.race([settled, deadline]);
+    if (expire) {
+      clearTimeout(expire);
     }
   }
 

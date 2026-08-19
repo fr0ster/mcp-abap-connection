@@ -212,19 +212,50 @@ describe('disconnect ends the server session', () => {
     releaseLogoff?.();
   });
 
-  it('a deadline bounds how long the logoff may take', async () => {
+  /**
+   * The deadline bounds the WAIT, never the request — the contract's words are
+   * "how long to wait for the transport release before **detaching** it". Handed
+   * to axios instead, it would abort the socket on expiry and cancel the release
+   * it was waiting for, leaving the session open: the precise failure this whole
+   * change exists to prevent, reintroduced by the parameter meant to bound it.
+   */
+  it('a deadline detaches the logoff rather than aborting it', async () => {
     const conn = new BaseAbapConnection(baseConfig, makeLogger());
     const seen: Seen[] = [];
-    attachMockAxios(conn, seen);
+    let releaseLogoff: (() => void) | undefined;
+    let logoffFinished = false;
+    attachMockAxios(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff')) {
+        await new Promise<void>((resolve) => {
+          releaseLogoff = resolve;
+        });
+        logoffFinished = true;
+      }
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': ['SAP_SESSIONID_E19_100=abc%3d; path=/'],
+        },
+      };
+    });
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 250 });
+    await conn.disconnect({ deadlineMs: 20 });
 
     const logoff = seen.find((r) => r.url.includes('/logoff'));
     expect(logoff).toBeDefined();
-    // The budget reaches axios rather than this method's own idea of patience.
-    expect(logoff?.timeout).toBeGreaterThan(0);
-    expect(logoff?.timeout).toBeLessThanOrEqual(250);
+    // No axios deadline at any budget: the one request whose purpose is to
+    // reach the server must be allowed to get there.
+    expect(logoff?.timeout).toBeUndefined();
+    // The wait ended without it, and it is still on its way rather than killed.
+    expect(logoffFinished).toBe(false);
+    expect(conn.isConnected()).toBe(false);
+
+    releaseLogoff?.();
+    await Promise.resolve();
+    expect(logoffFinished).toBe(true);
   });
 
   // Its place is a `finally`, so it does not throw there — an exception raised
