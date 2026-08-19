@@ -188,18 +188,6 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
     expect(cleared).toBe(1);
     expect(conn.isConnected()).toBe(false);
   });
-
-  it('leaves the connection unusable when reset() discards the session', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
-    await conn.connect();
-
-    conn.reset();
-
-    expect(conn.isConnected()).toBe(false);
-    // reset() returns immediately; the cleanup it queued settles after
-    await new Promise((r) => setTimeout(r, 20));
-    expect(conn.getSessionIdentity()).toBeNull();
-  });
 });
 
 describe('JwtAbapConnection establishment retry', () => {

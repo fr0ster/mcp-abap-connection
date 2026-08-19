@@ -130,13 +130,6 @@ describeIfRfc('RfcAbapConnection (integration)', () => {
     // No error — session type accepted
     conn.setSessionType('stateless');
   });
-
-  it('should support reset()', () => {
-    // reset() should not throw even mid-session
-    // We'll reconnect in afterAll is not called, but let's just test it doesn't crash
-    // Note: after reset the connection is closed, so we reconnect
-    expect(() => conn.reset()).not.toThrow();
-  });
 });
 
 describeIfRfc('RfcAbapConnection validation', () => {

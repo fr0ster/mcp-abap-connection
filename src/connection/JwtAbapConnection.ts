@@ -243,7 +243,7 @@ export class JwtAbapConnection extends AbstractAbapConnection {
     );
     // The renewed credential cannot keep the old ABAP session, so this is a
     // session-lost teardown — internal, or it would cancel the very recovery it
-    // is setting up. reset() would be the caller-origin one.
+    // is setting up. disconnect() would be the caller-origin one.
     this.discardSession();
     // Re-establish before retrying: the retry goes through admission, and a
     // discarded session admits nothing.

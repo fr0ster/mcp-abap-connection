@@ -392,18 +392,6 @@ abstract class AbstractAbapConnection
   }
 
   /**
-   * Discards the session at a caller's request: cancels queued recoveries and
-   * queues the cleanup rather than tearing down under a live request.
-   */
-  reset(): void {
-    this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: true });
-    void this.lifecycle.transition('cleanup', async () => {
-      this.clearSessionState();
-      this.lifecycle.markDisconnected();
-    });
-  }
-
-  /**
    * Re-establishes the session for a request that is recovering from a
    * credential renewal, then lets that request retry.
    *
@@ -1480,7 +1468,9 @@ abstract class AbstractAbapConnection
    * cookies (HTTP 401 on a mutation while a cached token exists). This forces the
    * next request path to fetch a fresh token and a fresh SAP_SESSIONID cookie.
    *
-   * Distinct from reset(): this leaves the axios instance and interceptors in place.
+   * Distinct from disconnect(): this leaves the axios instance and interceptors
+   * in place, and tells the server nothing — it is a request-level repair, not a
+   * teardown.
    */
   private invalidateSession(): void {
     this.setCsrfToken(null);
