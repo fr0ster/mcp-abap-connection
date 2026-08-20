@@ -102,19 +102,45 @@ answer, not a credential one, and nothing is torn down for it.
 
 ---
 
-## A Lock Lives In The Session
+## What This Layer Actually Solves
 
-Locks are held by the ABAP session, not by the connection object. So a lock
-handle outlives nothing the session does not: lose the session and every handle
-taken in it is dead, whether or not this client noticed.
+The link to the ABAP session is not guaranteed, and that is the whole problem:
+
+- the ABAP session can be terminated by the system while this client still
+  believes it has one — the next lock-bound request answers
+  `400 "Session not found"`;
+- or it is never created at all, because the system will not open another one
+  for this user right now.
+
+Both are reported, neither is worked around. `connect()` fails with the reason
+when no session was opened; a session lost afterwards surfaces as
+`ADT_SESSION_REPLACED` rather than a request quietly continuing somewhere it
+does not belong. What to do about either — wait, retry, reconnect, release
+sessions the user still holds, carry on read-only — is the caller's decision,
+made with the cookies and the answers in hand.
+
+## A Lock Lives In The ABAP Session
+
+There are two sessions here, and they are not the same thing:
+
+- the **HTTP session** — the conversation this client is having. It exists as
+  long as the cookies do, and nothing about it is in doubt;
+- the **ABAP session** — named by `SAP_SESSIONID_<SID>_<CLIENT>`, and the thing
+  locks are bound to.
+
+The doubt is only ever about the second. It may not have been created, or it may
+have been terminated while this client still holds the cookies and believes it
+has one — and a lock is dead in either case, whether or not the client noticed.
 
 Two ways to lose one, and they are different problems:
 
-- **The server never opened one.** `connect()` refuses in that case rather than
-  handing back a connection whose first lock would be dead on arrival. Sessions
-  are limited per user and shared with every other tool logged on as them, so
-  this says nothing about your code — it says the system would not open another
-  one right now.
+- **The server never opened one.** No `SAP_SESSIONID` came back, so there is no
+  ABAP session known to this connection and nothing a lock could be bound to —
+  while the HTTP side is perfectly fine, which is why it does not look like a
+  failure at all. `connect()` refuses rather than handing back a connection
+  whose first lock would be dead on arrival. Sessions are limited per user and shared with every other tool
+  logged on as them, so this says nothing about your code — it says the system
+  would not open another one right now.
 - **It timed out while you were quiet.** The timeout is an idle one, and it is
   the *silence* that spends it, not the elapsed time. Measured on an on-prem
   system with a 30-minute window: a small request once a minute kept one session

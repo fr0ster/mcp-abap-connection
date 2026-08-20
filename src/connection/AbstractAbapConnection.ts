@@ -115,9 +115,12 @@ abstract class AbstractAbapConnection
    *
    * Carries the session id, not just the promise, so a release still in flight
    * for an EARLIER session is recognised as not being this one's — reusing it
-   * was what left the second session of a reconnect never released at all. The
-   * id is the `SAP_SESSIONID` value, never the cookie header: that header also
-   * carries `sap-XSRF_*`, which rotates within one and the same session.
+   * was what left the second session of a reconnect never released at all.
+   *
+   * The id is the `SAP_SESSIONID` value — the ABAP session, the one locks are
+   * bound to — never the cookie header: that header also carries `sap-XSRF_*`,
+   * which rotates within one and the same session, so comparing headers made a
+   * session stop recognising itself after a token refresh.
    */
   private pendingRelease: { id: string; inFlight: Promise<void> } | null = null;
 
@@ -599,11 +602,15 @@ abstract class AbstractAbapConnection
     // sessions are already open for the user — and such a connection still gets
     // `200` for a LOCK and hands back a handle the next request cannot use.
     //
-    // "No cookie" and "no session" are the same thing, checked rather than
-    // assumed: a connection that got none was held open against an on-prem
-    // system and SM04 listed nothing for it, while a connection that got one
-    // appeared there. So the cookie's absence is the server saying it opened
-    // nothing, not merely declining to name what it opened.
+    // SAP_SESSIONID names the ABAP session — the one locks are bound to. Its
+    // absence is therefore not a transport problem: the HTTP side is fine, the
+    // cookies are here, and stateless requests will work. What is missing is any
+    // ABAP session known to this connection, so there is nothing a lock could be
+    // bound to and every lock taken over it is dead the moment it is issued.
+    //
+    // Checked rather than assumed: a connection that got no cookie was held open
+    // against an on-prem system and the session list showed nothing for it,
+    // while one that got a cookie appeared there.
     //
     // Which is why this refuses to connect rather than warning. There is no
     // count to plan around — the same system allowed 21 sessions one day and
@@ -630,7 +637,7 @@ abstract class AbstractAbapConnection
       this.lifecycle.markDisconnected();
       throw sessionError(
         ADT_SESSION_ERROR.NOT_CONNECTED,
-        'The server authenticated the request but opened no ABAP session: no SAP_SESSIONID cookie came back, and a system that issues none has none — the session list shows nothing for such a connection. ' +
+        'The server authenticated the request but opened no ABAP session: no SAP_SESSIONID cookie came back, so there is no session for a lock to be bound to. The HTTP side is fine — the cookies are here — which is why this is not a transport failure and does not look like one. ' +
           'Stateless reads would still work over it, but a lock, and any write under that lock, is dead the moment it is issued. ' +
           'The usual cause is the system declining to open another session for this user: they are limited per user, shared with every other tool logged on as them, and released either by disconnecting or by their own idle timeout. ' +
           'Whether to wait, retry, or release sessions this user still holds is yours to decide — this library does not retry on your behalf.',
