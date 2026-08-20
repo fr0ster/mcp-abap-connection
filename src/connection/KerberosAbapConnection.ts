@@ -9,7 +9,15 @@ import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
 
-/** Kerberos / SPNEGO single-leg auth: send Negotiate token, reuse the resulting SAP session cookie. */
+/**
+ * @deprecated The class you take should say which SYSTEM you are dialling,
+ * not which credential you hold — a session mechanism that rides along with
+ * the credential gets one of them wrong. Use `AdtOnPremConnector` with `a Kerberos credential`:
+ *
+ *   not yet available — SPNEGO keeps its own class until its exchange is moved
+ *
+ * Kept working, and not removed here: existing consumers are unaffected.
+ */
 export class KerberosAbapConnection extends AbstractAbapConnection {
   private spn: string;
   private currentToken = '';

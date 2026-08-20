@@ -35,14 +35,13 @@ interface IRecoveryScope {
 }
 
 /**
- * JWT Authentication connection for SAP BTP Cloud systems
+ * @deprecated The class you take should say which SYSTEM you are dialling,
+ * not which credential you hold — a session mechanism that rides along with
+ * the credential gets one of them wrong. Use `AdtCloudConnector` with `TokenAuthProvider`:
  *
- * Supports automatic token refresh via ITokenRefresher injection:
- * - a **401** triggers a token refresh when a tokenRefresher is available;
- * - without one, or when the refresh does not help, the server's own error is
- *   thrown unchanged — status and body intact;
- * - a **403** is never a token problem. It propagates as it arrived, because a
- *   new token is the same caller and cannot change a permissions answer.
+ *   new AdtCloudConnector(config, new TokenAuthProvider(token, refresher), logger)
+ *
+ * Kept working, and not removed here: existing consumers are unaffected.
  */
 export class JwtAbapConnection extends AbstractAbapConnection {
   private tokenRefresher?: ITokenRefresher;

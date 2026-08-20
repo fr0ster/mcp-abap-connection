@@ -4,7 +4,13 @@ import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
 
 /**
- * Basic Authentication connection for on-premise SAP systems
+ * @deprecated The class you take should say which SYSTEM you are dialling,
+ * not which credential you hold — a session mechanism that rides along with
+ * the credential gets one of them wrong. Use `AdtOnPremConnector` with `BasicAuthProvider`:
+ *
+ *   new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), logger)
+ *
+ * Kept working, and not removed here: existing consumers are unaffected.
  */
 export class BaseAbapConnection extends AbstractAbapConnection {
   constructor(
