@@ -26,7 +26,7 @@ export class BasicAuthProvider implements IAuthProvider {
     private readonly password: string,
   ) {}
 
-  authorizationHeader(): string {
+  async authorizationHeader(): Promise<string> {
     return `Basic ${Buffer.from(`${this.username ?? ''}:${this.password ?? ''}`).toString('base64')}`;
   }
 }
@@ -45,25 +45,35 @@ export class BasicAuthProvider implements IAuthProvider {
  */
 export class TokenAuthProvider implements IAuthProvider {
   readonly kind = 'token';
-  private token: string;
 
+  /**
+   * A token, or something that can produce one.
+   *
+   * A bare string is a token with no renewal behind it — honest, and fine for a
+   * short task. An `ITokenRefresher` or a function is a provider that checks
+   * expiry and renews on its own, which is where this belongs in a long-lived
+   * process.
+   */
   constructor(
-    initialToken: string,
-    private readonly refresher?: ITokenRefresher,
-  ) {
-    this.token = initialToken;
-  }
+    private readonly source: string | ITokenRefresher | (() => Promise<string>),
+  ) {}
 
-  async prepare(): Promise<void> {
-    if (!this.refresher) return;
-    // Asked once per establishment rather than per request: a refresher may go
-    // to the network, and a connection that did that on every call would spend
-    // more time authenticating than working.
-    this.token = await this.refresher.getToken();
-  }
-
-  authorizationHeader(): string {
-    return this.token ? `Bearer ${this.token}` : '';
+  /**
+   * Asked every time, and nothing kept.
+   *
+   * The provider behind this already caches the token, knows when it expires,
+   * and renews before handing one back. A second cache here would serve the
+   * stale one and hide exactly the renewal the provider exists to do — which
+   * is what the first version of this class did.
+   */
+  async authorizationHeader(): Promise<string> {
+    const token =
+      typeof this.source === 'string'
+        ? this.source
+        : typeof this.source === 'function'
+          ? await this.source()
+          : await this.source.getToken();
+    return token ? `Bearer ${token}` : '';
   }
 }
 
@@ -78,11 +88,11 @@ export class SamlAuthProvider implements IAuthProvider {
 
   constructor(private readonly sessionCookies: string) {}
 
-  authorizationHeader(): string {
+  async authorizationHeader(): Promise<string> {
     return '';
   }
 
-  /** The cookies to present. Read by the connection, not by the contract. */
+  /** The cookies to present. */
   cookies(): string {
     return this.sessionCookies;
   }
@@ -110,7 +120,7 @@ export class CertificateAuthProvider implements IAuthProvider {
     }
   }
 
-  authorizationHeader(): string {
+  async authorizationHeader(): Promise<string> {
     return '';
   }
 

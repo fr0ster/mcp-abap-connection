@@ -154,31 +154,45 @@ describe('the credential is what it authenticates with, and nothing more', () =>
     expect(seen[0].headers.Authorization).toBe(expected);
   });
 
-  it('a token credential asks its refresher once per establishment', async () => {
-    const getToken = jest.fn(async () => 'FRESH');
+  /**
+   * The provider renews; we must not hold what it returned.
+   *
+   * `BaseTokenProvider` checks expiry and refreshes before handing a token
+   * back, so a cache on this side serves the stale one and hides exactly the
+   * renewal the provider exists to do. The first version of this class cached
+   * at establishment, and this test is what that cost.
+   */
+  it('asks the provider per request, so a renewed token is used without reconnecting', async () => {
+    // A switch rather than a queue: how many times the header is asked for is
+    // an implementation detail, and a test that depends on the count would
+    // break for reasons that are not about renewal.
+    let renewed = false;
+    const getToken = jest.fn(async () => (renewed ? 'RENEWED' : 'FIRST'));
     const seen: Seen[] = [];
     const conn = new AdtOnPremConnector(
       config,
-      new TokenAuthProvider('stale', {
-        getToken,
-        refreshToken: jest.fn(async () => 'FRESH'),
-      } as never),
+      new TokenAuthProvider({ getToken, refreshToken: getToken } as never),
       makeLogger(),
     );
     serverAnsweringEverything(conn, seen);
 
     await conn.connect();
+    const before = seen.at(-1)?.headers.Authorization;
+
+    // The provider renews on its own, exactly as BaseTokenProvider does when a
+    // token expires. Nothing tells the connection about it.
+    renewed = true;
+
     await conn.makeAdtRequest({
       url: '/sap/bc/adt/discovery',
       method: 'GET',
       timeout: 5000,
     });
 
-    // Once, not per request: a refresher may go to the network, and a
-    // connection that asked every time would spend longer authenticating than
-    // working.
-    expect(getToken).toHaveBeenCalledTimes(1);
-    expect(seen.at(-1)?.headers.Authorization).toBe('Bearer FRESH');
+    expect(before).toBe('Bearer FIRST');
+    // No reconnect, no new session — the provider simply answered differently,
+    // and the next request carried it.
+    expect(seen.at(-1)?.headers.Authorization).toBe('Bearer RENEWED');
   });
 });
 
@@ -277,5 +291,165 @@ describe('cookie credentials reach the wire', () => {
     for (const request of seen) {
       expect(request.headers.Cookie ?? '').toContain('MYSAPSSO2=ticket');
     }
+  });
+});
+
+/**
+ * A 401 has two causes, and asking the provider again tells them apart.
+ *
+ * No renewal strategy is injected anywhere: the provider owns "get me a valid
+ * credential" and already renews on its own, so what is left is "the credential
+ * changed, so the session built on the old one is dead" — which only whoever
+ * owns the session can do.
+ */
+describe('a rejected credential is retried only when it actually changed', () => {
+  /** Accepts one header value on `/work`; everything else establishes fine. */
+  function serverRejectingUntil(
+    conn: object,
+    seen: Seen[],
+    accepted: string,
+    onReject: () => void = () => undefined,
+  ): void {
+    const instance = async (cfg: {
+      url?: string;
+      method?: string;
+      headers?: Record<string, string>;
+    }) => {
+      seen.push({
+        url: String(cfg.url),
+        method: cfg.method,
+        headers: cfg.headers ?? {},
+      });
+      const ok = {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+        },
+      };
+      if (!String(cfg.url).includes('/work')) return ok;
+      if (cfg.headers?.Authorization === accepted) return ok;
+      onReject();
+      const error = new Error('unauthorized') as Error & { response?: unknown };
+      error.response = { status: 401, headers: {}, data: '' };
+      throw error;
+    };
+    (instance as unknown as { interceptors: unknown }).interceptors = {
+      request: { clear: jest.fn() },
+      response: { clear: jest.fn() },
+    };
+    Object.defineProperty(conn, 'axiosInstance', {
+      get: () => instance,
+      set: () => undefined,
+      configurable: true,
+    });
+  }
+
+  it('renews and retries once when the provider answers differently', async () => {
+    // The provider renews once the token it gave has been refused — which is
+    // when BaseTokenProvider would notice the expiry, not before.
+    let refused = false;
+    const seen: Seen[] = [];
+    const conn = new AdtOnPremConnector(
+      config,
+      new TokenAuthProvider(async () => (refused ? 'GOOD' : 'STALE')),
+      makeLogger(),
+    );
+    serverRejectingUntil(conn, seen, 'Bearer GOOD', () => {
+      refused = true;
+    });
+
+    await conn.connect();
+    const response = await conn.makeAdtRequest({
+      url: '/work',
+      method: 'GET',
+      timeout: 5000,
+    });
+
+    expect(response.status).toBe(200);
+    const work = seen.filter((r) => r.url.includes('/work'));
+    // Exactly two: the refused one and the retry. Not three.
+    expect(work).toHaveLength(2);
+    expect(work[0].headers.Authorization).toBe('Bearer STALE');
+    expect(work[1].headers.Authorization).toBe('Bearer GOOD');
+  });
+
+  it('does not retry when the credential is unchanged', async () => {
+    const seen: Seen[] = [];
+    const conn = new AdtOnPremConnector(
+      config,
+      new BasicAuthProvider('u', 'wrong'),
+      makeLogger(),
+    );
+    // Nothing this credential can say is accepted — a real refusal rather than
+    // an expiry, and repeating it would only ask a second time.
+    serverRejectingUntil(conn, seen, 'Bearer NEVER');
+
+    await conn.connect();
+
+    await expect(
+      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
+    ).rejects.toMatchObject({ response: { status: 401 } });
+
+    expect(seen.filter((r) => r.url.includes('/work'))).toHaveLength(1);
+  });
+
+  /**
+   * One retry, not a loop.
+   *
+   * A provider that answers differently every time — a broken refresher, a
+   * server rejecting whatever it is given — would keep looking like "the
+   * credential changed" forever. The retry goes to `super`, so it cannot ask
+   * again; the same call reaching for `this` would spin until the process died.
+   */
+  it('retries exactly once even when the retry is refused too', async () => {
+    let n = 0;
+    const seen: Seen[] = [];
+    const conn = new AdtOnPremConnector(
+      config,
+      new TokenAuthProvider(async () => {
+        n += 1;
+        return `T${n}`;
+      }),
+      makeLogger(),
+    );
+    // Nothing is ever accepted, and the credential is different every time.
+    serverRejectingUntil(conn, seen, 'Bearer NEVER');
+
+    await conn.connect();
+
+    await expect(
+      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
+    ).rejects.toMatchObject({ response: { status: 401 } });
+
+    expect(seen.filter((r) => r.url.includes('/work'))).toHaveLength(2);
+  });
+
+  it('rebuilds once for concurrent requests, not once each', async () => {
+    let refused = false;
+    const seen: Seen[] = [];
+    const conn = new AdtOnPremConnector(
+      config,
+      new TokenAuthProvider(async () => (refused ? 'GOOD' : 'STALE')),
+      makeLogger(),
+    );
+    serverRejectingUntil(conn, seen, 'Bearer GOOD', () => {
+      refused = true;
+    });
+
+    await conn.connect();
+    const before = seen.filter((r) => r.url.includes('/discovery')).length;
+
+    await Promise.all([
+      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
+      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
+      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
+    ]);
+
+    // Three requests met the same refusal; the session was rebuilt once, so
+    // exactly one further establishing call went out.
+    const after = seen.filter((r) => r.url.includes('/discovery')).length;
+    expect(after - before).toBe(1);
   });
 });

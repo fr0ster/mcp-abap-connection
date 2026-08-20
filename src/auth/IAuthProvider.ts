@@ -25,8 +25,12 @@ export interface IAuthProvider {
   readonly kind: string;
 
   /**
-   * Get ready before anything is sent: mint a token, load key material, unlock
-   * a store. Called once per establishment, before the first request.
+   * Get ready before anything is sent: load key material, unlock a store.
+   * Called once per establishment, before the first request.
+   *
+   * Not for tokens. A stateful token provider caches and renews on its own, so
+   * asking it IS the preparation — and holding what it returned would hide the
+   * renewal it exists to do.
    *
    * Optional because most credentials are ready as constructed. A credential
    * that throws here fails the connect, which is correct — it has nothing to
@@ -38,10 +42,13 @@ export interface IAuthProvider {
    * The `Authorization` header value, or `''` when this credential is not a
    * header — a certificate authenticates through TLS and has none.
    *
-   * Called per request, so a credential that rotates returns the current value
-   * rather than one captured at construction.
+   * **Asked per request, and asynchronous, because the answer can change.** A
+   * token provider checks expiry and renews behind this call; anything cached
+   * on this side would serve the stale token and defeat it. Cheap in the
+   * ordinary case for the same reason: the provider holds the token and only
+   * goes to the network when it has expired.
    */
-  authorizationHeader(): string;
+  authorizationHeader(): Promise<string>;
 
   /**
    * Cookies this credential authenticates with, for the ways in where the

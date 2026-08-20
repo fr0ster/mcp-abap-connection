@@ -14,11 +14,22 @@
  */
 
 import type { AgentOptions } from 'node:https';
+import type {
+  IAbapRequestOptions,
+  IAdtResponse,
+} from '@mcp-abap-adt/interfaces';
 import { AxiosError } from 'axios';
 import type { IAuthProvider } from '../auth/IAuthProvider.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
+
+/** A 401 from the server, whatever transport shape it arrives in. */
+function isUnauthorized(error: unknown): boolean {
+  const status = (error as { response?: { status?: number } })?.response
+    ?.status;
+  return status === 401;
+}
 
 export abstract class CredentialAbapConnection extends AbstractAbapConnection {
   constructor(
@@ -39,12 +50,22 @@ export abstract class CredentialAbapConnection extends AbstractAbapConnection {
    * been loaded yet rejected the connect while the argument was still being
    * evaluated — outside every catch, with no request sent.
    */
+  /** The header last put on the wire, so a change can be seen. */
+  private lastAuthorization = '';
+  private credentialRenewal?: Promise<boolean>;
+
   protected override async prepareCredential(): Promise<void> {
     await this.credential.prepare?.();
   }
 
+  /**
+   * Nothing here: the header is asked for asynchronously in `getAuthHeaders()`,
+   * because a provider can renew behind the call and a synchronous read would
+   * have to hold what it returned. The base's abstract member is satisfied and
+   * unused.
+   */
   protected buildAuthorizationHeader(): string {
-    return this.credential.authorizationHeader();
+    return '';
   }
 
   /**
@@ -56,6 +77,15 @@ export abstract class CredentialAbapConnection extends AbstractAbapConnection {
    */
   override async getAuthHeaders(): Promise<Record<string, string>> {
     const headers = await super.getAuthHeaders();
+
+    // Asked now, not kept: a token provider renews behind this call, and a
+    // value held from establishment would be the stale one.
+    const authorization = await this.credential.authorizationHeader();
+    if (authorization) {
+      headers.Authorization = authorization;
+      this.lastAuthorization = authorization;
+    }
+
     const cookies = this.credential.cookies?.();
     if (cookies) {
       headers.Cookie = cookies;
@@ -67,6 +97,75 @@ export abstract class CredentialAbapConnection extends AbstractAbapConnection {
     return (
       this.credential.httpsAgentOptions?.() ?? super.getHttpsAgentOptions()
     );
+  }
+
+  /**
+   * One retry, and only when the credential actually changed.
+   *
+   * A provider renews on its own — `BaseTokenProvider` checks expiry and
+   * refreshes before answering — so a 401 has two very different causes, and
+   * asking again tells them apart. A different answer means the token was
+   * stale: the ABAP session built on the old one is dead, so it is rebuilt and
+   * the request goes once more. The same answer means the server refused these
+   * credentials, and repeating them would only ask a second time.
+   *
+   * This is why no renewal strategy is injected. The provider owns "get me a
+   * valid credential"; what is left is "the credential changed, so the session
+   * is gone", which belongs to whoever owns the session and cannot be done from
+   * outside it.
+   */
+  // biome-ignore lint/suspicious/noExplicitAny: matches the base signature exactly
+  override async makeAdtRequest<T = any, D = any>(
+    options: IAbapRequestOptions,
+  ): Promise<IAdtResponse<T, D>> {
+    try {
+      return await super.makeAdtRequest<T, D>(options);
+    } catch (error) {
+      if (!isUnauthorized(error)) throw error;
+      if (!(await this.rebuiltAfterCredentialChange())) throw error;
+      // Exactly once, and to `super` deliberately: reaching for `this` would
+      // re-enter this method, and a provider that answers differently every
+      // time — a broken refresher, or a server refusing whatever it is given —
+      // would look like "the credential changed" forever.
+      //
+      // A test pins the request count at two, but it does NOT distinguish the
+      // two forms: swapping `super` for `this` leaves the suite green, and why
+      // it does not then recurse is unexplained. Treat this line as guarded by
+      // review, not by the suite.
+      return await super.makeAdtRequest<T, D>(options);
+    }
+  }
+
+  /**
+   * Ask the provider again; if it answers differently, rebuild the session.
+   *
+   * Single-flight, because concurrent operations meet the same 401 at the same
+   * moment and the session must be rebuilt once, not once per request in
+   * flight. Everyone joins the first one and gets its verdict.
+   */
+  private rebuiltAfterCredentialChange(): Promise<boolean> {
+    if (this.credentialRenewal) return this.credentialRenewal;
+
+    const inFlight = (async () => {
+      const before = this.lastAuthorization;
+      const now = await this.credential.authorizationHeader();
+      if (!now || now === before) return false;
+
+      this.logger?.debug(
+        'The credential changed after a 401; the session built on the old one is gone. Rebuilding.',
+      );
+      const baseline = this.teardownEpoch;
+      this.discardSession();
+      await this.recoverSession(baseline);
+      return true;
+    })().finally(() => {
+      if (this.credentialRenewal === inFlight) {
+        this.credentialRenewal = undefined;
+      }
+    });
+
+    this.credentialRenewal = inFlight;
+    return inFlight;
   }
 
   /**
