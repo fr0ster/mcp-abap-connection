@@ -437,6 +437,116 @@ describe('requests stay on the server the session lives on', () => {
   });
 });
 
+/**
+ * A session opened by the preflight, on a connect that then failed.
+ *
+ * The preflight opens the session on its own request; establishing runs after
+ * it and can still fail on a credential the preflight never used. Clearing the
+ * local state then would leave that session open AND unreachable: the
+ * connection is not connected, so `disconnect()` sends nothing, and the cookie
+ * that was the only permission to close it is gone.
+ */
+describe('a session opened before a failed connect is not abandoned', () => {
+  const SESSION_DOC =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom">' +
+    '<atom:link href="/sap/bc/adt/core/http/sessions/S-1" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession" title="Security session"/>' +
+    '<atom:link href="/sap/public/bc/icf/logoff" rel="http://www.sap.com/adt/categories/core/http/sessions/logoff" title="Logoff resource"/>' +
+    '</http:session>';
+
+  function cloudThenFailing(conn: BaseAbapConnection, seen: Seen[]): void {
+    const instance = async (cfg: any) => {
+      seen.push({
+        url: cfg.url,
+        method: cfg.method,
+        headers: cfg.headers ?? {},
+        timeout: cfg.timeout,
+      });
+      // The preflight succeeds and opens a session.
+      if (String(cfg.url).includes('/core/http/sessions?')) {
+        return {
+          status: 200,
+          data: SESSION_DOC,
+          headers: { 'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'] },
+        };
+      }
+      // The DELETE that says goodbye.
+      if (String(cfg.url).includes('/core/http/sessions/')) {
+        return { status: 200, data: '', headers: {} };
+      }
+      // Establishing then fails, as it can on a credential the preflight did
+      // not use.
+      throw new Error('establishment refused');
+    };
+    (instance as any).interceptors = {
+      request: { clear: jest.fn() },
+      response: { clear: jest.fn() },
+    };
+    Object.defineProperty(conn, 'axiosInstance', {
+      get: () => instance,
+      set: () => undefined,
+      configurable: true,
+    });
+  }
+
+  it('says goodbye to it when establishing fails afterwards', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    cloudThenFailing(conn, seen);
+
+    await expect(conn.connect()).rejects.toThrow();
+    // The goodbye is dispatched but not awaited — the caller is owed the
+    // establishment error, not a round trip.
+    await new Promise((r) => setTimeout(r, 20));
+
+    const goodbye = seen.find(
+      (r) => r.method === 'DELETE' && r.url.includes('/core/http/sessions/S-1'),
+    );
+    expect(goodbye).toBeDefined();
+    // With the cookie that is the whole permission to close it, taken before
+    // the local state was cleared.
+    expect(goodbye?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
+  });
+
+  it('says nothing when the preflight opened nothing', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    const instance = async (cfg: any) => {
+      seen.push({
+        url: cfg.url,
+        method: cfg.method,
+        headers: cfg.headers ?? {},
+        timeout: cfg.timeout,
+      });
+      // No session resource on this system.
+      if (String(cfg.url).includes('/core/http/sessions')) {
+        return { status: 404, data: '', headers: {} };
+      }
+      throw new Error('establishment refused');
+    };
+    (instance as any).interceptors = {
+      request: { clear: jest.fn() },
+      response: { clear: jest.fn() },
+    };
+    Object.defineProperty(conn, 'axiosInstance', {
+      get: () => instance,
+      set: () => undefined,
+      configurable: true,
+    });
+    // The debris: a cookie left behind by the response that rejected us. It
+    // looks exactly like a session and is not one, which is why "there are
+    // cookies" cannot be the test for whether to say goodbye.
+    (conn as unknown as { cookies: string }).cookies =
+      'SAP_SESSIONID_STUB_100=junk%3d';
+
+    await expect(conn.connect()).rejects.toThrow();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(seen.some((r) => r.url.includes('/icf/logoff'))).toBe(false);
+    expect(seen.some((r) => r.method === 'DELETE')).toBe(false);
+  });
+});
+
 describe('disconnect ends the server session', () => {
   it('calls the logoff endpoint with the session cookies', async () => {
     const conn = new BaseAbapConnection(baseConfig, makeLogger());

@@ -147,6 +147,15 @@ abstract class AbstractAbapConnection
    * longer exists.
    */
   private appServer: string | null = null;
+  /**
+   * Whether the preflight opened a session of its own.
+   *
+   * Distinct from "there are cookies": a failed establishment often leaves a
+   * cookie from the 401 that rejected it, and that is debris, not a session.
+   * Only a preflight answered with a session address opened one, and only that
+   * is worth saying goodbye to when establishment then fails.
+   */
+  private preflightOpenedSession = false;
   private sessionStrategy: SessionStrategy = new IcfSessionStrategy(null);
   private pendingRelease: { id: string; inFlight: Promise<void> } | null = null;
 
@@ -646,7 +655,10 @@ abstract class AbstractAbapConnection
    */
   private async openServerSession(): Promise<void> {
     const cloud = new CloudSecuritySessionStrategy(this.logger);
-    this.sessionStrategy = (await cloud.openSession(this.sessionTransport()))
+    this.preflightOpenedSession = await cloud.openSession(
+      this.sessionTransport(),
+    );
+    this.sessionStrategy = this.preflightOpenedSession
       ? cloud
       : new IcfSessionStrategy(this.logger);
     this.logger?.debug(`Session strategy: ${this.sessionStrategy.kind}`);
@@ -690,6 +702,24 @@ abstract class AbstractAbapConnection
       // Safe to clear here, unlike the abandonment path below: establishSession()
       // threw, so no session was published, and admission requires a connected
       // lifecycle — nothing can be in flight over what this drops.
+      //
+      // But say goodbye FIRST. The preflight may already have opened a session
+      // — on cloud it does, and the SAP_SESSIONID is in the cookies about to be
+      // dropped — and establishing can still fail after it, on a credential the
+      // preflight never used. Clearing without telling the server would leak
+      // exactly the session this release exists to stop leaking, and leave it
+      // unreachable: the connection is not connected, so disconnect() sends
+      // nothing, and the cookie that was the only permission to close it is
+      // gone. The transport is a snapshot, so this survives the clearing that
+      // follows it.
+      // Only when the preflight opened one. A cookie left by the 401 that
+      // rejected us is debris, not a session, and telling the server we are
+      // finished with something we never had sends a request nobody asked for
+      // — into the middle of an authentication exchange, in the case that found
+      // this.
+      const goodbye = this.preflightOpenedSession
+        ? this.sessionStrategy.closeSession(this.sessionTransport())
+        : Promise.resolve();
       this.invalidateSession();
       // And the identity with it. The rejecting response was still observed, so
       // its cookie was recorded as a session that had just been established —
@@ -697,6 +727,10 @@ abstract class AbstractAbapConnection
       // isConnected() says false. Two answers to one question is worse than
       // either.
       this.lifecycle.markDisconnected();
+      // Not awaited, for the same reason a teardown does not wait: the caller
+      // is owed the establishment error now, not after a round trip nobody is
+      // waiting on. closeSession never throws, so nothing here can go unhandled.
+      void goodbye;
       throw error;
     }
 
@@ -953,6 +987,7 @@ abstract class AbstractAbapConnection
     this.cookies = null;
     // Names a server for a session that no longer exists.
     this.appServer = null;
+    this.preflightOpenedSession = false;
     this.cookieStore.clear();
     // Note: baseUrl is not reset as it's derived from immutable config
   }
