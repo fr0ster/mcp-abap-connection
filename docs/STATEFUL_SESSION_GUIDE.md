@@ -126,6 +126,14 @@ read, a status check. There is deliberately no keepalive timer in this package:
 holding a session alive means holding a scarce, shared slot, and deciding to do
 that belongs to the caller who knows why the session is worth keeping.
 
+**The cookies are the session.** Nothing else ties a caller to one, so a second
+connection given the same cookie jar works in the same ABAP session and can use
+the locks taken in it — that is what makes handing them over a way to continue
+someone else's work. It cuts both ways: `disconnect()` ends the session for
+everyone holding those cookies, not just for the object it was called on, and no
+connection can see the copies. Deciding who may hold them, and who is allowed to
+close, belongs to whoever passes them around.
+
 The server never tells the client how long it has: the session cookie carries no
 expiry and no response header mentions one. The only honest signals are the ones
 you get by asking — `getSessionIdentity()` for which session you are in, and

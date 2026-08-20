@@ -142,44 +142,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A hung release no longer charges every later `disconnect()` its full deadline.** The wait was
-  on every release in flight, and the logoff carries no request timeout by design — so one that
-  never answers stays outstanding for ever and each later caller spent its whole budget on a
-  request nobody can finish (measured: 2002 ms for a `deadlineMs: 2000` whose own logoff had
-  already answered). A caller now waits only on what its own call dispatched, plus an in-flight
-  release for the session it is itself disconnecting. Joining one still avoids a duplicate
-  request; it no longer means waiting for it.
+- **`disconnect()` releases the session this connection holds, and nothing else.** What grew
+  around that sentence — a map of owed sessions, a map of releases in flight, an attempt counter,
+  a give-up rule, a retry across reconnects, and the waiting rules to go with them — is gone. Four
+  review rounds found a defect in each round's own fix, every one of them in that machinery, and
+  none of it was needed: **a connection holds one session**. `connect()` opens it, `disconnect()`
+  closes it, a repeat `connect()` is a NEW session with a new `SAP_SESSIONID`, and an earlier
+  session is not this connection's business — its logoff is already on the wire, or the system
+  times it out.
 
-- **A joining `disconnect()` waits for the release it asked about.** Concurrent calls join one
-  transition, and a joiner is handed the existing promise without its callback being run — so
-  anything computed inside it was invisible to the joiner, and one asking for a 30-second budget
-  returned as soon as the logoff had been dispatched. The session to wait for is now taken before
-  the transition, from what the caller could see when it called.
+  Nothing retries, counts, limits or keeps a list. How many connections to run, how frugally, and
+  what to do when a release did not land are the caller's, and were never knowable from inside a
+  single connection.
 
-- **A release that keeps failing is given up on, with a warning.** Every owed session was retried
-  on every teardown, so against a server that refuses the logoff — a proxy in the way, a 404, the
-  network down — twenty reconnect cycles cost 210 requests, and the cookies being retried named
-  sessions that had idled out server-side long before. Three attempts, then the session is left to
-  the system's own timeout and the log says so.
+  The session a release belongs to is now its `SAP_SESSIONID`, not the cookie header it is sent
+  with. The header also carries `sap-XSRF_*`, which rotates within one and the same session, so
+  comparing headers made a session stop recognising itself after a token refresh.
 
-- **Building a logoff request cannot take the other owed sessions down with it.** Assembling the
-  auth header can throw on its own — a Kerberos connection with no cookie and no token does — and
-  that escaped a teardown documented never to throw, leaving `clearSessionState()` and
-  `markDisconnected()` unrun. Such a failure counts as an attempt like any other: it never reaches
-  the rejection handler, so a limit applied only there would not apply on this path at all.
+- **A logoff that cannot even be assembled no longer escapes the teardown.** Building it can throw
+  on its own — a certificate connection whose material is not loaded throws while building the
+  agent — and `disconnect()` is documented never to throw and is called from a `finally`, where a
+  throw replaces the error that sent the caller there.
 
-- **A session released while a teardown is walking its list is not asked to close twice.** The
-  loop iterates a snapshot and awaits per entry, so a release landing meanwhile could have its key
-  removed and then re-added by the very iteration that followed it — a second logoff for a session
-  already closed, owed again afterwards and retried by every later teardown. The check sits before
-  the request is dispatched: after it, the request is already on the wire, and skipping the
-  handlers would leave a rejection with nobody to catch it.
+### Documentation
 
-- **A repeat `disconnect()` waits for what it is still owed.** Its own cookies were cleared by the
-  first call, so it had no session to look up and returned instantly — however long a budget it
-  passed. A caller that comes back specifically to find out whether the session closed now waits
-  for the releases outstanding. A first call still does not: waiting on someone else's release,
-  which may hang for ever, is what cost it its whole deadline.
+- **The cookies are the session, and a logoff ends it for everyone holding them.** A second
+  connection given the same cookie jar works in the same ABAP session and can use the locks taken
+  in it; `disconnect()` closes that session for all of them, and no connection can see the copies.
+  Written down in `STATEFUL_SESSION_GUIDE.md` and on `disconnect()` itself.
 
 ### Changed — BREAKING
 
