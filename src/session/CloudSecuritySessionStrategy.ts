@@ -38,6 +38,11 @@ export class CloudSecuritySessionStrategy extends SessionStrategy {
 
   async openSession(transport: ISessionTransport): Promise<boolean> {
     try {
+      // Read ONCE. The contract lets a provider answer differently each time —
+      // a token provider renews behind the call — so two reads can build one
+      // request out of two different credentials, and for a token provider they
+      // also double the work.
+      const auth = await transport.authHeaders();
       const response = await transport.send({
         method: 'GET',
         // The cache-buster is Eclipse's; kept because this must not be served
@@ -49,10 +54,10 @@ export class CloudSecuritySessionStrategy extends SessionStrategy {
         // Its SAP_SESSIONID is the session.
         adoptCookies: true,
         headers: {
-          ...(await transport.authHeaders()),
+          ...auth,
           Accept: SESSION_ACCEPT,
           Cookie: mergeCookieHeaders(
-            (await transport.authHeaders()).Cookie,
+            auth.Cookie,
             transport.cookies() ?? undefined,
           ),
           'sap-adt-purpose': 'preflight_logon',
@@ -102,13 +107,14 @@ export class CloudSecuritySessionStrategy extends SessionStrategy {
 
     const csrf = transport.csrfToken();
     try {
+      const auth = await transport.authHeaders();
       await transport.send({
         method: 'DELETE',
         url: new URL(resource, transport.baseUrl).toString(),
         headers: {
-          ...(await transport.authHeaders()),
+          ...auth,
           Cookie: mergeCookieHeaders(
-            (await transport.authHeaders()).Cookie,
+            auth.Cookie,
             transport.cookies() ?? undefined,
           ),
           'x-sap-security-session': 'use',

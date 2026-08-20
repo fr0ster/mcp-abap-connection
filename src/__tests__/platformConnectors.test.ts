@@ -217,26 +217,27 @@ describe('createAbapConnection does what the caller states', () => {
     expect(conn).toBeInstanceOf(AdtCloudConnector);
   });
 
-  /**
-   * JWT is refused rather than quietly downgraded.
-   *
-   * A `TokenAuthProvider` fetches a token at establishment and nothing after
-   * it. Everything `JwtAbapConnection` does beyond authenticating — a 401
-   * caught mid-operation, one refresh shared by the operations in flight, the
-   * session rebuilt behind it, the request retried once — has not moved. A
-   * caller who followed a migration note would have traded all of it for a
-   * connection that dies on the first expiry, and would not have been told.
-   */
-  it('refuses jwt on the new path until its recovery moves with it', () => {
-    expect(() =>
-      createAbapConnection(
-        { ...config, authType: 'jwt', jwtToken: 'a.b.c' } as SapConfig,
-        makeLogger(),
-        undefined,
-        undefined,
-        { system: 'onprem' },
-      ),
-    ).toThrow(/token renewal and session recovery/);
+  it('builds a token connector for jwt, using the refresher it was given', async () => {
+    const refresher = {
+      getToken: jest.fn(async () => 'FROM-REFRESHER'),
+      refreshToken: jest.fn(async () => 'FROM-REFRESHER'),
+    };
+    const seen: Seen[] = [];
+    const conn = createAbapConnection(
+      { ...config, authType: 'jwt', jwtToken: 'ignored' } as SapConfig,
+      makeLogger(),
+      undefined,
+      refresher as never,
+      { system: 'cloud' },
+    );
+    serverAnsweringEverything(conn, seen);
+
+    await conn.connect();
+
+    // The refresher, not the static token beside it: a caller that supplies one
+    // supplied it to be used.
+    expect(seen[0].headers.Authorization).toBe('Bearer FROM-REFRESHER');
+    expect(conn).toBeInstanceOf(AdtCloudConnector);
   });
 
   it('warns when nothing was stated, and falls back to the old choice', () => {
@@ -562,5 +563,129 @@ describe('the token provider is used the way its contract says', () => {
     // asked for only when the server has actually refused something.
     expect(refresher.refreshToken).not.toHaveBeenCalled();
     expect(refresher.getToken).toHaveBeenCalled();
+  });
+});
+
+/**
+ * A refusal that arrives after somebody else has already fixed things.
+ *
+ * Two requests go out on one session with one token. The first is refused,
+ * renews, rebuilds, and carries on. The second's refusal — answered by the
+ * server before any of that, and delivered afterwards — says nothing about the
+ * credential in use now: it was answered by a session that no longer exists.
+ * Acting on it forces a second refresh and tears down a healthy session.
+ */
+describe('a late refusal does not undo a session somebody else rebuilt', () => {
+  it('retries on the new session instead of renewing again', async () => {
+    let refused = false;
+    let release: (() => void) | undefined;
+    const seen: Seen[] = [];
+    const refresher = {
+      getToken: jest.fn(async () => (refused ? 'GOOD' : 'STALE')),
+      refreshToken: jest.fn(async () => {
+        refused = true;
+        return 'GOOD';
+      }),
+    };
+    const conn = new AdtOnPremConnector(
+      config,
+      new TokenAuthProvider(refresher as never),
+      makeLogger(),
+    );
+
+    const instance = async (cfg: {
+      url?: string;
+      method?: string;
+      headers?: Record<string, string>;
+    }) => {
+      seen.push({
+        url: String(cfg.url),
+        method: cfg.method,
+        headers: cfg.headers ?? {},
+      });
+      const ok = {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+        },
+      };
+      if (!String(cfg.url).includes('/work')) return ok;
+      if (cfg.headers?.Authorization === 'Bearer GOOD') return ok;
+      // The slow one: refused by the old session, delivered long after the
+      // fast one has finished renewing and rebuilding.
+      if (String(cfg.url).includes('/slow')) {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+      const error = new Error('unauthorized') as Error & { response?: unknown };
+      error.response = { status: 401, headers: {}, data: '' };
+      throw error;
+    };
+    (instance as unknown as { interceptors: unknown }).interceptors = {
+      request: { clear: jest.fn() },
+      response: { clear: jest.fn() },
+    };
+    Object.defineProperty(conn, 'axiosInstance', {
+      get: () => instance,
+      set: () => undefined,
+      configurable: true,
+    });
+
+    await conn.connect();
+
+    const slow = conn.makeAdtRequest({
+      url: '/work/slow',
+      method: 'GET',
+      timeout: 5000,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    await conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 });
+    release?.();
+    await slow;
+
+    // One refusal, one refresh. The late one found the session already replaced
+    // and simply went again.
+    expect(refresher.refreshToken).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * One physical request, one credential read.
+ *
+ * The contract lets a provider answer differently each time — that is the whole
+ * point of asking per request — so a request assembled from two reads can carry
+ * an Authorization from one credential and a Cookie from another. For a token
+ * provider it also doubles the work behind every call.
+ */
+describe('a request is built from one reading of the credential', () => {
+  it.each([
+    [
+      'on-prem',
+      (p: TokenAuthProvider) => new AdtOnPremConnector(config, p, makeLogger()),
+    ],
+    [
+      'cloud',
+      (p: TokenAuthProvider) => new AdtCloudConnector(config, p, makeLogger()),
+    ],
+  ])('%s asks once per request it sends', async (_name, build) => {
+    const seen: Seen[] = [];
+    let reads = 0;
+    const conn = build(
+      new TokenAuthProvider(async () => {
+        reads += 1;
+        return 'T';
+      }),
+    );
+    serverAnsweringEverything(conn, seen);
+
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 500 });
+
+    // Never more than one read per request that actually went out. More means
+    // some request was assembled from two different answers.
+    expect(reads).toBeLessThanOrEqual(seen.length);
   });
 });

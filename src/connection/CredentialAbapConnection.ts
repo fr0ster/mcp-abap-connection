@@ -118,11 +118,16 @@ export abstract class CredentialAbapConnection extends AbstractAbapConnection {
   override async makeAdtRequest<T = any, D = any>(
     options: IAbapRequestOptions,
   ): Promise<IAdtResponse<T, D>> {
+    // Which session this request is going out on. A 401 that comes back after
+    // the session has already been replaced says nothing about the credential:
+    // it was answered by a server we are no longer talking to.
+    const sentOn = this.sessionGeneration;
     try {
       return await super.makeAdtRequest<T, D>(options);
     } catch (error) {
       if (!isUnauthorized(error)) throw error;
-      if (!(await this.rebuiltAfterCredentialChange())) throw error;
+
+      if (!(await this.rebuiltAfterCredentialChange(sentOn))) throw error;
       // Exactly once, and to `super` deliberately: reaching for `this` would
       // re-enter this method, and a provider that answers differently every
       // time — a broken refresher, or a server refusing whatever it is given —
@@ -143,10 +148,17 @@ export abstract class CredentialAbapConnection extends AbstractAbapConnection {
    * moment and the session must be rebuilt once, not once per request in
    * flight. Everyone joins the first one and gets its verdict.
    */
-  private rebuiltAfterCredentialChange(): Promise<boolean> {
+  private rebuiltAfterCredentialChange(sentOn: number): Promise<boolean> {
     if (this.credentialRenewal) return this.credentialRenewal;
 
     const inFlight = (async () => {
+      // Somebody else already rebuilt while this request was in flight, so this
+      // refusal was answered by a session that no longer exists and says
+      // nothing about the credential in use now. Retry on the new one; renewing
+      // again would force a second refresh and tear down a healthy session —
+      // which is what comparing against a connection-wide "last header" did,
+      // since by then that header was the NEW one.
+      if (this.sessionGeneration !== sentOn) return true;
       const before = this.lastAuthorization;
       // Tell the credential its last answer was refused BEFORE asking again.
       // Asking alone is not enough: a token provider returns the cached token

@@ -43,15 +43,16 @@ export class IcfSessionStrategy extends SessionStrategy {
     }
 
     try {
+      // Read once: see CloudSecuritySessionStrategy — a provider may answer
+      // differently on a second call, and one request must be built from one
+      // credential.
+      const auth = await transport.authHeaders();
       await transport.send({
         method: 'GET',
         url: `${transport.baseUrl}${ICF_LOGOFF_PATH}`,
         headers: {
-          ...(await transport.authHeaders()),
-          Cookie: mergeCookieHeaders(
-            (await transport.authHeaders()).Cookie,
-            cookies,
-          ),
+          ...auth,
+          Cookie: mergeCookieHeaders(auth.Cookie, cookies),
         },
       });
       this.logger?.debug('Told the server the session is finished');

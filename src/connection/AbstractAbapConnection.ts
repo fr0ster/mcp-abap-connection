@@ -868,6 +868,17 @@ abstract class AbstractAbapConnection
   }
 
   /**
+   * Which session the connection is on now.
+   *
+   * Moves whenever the session does. A response that comes back carrying an
+   * older one belongs to a session that has already been replaced, and must not
+   * be acted on as if it said something about the current one.
+   */
+  protected get sessionGeneration(): number {
+    return this.lifecycle.sessionGeneration;
+  }
+
+  /**
    * Raises a session-lost teardown from inside request handling.
    *
    * There are exactly three things that can cost us the ABAP session, and they
