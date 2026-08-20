@@ -133,6 +133,20 @@ abstract class AbstractAbapConnection
    * than by guessing which system it is. Set at establishment; until then the
    * on-prem mechanism, which is the one that needs no resource.
    */
+  /**
+   * The application server this session lives on, as the server named it.
+   *
+   * A session belongs to ONE application server. On a multi-node system a
+   * request that lands on another gets another session — and a lock held on the
+   * first is then dead through nobody's fault and no inactivity. Eclipse pins
+   * itself with these headers; without them every request is a fresh throw of
+   * the dice.
+   *
+   * Learned from `sap-adt-saplb` on a response, sent back as `saplb`. Cleared
+   * with the rest of the session state: it names a server for a session that no
+   * longer exists.
+   */
+  private appServer: string | null = null;
   private sessionStrategy: SessionStrategy = new IcfSessionStrategy(null);
   private pendingRelease: { id: string; inFlight: Promise<void> } | null = null;
 
@@ -513,7 +527,7 @@ abstract class AbstractAbapConnection
    * session cookie. Use {@link isConnected} for connection state.
    *
    * It follows that null → non-null is not a replacement but an identity being
-   * learned; only a CHANGED value means the session was replaced.
+   * learned; only a CHANGED value means the session we had is gone.
    */
   getSessionIdentity(): string | null {
     return this.lifecycle.identity;
@@ -557,13 +571,28 @@ abstract class AbstractAbapConnection
    * strategy can neither mark this connection connected nor tear it down.
    */
   private sessionTransport(): ISessionTransport {
+    // A SNAPSHOT, not a view. The close is dispatched without being awaited —
+    // a teardown does not wait for it — so `clearSessionState()` runs while the
+    // strategy is still suspended on its first `await`. Reading the connection
+    // then would find the axios instance already dropped and the cookies gone,
+    // and the request would go out through a freshly built client with no
+    // session on it, or not at all. Taken here, while they are still true.
+    const instance = this.getAxiosInstance();
+    const cookies = this.cookies;
+    const csrfToken = this.csrfToken;
     return {
       baseUrl: this.baseUrl,
-      authHeaders: () => this.getAuthHeaders(),
-      cookies: () => this.cookies,
-      csrfToken: () => this.csrfToken,
+      // The affinity headers ride along with auth: the open must be answered by
+      // the server that will hold the session, and the close must reach the one
+      // that holds it.
+      authHeaders: async () => ({
+        ...(await this.getAuthHeaders()),
+        ...this.affinityHeaders(),
+      }),
+      cookies: () => cookies,
+      csrfToken: () => csrfToken,
       send: async (request) => {
-        const response = await this.getAxiosInstance()({
+        const response = await instance({
           method: request.method,
           url: request.url,
           headers: request.headers,
@@ -588,9 +617,13 @@ abstract class AbstractAbapConnection
           // establishing call still to come. Two requests we make ourselves,
           // back to back, are one establishment; policing between them would
           // read our own second call as somebody replacing our first.
-          this.updateCookiesFromResponse(
-            response.headers as Record<string, unknown> | undefined,
-          );
+          const headers = response.headers as
+            | Record<string, unknown>
+            | undefined;
+          // The open is the first answer that can name the application server,
+          // and every request after it should already be pinned there.
+          this.rememberAppServer(headers);
+          this.updateCookiesFromResponse(headers);
         }
         return {
           status: response.status,
@@ -818,7 +851,43 @@ abstract class AbstractAbapConnection
       );
       return;
     }
+    this.rememberAppServer(headers);
     this.applyIdentityPolicy(this.updateCookiesFromResponse(headers));
+  }
+
+  /**
+   * Take the application server's name from a response, if it named one.
+   *
+   * Only ever set from the server's own answer — never guessed, and never kept
+   * across a teardown.
+   */
+  private rememberAppServer(headers?: Record<string, unknown>): void {
+    if (!headers) return;
+    const key = Object.keys(headers).find(
+      (k) => k.toLowerCase() === 'sap-adt-saplb',
+    );
+    const value = key ? headers[key] : undefined;
+    if (typeof value === 'string' && value && value !== this.appServer) {
+      this.appServer = value;
+      this.logger?.debug(`Session is on application server ${value}`);
+    }
+  }
+
+  /**
+   * Headers that keep this connection on the server its session lives on.
+   *
+   * `sap-adt-saplb: fetch` asks the server to name itself — it answers on every
+   * request, so the binding survives a restart that moves us. `saplb` is that
+   * name sent back. `REDISPATCH_ON_SHUTDOWN` is what Eclipse asks for: if the
+   * server is going down, send us elsewhere rather than fail.
+   */
+  private affinityHeaders(): Record<string, string> {
+    return {
+      'sap-adt-saplb': 'fetch',
+      ...(this.appServer
+        ? { saplb: this.appServer, 'saplb-options': 'REDISPATCH_ON_SHUTDOWN' }
+        : {}),
+    };
   }
 
   /**
@@ -845,7 +914,9 @@ abstract class AbstractAbapConnection
     this.raiseSessionLost('the session cookie changed under us');
     throw sessionError(
       ADT_SESSION_ERROR.SESSION_REPLACED,
-      'The SAP session was replaced; anything held against the previous one is dead',
+      'The SAP session this connection was using is gone and the requests are now on a different one; anything held against the old session — a lock and any write under it — is dead. ' +
+        'The server does not swap sessions on a whim: the usual causes are the session idling out (the timeout is idle-based, so a quiet connection loses it while a busy one does not) or a request landing on a different application server. ' +
+        'What to do about it is yours: re-establish and redo the work, or fail the operation. Nothing is retried here.',
     );
   }
 
@@ -880,6 +951,8 @@ abstract class AbstractAbapConnection
     }
     this.csrfToken = null;
     this.cookies = null;
+    // Names a server for a session that no longer exists.
+    this.appServer = null;
     this.cookieStore.clear();
     // Note: baseUrl is not reset as it's derived from immutable config
   }
@@ -990,6 +1063,12 @@ abstract class AbstractAbapConnection
     if (this.sessionId) {
       requestHeaders['sap-adt-connection-id'] = this.sessionId;
     }
+
+    // Keep this request on the server the session lives on. A session belongs
+    // to one application server, so a request that lands elsewhere gets a
+    // different session — and any lock held on the first one dies, with no
+    // inactivity and nobody at fault.
+    Object.assign(requestHeaders, this.affinityHeaders());
 
     // Add stateful session headers if stateful mode is enabled
     if (this.sessionMode === 'stateful') {
@@ -1382,6 +1461,10 @@ abstract class AbstractAbapConnection
         if (this.sessionId) {
           headers['sap-adt-connection-id'] = this.sessionId;
         }
+
+        // Same reason as every other request: a token fetched from another
+        // application server belongs to another session.
+        Object.assign(headers, this.affinityHeaders());
 
         // Always add cookies if available - they are needed for session continuity
         // Even on first attempt, if we have cookies from previous session or error response, use them

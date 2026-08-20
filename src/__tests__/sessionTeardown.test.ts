@@ -339,6 +339,104 @@ describe('every session of a reconnect cycle is released', () => {
   });
 });
 
+/**
+ * A session belongs to ONE application server. On a multi-node system a request
+ * that lands on another gets another session, and a lock held on the first dies
+ * — no inactivity, nobody at fault. Eclipse pins itself with these headers on
+ * every request; without them each one is a fresh throw of the dice.
+ */
+describe('requests stay on the server the session lives on', () => {
+  function pinning(
+    conn: BaseAbapConnection,
+    seen: Seen[],
+    server?: string,
+  ): void {
+    const instance = async (cfg: any) => {
+      seen.push({
+        url: cfg.url,
+        method: cfg.method,
+        headers: cfg.headers ?? {},
+        timeout: cfg.timeout,
+      });
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+          ...(server ? { 'sap-adt-saplb': server } : {}),
+        },
+      };
+    };
+    (instance as any).interceptors = {
+      request: { clear: jest.fn() },
+      response: { clear: jest.fn() },
+    };
+    Object.defineProperty(conn, 'axiosInstance', {
+      get: () => instance,
+      set: () => undefined,
+      configurable: true,
+    });
+  }
+
+  it('asks the server to name itself, then sends that name back', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    pinning(conn, seen, 'appserver-c5zhg');
+
+    await conn.connect();
+    await conn.makeAdtRequest({
+      url: '/sap/bc/adt/discovery',
+      method: 'GET',
+      timeout: 5000,
+    });
+
+    // Every request asks, because a restart can move us and the answer is how
+    // we find out.
+    for (const request of seen) {
+      expect(request.headers['sap-adt-saplb']).toBe('fetch');
+    }
+    // The name can only be sent once it has been answered, so the first
+    // request cannot carry it — every one after it must.
+    const afterNamed = seen.slice(1);
+    expect(afterNamed.length).toBeGreaterThan(0);
+    for (const request of afterNamed) {
+      expect(request.headers.saplb).toBe('appserver-c5zhg');
+      expect(request.headers['saplb-options']).toBe('REDISPATCH_ON_SHUTDOWN');
+    }
+  });
+
+  it('sends no name when the server never gave one', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    pinning(conn, seen);
+
+    await conn.connect();
+
+    // Never invented: a single-node system names nobody, and a guessed
+    // `saplb` would pin us to a server that may not exist.
+    for (const request of seen) {
+      expect(request.headers.saplb).toBeUndefined();
+    }
+  });
+
+  it('forgets the server when the session it belonged to is gone', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    pinning(conn, seen, 'appserver-c5zhg');
+
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 500 });
+    const before = seen.length;
+    await conn.connect();
+
+    // A fresh connect starts by asking again rather than by asserting where
+    // the last session used to live.
+    expect(seen[before].headers.saplb).toBeUndefined();
+    expect(seen[before].headers['sap-adt-saplb']).toBe('fetch');
+  });
+});
+
 describe('disconnect ends the server session', () => {
   it('calls the logoff endpoint with the session cookies', async () => {
     const conn = new BaseAbapConnection(baseConfig, makeLogger());

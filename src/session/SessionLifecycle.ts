@@ -21,7 +21,8 @@
  *     untouched; their results are fenced by session generation so a late answer
  *     cannot write over a session established since.
  *   - **Identity is observed, never assumed.** A changed fingerprint means the
- *     session was replaced, which is fatal to anything held against the old one;
+ *     session we had is gone and this is a different one, which is fatal to
+ *     anything held against the old one;
  *     an unchanged one says nothing about whether the server still has it.
  */
 
