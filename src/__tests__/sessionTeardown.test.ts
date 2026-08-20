@@ -224,16 +224,21 @@ describe('every session of a reconnect cycle is released', () => {
   it('does not spend a caller’s deadline on a release that never answers', async () => {
     const conn = new BaseAbapConnection(baseConfig, makeLogger());
     const seen: Seen[] = [];
+    // Counted per CONNECT, not per request: establishment is two requests now
+    // (the preflight, then the establishing call), and numbering by request
+    // made every logoff carry a cookie the hang branch below never matched —
+    // the test passed while testing nothing.
     let session = 0;
+    let firstGoodbyeHung = false;
     surviving(conn, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
-        // The first session's logoff hangs; the second's answers at once.
+        // The first session's goodbye hangs; the second's answers at once.
         if (String(cfg.headers?.Cookie ?? '').includes('S1')) {
+          firstGoodbyeHung = true;
           await new Promise<never>(() => undefined);
         }
         return { status: 200, data: '', headers: {} };
       }
-      session += 1;
       return {
         status: 200,
         data: '<service/>',
@@ -244,15 +249,20 @@ describe('every session of a reconnect cycle is released', () => {
       };
     });
 
+    session = 1;
     await conn.connect();
     await conn.disconnect();
+    session = 2;
     await conn.connect();
 
     const startedAt = Date.now();
     await conn.disconnect({ deadlineMs: 2000 });
     const spent = Date.now() - startedAt;
 
-    // Its own release answered, so it had no reason to wait at all.
+    // The hang is real — without this the assertion below passes for the wrong
+    // reason, which is exactly what happened.
+    expect(firstGoodbyeHung).toBe(true);
+    // And its own release answered, so it had no reason to wait at all.
     expect(spent).toBeLessThan(1000);
   });
 

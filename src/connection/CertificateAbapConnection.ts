@@ -64,6 +64,11 @@ export class CertificateAbapConnection extends AbstractAbapConnection {
    * Establishes the session for this auth type. Called by
    * AbstractAbapConnection.connect(), which owns the lifecycle around it.
    */
+  /** The material has to be loaded before anything is sent, preflight included. */
+  protected override async prepareCredential(): Promise<void> {
+    await this.ensureMaterial();
+  }
+
   protected async establishSession(): Promise<void> {
     await this.ensureMaterial();
     const baseUrl = await this.getBaseUrl();

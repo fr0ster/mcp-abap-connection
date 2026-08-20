@@ -33,12 +33,6 @@ import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 
 /**
- * The platform's session logoff. Not an ADT path — ADT has no session-close of
- * its own, and its logon is the discovery call.
- */
-const ICF_LOGOFF_PATH = '/sap/public/bc/icf/logoff';
-
-/**
  * The configured default release deadline, refused at construction if it is not
  * a number. `parseInt` alone would not do: it answers `NaN` for `"abc"` and `5`
  * for `"5s"`, and both used to travel all the way to a teardown — the first as
@@ -293,6 +287,28 @@ abstract class AbstractAbapConnection
   protected abstract establishSession(): Promise<void>;
 
   /**
+   * Gets the credential ready before anything is sent.
+   *
+   * A no-op for the auth types whose credential is already in hand — basic
+   * builds a header from the configuration, JWT carries a token it was given.
+   * It exists for the ones that have to fetch or load theirs, because the
+   * preflight now runs BEFORE `establishSession()` and needs a credential to
+   * go out with: a certificate connection reads its material there, and
+   * without this the preflight throws `certificate material not loaded` while
+   * assembling the transport — before a single request is made, on every
+   * system, cloud or on-prem.
+   *
+   * Must be idempotent: `establishSession()` may prepare the same credential
+   * again, and does.
+   *
+   * Kerberos deliberately does NOT implement it. Minting the SPNEGO token this
+   * early changes when the exchange happens, and that connection is not
+   * production-tested — its preflight fails the way it already did, is caught
+   * inside the strategy, and the connection falls back to ICF as before.
+   */
+  protected async prepareCredential(): Promise<void> {}
+
+  /**
    * Establishes the session, once, under the lifecycle.
    *
    * Idempotent, and concurrent callers share one establishment: the transition
@@ -448,24 +464,14 @@ abstract class AbstractAbapConnection
       return;
     }
 
-    // A lock → modify → unlock chain is mid-flight, and ending the session
-    // would cut it: the unlock would fail against a session that no longer
-    // exists and the object would stay locked and inactive — the exact damage
-    // a release exists to prevent, caused by the release itself.
-    // `beginCriticalSection()` is how a caller says that chain must not be cut,
-    // and it is honoured here as it is for timeouts.
-    //
-    // The local teardown still happens — the caller asked to disconnect — and
-    // nothing is sent, so the session ends by its own idle timeout. Not tracked
-    // for a later retry: what the server does with a session it still holds is
-    // the server's business, and a connection that has been torn down has no
-    // standing to come back and manage it.
-    if (this.inCriticalSection) {
-      this.logger?.warn(
-        'disconnect() during a critical section: the server is not being told the session is finished, because that would cut the lock chain in flight. The session will end by its own idle timeout.',
-      );
-      return;
-    }
+    // No critical-section guard here, deliberately. `beginTeardown()` above has
+    // already shut admission, so the unlock of a chain in flight is refused
+    // whether or not the server is told — skipping the goodbye does not rescue
+    // the chain, it only leaves the session open. And the depth is decremented
+    // by `endCriticalSection()` alone, so one caller forgetting its `finally`
+    // would silence every release on this connection for good: a caller's bug
+    // turned into the leak this whole change exists to stop. Not disconnecting
+    // mid-chain is the caller's to get right.
 
     // Already on its way for THIS session: a second would tell the server the
     // same thing twice.
@@ -477,16 +483,41 @@ abstract class AbstractAbapConnection
     // session resource to DELETE on ABAP Cloud, the platform's ICF logoff on
     // on-prem. Both say the same thing — we have finished with this session —
     // and neither is asked what the server then did about it.
-    const send = this.sessionStrategy.closeSession(this.sessionTransport());
+    // Assembling it can throw before anything is sent — `sessionTransport()`
+    // builds the client, and a certificate connection whose material is not
+    // loaded throws there. `disconnect()` promises never to throw, and it is
+    // called from a `finally`, where an exception would replace the error that
+    // sent the caller into it.
+    let send: Promise<void>;
+    try {
+      send = this.sessionStrategy.closeSession(this.sessionTransport());
+    } catch (error) {
+      this.logger?.debug(
+        `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
 
     // Reported when it lands, waited for or not: "nobody is waiting on it" is
-    // not "nobody wants to know". `closeSession` never throws, so this needs no
-    // rejection handler to keep the teardown's promise never to.
-    const settled = send.then(() => {
-      if (this.pendingRelease?.id === id) {
-        this.pendingRelease = null;
-      }
-    });
+    // not "nobody wants to know". A rejection handler even though `closeSession`
+    // is meant never to throw: that is an invariant of another unit, and an
+    // unhandled rejection here would crash a process over a teardown the caller
+    // declined to wait for.
+    const settled = send.then(
+      () => {
+        if (this.pendingRelease?.id === id) {
+          this.pendingRelease = null;
+        }
+      },
+      (error: unknown) => {
+        if (this.pendingRelease?.id === id) {
+          this.pendingRelease = null;
+        }
+        this.logger?.debug(
+          `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
+    );
 
     this.pendingRelease = { id, inFlight: settled };
   }
@@ -679,6 +710,10 @@ abstract class AbstractAbapConnection
     // makes the new fingerprint `established`, which is what it is.
     this.lifecycle.forgetIdentity();
     try {
+      // First, because the preflight below has to be able to authenticate: the
+      // credential of a certificate or Kerberos connection is not in hand until
+      // it is loaded or minted, and assembling a request without it throws.
+      await this.prepareCredential();
       // Before the establishing call, because on a system that has one this is
       // what creates the session the rest of the connection runs in — and the
       // cookies it sets are the ones the establishing call must carry.
@@ -783,6 +818,19 @@ abstract class AbstractAbapConnection
     // to revisit — and it will say so loudly rather than fail quietly.
     const fingerprint = this.sessionFingerprint();
     if (fingerprint.size === 0 && !this.skipSessionType) {
+      // Goodbye first, for the same reason the catch above does it: the
+      // preflight may have opened a session — on cloud it does — and this path
+      // is about to drop the cookies that are the only permission to close it.
+      // Refusing to connect must not leak the session the refusal is about.
+      if (this.preflightOpenedSession) {
+        try {
+          void this.sessionStrategy.closeSession(this.sessionTransport());
+        } catch (error) {
+          this.logger?.debug(
+            `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
       this.invalidateSession();
       this.lifecycle.forgetIdentity();
       this.lifecycle.markDisconnected();
@@ -1831,6 +1879,13 @@ abstract class AbstractAbapConnection
     this.setCsrfToken(null);
     this.cookies = null;
     this.cookieStore.clear();
+    // Everything else that described THAT session. The application server named
+    // a server for a session that is gone — sending it again would pin the next
+    // connect, preflight included, to a dead one — and the preflight flag would
+    // otherwise let a later failure send a goodbye to the previous session's
+    // address.
+    this.appServer = null;
+    this.preflightOpenedSession = false;
     // And the tracked identity, because WE discarded the session. Without this
     // the cookie that arrives next reads as a foreign replacement — and since a
     // replacement is now always fatal, our own deliberate re-authentication

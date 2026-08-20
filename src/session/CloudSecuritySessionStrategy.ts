@@ -102,7 +102,7 @@ export class CloudSecuritySessionStrategy extends SessionStrategy {
     try {
       await transport.send({
         method: 'DELETE',
-        url: `${transport.baseUrl}${resource}`,
+        url: new URL(resource, transport.baseUrl).toString(),
         headers: {
           ...(await transport.authHeaders()),
           Cookie: transport.cookies() as string,
