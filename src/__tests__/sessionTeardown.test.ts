@@ -179,13 +179,18 @@ describe('every session of a reconnect cycle is released', () => {
   it('sends a logoff for the second session while the first still hangs', async () => {
     const conn = new BaseAbapConnection(baseConfig, makeLogger());
     const seen: Seen[] = [];
-    let session = 0;
+    // A server issues ONE session and keeps handing back the same id until it
+    // is told the session is finished — it does not mint a new one per request.
+    // Modelling it the other way made every count depend on how many requests
+    // connect() happens to make.
+    let session = 1;
     surviving(conn, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
         // Never answers: the first release stays in flight across the reconnect.
+        // The next connect is a new session all the same.
+        session += 1;
         await new Promise<never>(() => undefined);
       }
-      session += 1;
       return {
         status: 200,
         data: '<service/>',
@@ -547,7 +552,10 @@ describe('disconnect ends the server session', () => {
     attachMockAxios(conn, seen, async (cfg) => {
       // Only the re-establishment hangs; the first connect must complete so a
       // session exists to log off.
-      if (gateArmed && !String(cfg.url).includes('logoff')) {
+      // Only the establishing call is held. The session preflight that runs
+      // before it is part of the same connect and gating it would hang the
+      // recovery somewhere else than this test is about.
+      if (gateArmed && String(cfg.url).includes('/discovery')) {
         await new Promise<void>((resolve) => {
           gate = resolve;
         });

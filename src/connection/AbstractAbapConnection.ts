@@ -13,11 +13,17 @@ import axios, {
 } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
+import { CloudSecuritySessionStrategy } from '../session/CloudSecuritySessionStrategy.js';
+import { IcfSessionStrategy } from '../session/IcfSessionStrategy.js';
 import {
   type RequestLease,
   SessionLifecycle,
   sessionError,
 } from '../session/SessionLifecycle.js';
+import type {
+  ISessionTransport,
+  SessionStrategy,
+} from '../session/SessionStrategy.js';
 import {
   getCriticalSectionTimeout,
   getReleaseDeadline,
@@ -122,6 +128,12 @@ abstract class AbstractAbapConnection
    * which rotates within one and the same session, so comparing headers made a
    * session stop recognising itself after a token refresh.
    */
+  /**
+   * How this server opens and gives back a session, decided by asking it rather
+   * than by guessing which system it is. Set at establishment; until then the
+   * on-prem mechanism, which is the one that needs no resource.
+   */
+  private sessionStrategy: SessionStrategy = new IcfSessionStrategy(null);
   private pendingRelease: { id: string; inFlight: Promise<void> } | null = null;
 
   protected constructor(
@@ -413,52 +425,45 @@ abstract class AbstractAbapConnection
       return;
     }
 
-    // Already on its way for THIS session: a second would ask the server to
-    // close what the first request is closing.
-    if (this.pendingRelease?.id === id) {
-      return;
-    }
-
-    let send: Promise<unknown>;
-    try {
-      send = this.getAxiosInstance()({
-        method: 'GET' as const,
-        url: `${this.baseUrl}${ICF_LOGOFF_PATH}`,
-        headers: {
-          ...(await this.getAuthHeaders()),
-          Cookie: cookies,
-        },
-      });
-    } catch (error) {
-      // Assembling it can fail on its own — a certificate connection whose
-      // material is not loaded throws while building the agent — and that must
-      // not escape a teardown documented never to throw.
-      this.logger?.debug(
-        `Could not start the session release: ${error instanceof Error ? error.message : String(error)}`,
+    // A lock → modify → unlock chain is mid-flight, and ending the session
+    // would cut it: the unlock would fail against a session that no longer
+    // exists and the object would stay locked and inactive — the exact damage
+    // a release exists to prevent, caused by the release itself.
+    // `beginCriticalSection()` is how a caller says that chain must not be cut,
+    // and it is honoured here as it is for timeouts.
+    //
+    // The local teardown still happens — the caller asked to disconnect — and
+    // nothing is sent, so the session ends by its own idle timeout. Not tracked
+    // for a later retry: what the server does with a session it still holds is
+    // the server's business, and a connection that has been torn down has no
+    // standing to come back and manage it.
+    if (this.inCriticalSection) {
+      this.logger?.warn(
+        'disconnect() during a critical section: the server is not being told the session is finished, because that would cut the lock chain in flight. The session will end by its own idle timeout.',
       );
       return;
     }
 
+    // Already on its way for THIS session: a second would tell the server the
+    // same thing twice.
+    if (this.pendingRelease?.id === id) {
+      return;
+    }
+
+    // Which mechanism this system publishes was settled at establishment: a
+    // session resource to DELETE on ABAP Cloud, the platform's ICF logoff on
+    // on-prem. Both say the same thing — we have finished with this session —
+    // and neither is asked what the server then did about it.
+    const send = this.sessionStrategy.closeSession(this.sessionTransport());
+
     // Reported when it lands, waited for or not: "nobody is waiting on it" is
-    // not "nobody wants to know". Attached at dispatch so a rejection always has
-    // a handler — an unhandled one would crash a process over a teardown the
-    // caller declined to wait for.
-    const settled = send.then(
-      () => {
-        if (this.pendingRelease?.id === id) {
-          this.pendingRelease = null;
-        }
-        this.logger?.debug('Server session released');
-      },
-      (error: unknown) => {
-        if (this.pendingRelease?.id === id) {
-          this.pendingRelease = null;
-        }
-        this.logger?.debug(
-          `Could not release the server session: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      },
-    );
+    // not "nobody wants to know". `closeSession` never throws, so this needs no
+    // rejection handler to keep the teardown's promise never to.
+    const settled = send.then(() => {
+      if (this.pendingRelease?.id === id) {
+        this.pendingRelease = null;
+      }
+    });
 
     this.pendingRelease = { id, inFlight: settled };
   }
@@ -546,6 +551,74 @@ abstract class AbstractAbapConnection
    * Shared by connect() and recoverSession() rather than written twice —
    * the two drifted apart once already, and a third caller would drift again.
    */
+  /**
+   * What a session strategy is given: enough to make one request and to prove
+   * the session is ours, and nothing else. It cannot reach session state, so a
+   * strategy can neither mark this connection connected nor tear it down.
+   */
+  private sessionTransport(): ISessionTransport {
+    return {
+      baseUrl: this.baseUrl,
+      authHeaders: () => this.getAuthHeaders(),
+      cookies: () => this.cookies,
+      csrfToken: () => this.csrfToken,
+      send: async (request) => {
+        const response = await this.getAxiosInstance()({
+          method: request.method,
+          url: request.url,
+          headers: request.headers,
+          ...(request.timeoutMs !== undefined
+            ? { timeout: request.timeoutMs }
+            : {}),
+          // A 404 is an answer — "this system has no session resource" — and a
+          // 403 on a close is the server declining a message. Both belong to
+          // the strategy to read, not to axios to throw over.
+          validateStatus: () => true,
+        });
+        // Only the open: its cookies ARE the session — SAP_SESSIONID arrives
+        // there — and they go through the same path every other response uses.
+        // No generation, because like the establishing CSRF fetch this is what
+        // creates the session a generation would be compared against. A close
+        // is deliberately not observed: its cookies would read as the session
+        // having been replaced under a connection that is being torn down.
+        if (request.adoptCookies) {
+          // Cookies adopted, verdict NOT asked for. The identity policy answers
+          // "did the server move us to a different session while we were
+          // working" — and this request is us opening one, with the
+          // establishing call still to come. Two requests we make ourselves,
+          // back to back, are one establishment; policing between them would
+          // read our own second call as somebody replacing our first.
+          this.updateCookiesFromResponse(
+            response.headers as Record<string, unknown> | undefined,
+          );
+        }
+        return {
+          status: response.status,
+          headers: response.headers,
+          data: response.data,
+        };
+      },
+    };
+  }
+
+  /**
+   * Ask the server to open a session before the establishing call needs one.
+   *
+   * The strategy is chosen by what the server publishes, not by which system we
+   * believe it to be: ABAP Cloud offers a session resource and issues
+   * `SAP_SESSIONID` to whoever asks for one — with `x-sap-security-session:
+   * create` — while on-prem has no such resource and its session arrives with
+   * the establishing request. Believing cloud simply "issues no SAP_SESSIONID"
+   * is what happens when nobody asks.
+   */
+  private async openServerSession(): Promise<void> {
+    const cloud = new CloudSecuritySessionStrategy(this.logger);
+    this.sessionStrategy = (await cloud.openSession(this.sessionTransport()))
+      ? cloud
+      : new IcfSessionStrategy(this.logger);
+    this.logger?.debug(`Session strategy: ${this.sessionStrategy.kind}`);
+  }
+
   private async establishAndCommit(baselineEpoch: number): Promise<void> {
     if (this.lifecycle.teardownEpoch !== baselineEpoch) {
       throw sessionError(
@@ -561,6 +634,17 @@ abstract class AbstractAbapConnection
     // makes the new fingerprint `established`, which is what it is.
     this.lifecycle.forgetIdentity();
     try {
+      // Before the establishing call, because on a system that has one this is
+      // what creates the session the rest of the connection runs in — and the
+      // cookies it sets are the ones the establishing call must carry.
+      await this.openServerSession();
+      // Forgotten again, because the open was OURS. Establishment is now two
+      // requests where it used to be one, and the identity policy answers "did
+      // the server move us to a different session while we were working" — a
+      // question that has no meaning between two calls we make ourselves to set
+      // this session up. The identity that counts is taken at the end, from the
+      // cookies we finish with.
+      this.lifecycle.forgetIdentity();
       await this.establishSession();
     } catch (error) {
       // A failed establishment leaves debris that poisons the next attempt: the

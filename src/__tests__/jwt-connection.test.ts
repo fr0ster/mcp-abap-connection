@@ -595,9 +595,13 @@ describe('JwtAbapConnection credential renewal', () => {
     let adtCalls = 0;
     const transport = jest.fn(async (cfg: { url?: string }) => {
       if ((cfg.url ?? '').includes('/discovery')) return discoveryOk(cfg);
-      // The ICF logoff is the platform's, not an ADT request: counting it would
-      // make "how many ADT attempts did this make" depend on teardown.
-      if ((cfg.url ?? '').includes('/icf/logoff')) {
+      // Neither the session preflight nor the ICF logoff is an ADT request:
+      // counting them would make "how many ADT attempts did this make" depend
+      // on how connect() and disconnect() are built.
+      if (
+        (cfg.url ?? '').includes('/icf/logoff') ||
+        (cfg.url ?? '').includes('/core/http/sessions')
+      ) {
         return {
           status: 200,
           statusText: 'OK',
@@ -827,6 +831,20 @@ describe('JwtAbapConnection operation scope', () => {
     let adtCalls = 0;
     (conn as any).axiosInstance = jest.fn(async (cfg: { url?: string }) => {
       if ((cfg.url ?? '').includes('/discovery')) return discoveryOk(cfg);
+      // The session preflight and the ICF logoff belong to connect/disconnect,
+      // not to the ADT conversation these tests count.
+      if (
+        (cfg.url ?? '').includes('/core/http/sessions') ||
+        (cfg.url ?? '').includes('/icf/logoff')
+      ) {
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: '',
+          headers: {},
+          config: cfg,
+        };
+      }
       adtCalls += 1;
       return adt(adtCalls, cfg);
     });
