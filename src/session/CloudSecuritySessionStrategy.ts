@@ -15,6 +15,7 @@
  * came to be believed.
  */
 
+import { mergeCookieHeaders } from '../utils/cookies.js';
 import { getTimeout } from '../utils/timeouts.js';
 import { type ISessionTransport, SessionStrategy } from './SessionStrategy.js';
 
@@ -50,11 +51,12 @@ export class CloudSecuritySessionStrategy extends SessionStrategy {
         headers: {
           ...(await transport.authHeaders()),
           Accept: SESSION_ACCEPT,
+          Cookie: mergeCookieHeaders(
+            (await transport.authHeaders()).Cookie,
+            transport.cookies() ?? undefined,
+          ),
           'sap-adt-purpose': 'preflight_logon',
           'x-sap-security-session': 'create',
-          ...(transport.cookies()
-            ? { Cookie: transport.cookies() as string }
-            : {}),
         },
       });
 
@@ -105,7 +107,10 @@ export class CloudSecuritySessionStrategy extends SessionStrategy {
         url: new URL(resource, transport.baseUrl).toString(),
         headers: {
           ...(await transport.authHeaders()),
-          Cookie: transport.cookies() as string,
+          Cookie: mergeCookieHeaders(
+            (await transport.authHeaders()).Cookie,
+            transport.cookies() ?? undefined,
+          ),
           'x-sap-security-session': 'use',
           // A state change, so the server wants the token. Without one the
           // request is refused with 403 — which is still just a message the

@@ -44,6 +44,17 @@ export interface IAuthProvider {
   authorizationHeader(): string;
 
   /**
+   * Cookies this credential authenticates with, for the ways in where the
+   * session was negotiated elsewhere and handed over — SAML is one.
+   *
+   * Part of the contract rather than a method a provider happens to have: the
+   * first version left it off, so `SamlAuthProvider` held the cookies, nothing
+   * ever asked for them, and the recommended replacement authenticated with
+   * nothing at all.
+   */
+  cookies?(): string;
+
+  /**
    * TLS options for credentials that live in the transport rather than in a
    * header. Omitted by everything else.
    */

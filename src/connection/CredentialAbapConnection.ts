@@ -47,6 +47,22 @@ export abstract class CredentialAbapConnection extends AbstractAbapConnection {
     return this.credential.authorizationHeader();
   }
 
+  /**
+   * The credential's cookies travel with its header.
+   *
+   * On every path, not only on ordinary requests: a SAML session that is not
+   * presented to the session preflight and the establishing call is a session
+   * the server never sees us in.
+   */
+  override async getAuthHeaders(): Promise<Record<string, string>> {
+    const headers = await super.getAuthHeaders();
+    const cookies = this.credential.cookies?.();
+    if (cookies) {
+      headers.Cookie = cookies;
+    }
+    return headers;
+  }
+
   protected override getHttpsAgentOptions(): AgentOptions {
     return (
       this.credential.httpsAgentOptions?.() ?? super.getHttpsAgentOptions()

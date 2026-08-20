@@ -12,6 +12,7 @@
  * rather than ADT's.
  */
 
+import { mergeCookieHeaders } from '../utils/cookies.js';
 import { type ISessionTransport, SessionStrategy } from './SessionStrategy.js';
 
 const ICF_LOGOFF_PATH = '/sap/public/bc/icf/logoff';
@@ -47,7 +48,10 @@ export class IcfSessionStrategy extends SessionStrategy {
         url: `${transport.baseUrl}${ICF_LOGOFF_PATH}`,
         headers: {
           ...(await transport.authHeaders()),
-          Cookie: cookies,
+          Cookie: mergeCookieHeaders(
+            (await transport.authHeaders()).Cookie,
+            cookies,
+          ),
         },
       });
       this.logger?.debug('Told the server the session is finished');

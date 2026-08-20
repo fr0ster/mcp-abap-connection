@@ -23,6 +23,7 @@ import type {
   ISessionTransport,
   SessionStrategy,
 } from '../session/SessionStrategy.js';
+import { mergeCookieHeaders } from '../utils/cookies.js';
 import {
   getCriticalSectionTimeout,
   getReleaseDeadline,
@@ -1187,9 +1188,13 @@ abstract class AbstractAbapConnection
       requestHeaders['x-csrf-token'] = this.csrfToken;
     }
 
-    // Add cookies LAST (MUST NOT be overridden by custom headers)
+    // Add cookies LAST (MUST NOT be overridden by custom headers), MERGED with
+    // whatever the auth headers already put there — see mergeCookieHeaders.
     if (this.cookies) {
-      requestHeaders.Cookie = this.cookies;
+      requestHeaders.Cookie = mergeCookieHeaders(
+        requestHeaders.Cookie,
+        this.cookies,
+      );
       this.logger?.debug(
         `[DEBUG] BaseAbapConnection - Adding cookies to request (first 100 chars): ${this.cookies.substring(0, 100)}...`,
       );
@@ -1567,7 +1572,7 @@ abstract class AbstractAbapConnection
         // Always add cookies if available - they are needed for session continuity
         // Even on first attempt, if we have cookies from previous session or error response, use them
         if (this.cookies) {
-          headers.Cookie = this.cookies;
+          headers.Cookie = mergeCookieHeaders(headers.Cookie, this.cookies);
           this.logger?.debug(
             `[DEBUG] BaseAbapConnection - Adding cookies to CSRF token request (attempt ${attempt + 1}, first 100 chars): ${this.cookies.substring(0, 100)}...`,
           );

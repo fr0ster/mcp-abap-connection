@@ -35,7 +35,15 @@ function authProviderFor(
 ): IAuthProvider {
   switch (config.authType) {
     case 'jwt':
-      return new TokenAuthProvider(config.jwtToken ?? '', tokenRefresher);
+      // Deliberately refused rather than quietly downgraded. The renewal a JWT
+      // connection does — a 401 caught, one refresh shared by every operation
+      // in flight, the session rebuilt behind it and the request retried once —
+      // lives in JwtAbapConnection and has not moved yet. A TokenAuthProvider
+      // fetches a token at establishment and nothing after it, so a caller who
+      // followed the migration note would lose recovery without being told.
+      throw new Error(
+        'authType "jwt" is not available through options.system yet: token renewal and session recovery still live in JwtAbapConnection. Build that class directly until they move (see the platform-connectors spec).',
+      );
     case 'saml':
       return new SamlAuthProvider(config.sessionCookies ?? '');
     case 'certificate':

@@ -10,7 +10,11 @@
  * an on-prem system got the cloud one. Both rows below are those cases.
  */
 
-import { BasicAuthProvider, TokenAuthProvider } from '../auth/providers.js';
+import {
+  BasicAuthProvider,
+  SamlAuthProvider,
+  TokenAuthProvider,
+} from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
@@ -199,16 +203,26 @@ describe('createAbapConnection does what the caller states', () => {
     expect(conn).toBeInstanceOf(AdtCloudConnector);
   });
 
-  it('gives the on-prem connector for a token when asked for on-prem', () => {
-    const conn = createAbapConnection(
-      { ...config, authType: 'jwt', jwtToken: 'a.b.c' } as SapConfig,
-      makeLogger(),
-      undefined,
-      undefined,
-      { system: 'onprem' },
-    );
-
-    expect(conn).toBeInstanceOf(AdtOnPremConnector);
+  /**
+   * JWT is refused rather than quietly downgraded.
+   *
+   * A `TokenAuthProvider` fetches a token at establishment and nothing after
+   * it. Everything `JwtAbapConnection` does beyond authenticating — a 401
+   * caught mid-operation, one refresh shared by the operations in flight, the
+   * session rebuilt behind it, the request retried once — has not moved. A
+   * caller who followed a migration note would have traded all of it for a
+   * connection that dies on the first expiry, and would not have been told.
+   */
+  it('refuses jwt on the new path until its recovery moves with it', () => {
+    expect(() =>
+      createAbapConnection(
+        { ...config, authType: 'jwt', jwtToken: 'a.b.c' } as SapConfig,
+        makeLogger(),
+        undefined,
+        undefined,
+        { system: 'onprem' },
+      ),
+    ).toThrow(/token renewal and session recovery/);
   });
 
   it('warns when nothing was stated, and falls back to the old choice', () => {
@@ -222,5 +236,46 @@ describe('createAbapConnection does what the caller states', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('options.system'),
     );
+  });
+});
+
+/**
+ * A credential that is cookies rather than a header.
+ *
+ * The first version of the split held them on the provider and never asked for
+ * them: `SamlAuthProvider` had a `cookies()` method that nothing called, so the
+ * connector sent an empty Authorization, presented no session, and the class it
+ * was recommended over authenticated with nothing at all.
+ */
+describe('cookie credentials reach the wire', () => {
+  it.each([
+    [
+      'on-prem',
+      (p: SamlAuthProvider) => new AdtOnPremConnector(config, p, makeLogger()),
+    ],
+    [
+      'cloud',
+      (p: SamlAuthProvider) => new AdtCloudConnector(config, p, makeLogger()),
+    ],
+  ])('%s sends the SAML cookies on every request', async (_name, build) => {
+    const seen: Seen[] = [];
+    const conn = build(
+      new SamlAuthProvider('MYSAPSSO2=ticket; sap-usercontext=x'),
+    );
+    serverAnsweringEverything(conn, seen);
+
+    await conn.connect();
+    await conn.makeAdtRequest({
+      url: '/sap/bc/adt/discovery',
+      method: 'GET',
+      timeout: 5000,
+    });
+
+    // Every one of them: the preflight and the establishing call included. A
+    // session not presented to those is a session the server never sees us in.
+    expect(seen.length).toBeGreaterThan(1);
+    for (const request of seen) {
+      expect(request.headers.Cookie ?? '').toContain('MYSAPSSO2=ticket');
+    }
   });
 });

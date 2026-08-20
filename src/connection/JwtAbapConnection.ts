@@ -35,13 +35,22 @@ interface IRecoveryScope {
 }
 
 /**
- * @deprecated The class you take should say which SYSTEM you are dialling,
- * not which credential you hold — a session mechanism that rides along with
- * the credential gets one of them wrong. Use `AdtCloudConnector` with `TokenAuthProvider`:
+ * The class you take should say which SYSTEM you are dialling, not which
+ * credential you hold — a session mechanism that rides along with the
+ * credential gets one of them wrong. `AdtCloudConnector` and
+ * `AdtOnPremConnector` are how that is said.
  *
- *   new AdtCloudConnector(config, new TokenAuthProvider(token, refresher), logger)
+ * **This class is NOT deprecated yet, and must not be replaced by
+ * `AdtCloudConnector` + `TokenAuthProvider`.** What it does beyond
+ * authenticating has not moved: a 401 caught mid-operation, one refresh shared
+ * by every operation in flight, the session rebuilt behind it, generation
+ * fencing so a dead session's response cannot land, and the request retried
+ * once. A `TokenAuthProvider` fetches a token at establishment and nothing
+ * after it, so swapping today trades all of that for a connection that dies on
+ * the first expiry.
  *
- * Kept working, and not removed here: existing consumers are unaffected.
+ * Use this class for JWT until that machinery moves; the split is the
+ * platform-connectors spec's next step.
  */
 export class JwtAbapConnection extends AbstractAbapConnection {
   private tokenRefresher?: ITokenRefresher;
