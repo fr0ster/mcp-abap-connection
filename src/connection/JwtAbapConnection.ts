@@ -7,7 +7,9 @@ import {
 import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
+import { CloudSecuritySessionStrategy } from '../session/CloudSecuritySessionStrategy.js';
 import { sessionError } from '../session/SessionLifecycle.js';
+import type { SessionStrategy } from '../session/SessionStrategy.js';
 import type { AbapRequestOptions } from './AbapConnection.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
 import { CSRF_CONFIG } from './csrfConfig.js';
@@ -287,6 +289,16 @@ export class JwtAbapConnection extends AbstractAbapConnection {
    * Establishes the session for this auth type. Called by
    * AbstractAbapConnection.connect(), which owns the lifecycle around it.
    */
+  /**
+   * Cloud manages sessions through ADT: a session resource is opened at
+   * `/sap/bc/adt/core/http/sessions` and given back by `DELETE` on the address
+   * the server publishes. This is the one connection that does it — on-prem
+   * keeps the platform's ICF logoff, which is what it has always used.
+   */
+  protected override createSessionStrategy(): SessionStrategy {
+    return new CloudSecuritySessionStrategy(this.logger);
+  }
+
   protected async establishSession(): Promise<void> {
     const baseUrl = await this.getBaseUrl();
     const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;

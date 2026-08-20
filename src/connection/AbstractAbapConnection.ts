@@ -13,7 +13,6 @@ import axios, {
 } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
-import { CloudSecuritySessionStrategy } from '../session/CloudSecuritySessionStrategy.js';
 import { IcfSessionStrategy } from '../session/IcfSessionStrategy.js';
 import {
   type RequestLease,
@@ -684,14 +683,30 @@ abstract class AbstractAbapConnection
    * the establishing request. Believing cloud simply "issues no SAP_SESSIONID"
    * is what happens when nobody asks.
    */
+  /**
+   * Which session management this system uses — decided by the connection, not
+   * discovered by asking.
+   *
+   * On-prem and cloud do not manage sessions the same way, and the two
+   * implementations exist for that reason. On-prem the session arrives with the
+   * establishing request and the platform's ICF logoff gives it back, exactly as
+   * it always has. Cloud opens a session resource and takes it back by DELETE on
+   * the address the server published.
+   *
+   * Probing was tried and is wrong: `/sap/bc/adt/core/http/sessions` answers on
+   * on-prem too — measured on S/4HANA, which publishes both the session resource
+   * and the ICF logoff in the same document — so a probe does not tell the two
+   * systems apart. It only tells whether an endpoint exists, and both have it.
+   */
+  protected createSessionStrategy(): SessionStrategy {
+    return new IcfSessionStrategy(this.logger);
+  }
+
   private async openServerSession(): Promise<void> {
-    const cloud = new CloudSecuritySessionStrategy(this.logger);
-    this.preflightOpenedSession = await cloud.openSession(
+    this.sessionStrategy = this.createSessionStrategy();
+    this.preflightOpenedSession = await this.sessionStrategy.openSession(
       this.sessionTransport(),
     );
-    this.sessionStrategy = this.preflightOpenedSession
-      ? cloud
-      : new IcfSessionStrategy(this.logger);
     this.logger?.debug(`Session strategy: ${this.sessionStrategy.kind}`);
   }
 

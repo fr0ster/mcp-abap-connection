@@ -65,6 +65,69 @@ function attachMockAxios(
   (conn as any).axiosInstance = instance;
 }
 
+/**
+ * On-prem and cloud do not manage sessions the same way, and the two
+ * implementations exist for that reason. Which one is used is decided by the
+ * connection — not discovered by asking the server, which was tried and is
+ * wrong: `/sap/bc/adt/core/http/sessions` answers on on-prem too, so a probe
+ * tells the two systems apart not at all. It only says whether an endpoint
+ * exists, and both have it.
+ */
+describe('the session mechanism is chosen by the connection, not probed', () => {
+  it('on-prem keeps the platform logoff, even where the session resource answers', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    // A system that publishes BOTH — which is what S/4HANA on-prem does.
+    attachMockAxios(conn, seen, async () => ({
+      status: 200,
+      data: '<http:session><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/></http:session>',
+      headers: {
+        'x-csrf-token': 'TOKEN',
+        'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+      },
+    }));
+
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 1000 });
+
+    // Nothing was asked of the session resource, and the goodbye is the ICF one.
+    expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(false);
+    expect(
+      seen.some(
+        (r) =>
+          r.url.includes('/sap/public/bc/icf/logoff') && r.method === 'GET',
+      ),
+    ).toBe(true);
+  });
+
+  it('cloud opens the session resource and gives it back by DELETE', async () => {
+    const { JwtAbapConnection } = await import(
+      '../connection/JwtAbapConnection.js'
+    );
+    const conn = new JwtAbapConnection(
+      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      makeLogger(),
+    );
+    const seen: Seen[] = [];
+    attachMockAxios(conn as never, seen, async () => ({
+      status: 200,
+      data: '<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom"><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/></http:session>',
+      headers: {
+        'x-csrf-token': 'TOKEN',
+        'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+      },
+    }));
+
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 1000 });
+
+    expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(true);
+    expect(seen.some((r) => r.method === 'DELETE')).toBe(true);
+    // And never the platform logoff: that is the other system's mechanism.
+    expect(seen.some((r) => r.url.includes('/icf/logoff'))).toBe(false);
+  });
+});
+
 describe('a connection the server gave no session says so', () => {
   /**
    * The cookie's absence is the server saying it opened nothing, and that was
@@ -500,9 +563,18 @@ describe('a session opened before a failed connect is not abandoned', () => {
   }
 
   it('says goodbye to it when establishing fails afterwards', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    // A CLOUD connection: it is the one that opens a session resource, so it is
+    // the one that can leave one open when establishing fails after the
+    // preflight. On-prem opens nothing to leave behind.
+    const { JwtAbapConnection } = await import(
+      '../connection/JwtAbapConnection.js'
+    );
+    const conn = new JwtAbapConnection(
+      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      makeLogger(),
+    );
     const seen: Seen[] = [];
-    cloudThenFailing(conn, seen);
+    cloudThenFailing(conn as never, seen);
 
     await expect(conn.connect()).rejects.toThrow();
     // The goodbye is dispatched but not awaited — the caller is owed the
@@ -519,7 +591,13 @@ describe('a session opened before a failed connect is not abandoned', () => {
   });
 
   it('says nothing when the preflight opened nothing', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const { JwtAbapConnection } = await import(
+      '../connection/JwtAbapConnection.js'
+    );
+    const conn = new JwtAbapConnection(
+      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      makeLogger(),
+    ) as never as BaseAbapConnection;
     const seen: Seen[] = [];
     const instance = async (cfg: any) => {
       seen.push({
