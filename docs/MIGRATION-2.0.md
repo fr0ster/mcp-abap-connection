@@ -46,7 +46,7 @@ later, on the first request, as an unrelated-looking 401.
 
 ### 3. Requests are refused after a teardown
 
-`disconnect()` and `reset()` stop the connection from serving requests until the
+`disconnect()` stops the connection from serving requests until the
 next `connect()`. An in-flight request is not cut off and not waited for either:
 it runs to completion, and its result is fenced so it cannot touch a session
 established since.

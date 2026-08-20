@@ -13,20 +13,67 @@ import axios, {
 } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
+import { IcfSessionStrategy } from '../session/IcfSessionStrategy.js';
 import {
   type RequestLease,
   SessionLifecycle,
   sessionError,
 } from '../session/SessionLifecycle.js';
-import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
+import type {
+  ISessionTransport,
+  SessionStrategy,
+} from '../session/SessionStrategy.js';
+import { mergeCookieHeaders } from '../utils/cookies.js';
+import {
+  getCriticalSectionTimeout,
+  getReleaseDeadline,
+  getTimeout,
+} from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
+
+/**
+ * The configured default release deadline, refused at construction if it is not
+ * a number. `parseInt` alone would not do: it answers `NaN` for `"abc"` and `5`
+ * for `"5s"`, and both used to travel all the way to a teardown — the first as
+ * a throw from every `disconnect()` in the process, the second as a silently
+ * wrong bound nobody asked for.
+ */
+function readReleaseDeadline(): number {
+  const raw = process.env.SAP_RELEASE_DEADLINE_MS;
+  if (raw === undefined || raw.trim() === '') {
+    return getReleaseDeadline();
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new TypeError(
+      `SAP_RELEASE_DEADLINE_MS must be a finite, non-negative number of milliseconds, got ${JSON.stringify(raw)}`,
+    );
+  }
+  return value;
+}
 
 /**
  * Declares the capabilities explicitly rather than satisfying them by accident.
  * `AbapConnection` is the base contract every transport honours; these two are
  * the HTTP session's own, and naming them means a signature that drifts from
  * the published contract fails to compile here instead of at the consumer.
+ *
+ * **This gives the consumer instruments; it does not decide for it.** `connect()`
+ * opens one session and `disconnect()` closes it. How many connections to hold,
+ * how long to hold them and when to let go stays with the caller — there are no
+ * thresholds here, no pooling and no eviction, because none of that is knowable
+ * from inside a single connection. A session this one did not open is not its
+ * business: the session limit is per user and the pool is shared, so a SAP GUI
+ * logon of the same user sits in the same list.
+ *
+ * **Nothing the server decides is treated as something to count on.** Whether it
+ * issues a session cookie, whether it still holds a session it issued, how many
+ * it will tolerate, how fast it answers a logoff — all of that is its own and
+ * may differ by system and release. So each is observed and reported, never
+ * relied upon: the logoff is best effort under a bound the caller sets, a
+ * missing session cookie is a warning rather than a rule, and no code here
+ * counts sessions or predicts the next answer from the last one.
  */
 abstract class AbstractAbapConnection
   implements AbapConnection, ISessionLifecycleAware
@@ -58,6 +105,53 @@ abstract class AbstractAbapConnection
   private inCriticalSection = false;
   /** Reference count for nested beginCriticalSection()/endCriticalSection() pairs. */
   private criticalSectionDepth = 0;
+  /** The default release deadline, validated once at construction. */
+  private readonly releaseDeadlineMs: number;
+  /**
+   * The logoff for the session this connection last held, while it is on its
+   * way. One, because a connection holds one session: `connect()` opens it and
+   * `disconnect()` closes it, and how many connections to run is the caller's
+   * business, not something to be tracked here.
+   *
+   * Carries the session id, not just the promise, so a release still in flight
+   * for an EARLIER session is recognised as not being this one's — reusing it
+   * was what left the second session of a reconnect never released at all.
+   *
+   * The id is the `SAP_SESSIONID` value — the ABAP session, the one locks are
+   * bound to — never the cookie header: that header also carries `sap-XSRF_*`,
+   * which rotates within one and the same session, so comparing headers made a
+   * session stop recognising itself after a token refresh.
+   */
+  /**
+   * How this server opens and gives back a session, decided by asking it rather
+   * than by guessing which system it is. Set at establishment; until then the
+   * on-prem mechanism, which is the one that needs no resource.
+   */
+  /**
+   * The application server this session lives on, as the server named it.
+   *
+   * A session belongs to ONE application server. On a multi-node system a
+   * request that lands on another gets another session — and a lock held on the
+   * first is then dead through nobody's fault and no inactivity. Eclipse pins
+   * itself with these headers; without them every request is a fresh throw of
+   * the dice.
+   *
+   * Learned from `sap-adt-saplb` on a response, sent back as `saplb`. Cleared
+   * with the rest of the session state: it names a server for a session that no
+   * longer exists.
+   */
+  private appServer: string | null = null;
+  /**
+   * Whether the preflight opened a session of its own.
+   *
+   * Distinct from "there are cookies": a failed establishment often leaves a
+   * cookie from the 401 that rejected it, and that is debris, not a session.
+   * Only a preflight answered with a session address opened one, and only that
+   * is worth saying goodbye to when establishment then fails.
+   */
+  private preflightOpenedSession = false;
+  private sessionStrategy: SessionStrategy = new IcfSessionStrategy(null);
+  private pendingRelease: { id: string; inFlight: Promise<void> } | null = null;
 
   protected constructor(
     private readonly config: SapConfig,
@@ -65,6 +159,14 @@ abstract class AbstractAbapConnection
     sessionId?: string,
     options?: { skipSessionType?: boolean },
   ) {
+    // Read and checked HERE, once, because the only other place it could be
+    // checked is disconnect() — and disconnect() belongs in a `finally`, where
+    // throwing replaces the error that sent the caller there. A misconfigured
+    // environment is a startup fault: it is the same on every call, it is not
+    // the caller's argument, and it is worth refusing a connection over rather
+    // than discovering at teardown.
+    this.releaseDeadlineMs = readReleaseDeadline();
+
     this.skipSessionType = options?.skipSessionType ?? false;
     // Generate sessionId (used for sap-adt-connection-id header)
     this.sessionId = sessionId || randomUUID();
@@ -185,6 +287,28 @@ abstract class AbstractAbapConnection
   protected abstract establishSession(): Promise<void>;
 
   /**
+   * Gets the credential ready before anything is sent.
+   *
+   * A no-op for the auth types whose credential is already in hand — basic
+   * builds a header from the configuration, JWT carries a token it was given.
+   * It exists for the ones that have to fetch or load theirs, because the
+   * preflight now runs BEFORE `establishSession()` and needs a credential to
+   * go out with: a certificate connection reads its material there, and
+   * without this the preflight throws `certificate material not loaded` while
+   * assembling the transport — before a single request is made, on every
+   * system, cloud or on-prem.
+   *
+   * Must be idempotent: `establishSession()` may prepare the same credential
+   * again, and does.
+   *
+   * Kerberos deliberately does NOT implement it. Minting the SPNEGO token this
+   * early changes when the exchange happens, and that connection is not
+   * production-tested — its preflight fails the way it already did, is caught
+   * inside the strategy, and the connection falls back to ICF as before.
+   */
+  protected async prepareCredential(): Promise<void> {}
+
+  /**
    * Establishes the session, once, under the lifecycle.
    *
    * Idempotent, and concurrent callers share one establishment: the transition
@@ -210,26 +334,225 @@ abstract class AbstractAbapConnection
   /**
    * Tears the session down. Never throws, and always settles.
    *
-   * It waits for NOTHING. Deciding when to disconnect is the caller's, and so is
-   * preparing for it — finishing chains, releasing locks. Waiting here on a
-   * request whose caller chose no timeout is what made a teardown unbounded, and
-   * an unbounded teardown blocks every later transition on the serialized tail.
+   * Tells the server the session is no longer needed, then clears the local
+   * state. **When the server actually reclaims it is the server's business** —
+   * possibly not until the next connect asks it for one — and nothing here
+   * waits for that or depends on it. What matters is that the session stops
+   * being counted against the user, which dropping the cookie alone does not
+   * achieve: the server keeps it until its own timeout, so a process that
+   * connects repeatedly leaves one behind every time. Measured on S/4HANA on-prem, 25 connects in a row: with the logoff,
+   * 24-25 of them were given a session; without it, 2. A connection that gets
+   * no session still answers `200` to a LOCK and hands back a handle the next
+   * request cannot use, so the leak surfaces as a half-written object rather
+   * than as anything about sessions.
    *
-   * Requests already in flight run to completion untouched. Generation fencing
-   * (see `SessionLifecycle.isCurrent`) keeps their results from reaching this
-   * connection afterwards.
+   * **The logoff is the only thing waited for**, under `deadlineMs`, and
+   * deciding that bound is the caller's — see the parameter. Nothing else is
+   * waited for: finishing chains and releasing locks stay the caller's to do
+   * before calling, and waiting here on a request whose caller chose no timeout
+   * is what made a teardown unbounded, which blocks every later transition on
+   * the serialized tail.
    *
-   * Sends no ADT session-close — see the design's D2.
+   * **Requests already in flight are not waited for, and the logoff ends the
+   * session they are running on** — so they will start failing against a
+   * session that no longer exists. That is the caller having asked to
+   * disconnect, not a race, and it is a change from the version that only
+   * dropped the cookie. Generation fencing (see `SessionLifecycle.isCurrent`)
+   * keeps their results from reaching this connection either way.
+   *
+   * @param options.deadlineMs How long to spend telling the server, measured
+   *   from this call and including time spent queued behind another transition.
+   *   **Defaults to `SAP_RELEASE_DEADLINE_MS`, which is `0` — do not wait.**
+   *   Waiting is for steps whose successor needs the server to have caught up;
+   *   a teardown has none. The logoff is still sent at `0`, because saying so
+   *   is not conditional on caring when it lands; its outcome is logged when it
+   *   arrives rather than awaited. Pass a positive value to bound a wait you
+   *   have chosen to take. Anything that is not a finite, non-negative number
+   *   is reported and the default used instead — this method is called from a
+   *   `finally`, where throwing would replace the error that sent the caller
+   *   there. The configured default is checked once, at construction, so a
+   *   misconfigured `SAP_RELEASE_DEADLINE_MS` fails before a connection exists
+   *   rather than at every teardown.
    */
-  async disconnect(): Promise<void> {
+  async disconnect(options?: { deadlineMs?: number }): Promise<void> {
+    // Nothing here throws, including on a bad argument. This method's place is
+    // a `finally` — a connection that was connected must be disconnected — and
+    // an exception raised there replaces the error that sent the caller into it.
+    // A nonsense deadline is reported and the configured default used instead,
+    // because refusing to release the session is a worse answer to a bad number
+    // than releasing it on the default schedule.
+    const requested = options?.deadlineMs;
+    const valid =
+      requested === undefined || (Number.isFinite(requested) && requested >= 0);
+    if (!valid) {
+      this.logger?.warn(
+        `disconnect(): ignoring deadlineMs=${requested}, which is not a finite, non-negative number; using ${this.releaseDeadlineMs}`,
+      );
+    }
+    const deadlineMs =
+      valid && requested !== undefined ? requested : this.releaseDeadlineMs;
+    // Started HERE, because the contract measures the deadline from the call
+    // and the transition below may sit in a queue first. A budget that started
+    // when the callback ran would give a queued teardown its full allowance
+    // again, which is the one thing the caller was bounding.
+    const startedAt = Date.now();
+
     // Synchronous, at the call: admission shuts and the generation moves before
     // anything is queued, so a caller who has asked to disconnect cannot have
     // requests still going through while this waits its turn.
     this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
+
+    // Captured before the transition and before anything is cleared: a
+    // concurrent disconnect JOINS the transition and its callback is never run
+    // for the joiner, so a joiner would otherwise learn nothing about what it
+    // asked to release.
+    const session = this.getSessionIdentity();
+
     await this.lifecycle.transition('disconnect', async () => {
+      await this.releaseServerSession();
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
+
+    // Its own release, and only that. Never another session's: an earlier one
+    // may never answer — the logoff carries no request timeout by design — and
+    // waiting on it would spend this caller's whole budget on a request nobody
+    // can finish.
+    const mine =
+      session && this.pendingRelease?.id === session
+        ? this.pendingRelease.inFlight
+        : null;
+
+    await this.awaitReleaseWithin(
+      Math.max(0, deadlineMs - (Date.now() - startedAt)),
+      mine,
+    );
+  }
+
+  /**
+   * Tells the server this session is no longer needed. Best effort, and the
+   * answer is not depended on: whether and when the server frees it is its own
+   * affair, and this connection does not check afterwards.
+   *
+   * ICF rather than ADT because ADT publishes no such endpoint: its discovery
+   * document lists none on any reachable system — on-prem, cloud, or legacy —
+   * and the ADT logon is the discovery call itself. `/sap/public/bc/icf/logoff`
+   * is the platform's own, and answers `200` while expiring the session cookie.
+   *
+   * **One session, this connection's own.** A repeat `connect()` opens a NEW
+   * one, with a new `SAP_SESSIONID`, so an earlier session is not this
+   * connection's business any more: its logoff is already on the wire, or the
+   * system will time it out. Nothing here retries, counts, or keeps a list —
+   * how many connections to run and how carefully stays with the caller.
+   *
+   * **It ends the session, not this object's use of it.** The cookies are the
+   * only thing tying anyone to a session, so a second connection given the same
+   * cookies works in the same ABAP session and can use the locks taken in it —
+   * and this logoff closes that session for all of them at once. Whoever hands
+   * the cookies around owns that decision; this method cannot see the copies.
+   *
+   * Never throws. `disconnect()` must always settle, and a session we could not
+   * close is better than a teardown that does not finish; the local state is
+   * cleared either way.
+   */
+  private async releaseServerSession(): Promise<void> {
+    const id = this.getSessionIdentity();
+    const cookies = this.cookies;
+    if (!id || !cookies) {
+      // No session, or no cookie to prove it is ours. Holding the cookie is the
+      // whole permission to close it.
+      return;
+    }
+
+    // No critical-section guard here, deliberately. `beginTeardown()` above has
+    // already shut admission, so the unlock of a chain in flight is refused
+    // whether or not the server is told — skipping the goodbye does not rescue
+    // the chain, it only leaves the session open. And the depth is decremented
+    // by `endCriticalSection()` alone, so one caller forgetting its `finally`
+    // would silence every release on this connection for good: a caller's bug
+    // turned into the leak this whole change exists to stop. Not disconnecting
+    // mid-chain is the caller's to get right.
+
+    // Already on its way for THIS session: a second would tell the server the
+    // same thing twice.
+    if (this.pendingRelease?.id === id) {
+      return;
+    }
+
+    // Which mechanism this system publishes was settled at establishment: a
+    // session resource to DELETE on ABAP Cloud, the platform's ICF logoff on
+    // on-prem. Both say the same thing — we have finished with this session —
+    // and neither is asked what the server then did about it.
+    // Assembling it can throw before anything is sent — `sessionTransport()`
+    // builds the client, and a certificate connection whose material is not
+    // loaded throws there. `disconnect()` promises never to throw, and it is
+    // called from a `finally`, where an exception would replace the error that
+    // sent the caller into it.
+    let send: Promise<void>;
+    try {
+      send = this.sessionStrategy.closeSession(this.sessionTransport());
+    } catch (error) {
+      this.logger?.debug(
+        `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+
+    // Reported when it lands, waited for or not: "nobody is waiting on it" is
+    // not "nobody wants to know". A rejection handler even though `closeSession`
+    // is meant never to throw: that is an invariant of another unit, and an
+    // unhandled rejection here would crash a process over a teardown the caller
+    // declined to wait for.
+    const settled = send.then(
+      () => {
+        if (this.pendingRelease?.id === id) {
+          this.pendingRelease = null;
+        }
+      },
+      (error: unknown) => {
+        if (this.pendingRelease?.id === id) {
+          this.pendingRelease = null;
+        }
+        this.logger?.debug(
+          `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
+    );
+
+    this.pendingRelease = { id, inFlight: settled };
+  }
+
+  /**
+   * Waits up to `budgetMs` for a release already on its way, then detaches.
+   *
+   * Detaching, not cancelling: when the budget runs out this stops waiting and
+   * the request carries on to the server. Each caller of `disconnect()` gets
+   * its own, so one caller's patience is never charged to another's.
+   */
+  private async awaitReleaseWithin(
+    budgetMs: number,
+    release: Promise<void> | null,
+  ): Promise<void> {
+    if (!release || budgetMs === 0) {
+      return;
+    }
+
+    // Detaching, not cancelling: when the budget runs out this stops waiting and
+    // the request carries on to the server. `unref` so a process that is
+    // otherwise done does not stay alive for the timer, and cleared when the
+    // release wins the race.
+    let expire: NodeJS.Timeout | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      expire = setTimeout(resolve, budgetMs);
+      expire.unref?.();
+    });
+
+    // `release` never rejects — its handlers are attached at dispatch — so this
+    // needs no catch to keep "never throws" true.
+    await Promise.race([release, deadline]);
+    if (expire) {
+      clearTimeout(expire);
+    }
   }
 
   isConnected(): boolean {
@@ -244,22 +567,10 @@ abstract class AbstractAbapConnection
    * session cookie. Use {@link isConnected} for connection state.
    *
    * It follows that null → non-null is not a replacement but an identity being
-   * learned; only a CHANGED value means the session was replaced.
+   * learned; only a CHANGED value means the session we had is gone.
    */
   getSessionIdentity(): string | null {
     return this.lifecycle.identity;
-  }
-
-  /**
-   * Discards the session at a caller's request: cancels queued recoveries and
-   * queues the cleanup rather than tearing down under a live request.
-   */
-  reset(): void {
-    this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: true });
-    void this.lifecycle.transition('cleanup', async () => {
-      this.clearSessionState();
-      this.lifecycle.markDisconnected();
-    });
   }
 
   /**
@@ -294,6 +605,112 @@ abstract class AbstractAbapConnection
    * Shared by connect() and recoverSession() rather than written twice —
    * the two drifted apart once already, and a third caller would drift again.
    */
+  /**
+   * What a session strategy is given: enough to make one request and to prove
+   * the session is ours, and nothing else. It cannot reach session state, so a
+   * strategy can neither mark this connection connected nor tear it down.
+   */
+  private sessionTransport(): ISessionTransport {
+    // A SNAPSHOT, not a view. The close is dispatched without being awaited —
+    // a teardown does not wait for it — so `clearSessionState()` runs while the
+    // strategy is still suspended on its first `await`. Reading the connection
+    // then would find the axios instance already dropped and the cookies gone,
+    // and the request would go out through a freshly built client with no
+    // session on it, or not at all. Taken here, while they are still true.
+    const instance = this.getAxiosInstance();
+    const cookies = this.cookies;
+    const csrfToken = this.csrfToken;
+    return {
+      baseUrl: this.baseUrl,
+      // The affinity headers ride along with auth: the open must be answered by
+      // the server that will hold the session, and the close must reach the one
+      // that holds it.
+      authHeaders: async () => ({
+        ...(await this.getAuthHeaders()),
+        ...this.affinityHeaders(),
+      }),
+      cookies: () => cookies,
+      csrfToken: () => csrfToken,
+      send: async (request) => {
+        const response = await instance({
+          method: request.method,
+          url: request.url,
+          headers: request.headers,
+          ...(request.timeoutMs !== undefined
+            ? { timeout: request.timeoutMs }
+            : {}),
+          // A 404 is an answer — "this system has no session resource" — and a
+          // 403 on a close is the server declining a message. Both belong to
+          // the strategy to read, not to axios to throw over.
+          validateStatus: () => true,
+        });
+        // Only the open: its cookies ARE the session — SAP_SESSIONID arrives
+        // there — and they go through the same path every other response uses.
+        // No generation, because like the establishing CSRF fetch this is what
+        // creates the session a generation would be compared against. A close
+        // is deliberately not observed: its cookies would read as the session
+        // having been replaced under a connection that is being torn down.
+        if (request.adoptCookies) {
+          // Cookies adopted, verdict NOT asked for. The identity policy answers
+          // "did the server move us to a different session while we were
+          // working" — and this request is us opening one, with the
+          // establishing call still to come. Two requests we make ourselves,
+          // back to back, are one establishment; policing between them would
+          // read our own second call as somebody replacing our first.
+          const headers = response.headers as
+            | Record<string, unknown>
+            | undefined;
+          // The open is the first answer that can name the application server,
+          // and every request after it should already be pinned there.
+          this.rememberAppServer(headers);
+          this.updateCookiesFromResponse(headers);
+        }
+        return {
+          status: response.status,
+          headers: response.headers,
+          data: response.data,
+        };
+      },
+    };
+  }
+
+  /**
+   * Ask the server to open a session before the establishing call needs one.
+   *
+   * The strategy is chosen by what the server publishes, not by which system we
+   * believe it to be: ABAP Cloud offers a session resource and issues
+   * `SAP_SESSIONID` to whoever asks for one — with `x-sap-security-session:
+   * create` — while on-prem has no such resource and its session arrives with
+   * the establishing request. Believing cloud simply "issues no SAP_SESSIONID"
+   * is what happens when nobody asks.
+   */
+  /**
+   * Which session management this system uses — decided by the connection, not
+   * discovered by asking.
+   *
+   * On-prem and cloud do not manage sessions the same way, and the two
+   * implementations exist for that reason. On-prem the session arrives with the
+   * establishing request and the platform's ICF logoff gives it back, exactly as
+   * it always has. Cloud opens a session resource and takes it back by DELETE on
+   * the address the server published.
+   *
+   * Probing was tried and is wrong: `/sap/bc/adt/core/http/sessions` answers on
+   * on-prem too — measured on S/4HANA, which publishes both the session resource
+   * and the ICF logoff in the same document — so a probe does not tell the two
+   * systems apart. It only tells whether an endpoint exists, and both have it.
+   */
+  protected createSessionStrategy(): SessionStrategy {
+    return new IcfSessionStrategy(this.logger);
+  }
+
+  private async openServerSession(): Promise<void> {
+    this.sessionStrategy = this.createSessionStrategy();
+    this.preflightOpenedSession = await this.sessionStrategy.openSession(
+      this.sessionTransport(),
+    );
+    this.logger?.debug(`Session strategy: ${this.sessionStrategy.kind}`);
+  }
+
   private async establishAndCommit(baselineEpoch: number): Promise<void> {
     if (this.lifecycle.teardownEpoch !== baselineEpoch) {
       throw sessionError(
@@ -309,6 +726,21 @@ abstract class AbstractAbapConnection
     // makes the new fingerprint `established`, which is what it is.
     this.lifecycle.forgetIdentity();
     try {
+      // First, because the preflight below has to be able to authenticate: the
+      // credential of a certificate or Kerberos connection is not in hand until
+      // it is loaded or minted, and assembling a request without it throws.
+      await this.prepareCredential();
+      // Before the establishing call, because on a system that has one this is
+      // what creates the session the rest of the connection runs in — and the
+      // cookies it sets are the ones the establishing call must carry.
+      await this.openServerSession();
+      // Forgotten again, because the open was OURS. Establishment is now two
+      // requests where it used to be one, and the identity policy answers "did
+      // the server move us to a different session while we were working" — a
+      // question that has no meaning between two calls we make ourselves to set
+      // this session up. The identity that counts is taken at the end, from the
+      // cookies we finish with.
+      this.lifecycle.forgetIdentity();
       await this.establishSession();
     } catch (error) {
       // A failed establishment leaves debris that poisons the next attempt: the
@@ -321,6 +753,24 @@ abstract class AbstractAbapConnection
       // Safe to clear here, unlike the abandonment path below: establishSession()
       // threw, so no session was published, and admission requires a connected
       // lifecycle — nothing can be in flight over what this drops.
+      //
+      // But say goodbye FIRST. The preflight may already have opened a session
+      // — on cloud it does, and the SAP_SESSIONID is in the cookies about to be
+      // dropped — and establishing can still fail after it, on a credential the
+      // preflight never used. Clearing without telling the server would leak
+      // exactly the session this release exists to stop leaking, and leave it
+      // unreachable: the connection is not connected, so disconnect() sends
+      // nothing, and the cookie that was the only permission to close it is
+      // gone. The transport is a snapshot, so this survives the clearing that
+      // follows it.
+      // Only when the preflight opened one. A cookie left by the 401 that
+      // rejected us is debris, not a session, and telling the server we are
+      // finished with something we never had sends a request nobody asked for
+      // — into the middle of an authentication exchange, in the case that found
+      // this.
+      const goodbye = this.preflightOpenedSession
+        ? this.sessionStrategy.closeSession(this.sessionTransport())
+        : Promise.resolve();
       this.invalidateSession();
       // And the identity with it. The rejecting response was still observed, so
       // its cookie was recorded as a session that had just been established —
@@ -328,6 +778,10 @@ abstract class AbstractAbapConnection
       // isConnected() says false. Two answers to one question is worse than
       // either.
       this.lifecycle.markDisconnected();
+      // Not awaited, for the same reason a teardown does not wait: the caller
+      // is owed the establishment error now, not after a round trip nobody is
+      // waiting on. closeSession never throws, so nothing here can go unhandled.
+      void goodbye;
       throw error;
     }
 
@@ -343,15 +797,85 @@ abstract class AbstractAbapConnection
       );
     }
 
-    // establishSession() throws on failure, so reaching here means a session
-    // exists. There is no third outcome: no "connected but unusable", no
-    // resolved promise over an empty jar.
-    this.lifecycle.markConnected(this.sessionFingerprint());
+    // The session IS the SAP_SESSIONID the server issued; our own session id is
+    // a conversation label we generate and says nothing about what exists on
+    // the other side. An empty fingerprint therefore means the server opened no
+    // session — on-prem it answers with `sap-XSRF_*` instead once enough
+    // sessions are already open for the user — and such a connection still gets
+    // `200` for a LOCK and hands back a handle the next request cannot use.
+    //
+    // SAP_SESSIONID names the ABAP session — the one locks are bound to. Its
+    // absence is therefore not a transport problem: the HTTP side is fine, the
+    // cookies are here, and stateless requests will work. What is missing is any
+    // ABAP session known to this connection, so there is nothing a lock could be
+    // bound to and every lock taken over it is dead the moment it is issued.
+    //
+    // Checked rather than assumed: a connection that got no cookie was held open
+    // against an on-prem system and the session list showed nothing for it,
+    // while one that got a cookie appeared there.
+    //
+    // Which is why this refuses to connect rather than warning. There is no
+    // count to plan around — the same system allowed 21 sessions one day and
+    // refused an eleventh the next — so a caller cannot avoid the condition by
+    // being frugal, and the only reliable signal is whether THIS connect got a
+    // session. Reported with its cause; recovering is the caller's call, and
+    // nothing here retries on anyone's behalf.
+    //
+    // Reported, not decided on. A session that was not opened is a condition on
+    // the server, and what to do about it — wait, retry, release sessions this
+    // user still holds, carry on read-only over a fresh connection — depends on
+    // things only the caller knows. So it is raised where the caller can catch
+    // it, with enough in the message to act on, and nothing is retried here.
+    //
+    // Every transport, not only basic: splitting by authentication type would
+    // encode a guess about cloud ABAP, whose ADT endpoint would not answer the
+    // bearer obtainable here, so the question stayed open. If a cloud system
+    // turns out to hold sessions without issuing this cookie, this is the rule
+    // to revisit — and it will say so loudly rather than fail quietly.
+    const fingerprint = this.sessionFingerprint();
+    if (fingerprint.size === 0 && !this.skipSessionType) {
+      // Goodbye first, for the same reason the catch above does it: the
+      // preflight may have opened a session — on cloud it does — and this path
+      // is about to drop the cookies that are the only permission to close it.
+      // Refusing to connect must not leak the session the refusal is about.
+      if (this.preflightOpenedSession) {
+        try {
+          void this.sessionStrategy.closeSession(this.sessionTransport());
+        } catch (error) {
+          this.logger?.debug(
+            `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      this.invalidateSession();
+      this.lifecycle.forgetIdentity();
+      this.lifecycle.markDisconnected();
+      throw sessionError(
+        ADT_SESSION_ERROR.NOT_CONNECTED,
+        'The server authenticated the request but opened no ABAP session: no SAP_SESSIONID cookie came back, so there is no session for a lock to be bound to. The HTTP side is fine — the cookies are here — which is why this is not a transport failure and does not look like one. ' +
+          'Stateless reads would still work over it, but a lock, and any write under that lock, is dead the moment it is issued. ' +
+          'The usual cause is the system declining to open another session for this user: they are limited per user, shared with every other tool logged on as them, and released either by disconnecting or by their own idle timeout. ' +
+          'Whether to wait, retry, or release sessions this user still holds is yours to decide — this library does not retry on your behalf.',
+      );
+    }
+
+    this.lifecycle.markConnected(fingerprint);
   }
 
   /** The teardown epoch, for a recovery to capture before it starts. */
   protected get teardownEpoch(): number {
     return this.lifecycle.teardownEpoch;
+  }
+
+  /**
+   * Which session the connection is on now.
+   *
+   * Moves whenever the session does. A response that comes back carrying an
+   * older one belongs to a session that has already been replaced, and must not
+   * be acted on as if it said something about the current one.
+   */
+  protected get sessionGeneration(): number {
+    return this.lifecycle.sessionGeneration;
   }
 
   /**
@@ -436,7 +960,43 @@ abstract class AbstractAbapConnection
       );
       return;
     }
+    this.rememberAppServer(headers);
     this.applyIdentityPolicy(this.updateCookiesFromResponse(headers));
+  }
+
+  /**
+   * Take the application server's name from a response, if it named one.
+   *
+   * Only ever set from the server's own answer — never guessed, and never kept
+   * across a teardown.
+   */
+  private rememberAppServer(headers?: Record<string, unknown>): void {
+    if (!headers) return;
+    const key = Object.keys(headers).find(
+      (k) => k.toLowerCase() === 'sap-adt-saplb',
+    );
+    const value = key ? headers[key] : undefined;
+    if (typeof value === 'string' && value && value !== this.appServer) {
+      this.appServer = value;
+      this.logger?.debug(`Session is on application server ${value}`);
+    }
+  }
+
+  /**
+   * Headers that keep this connection on the server its session lives on.
+   *
+   * `sap-adt-saplb: fetch` asks the server to name itself — it answers on every
+   * request, so the binding survives a restart that moves us. `saplb` is that
+   * name sent back. `REDISPATCH_ON_SHUTDOWN` is what Eclipse asks for: if the
+   * server is going down, send us elsewhere rather than fail.
+   */
+  private affinityHeaders(): Record<string, string> {
+    return {
+      'sap-adt-saplb': 'fetch',
+      ...(this.appServer
+        ? { saplb: this.appServer, 'saplb-options': 'REDISPATCH_ON_SHUTDOWN' }
+        : {}),
+    };
   }
 
   /**
@@ -463,14 +1023,16 @@ abstract class AbstractAbapConnection
     this.raiseSessionLost('the session cookie changed under us');
     throw sessionError(
       ADT_SESSION_ERROR.SESSION_REPLACED,
-      'The SAP session was replaced; anything held against the previous one is dead',
+      'The SAP session this connection was using is gone and the requests are now on a different one; anything held against the old session — a lock and any write under it — is dead. ' +
+        'The server does not swap sessions on a whim: the usual causes are the session idling out (the timeout is idle-based, so a quiet connection loses it while a busy one does not) or a request landing on a different application server. ' +
+        'What to do about it is yours: re-establish and redo the work, or fail the operation. Nothing is retried here.',
     );
   }
 
   /**
    * Whether the server is telling us the session it was given no longer exists.
    *
-   * The E19 shape was HTTP 400 with "Session not found", answered in ~60 ms
+   * One on-prem system answered HTTP 400 with "Session not found", answered in ~60 ms
    * with the cookie present — which is why identity comparison cannot see this:
    * the cookie, and therefore the fingerprint, is completely unchanged. The
    * exact match is landscape-specific and is one of the live probes this design
@@ -498,6 +1060,9 @@ abstract class AbstractAbapConnection
     }
     this.csrfToken = null;
     this.cookies = null;
+    // Names a server for a session that no longer exists.
+    this.appServer = null;
+    this.preflightOpenedSession = false;
     this.cookieStore.clear();
     // Note: baseUrl is not reset as it's derived from immutable config
   }
@@ -609,6 +1174,12 @@ abstract class AbstractAbapConnection
       requestHeaders['sap-adt-connection-id'] = this.sessionId;
     }
 
+    // Keep this request on the server the session lives on. A session belongs
+    // to one application server, so a request that lands elsewhere gets a
+    // different session — and any lock held on the first one dies, with no
+    // inactivity and nobody at fault.
+    Object.assign(requestHeaders, this.affinityHeaders());
+
     // Add stateful session headers if stateful mode is enabled
     if (this.sessionMode === 'stateful') {
       requestHeaders['x-sap-adt-sessiontype'] = 'stateful';
@@ -628,9 +1199,13 @@ abstract class AbstractAbapConnection
       requestHeaders['x-csrf-token'] = this.csrfToken;
     }
 
-    // Add cookies LAST (MUST NOT be overridden by custom headers)
+    // Add cookies LAST (MUST NOT be overridden by custom headers), MERGED with
+    // whatever the auth headers already put there — see mergeCookieHeaders.
     if (this.cookies) {
-      requestHeaders.Cookie = this.cookies;
+      requestHeaders.Cookie = mergeCookieHeaders(
+        requestHeaders.Cookie,
+        this.cookies,
+      );
       this.logger?.debug(
         `[DEBUG] BaseAbapConnection - Adding cookies to request (first 100 chars): ${this.cookies.substring(0, 100)}...`,
       );
@@ -1001,10 +1576,14 @@ abstract class AbstractAbapConnection
           headers['sap-adt-connection-id'] = this.sessionId;
         }
 
+        // Same reason as every other request: a token fetched from another
+        // application server belongs to another session.
+        Object.assign(headers, this.affinityHeaders());
+
         // Always add cookies if available - they are needed for session continuity
         // Even on first attempt, if we have cookies from previous session or error response, use them
         if (this.cookies) {
-          headers.Cookie = this.cookies;
+          headers.Cookie = mergeCookieHeaders(headers.Cookie, this.cookies);
           this.logger?.debug(
             `[DEBUG] BaseAbapConnection - Adding cookies to CSRF token request (attempt ${attempt + 1}, first 100 chars): ${this.cookies.substring(0, 100)}...`,
           );
@@ -1323,12 +1902,21 @@ abstract class AbstractAbapConnection
    * cookies (HTTP 401 on a mutation while a cached token exists). This forces the
    * next request path to fetch a fresh token and a fresh SAP_SESSIONID cookie.
    *
-   * Distinct from reset(): this leaves the axios instance and interceptors in place.
+   * Distinct from disconnect(): this leaves the axios instance and interceptors
+   * in place, and tells the server nothing — it is a request-level repair, not a
+   * teardown.
    */
   private invalidateSession(): void {
     this.setCsrfToken(null);
     this.cookies = null;
     this.cookieStore.clear();
+    // Everything else that described THAT session. The application server named
+    // a server for a session that is gone — sending it again would pin the next
+    // connect, preflight included, to a dead one — and the preflight flag would
+    // otherwise let a later failure send a goodbye to the previous session's
+    // address.
+    this.appServer = null;
+    this.preflightOpenedSession = false;
     // And the tracked identity, because WE discarded the session. Without this
     // the cookie that arrives next reads as a foreign replacement — and since a
     // replacement is now always fatal, our own deliberate re-authentication

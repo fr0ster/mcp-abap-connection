@@ -385,14 +385,6 @@ export class RfcAbapConnection implements AbapConnection {
   }
 
   /**
-   * Reset the connection — for RFC this closes the session.
-   * Provides interface compatibility with HTTP connections.
-   */
-  reset(): void {
-    this.close();
-  }
-
-  /**
    * Close the RFC connection and release the ABAP session.
    */
   async close(): Promise<void> {

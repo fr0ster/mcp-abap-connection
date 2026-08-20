@@ -225,7 +225,12 @@ describe('JwtAbapConnection error classification', () => {
     // them the mutation first fetches a token, and that fetch retries with
     // delays — the test then times out somewhere that is not its subject.
     (conn as any).csrfToken = 'cached-token';
+    // Both halves of what a server that opened a session leaves behind: the
+    // header to send back, and the store the identity is derived from. Seeding
+    // only the header modelled a system that issues no session at all, which
+    // establishment now refuses — correctly, and not what these tests are about.
     (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
+    (conn as any).cookieStore.set('SAP_SESSIONID_STUB_100', 'S1');
     // Discovery answers; only the ADT request fails. A transport that rejected
     // everything would make the recovery establishment retry with delays too,
     // and the test would time out in the session layer rather than say
@@ -459,7 +464,12 @@ describe('JwtAbapConnection nested CSRF failures share one renewal', () => {
     markConnectedForTest(conn);
     // No cached CSRF token: a mutation has to fetch one, which is the nested
     // level this test is about.
+    // Both halves of what a server that opened a session leaves behind: the
+    // header to send back, and the store the identity is derived from. Seeding
+    // only the header modelled a system that issues no session at all, which
+    // establishment now refuses — correctly, and not what these tests are about.
     (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
+    (conn as any).cookieStore.set('SAP_SESSIONID_STUB_100', 'S1');
 
     const basePrototype = Object.getPrototypeOf(JwtAbapConnection.prototype);
     let csrfCalls = 0;
@@ -576,14 +586,52 @@ describe('JwtAbapConnection credential renewal', () => {
     });
     markConnectedForTest(conn);
     (conn as any).csrfToken = 'cached-token';
+    // Both halves of what a server that opened a session leaves behind: the
+    // header to send back, and the store the identity is derived from. Seeding
+    // only the header modelled a system that issues no session at all, which
+    // establishment now refuses — correctly, and not what these tests are about.
     (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
+    (conn as any).cookieStore.set('SAP_SESSIONID_STUB_100', 'S1');
     let adtCalls = 0;
     const transport = jest.fn(async (cfg: { url?: string }) => {
       if ((cfg.url ?? '').includes('/discovery')) return discoveryOk(cfg);
+      // Neither the session preflight nor the ICF logoff is an ADT request:
+      // counting them would make "how many ADT attempts did this make" depend
+      // on how connect() and disconnect() are built.
+      if (
+        (cfg.url ?? '').includes('/icf/logoff') ||
+        (cfg.url ?? '').includes('/core/http/sessions')
+      ) {
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: '',
+          headers: {},
+          config: cfg,
+        };
+      }
       adtCalls += 1;
       return adt(adtCalls, cfg);
     });
-    (conn as any).axiosInstance = transport;
+    // clearSessionState() detaches the interceptors and then drops the
+    // instance. The double carries them, and survives being dropped: these
+    // tests exercise recovery, which tears down and re-establishes, and a
+    // double that vanished at the first teardown would send the retry to a real
+    // client and out to the network.
+    //
+    // Before this, the double had no `interceptors` at all — so
+    // clearSessionState() threw inside a fire-and-forget cleanup, the rejection
+    // was swallowed, and the instance was never actually dropped. These tests
+    // were passing because of that crash.
+    (transport as any).interceptors = {
+      request: { clear: jest.fn() },
+      response: { clear: jest.fn() },
+    };
+    Object.defineProperty(conn, 'axiosInstance', {
+      get: () => transport,
+      set: () => undefined,
+      configurable: true,
+    });
     return { conn, transport, adtCalls: () => adtCalls };
   }
 
@@ -670,9 +718,9 @@ describe('JwtAbapConnection credential renewal', () => {
   /**
    * Test 14: a teardown between the last lifecycle check and the retry.
    *
-   * reset() alone would not prove this — it shuts admission synchronously, so
+   * A teardown alone would not prove this — it shuts admission synchronously, so
    * the retry would be refused with or without the guard. The connection has to
-   * be usable again AND carry a moved epoch, which is reset() followed by a
+   * be usable again AND carry a moved epoch, which is disconnect() followed by a
    * successful connect(): markConnected clears teardownPending without touching
    * the epoch.
    */
@@ -695,7 +743,7 @@ describe('JwtAbapConnection credential renewal', () => {
       // The renewal is done and renewalInFlight is cleared. Now the caller
       // discards the connection and it is brought back up: admission open,
       // epoch moved.
-      conn.reset();
+      await conn.disconnect();
       await conn.connect();
       return answer;
     };
@@ -774,10 +822,29 @@ describe('JwtAbapConnection operation scope', () => {
     });
     markConnectedForTest(conn);
     (conn as any).csrfToken = 'cached-token';
+    // Both halves of what a server that opened a session leaves behind: the
+    // header to send back, and the store the identity is derived from. Seeding
+    // only the header modelled a system that issues no session at all, which
+    // establishment now refuses — correctly, and not what these tests are about.
     (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
+    (conn as any).cookieStore.set('SAP_SESSIONID_STUB_100', 'S1');
     let adtCalls = 0;
     (conn as any).axiosInstance = jest.fn(async (cfg: { url?: string }) => {
       if ((cfg.url ?? '').includes('/discovery')) return discoveryOk(cfg);
+      // The session preflight and the ICF logoff belong to connect/disconnect,
+      // not to the ADT conversation these tests count.
+      if (
+        (cfg.url ?? '').includes('/core/http/sessions') ||
+        (cfg.url ?? '').includes('/icf/logoff')
+      ) {
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: '',
+          headers: {},
+          config: cfg,
+        };
+      }
       adtCalls += 1;
       return adt(adtCalls, cfg);
     });

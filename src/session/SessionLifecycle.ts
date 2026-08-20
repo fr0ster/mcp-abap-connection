@@ -7,8 +7,23 @@
  * this unit testable without a server, and it is where the hard part lives:
  * ordering, admission, and telling one session from the next.
  *
- * Design: docs/superpowers/specs/2026-07-31-teardown-policy-design.md in
- * @mcp-abap-adt/adt-clients.
+ * What it guarantees, since the design note it used to point at lived in another
+ * package and has been deleted with the work it described:
+ *
+ *   - **One transition at a time**, on a serializing tail. Connects join
+ *     connects and disconnects join disconnects, so concurrent callers share one
+ *     establishment or one teardown rather than racing to build and demolish the
+ *     same session.
+ *   - **Admission is synchronous.** A request is admitted, or refused, in the
+ *     same step that counts it — so nothing can be admitted and still be
+ *     invisible to a teardown draining at that instant.
+ *   - **A teardown waits for nothing.** In-flight requests run to completion
+ *     untouched; their results are fenced by session generation so a late answer
+ *     cannot write over a session established since.
+ *   - **Identity is observed, never assumed.** A changed fingerprint means the
+ *     session we had is gone and this is a different one, which is fatal to
+ *     anything held against the old one;
+ *     an unchanged one says nothing about whether the server still has it.
  */
 
 import {

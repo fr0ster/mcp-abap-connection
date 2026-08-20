@@ -51,6 +51,16 @@ async function startStub(): Promise<Stub> {
       res.end('<service/>');
       return;
     }
+    // Actually slow, so "does not wait for an in-flight request" tests the
+    // claim rather than the absence of I/O in disconnect(): every route used to
+    // answer instantly, which made the ordering hold for the wrong reason.
+    if (url.includes('/slow')) {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'text/plain' });
+        res.end('');
+      }, 300);
+      return;
+    }
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('');
   });
@@ -177,18 +187,6 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
     // to tell anyone.
     expect(cleared).toBe(1);
     expect(conn.isConnected()).toBe(false);
-  });
-
-  it('leaves the connection unusable when reset() discards the session', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
-    await conn.connect();
-
-    conn.reset();
-
-    expect(conn.isConnected()).toBe(false);
-    // reset() returns immediately; the cleanup it queued settles after
-    await new Promise((r) => setTimeout(r, 20));
-    expect(conn.getSessionIdentity()).toBeNull();
   });
 });
 

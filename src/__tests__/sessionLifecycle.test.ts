@@ -1,9 +1,10 @@
 /**
  * SessionLifecycle — the concurrency rules of the session design, executed.
  *
- * Design: docs/superpowers/specs/2026-07-31-teardown-policy-design.md in
- * @mcp-abap-adt/adt-clients. Each test names the implementation it is meant to
- * fail, because most of them pass on a plausible wrong version.
+ * The rules are stated on `SessionLifecycle` itself; the design note this used
+ * to cite lived in another package and was deleted with the work it described.
+ * Each test names the implementation it is meant to fail, because most of them
+ * pass on a plausible wrong version.
  *
  * No SAP, no HTTP, no RFC: this unit knows about none of them.
  */

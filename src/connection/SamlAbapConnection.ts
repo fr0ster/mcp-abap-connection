@@ -4,7 +4,13 @@ import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
 
 /**
- * SAML session cookie authentication for SAP systems
+ * @deprecated The class you take should say which SYSTEM you are dialling,
+ * not which credential you hold — a session mechanism that rides along with
+ * the credential gets one of them wrong. Use `AdtOnPremConnector` with `SamlAuthProvider`:
+ *
+ *   new AdtOnPremConnector(config, new SamlAuthProvider(cookies), logger)
+ *
+ * Kept working, and not removed here: existing consumers are unaffected.
  */
 export class SamlAbapConnection extends AbstractAbapConnection {
   private sessionCookies: string;

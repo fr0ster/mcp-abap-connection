@@ -7,6 +7,199 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every session of a reconnect cycle is released, not only the first.** A release already on
+  its way was treated as "the release still owed" whoever it belonged to, so an in-flight logoff
+  for a previous session suppressed the current one's entirely: `connect → disconnect → connect →
+  disconnect` sent **one** logoff and left the second session open. Not an edge case — the
+  default deadline is `0`, so `disconnect()` does not wait for the logoff and a release is
+  routinely still in flight when the next `connect()` happens, which made this the normal path on
+  any server that does not answer instantly. Releases are now keyed by the session they belong
+  to, and both completion handlers clear by that key, so a late answer about one session cannot
+  discard what is owed for another. Sessions still owed are kept as a set rather than one slot,
+  because more than one can be outstanding and the older was being overwritten.
+
+### Removed — BREAKING
+
+- **`reset()` is gone**, from `AbstractAbapConnection` and `RfcAbapConnection`. There is no
+  local-only discard, because there is no local-only session: the session lives on the server,
+  and dropping the cookie leaves it there. The lifecycle is `connect()` / `disconnect()`,
+  repeatable, and both say what they do to the server.
+
+  It carried nothing `disconnect()` lacks — it cleared the fingerprint at the start of teardown
+  rather than at its end, did not join the transition tail, and returned `void`. That last one
+  is the point: a teardown that reports nothing cannot tell the caller whether the session was
+  released, which is the whole subject of this release.
+
+  No callers outside tests, and it is in neither `IAbapConnection` nor `ISessionLifecycleAware`,
+  so consumers programming against the published contracts are unaffected. `RfcAbapConnection`
+  keeps `close()`, which is its own teardown and always was.
+
+  **Migration:** `conn.reset()` → `await conn.disconnect()`, and `connect()` again to carry on —
+  the connection is reusable. A caller that does not want to wait simply does not `await` it,
+  which is what `reset()` was really used for.
+
+### Fixed
+
+- **`disconnect()` tells the server the session is done, not only the client.** Dropping the cookie
+  left the ABAP session alive until its own timeout — default `http/security_session_timeout`,
+  1800 s — so a process that connects repeatedly left one behind every time. Measured on S/4HANA
+  on-prem: 25 connects in a row with the logoff, 24–25 of them were given a session; without it,
+  2. The server-side view is unambiguous — SM04 showed 25 HTTP sessions for the same user, one per
+  `connect()`, each holding ~12.8 MB, all of them opened by `P=/sap/bc/adt/discovery`, which is the
+  establishing call.
+
+  The logoff says the session is no longer needed; **when the server reclaims it is the
+  server's business** — possibly not until the next `connect()` asks for one — and nothing
+  here waits on that or depends on it. So `disconnect()` **does not wait by default**:
+  waiting is for steps whose successor needs the server to have caught up, and a teardown
+  has no successor. A caller that wants a bounded wait passes it —
+  `disconnect({ deadlineMs })`, the parameter `ISessionLifecycleAware` has published all
+  along and which nothing implemented; the default comes from `SAP_RELEASE_DEADLINE_MS`,
+  which is `0`.
+
+  **The deadline bounds the wait, never the request.** When it expires the waiting stops and
+  the logoff carries on to the server — the contract's word is *detach*. Handed to axios as a
+  request timeout instead, it would abort the socket and cancel the very release it was waiting
+  for: `deadlineMs: 200` against a server answering in 500 ms left the session open, and the
+  default of `0` was more reliable than any small positive value.
+
+  **Each caller waits its own deadline.** Concurrent disconnects join one transition and share
+  its promise, so a wait placed inside it was the first caller's wait imposed on everyone — a
+  caller passing `0` sat through another's 30-second budget, the one guarantee the parameter
+  exists to make. The transition now carries only what must happen once: dispatching the logoff
+  and clearing the local state.
+
+  **A repeat call finishes what is still owed**, as `ISessionLifecycleAware` promises. It could
+  not: `clearSessionState()` drops the cookies, so a second call found nothing to send and the
+  session lived out its 1800 s. The cookies of an incomplete release are kept aside for exactly
+  that retry and dropped as soon as one succeeds; a release already on its way is joined rather
+  than duplicated.
+
+  **The logoff does not cut a lock chain in flight.** It ends the session that chain is running
+  on, so a consumer's `finally` firing on shutdown mid-unlock would leave the object locked and
+  inactive — the damage this release exists to prevent, caused by the release itself.
+  `beginCriticalSection()` is honoured here as it already is for timeouts: the local teardown
+  still happens, the session is recorded as still owed, and calling `disconnect()` again once
+  the chain has finished releases it.
+
+- **A malformed `SAP_RELEASE_DEADLINE_MS` is refused at construction, not at teardown.** It
+  reached `parseInt`, came out `NaN`, and threw from **every** `disconnect()` in the process —
+  blaming a `deadlineMs` argument nobody had passed. It is a startup fault: the same on every
+  call, not the caller's argument, and worth refusing a connection over. `Number()` rather than
+  `parseInt()`, which read `"5s"` as `5` and travelled on as a silently wrong bound.
+
+  And `disconnect()` no longer throws at all, which is what it and the interface both promise.
+  Its place is a `finally` — a connection that was connected must be disconnected — and an
+  exception raised there replaces the error that sent the caller into it. A nonsense per-call
+  `deadlineMs` is reported and the default used instead.
+
+  It surfaces as anything but a session problem: once the server stops issuing sessions it still
+  authenticates every request, so stateless reads and writes keep working and only the
+  lock-bound write fails — `200` for the LOCK, a handle, then `400 Session not found` on the next
+  request and a half-edited object.
+
+  ICF rather than ADT because ADT publishes no session-close: its discovery document lists none on
+  any reachable system — on-prem, cloud, or legacy — and the ADT logon is the discovery call
+  itself. Best effort and never throwing: `disconnect()` must always settle, and a session we
+  could not close beats a teardown that hangs.
+
+  How many sessions a system tolerates is the server's business and is not guessed at here. Using
+  few connections, and reusing them, stays the consumer's decision.
+
+- **A connection the server gave no session now warns.** `sessionFingerprint()` tracks
+  `SAP_SESSIONID*` only, so a server that issued none leaves it empty — and an empty fingerprint
+  can never be classified `replaced`: `observe()` returns `established` or `unchanged` forever,
+  `applyIdentityPolicy()` never fires, `getSessionIdentity()` names nothing. Refusing to connect
+  would be the honest answer and is deliberately not done yet: whether cloud ABAP issues this
+  cookie is unverified, and a rule that wrong would break every cloud consumer to fix an on-prem
+  fault.
+
+### Documentation
+
+- **The guides stop recommending `reset()`**, which this release removes. `USAGE.md` had a
+  runnable `connection.reset()` under *Connection Reset*, `STATEFUL_SESSION_GUIDE.md` offered it
+  as the remedy for CSRF errors, and `MIGRATION-2.0.md` described its teardown — anyone following
+  them got `connection.reset is not a function`. They now say what replaces it and why: starting
+  over means telling the server, and dropping a cookie does not.
+- A doc block left dangling by the same removal had `close()` in `RfcAbapConnection` documented as
+  "Reset the connection … Provides interface compatibility with HTTP connections" — an API that no
+  longer exists.
+
+### Tests
+
+- The stub in `sessionComposition.test.ts` answered every route instantly, `/sap/bc/adt/slow`
+  included, so *does not wait for an in-flight request* held whenever `disconnect()` performed no
+  I/O rather than because the teardown declined to wait. That route now takes 300 ms and the test
+  asserts what its name says.
+- `sessionTeardown.test.ts` covers the teardown contract from the caller's side: the logoff goes
+  out with the session cookies and without a request timeout at any budget; it is detached rather
+  than aborted when a deadline expires; a failing logoff still disconnects; a repeat call re-sends
+  what is owed and sends nothing once it succeeded; two concurrent disconnects share one logoff
+  and keep separate deadlines; a critical section defers it; and a malformed
+  `SAP_RELEASE_DEADLINE_MS` refuses construction.
+
+### Fixed
+
+- **`disconnect()` releases the session this connection holds, and nothing else.** What grew
+  around that sentence — a map of owed sessions, a map of releases in flight, an attempt counter,
+  a give-up rule, a retry across reconnects, and the waiting rules to go with them — is gone. Four
+  review rounds found a defect in each round's own fix, every one of them in that machinery, and
+  none of it was needed: **a connection holds one session**. `connect()` opens it, `disconnect()`
+  closes it, a repeat `connect()` is a NEW session with a new `SAP_SESSIONID`, and an earlier
+  session is not this connection's business — its logoff is already on the wire, or the system
+  times it out.
+
+  Nothing retries, counts, limits or keeps a list. How many connections to run, how frugally, and
+  what to do when a release did not land are the caller's, and were never knowable from inside a
+  single connection.
+
+  The session a release belongs to is now its `SAP_SESSIONID`, not the cookie header it is sent
+  with. The header also carries `sap-XSRF_*`, which rotates within one and the same session, so
+  comparing headers made a session stop recognising itself after a token refresh.
+
+- **A logoff that cannot even be assembled no longer escapes the teardown.** Building it can throw
+  on its own — a certificate connection whose material is not loaded throws while building the
+  agent — and `disconnect()` is documented never to throw and is called from a `finally`, where a
+  throw replaces the error that sent the caller there.
+
+### Documentation
+
+- **The cookies are the session, and a logoff ends it for everyone holding them.** A second
+  connection given the same cookie jar works in the same ABAP session and can use the locks taken
+  in it; `disconnect()` closes that session for all of them, and no connection can see the copies.
+  Written down in `STATEFUL_SESSION_GUIDE.md` and on `disconnect()` itself.
+
+### Changed — BREAKING
+
+- **`connect()` fails when the server opened no session**, instead of warning and handing back a
+  connection whose first lock would be dead on arrival. Locks are held by the ABAP session, so a
+  connection without one can read but can hold nothing; the failure used to surface a request
+  later, as `400 Session not found` with the object half-edited.
+
+  Verified rather than inferred: a connection that received no `SAP_SESSIONID` was held open
+  against an on-prem system and the session list showed **nothing** for it, while one that
+  received the cookie appeared there. No cookie, no session.
+
+  Reported, not decided on. The message says what the server did, what still works, what does
+  not, the usual cause — sessions are limited per user and shared with every other tool logged on
+  as them — and that nothing is retried here, because whether to wait, retry, or release sessions
+  the user still holds depends on what only the caller knows.
+
+  Every transport, not only basic: splitting by authentication type would encode a guess about
+  cloud ABAP, whose ADT endpoint would not answer the bearer obtainable here. If a cloud system
+  turns out to hold sessions without issuing this cookie, this is the rule to revisit.
+
+### Documentation
+
+- **`STATEFUL_SESSION_GUIDE.md` gains "A Lock Lives In The Session".** That a lock dies with the
+  session that took it; that the timeout is an idle one, spent by silence rather than by elapsed
+  time — one small request a minute kept a session alive for 45 minutes past a 30-minute window,
+  identity unchanged; and that any request in the session resets it, which is why this package
+  holds no keepalive timer. Holding a session alive holds a scarce shared slot, and that is the
+  caller's decision to make.
+
 ## [4.0.0] - 2026-08-16
 
 A JWT connection stops answering with an error of its own making. See

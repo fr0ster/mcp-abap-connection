@@ -102,19 +102,83 @@ answer, not a credential one, and nothing is torn down for it.
 
 ---
 
+## What This Layer Actually Solves
+
+The link to the ABAP session is not guaranteed, and that is the whole problem:
+
+- the ABAP session can be terminated by the system while this client still
+  believes it has one — the next lock-bound request answers
+  `400 "Session not found"`;
+- or it is never created at all, because the system will not open another one
+  for this user right now.
+
+Both are reported, neither is worked around. `connect()` fails with the reason
+when no session was opened; a session lost afterwards surfaces as
+`ADT_SESSION_REPLACED` rather than a request quietly continuing somewhere it
+does not belong. What to do about either — wait, retry, reconnect, release
+sessions the user still holds, carry on read-only — is the caller's decision,
+made with the cookies and the answers in hand.
+
+## A Lock Lives In The ABAP Session
+
+There are two sessions here, and they are not the same thing:
+
+- the **HTTP session** — the conversation this client is having. It exists as
+  long as the cookies do, and nothing about it is in doubt;
+- the **ABAP session** — named by `SAP_SESSIONID_<SID>_<CLIENT>`, and the thing
+  locks are bound to.
+
+The doubt is only ever about the second. It may not have been created, or it may
+have been terminated while this client still holds the cookies and believes it
+has one — and a lock is dead in either case, whether or not the client noticed.
+
+Two ways to lose one, and they are different problems:
+
+- **The server never opened one.** No `SAP_SESSIONID` came back, so there is no
+  ABAP session known to this connection and nothing a lock could be bound to —
+  while the HTTP side is perfectly fine, which is why it does not look like a
+  failure at all. `connect()` refuses rather than handing back a connection
+  whose first lock would be dead on arrival. Sessions are limited per user and shared with every other tool
+  logged on as them, so this says nothing about your code — it says the system
+  would not open another one right now.
+- **It timed out while you were quiet.** The timeout is an idle one, and it is
+  the *silence* that spends it, not the elapsed time. Measured on an on-prem
+  system with a 30-minute window: a small request once a minute kept one session
+  alive for 45 minutes with its identity unchanged, straight past the mark.
+
+So a long chain under a lock is safe while it is doing something, and at risk
+while it waits. **Any request in the session resets the window** — a poll, a
+read, a status check. There is deliberately no keepalive timer in this package:
+holding a session alive means holding a scarce, shared slot, and deciding to do
+that belongs to the caller who knows why the session is worth keeping.
+
+**The cookies are the session.** Nothing else ties a caller to one, so a second
+connection given the same cookie jar works in the same ABAP session and can use
+the locks taken in it — that is what makes handing them over a way to continue
+someone else's work. It cuts both ways: `disconnect()` ends the session for
+everyone holding those cookies, not just for the object it was called on, and no
+connection can see the copies. Deciding who may hold them, and who is allowed to
+close, belongs to whoever passes them around.
+
+The server never tells the client how long it has: the session cookie carries no
+expiry and no response header mentions one. The only honest signals are the ones
+you get by asking — `getSessionIdentity()` for which session you are in, and
+`ADT_SESSION_REPLACED` when the one you were in is gone.
+
 ## Troubleshooting
 
-- **CSRF token errors**: discard the session and establish a new one. `reset()`
-  does that, but it lives on the HTTP connection classes and is **not** on the
-  `IAbapConnection` type `createAbapConnection()` returns — reach it through a
-  concrete type:
+- **CSRF token errors**: discard the session and establish a new one. That is
+  `disconnect()` followed by `connect()` — there is no local-only discard, because
+  dropping the cookie leaves the ABAP session open on the server. Both live on
+  the HTTP connection classes and are **not** on the `IAbapConnection` type
+  `createAbapConnection()` returns — reach them through a concrete type:
 
   ```ts
   import { BaseAbapConnection } from '@mcp-abap-adt/connection';
 
   const connection = new BaseAbapConnection(config, logger);
-  connection.reset();          // queues the cleanup; refuses requests meanwhile
-  await connection.connect();  // a new session, explicitly
+  await connection.disconnect(); // ends the session on the server, then clears
+  await connection.connect(); // a new session, explicitly
   ```
 - **Session expired**: reauthenticate to obtain a new session.
 - **Multiple connections**: each `createAbapConnection` instance maintains its own cookie jar; share the instance if you need continuity.

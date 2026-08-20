@@ -8,6 +8,13 @@ export type {
   IWebSocketTransport,
 } from '@mcp-abap-adt/interfaces';
 export { FileCertificateMaterialLoader } from './auth/FileCertificateMaterialLoader.js';
+export type { IAuthProvider } from './auth/IAuthProvider.js';
+export {
+  BasicAuthProvider,
+  CertificateAuthProvider,
+  SamlAuthProvider,
+  TokenAuthProvider,
+} from './auth/providers.js';
 export type {
   SapAuthType,
   SapConfig,
@@ -20,6 +27,8 @@ export type {
   AbapConnection,
   AbapRequestOptions,
 } from './connection/AbapConnection.js';
+export { AdtCloudConnector } from './connection/AdtCloudConnector.js';
+export { AdtOnPremConnector } from './connection/AdtOnPremConnector.js';
 // The session lifecycle vocabulary — ISessionLifecycleAware, ADT_SESSION_ERROR —
 // is deliberately NOT exported here. It lives in @mcp-abap-adt/interfaces, and a
 // consumer imports it from there: re-exporting a contract type gives it two

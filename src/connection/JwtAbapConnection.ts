@@ -7,7 +7,9 @@ import {
 import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
+import { CloudSecuritySessionStrategy } from '../session/CloudSecuritySessionStrategy.js';
 import { sessionError } from '../session/SessionLifecycle.js';
+import type { SessionStrategy } from '../session/SessionStrategy.js';
 import type { AbapRequestOptions } from './AbapConnection.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
 import { CSRF_CONFIG } from './csrfConfig.js';
@@ -33,14 +35,22 @@ interface IRecoveryScope {
 }
 
 /**
- * JWT Authentication connection for SAP BTP Cloud systems
+ * The class you take should say which SYSTEM you are dialling, not which
+ * credential you hold — a session mechanism that rides along with the
+ * credential gets one of them wrong. `AdtCloudConnector` and
+ * `AdtOnPremConnector` are how that is said.
  *
- * Supports automatic token refresh via ITokenRefresher injection:
- * - a **401** triggers a token refresh when a tokenRefresher is available;
- * - without one, or when the refresh does not help, the server's own error is
- *   thrown unchanged — status and body intact;
- * - a **403** is never a token problem. It propagates as it arrived, because a
- *   new token is the same caller and cannot change a permissions answer.
+ * **This class is NOT deprecated yet, and must not be replaced by
+ * `AdtCloudConnector` + `TokenAuthProvider`.** What it does beyond
+ * authenticating has not moved: a 401 caught mid-operation, one refresh shared
+ * by every operation in flight, the session rebuilt behind it, generation
+ * fencing so a dead session's response cannot land, and the request retried
+ * once. A `TokenAuthProvider` fetches a token at establishment and nothing
+ * after it, so swapping today trades all of that for a connection that dies on
+ * the first expiry.
+ *
+ * Use this class for JWT until that machinery moves; the split is the
+ * platform-connectors spec's next step.
  */
 export class JwtAbapConnection extends AbstractAbapConnection {
   private tokenRefresher?: ITokenRefresher;
@@ -243,7 +253,7 @@ export class JwtAbapConnection extends AbstractAbapConnection {
     );
     // The renewed credential cannot keep the old ABAP session, so this is a
     // session-lost teardown — internal, or it would cancel the very recovery it
-    // is setting up. reset() would be the caller-origin one.
+    // is setting up. disconnect() would be the caller-origin one.
     this.discardSession();
     // Re-establish before retrying: the retry goes through admission, and a
     // discarded session admits nothing.
@@ -287,6 +297,16 @@ export class JwtAbapConnection extends AbstractAbapConnection {
    * Establishes the session for this auth type. Called by
    * AbstractAbapConnection.connect(), which owns the lifecycle around it.
    */
+  /**
+   * Cloud manages sessions through ADT: a session resource is opened at
+   * `/sap/bc/adt/core/http/sessions` and given back by `DELETE` on the address
+   * the server publishes. This is the one connection that does it — on-prem
+   * keeps the platform's ICF logoff, which is what it has always used.
+   */
+  protected override createSessionStrategy(): SessionStrategy {
+    return new CloudSecuritySessionStrategy(this.logger);
+  }
+
   protected async establishSession(): Promise<void> {
     const baseUrl = await this.getBaseUrl();
     const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;
