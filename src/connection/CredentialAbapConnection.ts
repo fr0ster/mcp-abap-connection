@@ -148,6 +148,11 @@ export abstract class CredentialAbapConnection extends AbstractAbapConnection {
 
     const inFlight = (async () => {
       const before = this.lastAuthorization;
+      // Tell the credential its last answer was refused BEFORE asking again.
+      // Asking alone is not enough: a token provider returns the cached token
+      // while it believes it is valid, which after a 401 is precisely what it
+      // wrongly believes.
+      await this.credential.renew?.();
       const now = await this.credential.authorizationHeader();
       if (!now || now === before) return false;
 

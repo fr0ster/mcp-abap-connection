@@ -302,6 +302,49 @@ describe('cookie credentials reach the wire', () => {
  * changed, so the session built on the old one is dead" — which only whoever
  * owns the session can do.
  */
+/** Accepts one header value on `/work`; everything else establishes fine. */
+function serverRejectingUntilShared(
+  conn: object,
+  seen: Seen[],
+  accepted: string,
+  onReject: () => void = () => undefined,
+): void {
+  const instance = async (cfg: {
+    url?: string;
+    method?: string;
+    headers?: Record<string, string>;
+  }) => {
+    seen.push({
+      url: String(cfg.url),
+      method: cfg.method,
+      headers: cfg.headers ?? {},
+    });
+    const ok = {
+      status: 200,
+      data: '<service/>',
+      headers: {
+        'x-csrf-token': 'TOKEN',
+        'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+      },
+    };
+    if (!String(cfg.url).includes('/work')) return ok;
+    if (cfg.headers?.Authorization === accepted) return ok;
+    onReject();
+    const error = new Error('unauthorized') as Error & { response?: unknown };
+    error.response = { status: 401, headers: {}, data: '' };
+    throw error;
+  };
+  (instance as unknown as { interceptors: unknown }).interceptors = {
+    request: { clear: jest.fn() },
+    response: { clear: jest.fn() },
+  };
+  Object.defineProperty(conn, 'axiosInstance', {
+    get: () => instance,
+    set: () => undefined,
+    configurable: true,
+  });
+}
+
 describe('a rejected credential is retried only when it actually changed', () => {
   /** Accepts one header value on `/work`; everything else establishes fine. */
   function serverRejectingUntil(
@@ -451,5 +494,73 @@ describe('a rejected credential is retried only when it actually changed', () =>
     // exactly one further establishing call went out.
     const after = seen.filter((r) => r.url.includes('/discovery')).length;
     expect(after - before).toBe(1);
+  });
+});
+
+/**
+ * How the provider is used, which is the part that is ours to get right.
+ *
+ * The provider itself is a tested package; what this pins is the contract
+ * between us and it — which method, when, and how often. `ITokenRefresher`
+ * spells the important one out: `getToken()` "may return cached token if still
+ * valid", and `refreshToken()` is the one to call "when getToken() returned a
+ * token that was rejected by server (401/403)". Asking the first again after a
+ * refusal gets the same dead token back, and the renewal never happens.
+ */
+describe('the token provider is used the way its contract says', () => {
+  function refresherSpy(tokens: string[]) {
+    let i = 0;
+    return {
+      getToken: jest.fn(async () => tokens[i] ?? tokens[tokens.length - 1]),
+      // A real one mints a new token here and caches it, so the next getToken
+      // returns the new one. Modelled exactly that way.
+      refreshToken: jest.fn(async () => {
+        i = Math.min(i + 1, tokens.length - 1);
+        return tokens[i];
+      }),
+    };
+  }
+
+  it('forces a refresh after a refusal instead of asking again', async () => {
+    const refresher = refresherSpy(['STALE', 'GOOD']);
+    const seen: Seen[] = [];
+    const conn = new AdtOnPremConnector(
+      config,
+      new TokenAuthProvider(refresher as never),
+      makeLogger(),
+    );
+    serverRejectingUntilShared(conn, seen, 'Bearer GOOD');
+
+    await conn.connect();
+    const response = await conn.makeAdtRequest({
+      url: '/work',
+      method: 'GET',
+      timeout: 5000,
+    });
+
+    expect(response.status).toBe(200);
+    // Without this call the provider keeps handing back the token it still
+    // believes in, the header never changes, and the request fails for good.
+    expect(refresher.refreshToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not force a refresh when nothing was refused', async () => {
+    const refresher = refresherSpy(['GOOD']);
+    const seen: Seen[] = [];
+    const conn = new AdtOnPremConnector(
+      config,
+      new TokenAuthProvider(refresher as never),
+      makeLogger(),
+    );
+    serverRejectingUntilShared(conn, seen, 'Bearer GOOD');
+
+    await conn.connect();
+    await conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 });
+
+    // A forced refresh can be expensive — with authorization_code it may reach
+    // for a refresh token, or fall back to an interactive login — so it is
+    // asked for only when the server has actually refused something.
+    expect(refresher.refreshToken).not.toHaveBeenCalled();
+    expect(refresher.getToken).toHaveBeenCalled();
   });
 });

@@ -75,6 +75,23 @@ export class TokenAuthProvider implements IAuthProvider {
           : await this.source.getToken();
     return token ? `Bearer ${token}` : '';
   }
+
+  /**
+   * The token was refused, so force a new one.
+   *
+   * `getToken()` is documented to return the cached token while it believes it
+   * is still valid — which is exactly the situation after a 401 on a token the
+   * provider has not yet noticed is dead. `refreshToken()` is the contract's
+   * answer for that, and this is the only place it is called.
+   */
+  async renew(): Promise<void> {
+    if (typeof this.source === 'string' || typeof this.source === 'function') {
+      // Nothing to force: a fixed token has no source, and a function is asked
+      // afresh every time anyway.
+      return;
+    }
+    await this.source.refreshToken();
+  }
 }
 
 /**

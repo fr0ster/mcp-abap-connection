@@ -51,6 +51,20 @@ export interface IAuthProvider {
   authorizationHeader(): Promise<string>;
 
   /**
+   * The server refused what this last handed out; get a new one.
+   *
+   * Separate from `authorizationHeader()` because the two questions are
+   * different, and the token contract says so: `getToken()` "may return cached
+   * token if still valid", while `refreshToken()` is documented as the one to
+   * call "when getToken() returned a token that was rejected by server". Asking
+   * the first again after a 401 gets the same rejected token back, and the
+   * renewal never happens.
+   *
+   * Omitted by credentials that cannot be renewed — a password is a password.
+   */
+  renew?(): Promise<void>;
+
+  /**
    * Cookies this credential authenticates with, for the ways in where the
    * session was negotiated elsewhere and handed over — SAML is one.
    *
