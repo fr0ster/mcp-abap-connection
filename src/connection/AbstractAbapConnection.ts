@@ -392,13 +392,23 @@ abstract class AbstractAbapConnection
     });
 
     // Whatever this call dispatched, plus the release of the session it was
-    // disconnecting — which is how a joiner, and a repeat call made while an
-    // earlier release is still on its way, wait for the thing they asked about.
-    const owedToMe = mySession
-      ? this.releasesInFlight.get(mySession)
-      : undefined;
-    if (owedToMe && !releases.includes(owedToMe)) {
-      releases.push(owedToMe);
+    // disconnecting — which is how a joiner waits for the thing it asked about,
+    // its own callback never having been run.
+    //
+    // A repeat call has no session of its own: `clearSessionState()` dropped the
+    // cookies when the first one ran. What it asked for is the sessions still
+    // owed, so it waits on those — the caller chose to come back and spend a
+    // budget finding out whether they closed, and that is what the contract
+    // means by performing what is still owed. A first call does NOT do this:
+    // waiting on someone else's release, which may hang for ever, is what cost
+    // it its whole deadline for a request nobody can finish.
+    const waitFor = mySession
+      ? [this.releasesInFlight.get(mySession)]
+      : [...this.releasesInFlight.values()];
+    for (const release of waitFor) {
+      if (release && !releases.includes(release)) {
+        releases.push(release);
+      }
     }
 
     // Each caller then waits its own budget, measured from its own call, on the
@@ -470,11 +480,6 @@ abstract class AbstractAbapConnection
     const mine: Promise<void>[] = [];
 
     for (const cookies of [...this.owedReleaseCookies.keys()]) {
-      // A release already on its way FOR THIS SESSION is the release still
-      // owed; opening a second would ask the server to close a session the
-      // first request is closing. One in flight for a different session says
-      // nothing about this one — treating it as if it did meant the second
-      // session of a reconnect was never released at all.
       // A release already on its way for THIS session is the release still owed;
       // opening a second would ask the server to close a session the first
       // request is closing. Joining it is not waiting for it: whether this
@@ -486,27 +491,16 @@ abstract class AbstractAbapConnection
       }
 
       const attempts = (this.owedReleaseCookies.get(cookies) ?? 0) + 1;
-      this.owedReleaseCookies.set(cookies, attempts);
 
-      // No `timeout` here, at any budget. Whatever the caller allowed themselves
-      // to wait, the request must be allowed to finish: this is the one request
-      // whose whole purpose is to reach the server, and killing it is the failure
-      // it exists to prevent.
-      let send: Promise<unknown>;
+      // Assembled before anything is dispatched or recorded, because assembling
+      // is the part that can fail on its own — a Kerberos connection with no
+      // cookie and no token throws here. It must not take the other owed
+      // sessions down with it, and it must not escape a teardown documented
+      // never to throw.
+      let headers: Record<string, string>;
       try {
-        send = this.getAxiosInstance()({
-          method: 'GET' as const,
-          url: `${this.baseUrl}${ICF_LOGOFF_PATH}`,
-          headers: {
-            ...(await this.getAuthHeaders()),
-            Cookie: cookies,
-          },
-        });
+        headers = { ...(await this.getAuthHeaders()), Cookie: cookies };
       } catch (error) {
-        // Building the request can fail on its own — a Kerberos connection with
-        // no cookie and no token throws while assembling the header. It must not
-        // take the other owed sessions down with it, and it must not escape a
-        // teardown that is documented never to throw.
         this.logger?.debug(
           `Could not start a session release: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -514,17 +508,32 @@ abstract class AbstractAbapConnection
         // never reaches the rejection handler, so without this the attempt limit
         // would not apply on this path at all and the session would be retried
         // for ever — the cost the limit exists to stop.
+        this.owedReleaseCookies.set(cookies, attempts);
         this.giveUpIfExhausted(cookies, attempts);
         continue;
       }
 
-      // Re-checked after the await: an in-flight release for a LATER key can
-      // land while this iteration is assembling its request, and its success
-      // handler drops the key. Sending then would ask the server to close a
-      // session already closed, and would put the key back as owed.
+      // Re-checked HERE: between the snapshot and this line the only `await` in
+      // the iteration ran, and a release for a LATER key can land during it —
+      // its success handler drops that key. Reaching it afterwards would send a
+      // second logoff for a session already closed and put it back on the owed
+      // list, permanently. Checked BEFORE dispatch, not after: after it, the
+      // request is already on the wire and skipping the handler below would
+      // leave a rejection with nobody to catch it.
       if (!this.owedReleaseCookies.has(cookies)) {
         continue;
       }
+      this.owedReleaseCookies.set(cookies, attempts);
+
+      // No `timeout` here, at any budget. Whatever the caller allowed themselves
+      // to wait, the request must be allowed to finish: this is the one request
+      // whose whole purpose is to reach the server, and killing it is the failure
+      // it exists to prevent.
+      const send = this.getAxiosInstance()({
+        method: 'GET' as const,
+        url: `${this.baseUrl}${ICF_LOGOFF_PATH}`,
+        headers,
+      });
 
       // Reported whenever it lands, waited for or not: "nobody is waiting on it"
       // is not "nobody wants to know". Attached before any await so a rejection

@@ -170,7 +170,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A session released while a teardown is walking its list is not asked to close twice.** The
   loop iterates a snapshot and awaits per entry, so a release landing meanwhile could have its key
-  removed and then re-added by the very iteration that followed it.
+  removed and then re-added by the very iteration that followed it — a second logoff for a session
+  already closed, owed again afterwards and retried by every later teardown. The check sits before
+  the request is dispatched: after it, the request is already on the wire, and skipping the
+  handlers would leave a rejection with nobody to catch it.
+
+- **A repeat `disconnect()` waits for what it is still owed.** Its own cookies were cleared by the
+  first call, so it had no session to look up and returned instantly — however long a budget it
+  passed. A caller that comes back specifically to find out whether the session closed now waits
+  for the releases outstanding. A first call still does not: waiting on someone else's release,
+  which may hang for ever, is what cost it its whole deadline.
 
 ### Changed — BREAKING
 

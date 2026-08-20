@@ -377,6 +377,121 @@ describe('every session of a reconnect cycle is released', () => {
     expect((conn as any).owedReleaseCookies.size).toBe(0);
   });
 
+  /**
+   * The loop walks a snapshot and awaits inside it, so a release for a LATER key
+   * can land during an earlier iteration's await. Its success handler drops that
+   * key — and reaching it afterwards sent a second logoff for a session already
+   * closed and put it back on the owed list, where every later teardown retried
+   * it.
+   */
+  it('does not re-close a session released while the list is being walked', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    let session = 0;
+    let landS2: (() => void) | undefined;
+    surviving(conn, seen, async (cfg) => {
+      const cookie = String(cfg.headers?.Cookie ?? '');
+      if (String(cfg.url).includes('logoff')) {
+        if (cookie.includes('S1')) {
+          // Fails at once: S1 stays owed and nothing is in flight for it.
+          throw new Error('S1 logoff refused');
+        }
+        // S2 hangs until the test lands it.
+        await new Promise<void>((resolve) => {
+          landS2 = resolve;
+        });
+        return { status: 200, data: '', headers: {} };
+      }
+      session += 1;
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': [`SAP_SESSIONID_STUB_100=S${session}%3d; path=/`],
+        },
+      };
+    });
+
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 50 }); // S1 owed, release failed
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 0 }); // S2 dispatched and hanging
+
+    // The third teardown walks [S1, S2]. While S1 is assembling its request,
+    // S2's release lands and its handler drops S2 — the window this guards.
+    const realHeaders = (conn as any).getAuthHeaders.bind(conn);
+    let first = true;
+    (conn as any).getAuthHeaders = async () => {
+      const headers = await realHeaders();
+      if (first) {
+        first = false;
+        landS2?.();
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      return headers;
+    };
+
+    await conn.disconnect({ deadlineMs: 50 });
+
+    const s2Logoffs = seen.filter(
+      (r) =>
+        r.url.includes('/logoff') && String(r.headers.Cookie).includes('S2'),
+    );
+    expect(s2Logoffs).toHaveLength(1);
+    // And it is not owed again: it was released.
+    expect([...(conn as any).owedReleaseCookies.keys()].join()).not.toContain(
+      'S2',
+    );
+  });
+
+  /**
+   * "A repeat call performs whatever is still owed" — including the waiting. A
+   * caller that comes back with a budget to find out whether the session closed
+   * got no wait at all, because its own cookies were cleared by the first call
+   * and it therefore had no session to look up.
+   */
+  it('a repeat call waits for the release it is still owed', async () => {
+    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    let landLogoff: (() => void) | undefined;
+    let landed = false;
+    surviving(conn, seen, async (cfg) => {
+      if (String(cfg.url).includes('logoff')) {
+        await new Promise<void>((resolve) => {
+          landLogoff = () => {
+            landed = true;
+            resolve();
+          };
+        });
+        return { status: 200, data: '', headers: {} };
+      }
+      return {
+        status: 200,
+        data: '<service/>',
+        headers: {
+          'x-csrf-token': 'TOKEN',
+          'set-cookie': ['SAP_SESSIONID_STUB_100=S1%3d; path=/'],
+        },
+      };
+    });
+
+    await conn.connect();
+    await conn.disconnect({ deadlineMs: 0 }); // dispatched, not waited for
+    expect(landed).toBe(false);
+
+    let repeatDone = false;
+    const repeat = conn.disconnect({ deadlineMs: 30_000 }).then(() => {
+      repeatDone = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(repeatDone).toBe(false); // it asked to wait, and it is waiting
+
+    landLogoff?.();
+    await repeat;
+    expect(landed).toBe(true);
+  });
+
   it('keeps one session owed while another is released', async () => {
     const conn = new BaseAbapConnection(baseConfig, makeLogger());
     const seen: Seen[] = [];
