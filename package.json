@@ -35,12 +35,12 @@
     "url": "git+https://github.com/fr0ster/mcp-abap-connection.git"
   },
   "scripts": {
-    "chrono": "./tools/version-stats.sh",
-    "clean": "rm -rf dist tsconfig.tsbuildinfo",
-    "lint": "npx biome check --write src",
-    "lint:check": "npx biome check src",
-    "format": "npx biome format --write src",
-    "build": "npm run --silent clean && npx biome check src --diagnostic-level=error && npx tsc -p tsconfig.json",
+    "chrono": "node scripts/version-stats.mjs",
+    "clean": "node scripts/clean.mjs",
+    "lint": "npx biome check --write src scripts",
+    "lint:check": "npx biome check src scripts",
+    "format": "npx biome format --write src scripts",
+    "build": "npm run --silent clean && npx biome check src scripts --diagnostic-level=error && npx tsc -p tsconfig.json",
     "build:fast": "npx tsc -p tsconfig.json",
     "test": "npm run --silent check:docs && jest",
     "prepublishOnly": "npm run build && npm run check:docs",
