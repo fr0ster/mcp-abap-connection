@@ -15,6 +15,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ships, toPosix } from './docs-paths.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 process.chdir(root);
@@ -28,7 +29,7 @@ function walk(dir, test, out = []) {
     if (entry === 'node_modules' || entry.startsWith('.')) continue;
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) walk(full, test, out);
-    else if (test(entry)) out.push(relative(root, full));
+    else if (test(entry)) out.push(toPosix(relative(root, full)));
   }
   return out;
 }
@@ -162,17 +163,15 @@ for (const file of [...markdown, ...examples]) {
 // Check 3 sees the file on disk and passes. This one asks the other question —
 // does the target ship too.
 const published = JSON.parse(readFileSync('package.json', 'utf8')).files ?? [];
-const ships = (target) =>
-  published.some((entry) => target === entry || target.startsWith(`${entry}/`));
 
 for (const file of [...markdown, 'CHANGELOG.md']) {
-  if (!ships(file) && file !== 'README.md') continue; // not shipped, not its problem
+  if (!ships(published, file) && file !== 'README.md') continue; // not shipped, not its problem
   const text = readFileSync(file, 'utf8');
   for (const m of text.matchAll(/\]\((\.{0,2}\/?[A-Za-z0-9_/.-]+\.md)/g)) {
     // Relative to the linking file, then relative to the package root, which is
     // what `files` entries are expressed against.
     const target = relative(root, resolve(dirname(file), m[1]));
-    if (!ships(target)) {
+    if (!ships(published, target)) {
       report(
         'ships',
         `${file} -> ${m[1]} is in the repo but not in package.json "files"`,
