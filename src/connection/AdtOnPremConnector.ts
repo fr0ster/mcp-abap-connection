@@ -31,6 +31,12 @@ export class AdtOnPremConnector extends CredentialAbapConnection {
     credential: IAuthProvider,
     logger: ILogger | null = null,
     sessionId?: string,
+    /**
+     * `transport` is the second axis, and on-prem is where it is a real
+     * choice: the same ADT call travels over HTTP, or over RFC on a system
+     * where stateful HTTP sessions are not usable. Omitted means HTTP — the
+     * documented default, not something worked out from the config.
+     */
     options?: { skipSessionType?: boolean; transport?: IAdtTransport },
   ) {
     super(config, credential, logger, sessionId, options);
