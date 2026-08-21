@@ -32,6 +32,7 @@ import {
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import { adaptTransport } from './adaptTransport.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
+import { HttpTransport } from './HttpTransport.js';
 import type { IAdtTransport } from './IAdtTransport.js';
 
 /**
@@ -1860,30 +1861,19 @@ abstract class AbstractAbapConnection
 
   private getAxiosInstance(): AxiosInstance {
     if (!this.axiosInstance) {
-      // A transport that was said, not sniffed. Dressed in the axios shape the
-      // six send sites are written against; see adaptTransport().
-      if (this.adtTransport) {
-        this.logger?.debug(`Transport: ${this.adtTransport.kind}`);
-        const adapted = adaptTransport(this.adtTransport);
-        this.axiosInstance = adapted;
-        return adapted;
-      }
+      // Both ends of the axis are objects now. HTTP is the default rather than
+      // an inference: the caller names a transport or gets this one, and
+      // nothing is decided by looking at the config or the server.
+      //
+      // The thunk is where the two axes touch — TLS client-certificate
+      // material comes from the credential and configures the transport, and
+      // it must be read after the credential has been prepared.
+      const transport =
+        this.adtTransport ??
+        new HttpTransport(() => this.getHttpsAgentOptions(), this.logger);
 
-      const rejectUnauthorized =
-        process.env.NODE_TLS_REJECT_UNAUTHORIZED === '1' ||
-        (process.env.TLS_REJECT_UNAUTHORIZED === '1' &&
-          process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '0');
-
-      this.logger?.debug(
-        `TLS configuration: rejectUnauthorized=${rejectUnauthorized}`,
-      );
-
-      this.axiosInstance = axios.create({
-        httpsAgent: new Agent({
-          rejectUnauthorized,
-          ...this.getHttpsAgentOptions(),
-        }),
-      });
+      this.logger?.debug(`Transport: ${transport.kind}`);
+      this.axiosInstance = adaptTransport(transport);
     }
 
     return this.axiosInstance;

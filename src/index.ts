@@ -52,12 +52,20 @@ export {
   type IWebSocketFactory,
   type IWebSocketLike,
 } from './connection/GenericWebSocketTransport.js';
+// The transport axis. Both ends are objects, so a caller can name either.
+export { HttpTransport } from './connection/HttpTransport.js';
+export type {
+  IAdtTransport,
+  IAdtTransportRequest,
+  IAdtTransportResponse,
+} from './connection/IAdtTransport.js';
 export {
   JwtAbapConnection,
   JwtAbapConnection as CloudAbapConnection,
 } from './connection/JwtAbapConnection.js';
 export { KerberosAbapConnection } from './connection/KerberosAbapConnection.js';
 export { RfcAbapConnection } from './connection/RfcAbapConnection.js';
+export { RfcTransport } from './connection/RfcTransport.js';
 export { SamlAbapConnection } from './connection/SamlAbapConnection.js';
 export type { ILogger } from './logger.js';
 // Timeouts
