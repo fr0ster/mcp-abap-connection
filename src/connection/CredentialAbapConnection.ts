@@ -199,7 +199,7 @@ export abstract class CredentialAbapConnection extends AbstractAbapConnection {
 
     try {
       const token = this.credential.fetchCsrfToken
-        ? await this.credential.fetchCsrfToken(discoveryUrl)
+        ? await this.credential.fetchCsrfToken(this.sessionTransport())
         : await this.fetchCsrfToken(discoveryUrl);
       this.setCsrfToken(token);
       this.logger?.debug('Connected', {

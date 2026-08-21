@@ -610,7 +610,7 @@ abstract class AbstractAbapConnection
    * the session is ours, and nothing else. It cannot reach session state, so a
    * strategy can neither mark this connection connected nor tear it down.
    */
-  private sessionTransport(): ISessionTransport {
+  protected sessionTransport(): ISessionTransport {
     // A SNAPSHOT, not a view. The close is dispatched without being awaited —
     // a teardown does not wait for it — so `clearSessionState()` runs while the
     // strategy is still suspended on its first `await`. Reading the connection

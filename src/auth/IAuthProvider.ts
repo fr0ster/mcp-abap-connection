@@ -20,6 +20,32 @@
 
 import type { AgentOptions } from 'node:https';
 
+/**
+ * What a credential needs from the connection to talk to the server itself.
+ *
+ * Only the credentials whose way in IS a round trip use this — see
+ * {@link IAuthProvider.fetchCsrfToken}. It is deliberately the connection's own
+ * transport rather than an HTTP client of the credential's: the cookies the
+ * exchange produces have to land where every later request will look for them,
+ * and a credential holding its own axios would put them somewhere else.
+ *
+ * `ISessionTransport` extends this — the session strategies needed the same
+ * thing first, for the same reason.
+ */
+export interface ICredentialTransport {
+  /** Absolute base URL of the system. */
+  baseUrl: string;
+  /** Issue a raw request and hand back status, headers and body. */
+  send(request: {
+    method: 'GET' | 'DELETE';
+    url: string;
+    headers: Record<string, string>;
+    timeoutMs?: number;
+    /** Whether the cookies this answers with become the connection's. */
+    adoptCookies?: boolean;
+  }): Promise<{ status: number; headers: unknown; data: unknown }>;
+}
+
 export interface IAuthProvider {
   /** For logs, so which credential ran is never inferred from behaviour. */
   readonly kind: string;
@@ -86,6 +112,14 @@ export interface IAuthProvider {
    *
    * Only SPNEGO needs it: its token is consumed by one request and the exchange
    * is the fetch. Everything else leaves it out and gets the shared path.
+   *
+   * Given a transport rather than a URL, because a credential that owns the
+   * fetch owns what the fetch produces. The SPNEGO round trip is the request
+   * the server answers with the session cookie, and that cookie has to reach
+   * the connection — every later request authenticates with it, and the
+   * Negotiate token is spent by then. Handing over a URL and taking back a
+   * string left the cookie with nowhere to go, which is why this signature was
+   * never implementable and why nothing implemented it.
    */
-  fetchCsrfToken?(url: string): Promise<string>;
+  fetchCsrfToken?(transport: ICredentialTransport): Promise<string>;
 }

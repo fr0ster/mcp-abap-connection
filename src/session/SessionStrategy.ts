@@ -22,12 +22,11 @@
  * says so. Guessing the platform would be a guess; asking is not.
  */
 
+import type { ICredentialTransport } from '../auth/IAuthProvider.js';
 import type { ILogger } from '../logger.js';
 
 /** What a strategy needs from the connection to talk to the server. */
-export interface ISessionTransport {
-  /** Absolute base URL of the system. */
-  baseUrl: string;
+export interface ISessionTransport extends ICredentialTransport {
   /** Auth headers for a request made outside the normal request path. */
   authHeaders(): Promise<Record<string, string>>;
   /** Cookies held for this connection, or null before any have arrived. */
