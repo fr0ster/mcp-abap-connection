@@ -6,9 +6,11 @@
  * answer; a dead session is the exact opposite — the cookie is unchanged, so
  * only the answer tells. Both must end the same way for a caller holding a lock.
  */
+
 import { createServer, type Server } from 'node:http';
 import type { SapConfig } from '../../config/sapConfig.js';
-import { BaseAbapConnection } from '../../connection/BaseAbapConnection.js';
+import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
+import { onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
   baseUrl: string;
@@ -103,7 +105,7 @@ const configFor = (baseUrl: string): SapConfig => ({
   password: 'STUB',
 });
 
-const get = (conn: BaseAbapConnection, url = '/sap/bc/adt/work') =>
+const get = (conn: AdtOnPremConnector, url = '/sap/bc/adt/work') =>
   conn.makeAdtRequest({ url, method: 'GET', timeout: 5000 });
 
 describe('a replaced session cookie', () => {
@@ -118,7 +120,7 @@ describe('a replaced session cookie', () => {
   });
 
   it('is fatal', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     stub.rotateSession = true;
@@ -136,7 +138,7 @@ describe('a replaced session cookie', () => {
   // rule is written from what it CAN know — the session we were speaking to is
   // not the one we are speaking to now.
   it('is fatal even with nothing obviously at stake', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     stub.rotateSession = true;
@@ -151,7 +153,7 @@ describe('a replaced session cookie', () => {
   // flip it back to stateless while a lock is genuinely open, and a batch never
   // sets it at all.
   it('is fatal regardless of the session mode', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     conn.setSessionType('stateless');
 
@@ -178,7 +180,7 @@ describe('a replacement arriving on a non-200 response', () => {
   // discards its classification absorbs the replacement silently and every
   // later check reads `unchanged`. The error path did exactly that.
   it('is fatal too', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     stub.rotateSession = true;
@@ -206,7 +208,7 @@ describe('a session verdict raised during a retry', () => {
   // SESSION_REPLACED raised while observing the retry's own response. A caller
   // can retry a 403 itself; it cannot learn from a 403 that its lock is dead.
   it('reaches the caller instead of the error that started the retry', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     let attempts = 0;
@@ -275,7 +277,7 @@ describe('a dead session', () => {
   });
 
   it('is reported as a lost session, with the cookie untouched', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     const identityBefore = conn.getSessionIdentity();
 
@@ -290,7 +292,7 @@ describe('a dead session', () => {
   });
 
   it('does not retry the request internally', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     let attempts = 0;

@@ -7,9 +7,11 @@
  * critical section, makeAdtRequest raises the effective timeout to the large
  * SAP_TIMEOUT_CRITICAL ceiling.
  */
+
 import type { SapConfig } from '../config/sapConfig.js';
-import { BaseAbapConnection } from '../connection/BaseAbapConnection.js';
+import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
+import { onPrem } from './helpers/onPrem.js';
 import { markConnectedForTest } from './helpers/session.js';
 
 const mockLogger: ILogger = {
@@ -28,7 +30,7 @@ const baseConfig: SapConfig = {
 };
 
 function attachMockAxios(
-  conn: BaseAbapConnection,
+  conn: AdtOnPremConnector,
   fn: (cfg: any) => Promise<any>,
 ): void {
   (conn as any).axiosInstance = fn;
@@ -45,7 +47,7 @@ describe('critical section (uninterruptible lock → unlock)', () => {
   });
 
   it('begin/end is reference-counted and clamped at zero', () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     expect(conn.isInCriticalSection()).toBe(false);
 
@@ -64,7 +66,7 @@ describe('critical section (uninterruptible lock → unlock)', () => {
   });
 
   it('uses the short per-request timeout when NOT in a critical section', async () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     let captured: any;
     attachMockAxios(conn, async (cfg) => {
@@ -82,7 +84,7 @@ describe('critical section (uninterruptible lock → unlock)', () => {
   });
 
   it('raises the timeout to the large ceiling while in a critical section, then restores it', async () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     let captured: any;
     attachMockAxios(conn, async (cfg) => {

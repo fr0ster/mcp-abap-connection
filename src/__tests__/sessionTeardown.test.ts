@@ -7,9 +7,11 @@
  * cookie instead — and a connection without a session still gets `200` for a
  * LOCK, handing back a handle the next request cannot use.
  */
+
 import type { SapConfig } from '../config/sapConfig.js';
-import { BaseAbapConnection } from '../connection/BaseAbapConnection.js';
+import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
+import { onPrem } from './helpers/onPrem.js';
 
 const baseConfig: SapConfig = {
   url: 'https://sap.example.com',
@@ -36,7 +38,7 @@ type Seen = {
 };
 
 function attachMockAxios(
-  conn: BaseAbapConnection,
+  conn: AdtOnPremConnector,
   seen: Seen[],
   answer: (cfg: any) => Promise<any> = async () => ({
     status: 200,
@@ -75,7 +77,7 @@ function attachMockAxios(
  */
 describe('the session mechanism is chosen by the connection, not probed', () => {
   it('on-prem keeps the platform logoff, even where the session resource answers', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     // A system that publishes BOTH — which is what S/4HANA on-prem does.
     attachMockAxios(conn, seen, async () => ({
@@ -141,7 +143,7 @@ describe('a connection the server gave no session says so', () => {
    * whether this connect got a session.
    */
   it('refuses to connect when the server issued no SAP_SESSIONID', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     // What an on-prem server answers when it will not open a session: the CSRF
     // cookie, and nothing to hold a lock against.
     attachMockAxios(conn, [], async () => ({
@@ -162,7 +164,7 @@ describe('a connection the server gave no session says so', () => {
   // and it cannot decide from "NOT_CONNECTED" alone. It has to say what the
   // server did, what still works, what does not, and who is expected to act.
   it('says what happened, what it costs, and whose call it is', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     attachMockAxios(conn, [], async () => ({
       status: 200,
       data: '<service/>',
@@ -184,7 +186,7 @@ describe('a connection the server gave no session says so', () => {
 
   it('stays quiet when a session was established', async () => {
     const logger = makeLogger();
-    const conn = new BaseAbapConnection(baseConfig, logger);
+    const conn = onPrem(baseConfig, logger);
     attachMockAxios(conn, []);
 
     await conn.connect();
@@ -209,7 +211,7 @@ describe('a connection the server gave no session says so', () => {
 describe('every session of a reconnect cycle is released', () => {
   /** A double that survives clearSessionState(), as a reconnect requires. */
   function surviving(
-    conn: BaseAbapConnection,
+    conn: AdtOnPremConnector,
     seen: Seen[],
     answer: (cfg: any) => Promise<any>,
   ): void {
@@ -240,7 +242,7 @@ describe('every session of a reconnect cycle is released', () => {
    * second session never released at all.
    */
   it('sends a logoff for the second session while the first still hangs', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     // A server issues ONE session and keeps handing back the same id until it
     // is told the session is finished — it does not mint a new one per request.
@@ -285,7 +287,7 @@ describe('every session of a reconnect cycle is released', () => {
    * already answered.
    */
   it('does not spend a caller’s deadline on a release that never answers', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     // Counted per CONNECT, not per request: establishment is two requests now
     // (the preflight, then the establishing call), and numbering by request
@@ -340,7 +342,7 @@ describe('every session of a reconnect cycle is released', () => {
    * this passes either way.
    */
   it('a joining caller waits for the release it asked about', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     let releaseLogoff: (() => void) | undefined;
     let landed = false;
@@ -386,7 +388,7 @@ describe('every session of a reconnect cycle is released', () => {
   });
 
   it('does not re-send a release already on its way for the same session', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     surviving(conn, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
@@ -420,7 +422,7 @@ describe('every session of a reconnect cycle is released', () => {
  */
 describe('requests stay on the server the session lives on', () => {
   function pinning(
-    conn: BaseAbapConnection,
+    conn: AdtOnPremConnector,
     seen: Seen[],
     server?: string,
   ): void {
@@ -453,7 +455,7 @@ describe('requests stay on the server the session lives on', () => {
   }
 
   it('asks the server to name itself, then sends that name back', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     pinning(conn, seen, 'appserver-c5zhg');
 
@@ -480,7 +482,7 @@ describe('requests stay on the server the session lives on', () => {
   });
 
   it('sends no name when the server never gave one', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     pinning(conn, seen);
 
@@ -494,7 +496,7 @@ describe('requests stay on the server the session lives on', () => {
   });
 
   it('forgets the server when the session it belonged to is gone', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     pinning(conn, seen, 'appserver-c5zhg');
 
@@ -527,7 +529,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
     '<atom:link href="/sap/public/bc/icf/logoff" rel="http://www.sap.com/adt/categories/core/http/sessions/logoff" title="Logoff resource"/>' +
     '</http:session>';
 
-  function cloudThenFailing(conn: BaseAbapConnection, seen: Seen[]): void {
+  function cloudThenFailing(conn: AdtOnPremConnector, seen: Seen[]): void {
     const instance = async (cfg: any) => {
       seen.push({
         url: cfg.url,
@@ -597,7 +599,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
     const conn = new JwtAbapConnection(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
       makeLogger(),
-    ) as never as BaseAbapConnection;
+    ) as never as AdtOnPremConnector;
     const seen: Seen[] = [];
     const instance = async (cfg: any) => {
       seen.push({
@@ -637,7 +639,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
 
 describe('disconnect ends the server session', () => {
   it('calls the logoff endpoint with the session cookies', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen);
 
@@ -654,7 +656,7 @@ describe('disconnect ends the server session', () => {
   it('disconnects anyway when the logoff fails', async () => {
     // A session we could not close is strictly better than a teardown that
     // hangs or throws — disconnect() must always settle.
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
@@ -682,7 +684,7 @@ describe('disconnect ends the server session', () => {
    * caught up — lock, update, unlock, activate. A teardown has no successor.
    */
   it('does not wait by default, even if the logoff never answers', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
@@ -715,7 +717,7 @@ describe('disconnect ends the server session', () => {
    * that can violate it.
    */
   it('deadlineMs: 0 sends the logoff but does not wait for it', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     let releaseLogoff: (() => void) | undefined;
     attachMockAxios(conn, seen, async (cfg) => {
@@ -753,7 +755,7 @@ describe('disconnect ends the server session', () => {
    * change exists to prevent, reintroduced by the parameter meant to bound it.
    */
   it('a deadline detaches the logoff rather than aborting it', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     let releaseLogoff: (() => void) | undefined;
     let logoffFinished = false;
@@ -799,7 +801,7 @@ describe('disconnect ends the server session', () => {
     'reports a deadlineMs of %p and disconnects anyway',
     async (deadlineMs) => {
       const logger = makeLogger();
-      const conn = new BaseAbapConnection(baseConfig, logger);
+      const conn = onPrem(baseConfig, logger);
       const seen: Seen[] = [];
       attachMockAxios(conn, seen);
       await conn.connect();
@@ -819,7 +821,7 @@ describe('disconnect ends the server session', () => {
     const previous = process.env.SAP_RELEASE_DEADLINE_MS;
     process.env.SAP_RELEASE_DEADLINE_MS = 'abc';
     try {
-      expect(() => new BaseAbapConnection(baseConfig, makeLogger())).toThrow(
+      expect(() => onPrem(baseConfig, makeLogger())).toThrow(
         /SAP_RELEASE_DEADLINE_MS/,
       );
     } finally {
@@ -841,7 +843,7 @@ describe('disconnect ends the server session', () => {
    * allowance again, which is the one thing the caller was bounding.
    */
   it('spends the deadline while queued behind another transition', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     let gate: (() => void) | undefined;
     let gateArmed = false;
@@ -895,7 +897,7 @@ describe('disconnect ends the server session', () => {
   });
 
   it('sends nothing on a repeat call when the first logoff succeeded', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen);
 
@@ -907,7 +909,7 @@ describe('disconnect ends the server session', () => {
   });
 
   it('joins a release still in flight instead of opening a second', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     let releaseLogoff: (() => void) | undefined;
     attachMockAxios(conn, seen, async (cfg) => {
@@ -943,7 +945,7 @@ describe('disconnect ends the server session', () => {
    * once; the waiting is each caller's own.
    */
   it('does not charge one caller with another caller’s deadline', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     let releaseLogoff: (() => void) | undefined;
     attachMockAxios(conn, seen, async (cfg) => {
@@ -986,7 +988,7 @@ describe('disconnect ends the server session', () => {
    * the caller there, and would leave the teardown half-done.
    */
   it('disconnects even when the logoff cannot be assembled', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen);
 
@@ -1002,7 +1004,7 @@ describe('disconnect ends the server session', () => {
   });
 
   it('sends nothing when there is no session to end', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen);
 

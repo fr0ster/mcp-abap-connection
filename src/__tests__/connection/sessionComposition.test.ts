@@ -10,9 +10,11 @@
  * Admission is NOT enforced yet (that is the breaking switch), so a request on
  * an unconnected connection still goes through here.
  */
+
 import { createServer, type Server } from 'node:http';
 import type { SapConfig } from '../../config/sapConfig.js';
-import { BaseAbapConnection } from '../../connection/BaseAbapConnection.js';
+import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
+import { onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
   baseUrl: string;
@@ -98,7 +100,7 @@ const configFor = (baseUrl: string): SapConfig => ({
   password: 'STUB',
 });
 
-describe('session lifecycle composed into BaseAbapConnection', () => {
+describe('session lifecycle composed into AdtOnPremConnector', () => {
   let stub: Stub;
 
   beforeEach(async () => {
@@ -110,13 +112,13 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
   });
 
   it('starts disconnected, with no identity', () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     expect(conn.isConnected()).toBe(false);
     expect(conn.getSessionIdentity()).toBeNull();
   });
 
   it('publishes usability and the identity after connect()', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     expect(conn.isConnected()).toBe(true);
@@ -126,14 +128,14 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
   // The CSRF cookie changes on a token refresh WITHIN one session, so folding
   // it into the identity would report an ordinary refresh as a new session.
   it('keeps the CSRF cookie out of the identity', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     expect(conn.getSessionIdentity()).not.toContain('XSRF');
   });
 
   it('establishes once for concurrent connects, and once more is a no-op', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
 
     await Promise.all([conn.connect(), conn.connect()]);
     expect(stub.sessions).toHaveLength(1);
@@ -143,7 +145,7 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
   });
 
   it('reports not-connected and drops the identity after disconnect()', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     await conn.disconnect();
@@ -152,7 +154,7 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
   });
 
   it('connects again after a disconnect, on a fresh session', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     await conn.disconnect();
 
@@ -167,7 +169,7 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
   // outside the transition leaves every caller but the first reporting an empty
   // teardown — abandoned locks announced to nobody.
   it('tears down once for concurrent disconnects', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     let cleared = 0;
@@ -273,7 +275,7 @@ describe('explicit connect is required', () => {
   });
 
   it('refuses a request when connect() was never called', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
 
     await expect(
       conn.makeAdtRequest({
@@ -287,7 +289,7 @@ describe('explicit connect is required', () => {
   });
 
   it('serves requests after connect(), and refuses them after disconnect()', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     await expect(
@@ -312,7 +314,7 @@ describe('explicit connect is required', () => {
   // The swallow used to hide this: connect() resolved over a broken system and
   // the failure surfaced later, on a request, as something else entirely.
   it('rejects when the session cannot be established', async () => {
-    const conn = new BaseAbapConnection(
+    const conn = onPrem(
       configFor('http://127.0.0.1:1'), // nothing listens there
       null,
     );
@@ -338,10 +340,7 @@ describe('explicit connect is required', () => {
     const { port } = rejecting.address() as { port: number };
 
     try {
-      const conn = new BaseAbapConnection(
-        configFor(`http://127.0.0.1:${port}`),
-        null,
-      );
+      const conn = onPrem(configFor(`http://127.0.0.1:${port}`), null);
       await expect(conn.connect()).rejects.toThrow();
 
       expect(
@@ -360,7 +359,7 @@ describe('explicit connect is required', () => {
   // legitimately pass no timeout at all. The request is not aborted — it simply
   // no longer holds the teardown, or everything queued behind it, open.
   it('does not wait for an in-flight request', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     const order: string[] = [];
@@ -472,7 +471,7 @@ describe('a teardown requested during establishment', () => {
   });
 
   /** Holds establishment open until the test lets it finish. */
-  function stallEstablishment(conn: BaseAbapConnection) {
+  function stallEstablishment(conn: AdtOnPremConnector) {
     let release!: () => void;
     let markStarted!: () => void;
     const held = new Promise<void>((r) => {
@@ -500,7 +499,7 @@ describe('a teardown requested during establishment', () => {
   // it, clearing the teardown state and handing back a session the caller had
   // already asked to close.
   it('does not publish a connect that finished after a disconnect was requested', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     await conn.disconnect();
 
@@ -522,7 +521,7 @@ describe('a teardown requested during establishment', () => {
   });
 
   it('does not publish a recovery that finished after a disconnect was requested', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     const baseline = (conn as unknown as { teardownEpoch: number })
       .teardownEpoch;
@@ -560,7 +559,7 @@ describe('an abandoned establishment leaves in-flight work alone', () => {
   // guarantee. What replaces it is fencing: the request runs to completion
   // untouched, and its result cannot reach the connection.
   it('leaves the clearing to the teardown, and fences the request', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     // A request that will not finish until the test says so.

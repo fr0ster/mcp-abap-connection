@@ -9,9 +9,11 @@
  *
  * No SAP: a local stub, and the request is held open until the test says so.
  */
+
 import { createServer, type Server } from 'node:http';
 import type { SapConfig } from '../../config/sapConfig.js';
-import { BaseAbapConnection } from '../../connection/BaseAbapConnection.js';
+import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
+import { onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
   baseUrl: string;
@@ -92,7 +94,7 @@ const configFor = (baseUrl: string): SapConfig => ({
 });
 
 /** Holds any /work request until the returned release() is called. */
-function holdWork(conn: BaseAbapConnection) {
+function holdWork(conn: AdtOnPremConnector) {
   let release!: () => void;
   const held = new Promise<void>((r) => {
     release = r;
@@ -127,7 +129,7 @@ describe('a request that settles after its session was replaced', () => {
    * connect (S2); then the request is let go and answers with `status`.
    */
   async function staleRequest(status: number, body: string, method = 'GET') {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     const release = holdWork(conn);

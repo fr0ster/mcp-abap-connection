@@ -126,12 +126,17 @@ export abstract class CredentialAbapConnection<
     // the session has already been replaced says nothing about the credential:
     // it was answered by a server we are no longer talking to.
     const sentOn = this.sessionGeneration;
+    // And which lifetime. The generation alone cannot tell a session somebody
+    // REBUILT from one the caller tore down: both move it. The epoch moves only
+    // for a teardown, and the two cases want opposite answers — see below.
+    const sentDuring = this.teardownEpoch;
     try {
       return await super.makeAdtRequest<T, D>(options);
     } catch (error) {
       if (!isUnauthorized(error)) throw error;
 
-      if (!(await this.rebuiltAfterCredentialChange(sentOn))) throw error;
+      if (!(await this.rebuiltAfterCredentialChange(sentOn, sentDuring)))
+        throw error;
       // Exactly once, and to `super` deliberately: reaching for `this` would
       // re-enter this method, and a provider that answers differently every
       // time — a broken refresher, or a server refusing whatever it is given —
@@ -152,16 +157,32 @@ export abstract class CredentialAbapConnection<
    * moment and the session must be rebuilt once, not once per request in
    * flight. Everyone joins the first one and gets its verdict.
    */
-  private rebuiltAfterCredentialChange(sentOn: number): Promise<boolean> {
+  private rebuiltAfterCredentialChange(
+    sentOn: number,
+    sentDuring: number,
+  ): Promise<boolean> {
     if (this.credentialRenewal) return this.credentialRenewal;
 
     const inFlight = (async () => {
-      // Somebody else already rebuilt while this request was in flight, so this
+      // The caller tore this connection down while the request was in flight.
+      // The session it was sent on is gone deliberately, so retrying would
+      // replay it inside the LIVE one: same connection, current cookies, and a
+      // server that sees a legitimate-looking write nobody asked for. For a
+      // read that is merely wasteful; this was found on a PUT, where it is a
+      // mutation from a dead session committed into a live one. The 401 goes
+      // back to the caller unchanged.
+      if (this.teardownEpoch !== sentDuring) return false;
+
+      // No teardown, so somebody else rebuilt while this was in flight. The
       // refusal was answered by a session that no longer exists and says
-      // nothing about the credential in use now. Retry on the new one; renewing
+      // nothing about the credential in use now: retry on the new one. Renewing
       // again would force a second refresh and tear down a healthy session —
       // which is what comparing against a connection-wide "last header" did,
       // since by then that header was the NEW one.
+      //
+      // The two branches differ because the questions do. A rebuild continues
+      // one lifetime; a teardown ends it, and nothing from before it may be
+      // replayed after.
       if (this.sessionGeneration !== sentOn) return true;
       const before = this.lastAuthorization;
       // Tell the credential its last answer was refused BEFORE asking again.
@@ -213,7 +234,7 @@ export abstract class CredentialAbapConnection<
       });
     } catch (error) {
       this.logger?.warn(
-        `Could not establish upfront (${this.credential.kind}): ${error instanceof Error ? error.message : String(error)}. The first request will retry.`,
+        `Could not establish (${this.credential.kind}): ${error instanceof Error ? error.message : String(error)}`,
       );
       // A rejecting response can still carry the cookies that matter; they are
       // taken by fetchCsrfToken itself, so nothing is read out of the error
@@ -223,6 +244,17 @@ export abstract class CredentialAbapConnection<
           `Cookies after a failed establishment: ${this.getCookies() ? 'present' : 'none'}`,
         );
       }
+      // Rethrow: a resolved connect() must mean a usable session exists.
+      //
+      // This warned and resolved, on the reasoning that "the first request will
+      // retry" — true while establishment could happen lazily, and left behind
+      // when connect() became mandatory. Swallowing now leaves a connection
+      // that reports success and holds nothing; worse, it skips the debris
+      // clearing in establishAndCommit()'s catch, so the Set-Cookie that came
+      // with the 401 survives as the session identity. A cookie is proof to
+      // every credential that auth is settled, so the NEXT connect() goes out
+      // with no credentials at all and fails for an unrelated reason.
+      throw error;
     }
   }
 }

@@ -11,9 +11,10 @@
  * other response, so a replacement is fatal while a lock is held and
  * transparent when none is. An assumption until this file says otherwise.
  */
+
 import { createServer, type Server } from 'node:http';
 import type { SapConfig } from '../../config/sapConfig.js';
-import { BaseAbapConnection } from '../../connection/BaseAbapConnection.js';
+import { onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
   baseUrl: string;
@@ -91,7 +92,7 @@ describe('path C — a login-form 401 on a mutation', () => {
   });
 
   it('recovers transparently when no lock is held', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S1');
 
@@ -131,7 +132,7 @@ describe('path D — a 401 on a GET', () => {
   // The first branch retries with the cookies already held: same session, so
   // nothing to report.
   it('retries on the same session when it still has cookies', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     stub.nextWorkStatus = 401;

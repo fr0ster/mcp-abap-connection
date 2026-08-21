@@ -1,9 +1,10 @@
 import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
-import { BaseAbapConnection } from '../connection/BaseAbapConnection.js';
+import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { JwtAbapConnection } from '../connection/JwtAbapConnection.js';
 import { SamlAbapConnection } from '../connection/SamlAbapConnection.js';
 import type { ILogger } from '../logger.js';
+import { onPrem } from './helpers/onPrem.js';
 import { markConnectedForTest } from './helpers/session.js';
 
 const mockLogger: ILogger = {
@@ -49,7 +50,7 @@ function makeAxiosError(
   return err;
 }
 
-function attachMockAxios(conn: BaseAbapConnection, fn: jest.Mock) {
+function attachMockAxios(conn: AdtOnPremConnector, fn: jest.Mock) {
   (conn as any).axiosInstance = fn;
 }
 
@@ -59,7 +60,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
   });
 
   it('POST with cached CSRF token succeeds without retry', async () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).csrfToken = 'cached-token';
     (conn as any).cookies = 'SAP_SESSIONID_HQ6=alive';
@@ -85,7 +86,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
   });
 
   it('403 with "CSRF" body refetches token and retries; cookies preserved', async () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).csrfToken = 'old-token';
     (conn as any).cookies = 'SAP_SESSIONID_HQ6=alive';
@@ -120,7 +121,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
   });
 
   it('POST 401 without cached token: refetches token and retries', async () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).csrfToken = null;
     (conn as any).cookies = null;
@@ -155,7 +156,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
   });
 
   it('POST 401 with cached CSRF token: invalidates session, refetches, retries with new token/cookies', async () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).csrfToken = 'stale-token';
     (conn as any).cookies = 'SAP_SESSIONID_HQ6=dead';
@@ -210,7 +211,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
   });
 
   it('401 with cached token, retry also 401: original AxiosError propagates', async () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).csrfToken = 'stale-token';
     (conn as any).cookies = 'SAP_SESSIONID_HQ6=dead';
@@ -252,7 +253,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
   });
 
   it('401 with cached token, CSRF refetch fails: original AxiosError propagates', async () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).csrfToken = 'stale-token';
     (conn as any).cookies = 'SAP_SESSIONID_HQ6=dead';
@@ -303,7 +304,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     });
 
     const mock = jest.fn().mockRejectedValue(originalError);
-    attachMockAxios(conn as unknown as BaseAbapConnection, mock);
+    attachMockAxios(conn as unknown as AdtOnPremConnector, mock);
 
     // The rejection is the server's own error, not one of ours. This used to
     // assert 'JWT token has expired. Please re-authenticate.' — a message
@@ -343,7 +344,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     });
 
     const mock = jest.fn().mockRejectedValue(originalError);
-    attachMockAxios(conn as unknown as BaseAbapConnection, mock);
+    attachMockAxios(conn as unknown as AdtOnPremConnector, mock);
 
     await expect(
       conn.makeAdtRequest({
@@ -359,7 +360,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
   });
 
   it('GET 401 with cached token: does NOT invalidate session (new branch is mutation-only)', async () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).csrfToken = 'cached-token';
     (conn as any).cookies = 'SAP_SESSIONID_HQ6=alive';
@@ -388,7 +389,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
   });
 
   it('GET 401 with cookies retries with cookies (existing GET branch)', async () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).csrfToken = 'whatever';
     (conn as any).cookies = 'SAP_SESSIONID_HQ6=alive';
