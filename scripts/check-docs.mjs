@@ -15,7 +15,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ships, toPosix } from './docs-paths.js';
+import { ships } from './docs-paths.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 process.chdir(root);
@@ -23,13 +23,22 @@ process.chdir(root);
 const problems = [];
 const report = (check, detail) => problems.push(`${check}: ${detail}`);
 
-/** Every file under `dir` matching `test`, skipping node_modules. */
+/**
+ * Every file under `dir` matching `test`, skipping node_modules.
+ *
+ * Paths come back in the host's separator, because that is what every caller
+ * hands straight back to the filesystem. Rewriting them to POSIX here would be
+ * the checker corrupting its own input: a backslash is a legal character in a
+ * POSIX filename, so `docs/we\ird.md` would become `docs/we/ird.md` and the run
+ * would die on an ENOENT instead of reporting anything. The two spellings have
+ * to meet inside `ships()`, and that is where they are normalised.
+ */
 function walk(dir, test, out = []) {
   for (const entry of readdirSync(dir)) {
     if (entry === 'node_modules' || entry.startsWith('.')) continue;
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) walk(full, test, out);
-    else if (test(entry)) out.push(toPosix(relative(root, full)));
+    else if (test(entry)) out.push(relative(root, full));
   }
   return out;
 }

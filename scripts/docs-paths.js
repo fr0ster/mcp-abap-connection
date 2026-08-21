@@ -25,12 +25,23 @@ const toPosix = (p) => p.split(win32.sep).join(posix.sep);
  * Does `target` ship, given package.json's `files`? An entry covers a file by
  * naming it exactly or by being a directory above it — `docs` covers
  * `docs/USAGE.md`, and `docs-internal/USAGE.md` is a different directory.
+ *
+ * Both sides are normalised here, so a caller may hand this a path in either
+ * spelling and does not have to normalise first.
+ *
+ * Plain names and directories only. npm's `files` also accepts globs and a
+ * trailing slash, and neither is understood: `"docs/"` or `"dist/**"` would
+ * make this answer false for everything under them, and check 6 would then
+ * report every link in README as unshipped. Widen this before widening
+ * package.json.
  */
 const ships = (published, target) => {
-  const path = toPosix(target);
+  const normalized = toPosix(target);
   return published.some((raw) => {
     const entry = toPosix(raw);
-    return path === entry || path.startsWith(`${entry}${posix.sep}`);
+    return (
+      normalized === entry || normalized.startsWith(`${entry}${posix.sep}`)
+    );
   });
 };
 
