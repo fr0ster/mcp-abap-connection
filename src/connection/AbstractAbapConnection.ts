@@ -335,6 +335,11 @@ abstract class AbstractAbapConnection
     await this.lifecycle.transition('connect', async () => {
       if (this.lifecycle.connected) return;
 
+      // A transport that owns a wire opens it first — an RFC conversation has
+      // to exist before anything can be sent over it. HTTP has no such phase
+      // and omits the member.
+      await this.adtTransport?.open?.();
+
       await this.establishAndCommit(baselineEpoch);
     });
   }
@@ -418,6 +423,9 @@ abstract class AbstractAbapConnection
 
     await this.lifecycle.transition('disconnect', async () => {
       await this.releaseServerSession();
+      // Its own wire, given back. Never throws by contract, which is what lets
+      // it sit here rather than behind another try.
+      await this.adtTransport?.close?.();
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });

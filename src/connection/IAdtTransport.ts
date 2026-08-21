@@ -48,6 +48,21 @@ export interface IAdtTransport {
   readonly kind: string;
 
   /**
+   * Get the wire ready, if this transport owns one.
+   *
+   * HTTP omits it — there is nothing to open, a request opens its own socket.
+   * RFC implements it, because an RFC conversation IS the session and has to
+   * exist before anything can be sent over it.
+   */
+  open?(): Promise<void>;
+
+  /**
+   * Give the wire back. Never throws, and a repeat call finds nothing owed —
+   * this is reached from `disconnect()`, which promises to settle.
+   */
+  close?(): Promise<void>;
+
+  /**
    * Issue one request.
    *
    * Throws for a status `validateStatus` does not admit, carrying `response`
