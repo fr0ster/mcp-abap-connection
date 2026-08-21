@@ -154,3 +154,53 @@ describe('RfcTransport', () => {
     expect(client.close).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('query parameters', () => {
+  // axios serialises `params` into the query string for HTTP. RFC has no such
+  // step, so a transport that ignored them would send the request without its
+  // query — silently, and only over RFC. The class this replaced encoded them
+  // by hand for exactly this reason.
+  it('are encoded into the URI, which is the only place RFC can carry them', async () => {
+    const { transport, calls } = transportWith(okResponse);
+    await transport.open();
+
+    await transport.send({
+      method: 'GET',
+      url: '/sap/bc/adt/repository/informationsystem/search',
+      params: { operation: 'quickSearch', query: 'CL_ABAP*', maxResults: 3 },
+    });
+
+    expect(calls[0].params.REQUEST.REQUEST_LINE.URI).toBe(
+      '/sap/bc/adt/repository/informationsystem/search' +
+        // URLSearchParams leaves `*` alone — it is legal in a query, and this is
+        // byte for byte what the class this replaced produced.
+        '?operation=quickSearch&query=CL_ABAP*&maxResults=3',
+    );
+  });
+
+  it('join a URI that already carries some', async () => {
+    const { transport, calls } = transportWith(okResponse);
+    await transport.open();
+
+    await transport.send({
+      method: 'GET',
+      url: '/sap/bc/adt/x?already=1',
+      params: { more: '2' },
+    });
+
+    expect(calls[0].params.REQUEST.REQUEST_LINE.URI).toBe(
+      '/sap/bc/adt/x?already=1&more=2',
+    );
+  });
+
+  it('are left out when there are none, rather than adding a bare "?"', async () => {
+    const { transport, calls } = transportWith(okResponse);
+    await transport.open();
+
+    await transport.send({ method: 'GET', url: '/sap/bc/adt/discovery' });
+
+    expect(calls[0].params.REQUEST.REQUEST_LINE.URI).toBe(
+      '/sap/bc/adt/discovery',
+    );
+  });
+});

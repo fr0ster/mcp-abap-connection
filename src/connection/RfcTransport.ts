@@ -116,6 +116,19 @@ export class RfcTransport implements IAdtTransport {
     }
 
     const method = request.method.toUpperCase();
+
+    // HTTP clients serialise `params`; RFC has no such step, so they go into
+    // the URI here or they do not travel at all.
+    let uri = request.url;
+    const query = Object.entries(request.params ?? {}).filter(
+      ([, v]) => v !== undefined && v !== null,
+    );
+    if (query.length > 0) {
+      const serialised = new URLSearchParams(
+        query.map(([k, v]) => [k, String(v)]),
+      ).toString();
+      uri += (uri.includes('?') ? '&' : '?') + serialised;
+    }
     const headerFields = Object.entries(request.headers ?? {}).map(
       ([NAME, VALUE]) => ({ NAME, VALUE: String(VALUE) }),
     );
@@ -134,7 +147,7 @@ export class RfcTransport implements IAdtTransport {
       });
     }
 
-    this.logger?.debug(`RFC → ${method} ${request.url}`);
+    this.logger?.debug(`RFC → ${method} ${uri}`);
 
     let raw: Record<string, any>;
     try {
@@ -142,7 +155,7 @@ export class RfcTransport implements IAdtTransport {
         REQUEST: {
           REQUEST_LINE: {
             METHOD: method,
-            URI: request.url,
+            URI: uri,
             VERSION: 'HTTP/1.1',
           },
           HEADER_FIELDS: headerFields,
@@ -207,7 +220,7 @@ export class RfcTransport implements IAdtTransport {
     const admits = request.validateStatus ?? admits2xx;
     if (!admits(status)) {
       const error = new Error(
-        `Request failed with status ${status}: ${method} ${request.url}`,
+        `Request failed with status ${status}: ${method} ${uri}`,
       ) as Error & { response: IAdtTransportResponse };
       error.response = response;
       throw error;

@@ -24,6 +24,7 @@ export function adaptTransport(transport: IAdtTransport): AxiosInstance {
       url: String(config.url ?? ''),
       headers: (config.headers as Record<string, string> | undefined) ?? {},
       data: config.data,
+      params: config.params as Record<string, unknown> | undefined,
       timeout: config.timeout as number | undefined,
       validateStatus: config.validateStatus as
         | ((status: number) => boolean)

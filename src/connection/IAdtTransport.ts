@@ -20,6 +20,16 @@ export interface IAdtTransportRequest {
   url: string;
   headers?: Record<string, string>;
   data?: unknown;
+  /**
+   * Query parameters, unserialised.
+   *
+   * Part of the request rather than folded into `url` by the caller, because
+   * the two transports carry them differently: HTTP hands them to a client
+   * that serialises them, RFC has no such step and must write them into the
+   * URI itself. A transport that ignored them would send the request without
+   * its query — silently, and only on one of the two wires.
+   */
+  params?: Record<string, unknown>;
   /** Milliseconds; absent means the transport's own default. */
   timeout?: number;
   /**
