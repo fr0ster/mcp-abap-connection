@@ -23,6 +23,7 @@ import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
+import type { IAdtTransport } from './IAdtTransport.js';
 
 /** A 401 from the server, whatever transport shape it arrives in. */
 function isUnauthorized(error: unknown): boolean {
@@ -37,7 +38,7 @@ export abstract class CredentialAbapConnection extends AbstractAbapConnection {
     protected readonly credential: IAuthProvider,
     logger: ILogger | null = null,
     sessionId?: string,
-    options?: { skipSessionType?: boolean },
+    options?: { skipSessionType?: boolean; transport?: IAdtTransport },
   ) {
     super(config, logger, sessionId, options);
   }

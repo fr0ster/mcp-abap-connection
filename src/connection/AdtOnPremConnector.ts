@@ -23,6 +23,7 @@ import type { ILogger } from '../logger.js';
 import { IcfSessionStrategy } from '../session/IcfSessionStrategy.js';
 import type { SessionStrategy } from '../session/SessionStrategy.js';
 import { CredentialAbapConnection } from './CredentialAbapConnection.js';
+import type { IAdtTransport } from './IAdtTransport.js';
 
 export class AdtOnPremConnector extends CredentialAbapConnection {
   constructor(
@@ -30,7 +31,7 @@ export class AdtOnPremConnector extends CredentialAbapConnection {
     credential: IAuthProvider,
     logger: ILogger | null = null,
     sessionId?: string,
-    options?: { skipSessionType?: boolean },
+    options?: { skipSessionType?: boolean; transport?: IAdtTransport },
   ) {
     super(config, credential, logger, sessionId, options);
   }

@@ -30,7 +30,9 @@ import {
   getTimeout,
 } from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
+import { adaptTransport } from './adaptTransport.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
+import type { IAdtTransport } from './IAdtTransport.js';
 
 /**
  * The configured default release deadline, refused at construction if it is not
@@ -107,6 +109,8 @@ abstract class AbstractAbapConnection
   private criticalSectionDepth = 0;
   /** The default release deadline, validated once at construction. */
   private readonly releaseDeadlineMs: number;
+  /** What carries a request, when the caller named one. */
+  private readonly adtTransport: IAdtTransport | undefined;
   /**
    * The logoff for the session this connection last held, while it is on its
    * way. One, because a connection holds one session: `connect()` opens it and
@@ -157,7 +161,7 @@ abstract class AbstractAbapConnection
     private readonly config: SapConfig,
     protected readonly logger: ILogger | null,
     sessionId?: string,
-    options?: { skipSessionType?: boolean },
+    options?: { skipSessionType?: boolean; transport?: IAdtTransport },
   ) {
     // Read and checked HERE, once, because the only other place it could be
     // checked is disconnect() — and disconnect() belongs in a `finally`, where
@@ -168,6 +172,10 @@ abstract class AbstractAbapConnection
     this.releaseDeadlineMs = readReleaseDeadline();
 
     this.skipSessionType = options?.skipSessionType ?? false;
+    // Said by the caller. A connection never works out what it is travelling
+    // over — the deployment knows, and trying one to see if it answers is the
+    // guess this design exists to refuse.
+    this.adtTransport = options?.transport;
     // Generate sessionId (used for sap-adt-connection-id header)
     this.sessionId = sessionId || randomUUID();
 
@@ -1844,6 +1852,15 @@ abstract class AbstractAbapConnection
 
   private getAxiosInstance(): AxiosInstance {
     if (!this.axiosInstance) {
+      // A transport that was said, not sniffed. Dressed in the axios shape the
+      // six send sites are written against; see adaptTransport().
+      if (this.adtTransport) {
+        this.logger?.debug(`Transport: ${this.adtTransport.kind}`);
+        const adapted = adaptTransport(this.adtTransport);
+        this.axiosInstance = adapted;
+        return adapted;
+      }
+
       const rejectUnauthorized =
         process.env.NODE_TLS_REJECT_UNAUTHORIZED === '1' ||
         (process.env.TLS_REJECT_UNAUTHORIZED === '1' &&

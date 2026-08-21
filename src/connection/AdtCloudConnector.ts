@@ -22,6 +22,7 @@ import type { ILogger } from '../logger.js';
 import { CloudSecuritySessionStrategy } from '../session/CloudSecuritySessionStrategy.js';
 import type { SessionStrategy } from '../session/SessionStrategy.js';
 import { CredentialAbapConnection } from './CredentialAbapConnection.js';
+import type { IAdtTransport } from './IAdtTransport.js';
 
 export class AdtCloudConnector extends CredentialAbapConnection {
   constructor(
@@ -29,7 +30,7 @@ export class AdtCloudConnector extends CredentialAbapConnection {
     credential: IAuthProvider,
     logger: ILogger | null = null,
     sessionId?: string,
-    options?: { skipSessionType?: boolean },
+    options?: { skipSessionType?: boolean; transport?: IAdtTransport },
   ) {
     super(config, credential, logger, sessionId, options);
   }

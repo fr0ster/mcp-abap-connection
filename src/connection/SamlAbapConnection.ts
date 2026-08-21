@@ -2,6 +2,7 @@ import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
+import type { IAdtTransport } from './IAdtTransport.js';
 
 /**
  * @deprecated The class you take should say which SYSTEM you are dialling,
@@ -19,7 +20,7 @@ export class SamlAbapConnection extends AbstractAbapConnection {
     config: SapConfig,
     logger?: ILogger | null,
     sessionId?: string,
-    options?: { skipSessionType?: boolean },
+    options?: { skipSessionType?: boolean; transport?: IAdtTransport },
   ) {
     SamlAbapConnection.validateConfig(config);
     super(config, logger || null, sessionId, options);
