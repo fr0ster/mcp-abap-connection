@@ -1,0 +1,12 @@
+# Line endings are LF in the working tree on every platform.
+#
+# Without this, a Windows clone with the default core.autocrlf=true gets CRLF
+# files, and everything that reads them line by line is looking at text nobody
+# wrote that way: the docs checker's fence and heading scanning, biome's
+# formatter, and any `#!` line, where a trailing CR stops the script from
+# starting at all. It also keeps a Windows contributor's first diff from being
+# every line of every file.
+#
+# `text=auto` rather than `text`: git still decides for itself what is binary,
+# so this cannot corrupt one.
+* text=auto eol=lf

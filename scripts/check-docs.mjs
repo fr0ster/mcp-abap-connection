@@ -15,6 +15,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ships } from './docs-paths.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 process.chdir(root);
@@ -22,7 +23,16 @@ process.chdir(root);
 const problems = [];
 const report = (check, detail) => problems.push(`${check}: ${detail}`);
 
-/** Every file under `dir` matching `test`, skipping node_modules. */
+/**
+ * Every file under `dir` matching `test`, skipping node_modules.
+ *
+ * Paths come back in the host's separator, because that is what every caller
+ * hands straight back to the filesystem. Rewriting them to POSIX here would be
+ * the checker corrupting its own input: a backslash is a legal character in a
+ * POSIX filename, so `docs/we\ird.md` would become `docs/we/ird.md` and the run
+ * would die on an ENOENT instead of reporting anything. The two spellings have
+ * to meet inside `ships()`, and that is where they are normalised.
+ */
 function walk(dir, test, out = []) {
   for (const entry of readdirSync(dir)) {
     if (entry === 'node_modules' || entry.startsWith('.')) continue;
@@ -162,17 +172,15 @@ for (const file of [...markdown, ...examples]) {
 // Check 3 sees the file on disk and passes. This one asks the other question —
 // does the target ship too.
 const published = JSON.parse(readFileSync('package.json', 'utf8')).files ?? [];
-const ships = (target) =>
-  published.some((entry) => target === entry || target.startsWith(`${entry}/`));
 
 for (const file of [...markdown, 'CHANGELOG.md']) {
-  if (!ships(file) && file !== 'README.md') continue; // not shipped, not its problem
+  if (!ships(published, file) && file !== 'README.md') continue; // not shipped, not its problem
   const text = readFileSync(file, 'utf8');
   for (const m of text.matchAll(/\]\((\.{0,2}\/?[A-Za-z0-9_/.-]+\.md)/g)) {
     // Relative to the linking file, then relative to the package root, which is
     // what `files` entries are expressed against.
     const target = relative(root, resolve(dirname(file), m[1]));
-    if (!ships(target)) {
+    if (!ships(published, target)) {
       report(
         'ships',
         `${file} -> ${m[1]} is in the repo but not in package.json "files"`,

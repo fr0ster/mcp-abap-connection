@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build          # Clean + biome lint (error-level) + tsc compile
 npm run build:fast     # tsc only (skip clean and lint, for rapid iteration)
-npm run lint           # Biome auto-fix
-npm run lint:check     # Biome read-only check
+npm run lint           # Biome auto-fix (src and scripts)
+npm run lint:check     # Biome read-only check (src and scripts)
 npm test               # Jest (all tests)
 npx jest --testPathPattern=connectionFactory  # Run a single test file
 ```
