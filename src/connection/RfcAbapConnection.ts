@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   IAbapRequestOptions,
   IAdtResponse,
+  ISessionLifecycleAware,
 } from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
@@ -121,7 +122,9 @@ function detectExceptionStatus(body: string): {
  *   - SAP NW RFC SDK installed on the machine
  *   - @mcp-abap-adt/sap-rfc-lite package installed: npm install @mcp-abap-adt/sap-rfc-lite
  */
-export class RfcAbapConnection implements AbapConnection {
+export class RfcAbapConnection
+  implements AbapConnection, ISessionLifecycleAware
+{
   private rfcClient: IRfcClient | null = null;
   private readonly sessionId: string;
   private readonly baseUrl: string;
@@ -382,6 +385,51 @@ export class RfcAbapConnection implements AbapConnection {
       this.logger?.error(`RFC call failed: ${msg}`);
       throw new Error(`RFC call to SADT_REST_RFC_ENDPOINT failed: ${msg}`);
     }
+  }
+
+  /**
+   * Whether a caller may start work.
+   *
+   * The native client answers this, not a flag of ours: an RFC conversation can
+   * be dropped by the server or the network without this object being told, and
+   * a boolean we maintained would then say `true` about a connection that is
+   * gone.
+   */
+  isConnected(): boolean {
+    return this.rfcClient?.alive ?? false;
+  }
+
+  /**
+   * Which server session this connection is on.
+   *
+   * The session cookie the server issued, NOT {@link getSessionId} — that one
+   * is a `randomUUID()` fixed for this object's lifetime, so it could never
+   * change and therefore could never expose the server replacing the session
+   * underneath a caller, which is the whole point of asking.
+   *
+   * `null` says only that no identity is known. A live connection can return it:
+   * the cookie is captured from the first stateful answer, so a stateless
+   * conversation has none and is fine.
+   */
+  getSessionIdentity(): string | null {
+    return this.sessionCookie;
+  }
+
+  /**
+   * Tears the session down.
+   *
+   * `deadlineMs` is accepted and ignored: it bounds the wait for a transport
+   * release that is still in flight, and {@link close} has no such phase — the
+   * native client's close either returns or throws, and both are settled by the
+   * time this resolves. Taking the option and doing nothing with it is the
+   * honest reading of "wait no longer than this".
+   *
+   * Never throws: {@link close} swallows what the client raises, and a repeat
+   * call finds nothing owed and settles.
+   */
+  async disconnect(_options?: { deadlineMs?: number }): Promise<void> {
+    await this.close();
+    this.sessionCookie = null;
   }
 
   /**
