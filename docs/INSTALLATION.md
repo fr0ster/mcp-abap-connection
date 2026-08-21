@@ -163,7 +163,9 @@ const logger = {
   debug: (msg) => console.log('[DEBUG]', msg),
 };
 
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: 'onprem', // or 'cloud' — said by you, never detected
+});
 
 connection.connect()
   .then(() =>
@@ -231,7 +233,9 @@ const logger: ILogger = {
   debug: (msg: string) => console.log(msg),
 };
 
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: 'onprem', // or 'cloud' — said by you, never detected
+});
 ```
 
 ## Troubleshooting

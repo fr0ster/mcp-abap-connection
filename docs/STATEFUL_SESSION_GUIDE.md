@@ -29,7 +29,9 @@ The connection layer **does not** decide when to lock/unlock objects—that logi
 ```ts
 import { createAbapConnection } from '@mcp-abap-adt/connection';
 
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: 'onprem', // or 'cloud' — said by you, never detected
+});
 await connection.connect();   // required before any request
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
@@ -47,11 +49,11 @@ connection.setSessionType('stateless');
 ## Knowing Which Session You Are In
 
 ```ts
-import { BaseAbapConnection } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection';
 
 // getSessionIdentity() is on the HTTP connection classes, NOT on the
 // IAbapConnection type that createAbapConnection() returns.
-const connection = new BaseAbapConnection(config, logger);
+const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), logger);
 await connection.connect();
 
 // Which SAP session this connection is talking to. Changes only when the
@@ -174,9 +176,9 @@ you get by asking — `getSessionIdentity()` for which session you are in, and
   `createAbapConnection()` returns — reach them through a concrete type:
 
   ```ts
-  import { BaseAbapConnection } from '@mcp-abap-adt/connection';
+  import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection';
 
-  const connection = new BaseAbapConnection(config, logger);
+  const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), logger);
   await connection.disconnect(); // ends the session on the server, then clears
   await connection.connect(); // a new session, explicitly
   ```

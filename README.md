@@ -17,8 +17,8 @@ ABAP connection layer for MCP ABAP ADT server. Provides a unified interface for 
   - Session headers management (cookies, CSRF tokens)
   - Session state persistence is handled by `@mcp-abap-adt/auth-broker` package
 - 🏗️ **Clean Architecture**:
-  - Abstract base class for common HTTP/session logic
-  - Auth-type specific implementations (BaseAbapConnection, JwtAbapConnection, SamlAbapConnection)
+  - One connector per SYSTEM (`AdtOnPremConnector`, `AdtCloudConnector`), handed an auth provider
+  - Authentication is a parameter, not a subclass — nothing about the system is inferred from it
   - Proper separation of concerns - no JWT logic in base class
 - 🔌 **Realtime Transport Scaffold**:
   - Generic `GenericWebSocketTransport` with pluggable WS factory
@@ -39,21 +39,31 @@ The package uses a clean separation of concerns:
   - CSRF token fetching with retry
   - Auth-agnostic - knows nothing about Basic or JWT
   
-- **`BaseAbapConnection`** (concrete, exported):
-  - Basic Authentication implementation
-  - `connect()` establishes the session (required before any request)
-  - Suitable for on-premise SAP systems
-  
-- **`JwtAbapConnection`** (concrete, exported):
-  - JWT/OAuth2 Authentication implementation
-  - `connect()` establishes the session with the JWT token (required before any request)
-  - Suitable for SAP BTP ABAP Environment
-  - Token refresh handled by auth-broker package
+- **`AdtOnPremConnector`** (concrete, exported):
+  - An on-prem system: the session arrives with the establishing call, and the platform's
+    ICF logoff is how it is given back
+  - Takes an auth provider — basic, SAML, certificate, a bearer token, whatever you hold
 
-- **`SamlAbapConnection`** (concrete, exported):
-  - Session-cookie-based authentication (`authType: "saml"`)
-  - Uses existing SSO/SAML session cookies
-  - Fetches CSRF token and executes ADT requests in same HTTP model
+- **`AdtCloudConnector`** (concrete, exported):
+  - An ABAP Cloud system: a session is a resource, opened at
+    `/sap/bc/adt/core/http/sessions` and given back by `DELETE` on the address it publishes
+  - Takes an auth provider, same as above
+
+  **Which one you take is how you say where you are dialling.** Nothing is probed:
+  the session resource answers on on-prem too, and its `DELETE` there leaves the
+  session open while the logoff removes it — so asking the server would pick the
+  mechanism that releases nothing.
+
+- **Auth providers** (`BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`,
+  `CertificateAuthProvider`):
+  - What a connection authenticates with, passed in
+  - A token provider renews on its own; the connector asks it per request and, on a
+    `401`, tells it the answer was refused before asking again
+
+- **`BaseAbapConnection`, `JwtAbapConnection`, `SamlAbapConnection`,
+  `CertificateAbapConnection`, `KerberosAbapConnection`** (deprecated, still exported):
+  - The previous shape, where the class stated your credential and the session
+    mechanism came with it. See [Migration to 5.0](./docs/MIGRATION-5.0.md)
 
 - **`GenericWebSocketTransport`** (concrete, exported):
   - Transport abstraction for realtime WS message flows
@@ -158,7 +168,9 @@ const logger = {
 };
 
 // Create connection
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: "onprem", // which SYSTEM this is — said, never detected
+});
 await connection.connect();   // required before any request
 
 // Make ADT request
@@ -189,7 +201,9 @@ const logger = {
 };
 
 // Logger is optional - if not provided, no logging output
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: "cloud", // which SYSTEM this is — said, never detected
+});
 await connection.connect();
 
 // Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
@@ -210,7 +224,9 @@ const config: SapConfig = {
   sessionCookies: "MYSAPSSO2=...; SAP_SESSIONID=...",
 };
 
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: "onprem", // which SYSTEM this is — said, never detected
+});
 await connection.connect();
 
 const response = await connection.makeAdtRequest({
@@ -224,7 +240,11 @@ const response = await connection.makeAdtRequest({
 For automatic token refresh on **401** errors, inject `ITokenRefresher`:
 
 ```typescript
-import { JwtAbapConnection, SapConfig } from "@mcp-abap-adt/connection";
+import {
+  AdtCloudConnector,
+  TokenAuthProvider,
+  SapConfig,
+} from "@mcp-abap-adt/connection";
 import type { ITokenRefresher } from "@mcp-abap-adt/interfaces";
 
 // Token refresher provides token acquisition and refresh
@@ -234,20 +254,26 @@ const tokenRefresher: ITokenRefresher = {
   refreshToken: async () => { /* refresh and return new token */ },
 };
 
-// JWT configuration
 const config: SapConfig = {
   url: "https://your-instance.abap.cloud.sap",
   authType: "jwt",
-  jwtToken: await tokenRefresher.getToken(), // Get initial token
 };
 
-// Create connection with token refresher - 401 handled automatically
-const connection = new JwtAbapConnection(config, logger, undefined, tokenRefresher);
+// The connector says which SYSTEM this is; the provider says how to
+// authenticate. Neither decides the other.
+const connection = new AdtCloudConnector(
+  config,
+  new TokenAuthProvider(tokenRefresher),
+  logger,
+);
 await connection.connect();
 
-// Requests automatically retry with refreshed token on auth errors. A refresh
-// replaces the SAP session, so if a lock window is open the request fails with
-// ADT_SESSION_REPLACED instead of continuing on a session your lock is not in.
+// On a 401 the connector tells the provider its token was refused, asks again,
+// and only if the answer changed rebuilds the session and retries once. An
+// unchanged answer means the server refused these credentials, and the 401
+// reaches you. A refresh replaces the SAP session, so if a lock window is open
+// the request fails with ADT_SESSION_REPLACED rather than continuing on a
+// session your lock is not in.
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
@@ -273,7 +299,9 @@ For operations that require session state (e.g., object modifications), you can 
 ```typescript
 import { createAbapConnection } from "@mcp-abap-adt/connection";
 
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: "onprem", // which SYSTEM this is — said, never detected
+});
 await connection.connect();
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
@@ -321,7 +349,9 @@ class MyLogger implements ILogger {
 }
 
 const logger = new MyLogger();
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: "onprem", // which SYSTEM this is — said, never detected
+});
 ```
 
 ## CLI Tool

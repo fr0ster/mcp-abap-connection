@@ -36,7 +36,9 @@ const logger = {
 };
 
 // Create connection (logger is optional)
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: 'onprem', // or 'cloud' — said by you, never detected
+});
 // Or without logger:
 // const connection = createAbapConnection(config);
 
@@ -57,14 +59,27 @@ Tearing the session down is `disconnect()`, but it is not on the
 `IAbapConnection` type this factory returns — see
 [Session Lifecycle](#session-lifecycle) for where it lives and how to reach it.
 
-## Authentication Types
+## Which system, and how you authenticate
+
+Two independent choices, and they must stay independent. The connector says
+which SYSTEM you are dialling; the auth provider says how you prove who you
+are. A communication user against ABAP Cloud and a bearer token against an
+on-prem system are both ordinary, and a design where the credential picked the
+system's session mechanism got one of them wrong whichever way it guessed.
+
+Nothing is detected. `/sap/bc/adt/core/http/sessions` answers on on-prem too,
+and its `DELETE` there leaves the session open while the platform logoff removes
+it — so asking the server would choose the mechanism that releases nothing.
 
 ### Basic Authentication (On-Premise)
 
 For on-premise SAP systems using basic authentication:
 
 ```typescript
-import { BaseAbapConnection } from '@mcp-abap-adt/connection';
+import {
+  AdtOnPremConnector,
+  BasicAuthProvider,
+} from '@mcp-abap-adt/connection';
 
 const config = {
   url: 'https://sap-server.local:8000',
@@ -74,7 +89,11 @@ const config = {
   client: '100',
 };
 
-const connection = new BaseAbapConnection(config, logger);
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username, config.password),
+  logger,
+);
 await connection.connect();   // required: nothing is established implicitly
 ```
 
@@ -84,16 +103,25 @@ For SAP BTP ABAP Environment. Token refresh belongs to
 `@mcp-abap-adt/auth-broker`; this package only carries the token:
 
 ```typescript
-import { JwtAbapConnection } from '@mcp-abap-adt/connection';
+import {
+  AdtCloudConnector,
+  TokenAuthProvider,
+} from '@mcp-abap-adt/connection';
 
 const config = {
   url: 'https://tenant.abap.cloud',
   authType: 'jwt' as const,
-  jwtToken: 'eyJhbGciOiJSUzI1NiIs...',
   client: '100', // Optional for cloud
 };
 
-const connection = new JwtAbapConnection(config, logger);
+// A bare token works and has no renewal behind it. Hand the provider an
+// ITokenRefresher instead — from @mcp-abap-adt/auth-broker or your own — and it
+// checks expiry and refreshes on its own.
+const connection = new AdtCloudConnector(
+  config,
+  new TokenAuthProvider('eyJhbGciOiJSUzI1NiIs...'),
+  logger,
+);
 await connection.connect();   // required: nothing is established implicitly
 
 // Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
@@ -172,7 +200,9 @@ await connection.makeAdtRequest({
 By default, connections are stateless - each request gets fresh cookies and CSRF tokens:
 
 ```typescript
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: 'onprem', // or 'cloud' — said by you, never detected
+});
 await connection.connect();
 
 // Each request is independent
@@ -184,7 +214,9 @@ await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' })
 Enable stateful session mode for operations requiring consistent session state:
 
 ```typescript
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: 'onprem', // or 'cloud' — said by you, never detected
+});
 await connection.connect();
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
@@ -242,7 +274,7 @@ implied. Four things follow from it.
 > site:
 >
 > ```typescript
-> const conn = new BaseAbapConnection(config, logger);
+> const conn = new AdtOnPremConnector(config, provider, logger);
 > tearDownAfter(conn);                       // ✅ checked
 > tearDownAfter(new RfcAbapConnection(cfg)); // ✅ compile error, as it should be
 > ```
@@ -290,9 +322,13 @@ implied. Four things follow from it.
 ### connect() is required, and it tells the truth
 
 ```typescript
-import { BaseAbapConnection } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection';
 
-const connection = new BaseAbapConnection(config, logger);
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(user, pass),
+  logger,
+);
 
 await connection.connect();          // establishes the session, or rejects
 connection.isConnected();            // true only while a usable session exists
@@ -420,7 +456,9 @@ yours.
 Session IDs are auto-generated (UUID) when connection is created:
 
 ```typescript
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: 'onprem', // or 'cloud' — said by you, never detected
+});
 console.log(connection.getSessionId()); // e.g., '7f3a8b2c-...'
 
 // Or provide your own when creating connection
@@ -434,7 +472,9 @@ Dynamically switch between stateful and stateless modes:
 
 ```typescript
 // Start in stateless mode (default)
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: 'onprem', // or 'cloud' — said by you, never detected
+});
 await connection.connect();
 
 // Enable stateful for a series of operations
@@ -499,7 +539,9 @@ class CustomLogger implements ILogger {
 }
 
 const logger = new CustomLogger();
-const connection = createAbapConnection(config, logger);
+const connection = createAbapConnection(config, logger, undefined, undefined, {
+  system: 'onprem', // or 'cloud' — said by you, never detected
+});
 ```
 
 ## Error Handling
@@ -590,9 +632,31 @@ connection classes; `RfcAbapConnection` has some of them and not others, so
 reach for them through a concrete type rather than through what
 `createAbapConnection()` returns.
 
-### `BaseAbapConnection` (Basic Auth)
+### `AdtOnPremConnector` / `AdtCloudConnector`
 
-For on-premise SAP systems:
+One per system, each handed an auth provider:
+
+```typescript
+class AdtOnPremConnector extends CredentialAbapConnection {
+  constructor(
+    config: SapConfig,
+    provider: IAuthProvider,
+    logger?: ILogger | null,
+    sessionId?: string,
+  );
+}
+// AdtCloudConnector has the same shape.
+```
+
+The difference is what each does with the session: on-prem takes it from the
+establishing call and gives it back with the platform's ICF logoff; cloud opens
+one at `/sap/bc/adt/core/http/sessions` and gives it back by `DELETE` on the
+address the server publishes.
+
+### `BaseAbapConnection` (Basic Auth) — deprecated
+
+The previous shape, where the class stated the credential. Still works; see
+[Migration to 5.0](./MIGRATION-5.0.md).
 
 ```typescript
 class BaseAbapConnection extends AbstractAbapConnection {
@@ -676,7 +740,7 @@ export class CloudSdkAbapConnection {
 ```
 
 
-### `JwtAbapConnection` (JWT/OAuth2)
+### `JwtAbapConnection` (JWT/OAuth2) — deprecated
 
 For SAP BTP cloud systems. Token refresh is handled by `@mcp-abap-adt/auth-broker`:
 

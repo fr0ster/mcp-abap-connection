@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-08-21
+
+A connection now says which system it is, closes what it opens, and is handed its
+credential instead of being one. See [Migration to 5.0](./docs/MIGRATION-5.0.md).
+
+### Added
+
+- **`AdtOnPremConnector` and `AdtCloudConnector`.** The class you take states which SYSTEM you
+  are dialling; the auth provider states how you authenticate there. The two are independent, and
+  both were reachable combinations that the old shape got wrong: a communication user against
+  ABAP Cloud, and a bearer token against an on-prem system.
+
+  Nothing is detected. `/sap/bc/adt/core/http/sessions` answers on **on-prem too**, publishing
+  both the session resource and the ICF logoff in one document, and its `DELETE` there leaves the
+  session listed while the logoff removes it — a probe would have chosen the mechanism that
+  releases nothing.
+
+- **Auth providers** — `BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`,
+  `CertificateAuthProvider` — and `IAuthProvider`, the contract they satisfy. A token provider
+  renews on its own, so nothing is cached here: the header is asked for per request, and on a
+  `401` the provider is told its answer was refused (`refreshToken()`) before being asked again.
+
+- **`createAbapConnection(..., { system })`** builds the connector you name, with a provider from
+  the config. Without it, the old choice by `authType`, warned about once per call.
+
+- **`disconnect({ deadlineMs })`** — the parameter `ISessionLifecycleAware` published and nothing
+  implemented. It bounds the **wait**, never the request: handed to axios it would abort the
+  socket and cancel the release it was waiting for.
+
+### Changed — BREAKING
+
+- **`connect()` fails when the server opened no session**, where it used to warn and hand the
+  connection back. A lock is held by the ABAP session, so a connection without one can read but
+  can hold nothing, and the failure surfaced a request later as `400 Session not found` with the
+  object half-edited. Verified rather than inferred: a connection that received no
+  `SAP_SESSIONID` is listed in the server's session list as nothing at all.
+
+- **`disconnect()` makes a network call**, telling the server the session is finished. It does
+  not wait by default — `SAP_RELEASE_DEADLINE_MS` is `0` — because waiting is for steps whose
+  successor needs the server to have caught up, and a teardown has none. Requests still in flight
+  are running on the session being released and will start failing; that is the caller having
+  asked to disconnect.
+
+- **The five auth connection classes are deprecated** and keep working.
+
+### Removed — BREAKING
+
+- **`reset()`**, from `AbstractAbapConnection` and `RfcAbapConnection`. There is no local-only
+  discard because there is no local-only session: it lives on the server, and dropping the cookie
+  leaves it there. `await disconnect()`, then `connect()` again.
+
+### Fixed
+
+- **Requests stay on the server the session lives on.** A session belongs to one application
+  server, so on a multi-node system a request landing elsewhere gets a different session and any
+  lock held on the first dies — no inactivity, nobody at fault. `sap-adt-saplb` is asked for and
+  sent back, as Eclipse does.
+
+- **A late `401` no longer tears down a healthy session.** The comparison is bound to the session
+  the request went out on, so a refusal answered by a session that has since been replaced is
+  retried rather than acted on.
+
+- **A credential that is cookies reaches the wire.** A SAML provider's cookies are part of the
+  contract and merged with the session jar rather than written over by it — one says who we are,
+  the other which session we are in.
+
+- **A session opened before a failed `connect()` is not abandoned**, and the logoff does not cut
+  a lock chain held open with `beginCriticalSection()`.
+
+### Measured
+
+- 25 connects in a row on-prem: **24-25** given a session with the logoff, **2** without.
+- The server's session list shows the row appear at the second of the call, and go on
+  `disconnect()`; without one it would sit for 30 more minutes.
+- The timeout is **idle-based**: 45 small requests a minute apart held one session straight
+  through a 30-minute window, identity unchanged. There is no keepalive timer here on purpose.
+- Cloud: `AdtCloudConnector` with a token provider — session opened through ADT, three stateful
+  requests holding it, closed by `DELETE` on the address the server published.
+
 ### Fixed
 
 - **Every session of a reconnect cycle is released, not only the first.** A release already on
