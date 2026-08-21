@@ -16,7 +16,7 @@
  * So the seam passes a transport, the shape `src/session/` already uses for the
  * same reason.
  */
-import type { IAuthProvider } from '../auth/IAuthProvider.js';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 

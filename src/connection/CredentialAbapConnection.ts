@@ -17,9 +17,9 @@ import type { AgentOptions } from 'node:https';
 import type {
   IAbapRequestOptions,
   IAdtResponse,
+  IAuthProvider,
 } from '@mcp-abap-adt/interfaces';
 import { AxiosError } from 'axios';
-import type { IAuthProvider } from '../auth/IAuthProvider.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
@@ -95,7 +95,7 @@ export abstract class CredentialAbapConnection extends AbstractAbapConnection {
 
   protected override getHttpsAgentOptions(): AgentOptions {
     return (
-      this.credential.httpsAgentOptions?.() ?? super.getHttpsAgentOptions()
+      this.credential.transportMaterial?.() ?? super.getHttpsAgentOptions()
     );
   }
 

@@ -1,8 +1,8 @@
 import type {
+  IAuthProvider,
   ICertificateMaterialLoader,
   ITokenRefresher,
 } from '@mcp-abap-adt/interfaces';
-import type { IAuthProvider } from '../auth/IAuthProvider.js';
 import {
   BasicAuthProvider,
   CertificateAuthProvider,

@@ -8,7 +8,10 @@ export type {
   IWebSocketTransport,
 } from '@mcp-abap-adt/interfaces';
 export { FileCertificateMaterialLoader } from './auth/FileCertificateMaterialLoader.js';
-export type { IAuthProvider } from './auth/IAuthProvider.js';
+// IAuthProvider and ICredentialTransport are deliberately NOT re-exported.
+// They live in @mcp-abap-adt/interfaces and a consumer imports them from
+// there — the same rule the session-lifecycle vocabulary follows below, and
+// for the same reason: two names for one contract let the two drift.
 export {
   BasicAuthProvider,
   CertificateAuthProvider,

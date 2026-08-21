@@ -16,7 +16,7 @@
  * server answers.
  */
 
-import type { IAuthProvider } from '../auth/IAuthProvider.js';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { CloudSecuritySessionStrategy } from '../session/CloudSecuritySessionStrategy.js';

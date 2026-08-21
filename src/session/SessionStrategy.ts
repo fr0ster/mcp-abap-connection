@@ -22,7 +22,7 @@
  * says so. Guessing the platform would be a guess; asking is not.
  */
 
-import type { ICredentialTransport } from '../auth/IAuthProvider.js';
+import type { ICredentialTransport } from '@mcp-abap-adt/interfaces';
 import type { ILogger } from '../logger.js';
 
 /** What a strategy needs from the connection to talk to the server. */

@@ -17,7 +17,7 @@
  * because anything worked out where it was pointing.
  */
 
-import type { IAuthProvider } from '../auth/IAuthProvider.js';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { IcfSessionStrategy } from '../session/IcfSessionStrategy.js';
