@@ -100,9 +100,21 @@ export function createAbapConnection(
 
   if (options?.system) {
     const provider = authProviderFor(config, options, tokenRefresher);
-    const Connector =
-      options.system === 'cloud' ? AdtCloudConnector : AdtOnPremConnector;
-    return new Connector(config, provider, logger ?? null, sessionId, options);
+    // Branched rather than picked as a variable: the two connectors no longer
+    // have the same shape, because on-prem carries a transport axis that cloud
+    // does not have. A single call site for both could only exist while that
+    // difference was untyped.
+    return options.system === 'cloud'
+      ? new AdtCloudConnector(config, provider, logger ?? null, sessionId, {
+          skipSessionType: options.skipSessionType,
+        })
+      : new AdtOnPremConnector(
+          config,
+          provider,
+          logger ?? null,
+          sessionId,
+          options,
+        );
   }
 
   logger?.warn(

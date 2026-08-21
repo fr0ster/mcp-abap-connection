@@ -110,8 +110,12 @@ abstract class AbstractAbapConnection
   private criticalSectionDepth = 0;
   /** The default release deadline, validated once at construction. */
   private readonly releaseDeadlineMs: number;
-  /** What carries a request, when the caller named one. */
-  private readonly adtTransport: IAdtTransport | undefined;
+  /**
+   * What carries a request. Always an object — the caller named one, or this
+   * is the documented default. Never a branch, and never worked out from the
+   * config or from what the server answers.
+   */
+  readonly transport: IAdtTransport;
   /**
    * The logoff for the session this connection last held, while it is on its
    * way. One, because a connection holds one session: `connect()` opens it and
@@ -176,7 +180,9 @@ abstract class AbstractAbapConnection
     // Said by the caller. A connection never works out what it is travelling
     // over — the deployment knows, and trying one to see if it answers is the
     // guess this design exists to refuse.
-    this.adtTransport = options?.transport;
+    this.transport =
+      options?.transport ??
+      new HttpTransport(() => this.getHttpsAgentOptions(), logger);
     // Generate sessionId (used for sap-adt-connection-id header)
     this.sessionId = sessionId || randomUUID();
 
@@ -339,7 +345,7 @@ abstract class AbstractAbapConnection
       // A transport that owns a wire opens it first — an RFC conversation has
       // to exist before anything can be sent over it. HTTP has no such phase
       // and omits the member.
-      await this.adtTransport?.open?.();
+      await this.transport.open?.();
 
       await this.establishAndCommit(baselineEpoch);
     });
@@ -426,7 +432,7 @@ abstract class AbstractAbapConnection
       await this.releaseServerSession();
       // Its own wire, given back. Never throws by contract, which is what lets
       // it sit here rather than behind another try.
-      await this.adtTransport?.close?.();
+      await this.transport.close?.();
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
@@ -1868,12 +1874,8 @@ abstract class AbstractAbapConnection
       // The thunk is where the two axes touch — TLS client-certificate
       // material comes from the credential and configures the transport, and
       // it must be read after the credential has been prepared.
-      const transport =
-        this.adtTransport ??
-        new HttpTransport(() => this.getHttpsAgentOptions(), this.logger);
-
-      this.logger?.debug(`Transport: ${transport.kind}`);
-      this.axiosInstance = adaptTransport(transport);
+      this.logger?.debug(`Transport: ${this.transport.kind}`);
+      this.axiosInstance = adaptTransport(this.transport);
     }
 
     return this.axiosInstance;

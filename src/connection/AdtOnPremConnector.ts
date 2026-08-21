@@ -23,12 +23,26 @@ import type { ILogger } from '../logger.js';
 import { IcfSessionStrategy } from '../session/IcfSessionStrategy.js';
 import type { SessionStrategy } from '../session/SessionStrategy.js';
 import { CredentialAbapConnection } from './CredentialAbapConnection.js';
+import type { HttpTransport } from './HttpTransport.js';
 import type { IAdtTransport } from './IAdtTransport.js';
 
-export class AdtOnPremConnector extends CredentialAbapConnection {
+export class AdtOnPremConnector<
+  TCredential extends IAuthProvider = IAuthProvider,
+  TTransport extends IAdtTransport = HttpTransport,
+> extends CredentialAbapConnection<TCredential> {
+  /**
+   * The transport this was built with, in the type.
+   *
+   * `declare` because the base already assigns it — this only narrows what the
+   * caller gets back, which is the whole point of the parameter: a signature
+   * can ask for `AdtOnPremConnector<IAuthProvider, RfcTransport>` instead of
+   * taking any connection and casting.
+   */
+  declare readonly transport: TTransport;
+
   constructor(
     config: SapConfig,
-    credential: IAuthProvider,
+    credential: TCredential,
     logger: ILogger | null = null,
     sessionId?: string,
     /**
@@ -37,7 +51,7 @@ export class AdtOnPremConnector extends CredentialAbapConnection {
      * where stateful HTTP sessions are not usable. Omitted means HTTP — the
      * documented default, not something worked out from the config.
      */
-    options?: { skipSessionType?: boolean; transport?: IAdtTransport },
+    options?: { skipSessionType?: boolean; transport?: TTransport },
   ) {
     super(config, credential, logger, sessionId, options);
   }

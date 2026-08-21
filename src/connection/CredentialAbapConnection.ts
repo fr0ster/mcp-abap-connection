@@ -32,10 +32,13 @@ function isUnauthorized(error: unknown): boolean {
   return status === 401;
 }
 
-export abstract class CredentialAbapConnection extends AbstractAbapConnection {
+export abstract class CredentialAbapConnection<
+  TCredential extends IAuthProvider = IAuthProvider,
+> extends AbstractAbapConnection {
   constructor(
     config: SapConfig,
-    protected readonly credential: IAuthProvider,
+    /** Public because the type is the point: a caller can reach what it gave. */
+    readonly credential: TCredential,
     logger: ILogger | null = null,
     sessionId?: string,
     options?: { skipSessionType?: boolean; transport?: IAdtTransport },

@@ -23,10 +23,12 @@ import { CloudSecuritySessionStrategy } from '../session/CloudSecuritySessionStr
 import type { SessionStrategy } from '../session/SessionStrategy.js';
 import { CredentialAbapConnection } from './CredentialAbapConnection.js';
 
-export class AdtCloudConnector extends CredentialAbapConnection {
+export class AdtCloudConnector<
+  TCredential extends IAuthProvider = IAuthProvider,
+> extends CredentialAbapConnection<TCredential> {
   constructor(
     config: SapConfig,
-    credential: IAuthProvider,
+    credential: TCredential,
     logger: ILogger | null = null,
     sessionId?: string,
     /**
