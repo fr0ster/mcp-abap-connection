@@ -60,10 +60,15 @@ The package uses a clean separation of concerns:
   - A token provider renews on its own; the connector asks it per request and, on a
     `401`, tells it the answer was refused before asking again
 
-- **`BaseAbapConnection`, `JwtAbapConnection`, `SamlAbapConnection`,
-  `CertificateAbapConnection`, `KerberosAbapConnection`** (deprecated, still exported):
-  - The previous shape, where the class stated your credential and the session
-    mechanism came with it. See [Migration to 5.0](./docs/MIGRATION-5.0.md)
+- **Transports** (`HttpTransport`, `RfcTransport`):
+  - What a request travels over, and everything that is true of that wire.
+    `HttpTransport` keeps the cookie jar, the CSRF token and the affinity
+    headers; `RfcTransport` translates into `SADT_REST_RFC_ENDPOINT` and keeps a
+    conversation that IS the session
+  - On-prem is where this is a real choice; ABAP Cloud has one wire and its
+    connector takes no such parameter
+  - `rfcConversationFrom(config)` builds what `RfcTransport` needs, deriving
+    `ashost` and `sysnr` and loading the SDK only when a conversation opens
 
 - **`GenericWebSocketTransport`** (concrete, exported):
   - Transport abstraction for realtime WS message flows
@@ -123,6 +128,7 @@ This package interacts with external packages **ONLY through interfaces**:
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 6.0.0](./docs/MIGRATION-6.0.md)** - the factory and the per-credential classes are removed; RFC is a transport, not a class
 - 🚚 **[Migration to 4.0.0](./docs/MIGRATION-4.0.md)** - a 401 refreshes the token, a 403 reaches you with the server's message; the synthesised "JWT token has expired" is gone
 - 🚚 **[Migration: the explicit session lifecycle](./docs/MIGRATION-2.0.md)** - `connect()` is now required; start here if you are coming from 1.x
 - 💡 **[Examples](./examples/)** - Working code examples
@@ -149,7 +155,11 @@ For detailed installation instructions, see [Installation Guide](./docs/INSTALLA
 ### Basic Usage (On-Premise)
 
 ```typescript
-import { createAbapConnection, SapConfig } from "@mcp-abap-adt/connection";
+import {
+  AdtOnPremConnector,
+  BasicAuthProvider,
+  SapConfig,
+} from "@mcp-abap-adt/connection";
 
 const config: SapConfig = {
   url: "https://your-sap-system.com",
@@ -167,10 +177,13 @@ const logger = {
   debug: (msg: string, meta?: any) => console.debug(msg, meta),
 };
 
-// Create connection
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: "onprem", // which SYSTEM this is — said, never detected
-});
+// Which system you are dialling is the class you take; which credential it
+// authenticates with is the object you hand it. Neither is detected.
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  logger,
+);
 await connection.connect();   // required before any request
 
 // Make ADT request
@@ -183,7 +196,11 @@ const response = await connection.makeAdtRequest({
 ### Cloud Usage (JWT/OAuth2)
 
 ```typescript
-import { createAbapConnection, SapConfig } from "@mcp-abap-adt/connection";
+import {
+  AdtCloudConnector,
+  SapConfig,
+  TokenAuthProvider,
+} from "@mcp-abap-adt/connection";
 
 // JWT configuration
 const config: SapConfig = {
@@ -200,23 +217,71 @@ const logger = {
   debug: (msg: string, meta?: any) => console.debug(msg, meta),
 };
 
-// Logger is optional - if not provided, no logging output
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: "cloud", // which SYSTEM this is — said, never detected
-});
+// Logger is optional - if not provided, no logging output.
+// A bare string is a token with nothing behind it. Hand `TokenAuthProvider` an
+// `ITokenRefresher` instead and it checks expiry and renews on its own, which
+// is what you want in anything long-lived.
+const connection = new AdtCloudConnector(
+  config,
+  new TokenAuthProvider(config.jwtToken!),
+  logger,
+);
 await connection.connect();
 
-// Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
+// Note: obtaining and refreshing tokens is @mcp-abap-adt/auth-broker's job
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
 });
 ```
 
+### On-Premise over RFC
+
+The same ADT calls, over `SADT_REST_RFC_ENDPOINT` — the function module Eclipse
+ADT itself uses through JCo — instead of over HTTP. Worth taking on a system
+where stateful HTTP sessions are not usable: an RFC conversation is one ABAP
+session for its whole lifetime, which is the way past `423 invalid lock handle`
+on BASIS < 7.50.
+
+Needs the SAP NW RFC SDK on the machine and `npm install @mcp-abap-adt/sap-rfc-lite`.
+
+```typescript
+import {
+  AdtOnPremConnector,
+  BasicAuthProvider,
+  RfcTransport,
+  rfcConversationFrom,
+} from "@mcp-abap-adt/connection";
+
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  logger,
+  undefined,
+  { transport: new RfcTransport(rfcConversationFrom(config), logger) },
+);
+
+await connection.connect();
+// Everything above the wire is the same: makeAdtRequest, setSessionType,
+// disconnect. What differs is where the session lives — see below.
+```
+
+**Where to look for it.** An HTTP session is an ICF session and appears in
+**SM05**. An RFC conversation is a gateway client: it appears in **SMGW → Logged
+on Clients** as `NWRFC`, and never in SM05, because there is no ICM in that
+path. Looking for one in the other monitor and finding nothing is not a fault.
+
+There is no cloud equivalent: ABAP Cloud has one wire, and `AdtCloudConnector`
+takes no transport parameter at all.
+
 ### SSO Usage (SAML Session Cookies)
 
 ```typescript
-import { createAbapConnection, SapConfig } from "@mcp-abap-adt/connection";
+import {
+  AdtOnPremConnector,
+  SamlAuthProvider,
+  SapConfig,
+} from "@mcp-abap-adt/connection";
 
 const config: SapConfig = {
   url: "https://your-sap-system.com",
@@ -224,9 +289,12 @@ const config: SapConfig = {
   sessionCookies: "MYSAPSSO2=...; SAP_SESSIONID=...",
 };
 
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: "onprem", // which SYSTEM this is — said, never detected
-});
+// The cookies ARE the credential here — there is no Authorization header at all.
+const connection = new AdtOnPremConnector(
+  config,
+  new SamlAuthProvider(config.sessionCookies!),
+  logger,
+);
 await connection.connect();
 
 const response = await connection.makeAdtRequest({
@@ -297,11 +365,16 @@ See [MIGRATION-4.0.md](./docs/MIGRATION-4.0.md).
 For operations that require session state (e.g., object modifications), you can enable stateful sessions:
 
 ```typescript
-import { createAbapConnection } from "@mcp-abap-adt/connection";
+import {
+  AdtOnPremConnector,
+  BasicAuthProvider,
+} from "@mcp-abap-adt/connection";
 
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: "onprem", // which SYSTEM this is — said, never detected
-});
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  logger,
+);
 await connection.connect();
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
@@ -349,9 +422,11 @@ class MyLogger implements ILogger {
 }
 
 const logger = new MyLogger();
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: "onprem", // which SYSTEM this is — said, never detected
-});
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  logger,
+);
 ```
 
 ## CLI Tool
@@ -451,10 +526,12 @@ interface AbapConnection {
 }
 ```
 
-The HTTP connection classes carry the rest of the session lifecycle. It is on the
-shared contract as a **capability atom** in `@mcp-abap-adt/interfaces` rather than
-as methods on `IAbapConnection`, which is why `RfcAbapConnection` — a transport
-that owns no HTTP session — is unaffected by its existence:
+The connectors carry the rest of the session lifecycle. It is on the shared
+contract as a **capability atom** in `@mcp-abap-adt/interfaces` rather than as
+methods on `IAbapConnection`, so a consumer that only carries requests is
+unaffected by its existence. Note that a connection over RFC has the whole of it
+— what an RFC conversation has none of is a session RESOURCE to open and close
+by address, which is an empty mechanism, not an absent lifecycle:
 
 ```typescript
 // ISessionLifecycleAware
@@ -496,16 +573,36 @@ interface ILogger {
 
 ### Functions
 
-#### `createAbapConnection(config, logger?, sessionId?)`
+#### `rfcConversationFrom(config)`
 
-Factory function to create an ABAP connection instance.
+What `RfcTransport` is constructed with. Derives `ashost` from the url and
+`sysnr` from the HTTP port by the SAP convention that `80XX` is the ICM port for
+system `XX`, which `SAP_SYSNR` overrides for a port that follows no convention.
+
+The SAP NW RFC SDK is loaded when a conversation opens, not when this is called,
+so a machine without it fails at `connect()` with a message saying what to
+install rather than at construction.
 
 ```typescript
-function createAbapConnection(
-  config: SapConfig,
-  logger?: ILogger | null,
-  sessionId?: string
-): AbapConnection;
+function rfcConversationFrom(config: SapConfig): () => IRfcConversation;
+function rfcParamsFrom(config: SapConfig): RfcConnectionParams;
+```
+
+```typescript
+import {
+  AdtOnPremConnector,
+  BasicAuthProvider,
+  RfcTransport,
+  rfcConversationFrom,
+} from "@mcp-abap-adt/connection";
+
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  logger,
+  undefined,
+  { transport: new RfcTransport(rfcConversationFrom(config), logger) },
+);
 ```
 
 #### `CSRF_CONFIG` and `CSRF_ERROR_MESSAGES`

@@ -27,11 +27,16 @@ The connection layer **does not** decide when to lock/unlock objects—that logi
 ## Enabling Stateful Sessions
 
 ```ts
-import { createAbapConnection } from '@mcp-abap-adt/connection';
+import {
+  AdtOnPremConnector,
+  BasicAuthProvider,
+} from '@mcp-abap-adt/connection';
 
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: 'onprem', // or 'cloud' — said by you, never detected
-});
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  logger,
+);
 await connection.connect();   // required before any request
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
@@ -52,7 +57,7 @@ connection.setSessionType('stateless');
 import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection';
 
 // getSessionIdentity() is on the HTTP connection classes, NOT on the
-// IAbapConnection type that createAbapConnection() returns.
+// bare IAbapConnection type a caller may hand you.
 const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), logger);
 await connection.connect();
 
@@ -173,7 +178,8 @@ you get by asking — `getSessionIdentity()` for which session you are in, and
   `disconnect()` followed by `connect()` — there is no local-only discard, because
   dropping the cookie leaves the ABAP session open on the server. Both live on
   the HTTP connection classes and are **not** on the `IAbapConnection` type
-  `createAbapConnection()` returns — reach them through a concrete type:
+  a bare `IAbapConnection` carries — reach them through a connector type, or
+  through the `ISessionLifecycleAware` atom:
 
   ```ts
   import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection';
@@ -183,7 +189,7 @@ you get by asking — `getSessionIdentity()` for which session you are in, and
   await connection.connect(); // a new session, explicitly
   ```
 - **Session expired**: reauthenticate to obtain a new session.
-- **Multiple connections**: each `createAbapConnection` instance maintains its own cookie jar; share the instance if you need continuity.
+- **Multiple connections**: each connector holds its own wire, and the wire holds the cookie jar; share the instance if you need continuity.
 
 ---
 

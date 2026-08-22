@@ -35,7 +35,7 @@ It forwards every `(name, value)` pair from the JS `Client(params)` object to `R
 
 **4. For BTP on-prem scenarios (Cloud Connector), the JWT→x509/SNC swap happens server-side in the CC.** The client-side RFC call still carries classic credentials (x509 + SNC), not the JWT. Supporting that would be adding SNC-over-RFC for on-prem backends behind a CC tunnel — an on-prem extension, not a "cloud RFC" feature.
 
-**Conclusion:** "RFC to cloud" is not a missing feature that would be useful to add; it is a category error. ADT to cloud = HTTP (already supported here). RFC to on-prem = supported here via `connectionType: 'rfc'`. Anything claiming a third combination does not map to what the SAP stack actually exposes.
+**Conclusion:** "RFC to cloud" is not a missing feature that would be useful to add; it is a category error. ADT to cloud = HTTP (already supported here). RFC to on-prem = supported here, by handing `AdtOnPremConnector` an `RfcTransport`. Anything claiming a third combination does not map to what the SAP stack actually exposes.
 
 ## See also
 

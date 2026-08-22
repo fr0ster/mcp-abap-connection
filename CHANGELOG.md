@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The wire owns what is the wire's, and the factory and per-credential classes are
+gone. See [Migration to 6.0](./docs/MIGRATION-6.0.md).
+
+### Added
+
+- **The transport axis is complete and public.** `IAdtTransport` now covers
+  everything true of a wire — carrying a request, addressing it, establishing
+  itself, and whatever session state it keeps — and both ends are objects:
+  `HttpTransport` and `RfcTransport`. `IAdtEstablishContext`, `IRfcConversation`
+  and `RfcConnectionParams` are exported, so a caller handed a seam can name it.
+
+- **`rfcConversationFrom(config)`** — the front door to the RFC wire. Derives
+  `ashost` from the url and `sysnr` from the HTTP port (`80XX` → `XX`, with
+  `SAP_SYSNR` overriding), and loads the SAP NW RFC SDK only when a conversation
+  opens, so a machine without it fails at `connect()` rather than at
+  construction.
+
+- **`RfcTransport` supplies a default `Accept`.** axios adds one over HTTP and
+  nobody had noticed; ADT refuses a request without it with
+  `400 ExceptionResourceBadRequest: Accept header missing`.
+
+### Changed
+
+- **The on-prem connector works over RFC.** It did not, at all. Measured against
+  a real system, three blockers stood one behind the other, all of them HTTP
+  assumptions in the class every connector shares: the CSRF fetch handed
+  `SADT_REST_RFC_ENDPOINT` an absolute URL and dumped it with
+  `STRING_OFFSET_TOO_LARGE`; that endpoint returns no `x-csrf-token` however it
+  is asked, so the exchange could not succeed; and the session fingerprint was a
+  scan for a `SAP_SESSIONID` cookie, so a wire that issues none read as a
+  connection the server had opened no session for.
+
+  The base class did not merely check for cookies — it DEFINED a session as one.
+
+- **`AbstractAbapConnection` keeps the lifecycle and nothing else** (1989 → ~1620
+  lines): the transition queue, teardown epochs, session generations, critical
+  sections, stale-request fencing, 401 classification, the identity policy, and
+  the promise that `disconnect()` settles. Cookies, the cookie jar, the CSRF
+  exchange, affinity headers, axios and addressing all moved to the wire that
+  has them. There is no `if (transport is rfc)` anywhere.
+
+- **A credential refused during `connect()` surfaces** rather than being renewed
+  behind the caller. Renewal is the provider's, and it happens on an expiry the
+  provider can see, on every call that asks for a header. The request path is
+  unchanged: a 401 asks again, and retries once if the answer differs.
+
+### Removed
+
+- **`createAbapConnection()`** and the connection classes it built:
+  `BaseAbapConnection` (`OnPremAbapConnection`), `JwtAbapConnection`
+  (`CloudAbapConnection`), `SamlAbapConnection`, `CertificateAbapConnection`,
+  `KerberosAbapConnection`, `RfcAbapConnection` — 1597 lines. Take a connector,
+  hand it a credential, and name a transport if it is not the default.
+
+- `adaptTransport()`, which dressed a transport in an axios shape so six call
+  sites did not have to be rewritten. They were rewritten.
+
+- `connectionType: 'rfc'` as a way to reach the RFC wire. The wire is an
+  argument now.
+
+  **Kerberos has no direct replacement.** It was single-leg only and untested
+  against a live KDC (#35); a `KerberosAuthProvider` belongs on the credential
+  axis and should be added with a system to test it against.
+
+### Fixed
+
+- Credential cookies are merged into the establishing request rather than
+  overwritten by the wire's own — a SAML session IS that cookie, and replacing
+  it sent the exchange out unauthenticated.
+- The CSRF fallback endpoint is tried only when the primary answers 404. A host
+  that is not answering will not answer a different path, and asking doubled the
+  wait before the real error surfaced.
+- A CSRF token arriving on a refused response (405, or any refusal carrying the
+  header) is kept instead of thrown away by the retry.
+
 ## [5.0.0] - 2026-08-21
 
 A connection now says which system it is, closes what it opens, and is handed its

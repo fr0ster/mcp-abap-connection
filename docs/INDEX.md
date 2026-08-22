@@ -15,6 +15,7 @@ mcp-abap-connection/
 │   ├── INSTALLATION.md             # Setup and installation guide
 │   ├── USAGE.md                    # API documentation and examples
 │   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── MIGRATION-6.0.md            # the factory and the per-credential classes go; RFC is a transport
 │   ├── MIGRATION-4.0.md            # JWT error classification: 401 refreshes, 403 propagates
 │   ├── SCOPE.md                    # What this package does and does not own
 │   ├── STATEFUL_SESSION_GUIDE.md   # Stateful requests and lock windows
@@ -43,6 +44,7 @@ mcp-abap-connection/
 - 🔑 [JWT Auth Tools](./JWT_AUTH_TOOLS.md) - CLI tool for browser-based authentication
 
 ### Upgrading
+- 🚚 [Migrating to 6.0.0](./MIGRATION-6.0.md) - the factory and the per-credential classes are removed; the RFC wire is a transport you hand to the on-prem connector
 - 🧱 [Migrating to 4.0.0](./MIGRATION-4.0.md) - JWT error classification: a 401 refreshes, a 403 propagates with the server's message
 - 🧱 [Migrating to 2.0.0](./MIGRATION-2.0.md) - The explicit session lifecycle: `connect()` is required
 
@@ -72,8 +74,9 @@ mcp-abap-connection/
 ### API Reference
 - **Connection Interface**: [USAGE.md - API Reference](./USAGE.md#api-reference)
 - **Configuration Types**: [USAGE.md - Configuration Types](./USAGE.md#configuration-types)
-- **Factory Function**: `createAbapConnection()`
-- **Connection Classes**: `BaseAbapConnection`, `JwtAbapConnection`
+- **Connectors**: `AdtOnPremConnector`, `AdtCloudConnector`
+- **Credentials**: `BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`, `CertificateAuthProvider`
+- **Transports**: `HttpTransport`, `RfcTransport` (+ `rfcConversationFrom()`)
 
 ## Version Highlights
 

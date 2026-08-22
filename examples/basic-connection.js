@@ -4,7 +4,10 @@
  * Demonstrates simple connection to SAP system and making ADT request
  */
 
-const { createAbapConnection } = require('@mcp-abap-adt/connection');
+const {
+  AdtOnPremConnector,
+  BasicAuthProvider,
+} = require('@mcp-abap-adt/connection');
 
 async function main() {
   // Configuration from environment or hardcoded
@@ -19,7 +22,12 @@ async function main() {
   console.log('Creating connection to', config.url);
 
   // Create connection (factory auto-detects cloud vs on-premise)
-  const connection = createAbapConnection(config, console);
+  // Which system (the class), which credential (the object). Neither is detected.
+  const connection = new AdtOnPremConnector(
+    config,
+    new BasicAuthProvider(config.username, config.password),
+    console,
+  );
 
   try {
     // Connect and get CSRF token
