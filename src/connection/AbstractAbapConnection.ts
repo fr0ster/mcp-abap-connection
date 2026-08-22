@@ -341,12 +341,11 @@ abstract class AbstractAbapConnection
    *
    * **Nothing to wait for.** This TELLS the server the session is finished and
    * does not act on the answer — whether and when the session is freed is the
-   * server's affair. A `deadlineMs` used to bound a wait for that answer; it is
-   * accepted and ignored, and goes from the contract next. Waiting was also the
-   * one thing that could make a teardown unbounded, since the goodbye carries
-   * no request timeout by design.
+   * server's affair. Waiting for a reply nobody reads was also the one thing
+   * that could make a teardown unbounded, since the goodbye carries no request
+   * timeout by design.
    */
-  async disconnect(_options?: { deadlineMs?: number }): Promise<void> {
+  async disconnect(): Promise<void> {
     // Nothing here throws. This method's place is a `finally` — a connection
     // that was connected must be disconnected — and an exception raised there
     // replaces the error that sent the caller into it.

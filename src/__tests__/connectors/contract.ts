@@ -144,13 +144,14 @@ export function describeConnectorContract(
       await expect(conn.disconnect()).resolves.toBeUndefined();
     });
 
-    it('honours a disconnect deadline of zero', async () => {
+    it('settles without waiting for the server to answer', async () => {
       const conn = fixture.build();
       await conn.connect();
 
-      // Zero means do not wait for the release. It must still settle, and still
-      // leave the connection unusable.
-      await expect(conn.disconnect({ deadlineMs: 0 })).resolves.toBeUndefined();
+      // It notifies; the answer is not acted on, so there is nothing to wait
+      // for and no deadline to pass. What must hold is that it settles and
+      // leaves the connection unusable.
+      await expect(conn.disconnect()).resolves.toBeUndefined();
       expect(conn.isConnected()).toBe(false);
     });
 
