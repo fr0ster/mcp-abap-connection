@@ -4,7 +4,11 @@ import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
-import { onPrem } from './helpers/onPrem.js';
+import {
+  cloudHttpTransport,
+  onPrem,
+  onPremHttpTransport,
+} from './helpers/onPrem.js';
 import { markConnectedForTest } from './helpers/session.js';
 import { heldCookies, seedCookies } from './helpers/transportStub.js';
 
@@ -301,6 +305,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     const conn = new AdtCloudConnector(
       jwtConfig,
       new TokenAuthProvider('jwt-abc'),
+      cloudHttpTransport(jwtConfig, mockLogger),
       mockLogger,
     );
     markConnectedForTest(conn);
@@ -345,6 +350,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     const conn = new AdtOnPremConnector(
       samlConfig,
       new SamlAuthProvider('MYSAPSSO2=abc'),
+      onPremHttpTransport(samlConfig, mockLogger),
       mockLogger,
     );
     markConnectedForTest(conn);

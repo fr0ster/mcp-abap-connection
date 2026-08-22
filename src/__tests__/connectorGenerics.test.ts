@@ -9,6 +9,7 @@
  * On-prem has two parameters because it has two choices. Cloud has one, because
  * there is no cloud RFC.
  */
+
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
 import {
   BasicAuthProvider,
@@ -18,8 +19,9 @@ import {
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
-import { HttpTransport } from '../connection/HttpTransport.js';
+import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import { RfcTransport } from '../connection/RfcTransport.js';
+import { cloudHttpTransport, onPremHttpTransport } from './helpers/onPrem.js';
 
 const config: SapConfig = {
   url: 'https://sap.example.com',
@@ -44,7 +46,7 @@ function needsRfc(
   _conn: AdtOnPremConnector<IAuthProvider, RfcTransport>,
 ): void {}
 function needsHttp(
-  _conn: AdtOnPremConnector<IAuthProvider, HttpTransport>,
+  _conn: AdtOnPremConnector<IAuthProvider, OnPremHttpTransport>,
 ): void {}
 
 describe('on-prem carries both axes in its type', () => {
@@ -52,9 +54,9 @@ describe('on-prem carries both axes in its type', () => {
     const conn = new AdtOnPremConnector(
       config,
       new BasicAuthProvider('u', 'p'),
+      rfc,
       null,
       undefined,
-      { transport: rfc },
     );
 
     // Inferred, not asserted: no cast at this call site.
@@ -66,16 +68,18 @@ describe('on-prem carries both axes in its type', () => {
     const conn = new AdtOnPremConnector(
       config,
       new BasicAuthProvider('u', 'p'),
+      onPremHttpTransport(config, null),
     );
 
     needsHttp(conn);
-    expect(conn.transport).toBeInstanceOf(HttpTransport);
+    expect(conn.transport).toBeInstanceOf(OnPremHttpTransport);
   });
 
   it('refuses the wrong combination at compile time', () => {
     const overHttp = new AdtOnPremConnector(
       config,
       new BasicAuthProvider('u', 'p'),
+      onPremHttpTransport(config, null),
     );
 
     // @ts-expect-error an HTTP connection is not an RFC one, and a signature
@@ -88,7 +92,11 @@ describe('on-prem carries both axes in its type', () => {
       { load: async () => ({ cert: 'C' }) },
       config,
     );
-    const conn = new AdtOnPremConnector(config, credential);
+    const conn = new AdtOnPremConnector(
+      config,
+      credential,
+      onPremHttpTransport(config, null),
+    );
 
     // Typed as CertificateAuthProvider, so its own members are reachable
     // without narrowing.
@@ -99,7 +107,12 @@ describe('on-prem carries both axes in its type', () => {
 describe('cloud carries one', () => {
   it('remembers the credential', () => {
     const credential = new TokenAuthProvider('t');
-    const conn = new AdtCloudConnector(config, credential, null);
+    const conn = new AdtCloudConnector(
+      config,
+      credential,
+      cloudHttpTransport(config, null),
+      null,
+    );
 
     expect(conn.credential).toBe(credential);
   });

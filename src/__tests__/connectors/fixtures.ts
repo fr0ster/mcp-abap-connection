@@ -16,6 +16,8 @@ import { BasicAuthProvider, TokenAuthProvider } from '../../auth/providers.js';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
+import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
+import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { RfcTransport } from '../../connection/RfcTransport.js';
 import type { Connection, ConnectorFixture } from './contract.js';
 
@@ -107,13 +109,17 @@ export async function cloudFixture(): Promise<ConnectorFixture> {
   const wire = httpSubstrate();
   return {
     build(): Connection {
+      const transport = new CloudHttpTransport(() => ({}), null, {
+        client: config.client,
+        baseUrl: config.url,
+      });
+      (transport as unknown as { send: unknown }).send = wire.send;
       const conn = new AdtCloudConnector(
         config,
         new TokenAuthProvider('a-token'),
+        transport,
         null,
       );
-      (conn as unknown as { transport: { send: unknown } }).transport.send =
-        wire.send;
       return conn as unknown as Connection;
     },
     sessionsOpened: wire.sessionsOpened,
@@ -126,13 +132,17 @@ export async function onPremHttpFixture(): Promise<ConnectorFixture> {
   const wire = httpSubstrate();
   return {
     build(): Connection {
+      const transport = new OnPremHttpTransport(() => ({}), null, {
+        client: config.client,
+        baseUrl: config.url,
+      });
+      (transport as unknown as { send: unknown }).send = wire.send;
       const conn = new AdtOnPremConnector(
         config,
         new BasicAuthProvider('u', 'p'),
+        transport,
         null,
       );
-      (conn as unknown as { transport: { send: unknown } }).transport.send =
-        wire.send;
       return conn as unknown as Connection;
     },
     sessionsOpened: wire.sessionsOpened,
@@ -179,11 +189,8 @@ export async function onPremRfcFixture(): Promise<ConnectorFixture> {
       const conn = new AdtOnPremConnector(
         config,
         new BasicAuthProvider('u', 'p'),
+        new RfcTransport(() => conversation as never, null),
         null,
-        undefined,
-        {
-          transport: new RfcTransport(() => conversation as never, null),
-        },
       );
       return conn as unknown as Connection;
     },

@@ -13,6 +13,7 @@
  *     imports and cannot name Node's type; the material is what a client needs
  *     and what the loader already produces.
  */
+
 import type {
   IAuthProvider,
   ICertificateMaterial,
@@ -26,6 +27,7 @@ import {
 } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
+import { onPremHttpTransport } from './helpers/onPrem.js';
 
 const config: SapConfig = {
   url: 'https://sap.example.com',
@@ -54,7 +56,12 @@ describe('a credential that is not a header', () => {
   it('is what the connection builds its https agent from', async () => {
     const credential = new CertificateAuthProvider(loader, config);
     await credential.prepare();
-    const conn = new AdtOnPremConnector(config, credential, null);
+    const conn = new AdtOnPremConnector(
+      config,
+      credential,
+      onPremHttpTransport(config, null),
+      null,
+    );
 
     expect((conn as any).getHttpsAgentOptions()).toEqual(
       expect.objectContaining(material),

@@ -16,9 +16,11 @@
  * So the seam passes a transport, the shape `src/session/` already uses for the
  * same reason.
  */
+
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
+import { onPremHttpTransport } from './helpers/onPrem.js';
 
 const config: SapConfig = {
   url: 'https://sap.example.com',
@@ -45,7 +47,12 @@ function credentialOwningTheFetch() {
 describe('a credential that owns its CSRF fetch', () => {
   it('is handed a transport it can send with, not a URL to look at', async () => {
     const { credential, given } = credentialOwningTheFetch();
-    const conn = new AdtOnPremConnector(config, credential, null);
+    const conn = new AdtOnPremConnector(
+      config,
+      credential,
+      onPremHttpTransport(config, null),
+      null,
+    );
 
     await (conn as any).establishSession();
 
@@ -61,7 +68,12 @@ describe('a credential that owns its CSRF fetch', () => {
 
   it('is told where the system is, so it need not parse a URL back apart', async () => {
     const { credential, given } = credentialOwningTheFetch();
-    const conn = new AdtOnPremConnector(config, credential, null);
+    const conn = new AdtOnPremConnector(
+      config,
+      credential,
+      onPremHttpTransport(config, null),
+      null,
+    );
 
     await (conn as any).establishSession();
 
@@ -72,7 +84,12 @@ describe('a credential that owns its CSRF fetch', () => {
 
   it('has its token taken as the connection csrf token', async () => {
     const { credential } = credentialOwningTheFetch();
-    const conn = new AdtOnPremConnector(config, credential, null);
+    const conn = new AdtOnPremConnector(
+      config,
+      credential,
+      onPremHttpTransport(config, null),
+      null,
+    );
 
     await (conn as any).establishSession();
 
@@ -90,7 +107,12 @@ describe('a credential that does not', () => {
       kind: 'test-basic',
       authorizationHeader: async () => 'Basic dTpw',
     };
-    const conn = new AdtOnPremConnector(config, credential, null);
+    const conn = new AdtOnPremConnector(
+      config,
+      credential,
+      onPremHttpTransport(config, null),
+      null,
+    );
     const wire = jest
       .spyOn((conn as any).transport, 'establish')
       .mockImplementation(async () => {
@@ -108,7 +130,12 @@ describe('a credential that does not', () => {
       kind: 'test-basic',
       authorizationHeader: async () => 'Basic dTpw',
     };
-    const conn = new AdtOnPremConnector(config, credential, null);
+    const conn = new AdtOnPremConnector(
+      config,
+      credential,
+      onPremHttpTransport(config, null),
+      null,
+    );
     const wire = jest
       .spyOn((conn as any).transport, 'establish')
       .mockResolvedValue(undefined);

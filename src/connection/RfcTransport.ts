@@ -25,6 +25,7 @@ import type {
   IAdtTransport,
   IAdtTransportRequest,
   IAdtTransportResponse,
+  IOnPremTransport,
 } from './IAdtTransport.js';
 
 /** The slice of the native client this needs, so the SDK is not a hard dependency. */
@@ -71,8 +72,11 @@ function message(e: unknown): string {
 /** Axios's own default, which the classification above this seam is written against. */
 const admits2xx = (status: number) => status >= 200 && status < 300;
 
-export class RfcTransport implements IAdtTransport {
+export class RfcTransport implements IOnPremTransport {
   readonly kind = 'rfc';
+
+  /** Which system this wire is for. Read by the compiler, never at runtime. */
+  readonly system = 'onprem' as const;
 
   private conversation: IRfcConversation | null = null;
   /** Names the conversation, and so the ABAP session it carries. */

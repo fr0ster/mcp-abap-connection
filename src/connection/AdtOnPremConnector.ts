@@ -20,15 +20,18 @@
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
-import { IcfSessionStrategy } from '../session/IcfSessionStrategy.js';
-import type { SessionStrategy } from '../session/SessionStrategy.js';
 import { CredentialAbapConnection } from './CredentialAbapConnection.js';
-import type { HttpTransport } from './HttpTransport.js';
-import type { IAdtTransport } from './IAdtTransport.js';
+import type { IOnPremTransport } from './IAdtTransport.js';
+import type { OnPremHttpTransport } from './OnPremHttpTransport.js';
 
 export class AdtOnPremConnector<
   TCredential extends IAuthProvider = IAuthProvider,
-  TTransport extends IAdtTransport = HttpTransport,
+  /**
+   * The two wires an on-prem system actually offers. Said by the caller: the
+   * same ADT call travels over HTTP, or over RFC on a system where stateful
+   * HTTP sessions are not usable.
+   */
+  TTransport extends IOnPremTransport = OnPremHttpTransport,
 > extends CredentialAbapConnection<TCredential> {
   /**
    * The transport this was built with, in the type.
@@ -43,6 +46,7 @@ export class AdtOnPremConnector<
   constructor(
     config: SapConfig,
     credential: TCredential,
+    transport: TTransport,
     logger: ILogger | null = null,
     sessionId?: string,
     /**
@@ -53,10 +57,6 @@ export class AdtOnPremConnector<
      */
     options?: { skipSessionType?: boolean; transport?: TTransport },
   ) {
-    super(config, credential, logger, sessionId, options);
-  }
-
-  protected override createSessionStrategy(): SessionStrategy {
-    return new IcfSessionStrategy(this.logger);
+    super(config, credential, transport, logger, sessionId, options);
   }
 }

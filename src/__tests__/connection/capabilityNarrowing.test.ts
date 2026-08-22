@@ -12,6 +12,7 @@
  * So the subject of "lacks the atom" is no longer a shipped class. It is a bare
  * IAbapConnection, which is what the atom was always for.
  */
+
 import type {
   IAbapConnection,
   ISessionLifecycleAware,
@@ -19,6 +20,7 @@ import type {
 import { BasicAuthProvider } from '../../auth/providers.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { RfcTransport } from '../../connection/RfcTransport.js';
+import { onPremHttpTransport } from '../helpers/onPrem.js';
 
 const httpConfig = {
   url: 'https://h:44300',
@@ -33,9 +35,9 @@ const onPremOverRfc = () =>
   new AdtOnPremConnector(
     rfcConfig,
     new BasicAuthProvider('U', 'P'),
+    new RfcTransport(() => ({}) as never, null),
     null,
     undefined,
-    { transport: new RfcTransport(() => ({}) as never, null) },
   );
 
 const rfcConfig = {
@@ -76,7 +78,12 @@ function ownsSession(_conn: IAbapConnection & ISessionLifecycleAware): void {}
 // conversation is the session, and there is no endpoint to tell — but the
 // conversation is still opened, still observable and still torn down.
 ownsSession(
-  new AdtOnPremConnector(httpConfig, new BasicAuthProvider('U', 'P'), null),
+  new AdtOnPremConnector(
+    httpConfig,
+    new BasicAuthProvider('U', 'P'),
+    onPremHttpTransport(httpConfig, null),
+    null,
+  ),
 );
 ownsSession(onPremOverRfc());
 
@@ -96,7 +103,12 @@ describe('narrowing to a connection capability', () => {
   // assignment ever needs a cast, the implements clause has been lost.
   it('an HTTP connection satisfies the atom at compile time', () => {
     const conn: IAbapConnection & ISessionLifecycleAware =
-      new AdtOnPremConnector(httpConfig, new BasicAuthProvider('U', 'P'), null);
+      new AdtOnPremConnector(
+        httpConfig,
+        new BasicAuthProvider('U', 'P'),
+        onPremHttpTransport(httpConfig, null),
+        null,
+      );
     expect(typeof conn.disconnect).toBe('function');
     expect(typeof conn.getSessionIdentity).toBe('function');
   });
@@ -121,6 +133,7 @@ describe('narrowing to a connection capability', () => {
     const conn: IAbapConnection = new AdtOnPremConnector(
       httpConfig,
       new BasicAuthProvider('U', 'P'),
+      onPremHttpTransport(httpConfig, null),
       null,
     );
     expect(supportsSessionLifecycle(conn)).toBe(true);
@@ -139,6 +152,7 @@ describe('narrowing to a connection capability', () => {
       ...(new AdtOnPremConnector(
         httpConfig,
         new BasicAuthProvider('U', 'P'),
+        onPremHttpTransport(httpConfig, null),
         null,
       ) as unknown as Record<string, unknown>),
       isConnected: () => true,

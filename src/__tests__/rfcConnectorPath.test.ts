@@ -19,6 +19,7 @@
  * These say what the connector should do instead. They are about the transport
  * axis only — the cloud connector has one transport and is not touched.
  */
+
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
 import { BasicAuthProvider } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
@@ -27,7 +28,9 @@ import type {
   IAdtTransport,
   IAdtTransportRequest,
   IAdtTransportResponse,
+  IOnPremTransport,
 } from '../connection/IAdtTransport.js';
+import { onPremHttpTransport } from './helpers/onPrem.js';
 import { holdsNoSession } from './helpers/transportStub.js';
 
 const config: SapConfig = {
@@ -45,12 +48,14 @@ const credential: IAuthProvider = new BasicAuthProvider('USER', 'PASS');
  * header fields it actually returns. Nothing else — that absence is the point.
  */
 function rfcTransport(): {
-  transport: IAdtTransport;
+  transport: IOnPremTransport;
   sent: IAdtTransportRequest[];
 } {
   const sent: IAdtTransportRequest[] = [];
-  const transport: IAdtTransport = {
+  const transport: IOnPremTransport = {
     kind: 'rfc',
+    // A stub is a wire like any other, and says which system it is for.
+    system: 'onprem',
     ...holdsNoSession,
     // The conversation IS the session, so this wire is never on none — which is
     // what `RfcTransport` reports, and what the fingerprint check reads.
@@ -77,9 +82,7 @@ function rfcTransport(): {
 
 const onPremOverRfc = () => {
   const { transport, sent } = rfcTransport();
-  const conn = new AdtOnPremConnector(config, credential, null, undefined, {
-    transport,
-  });
+  const conn = new AdtOnPremConnector(config, credential, transport, null);
   return { conn, sent };
 };
 
@@ -137,9 +140,7 @@ describe('disconnect() over an RFC transport', () => {
     const { transport, sent } = rfcTransport();
     const closed = jest.fn(async () => {});
     transport.close = closed;
-    const conn = new AdtOnPremConnector(config, credential, null, undefined, {
-      transport,
-    });
+    const conn = new AdtOnPremConnector(config, credential, transport, null);
     await conn.connect();
     sent.length = 0;
 

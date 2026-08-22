@@ -39,7 +39,17 @@ function absentEndpoint(error: unknown): boolean {
 }
 
 export class HttpTransport implements IAdtTransport {
-  readonly kind = 'http';
+  /**
+   * A real wire, usable on its own: it sends, holds a jar, and earns a CSRF
+   * token. What the two subclasses add is not the wire but the SESSION
+   * MECHANISM — the cloud resource, the platform logoff — which is a different
+   * question and the one the consumer answers by taking one of them.
+   *
+   * A bare one therefore does something well defined: it carries requests and
+   * never asks for or gives back a session. Which system a connector is for is
+   * enforced by its type parameter, not by this being unusable.
+   */
+  readonly kind: string = 'http';
 
   private instance: AxiosInstance | null = null;
 
@@ -58,7 +68,7 @@ export class HttpTransport implements IAdtTransport {
 
   constructor(
     private readonly agentOptions: () => AgentOptions = () => ({}),
-    private readonly logger: ILogger | null = null,
+    protected readonly logger: ILogger | null = null,
     /**
      * `client` because SAP answers `sap-usercontext` with the system default
      * rather than the client that was asked for, and later requests then route

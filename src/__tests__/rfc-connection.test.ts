@@ -29,6 +29,7 @@ import {
   rfcParamsFrom,
 } from '../connection/rfcConversation.js';
 import type { ILogger } from '../logger.js';
+import { onPremHttpTransport } from './helpers/onPrem.js';
 
 // Load env file — default to e19.env, override via SAP_ENV_FILE
 const envFile = process.env.SAP_ENV_FILE || 'e19.env';
@@ -55,9 +56,8 @@ function overRfc(config: SapConfig) {
   return new AdtOnPremConnector(
     config,
     new BasicAuthProvider(config.username ?? '', config.password ?? ''),
+    new RfcTransport(rfcConversationFrom(config), logger),
     logger,
-    undefined,
-    { transport: new RfcTransport(rfcConversationFrom(config), logger) },
   );
 }
 

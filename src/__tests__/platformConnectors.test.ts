@@ -19,6 +19,7 @@ import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
+import { cloudHttpTransport, onPremHttpTransport } from './helpers/onPrem.js';
 
 const config: SapConfig = {
   url: 'https://sap.example.com',
@@ -90,6 +91,7 @@ describe('the consumer decides the session mechanism, by which connector it take
     const conn = new AdtOnPremConnector(
       config,
       new TokenAuthProvider('a-token'),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverAnsweringEverything(conn, seen);
@@ -110,6 +112,7 @@ describe('the consumer decides the session mechanism, by which connector it take
     const conn = new AdtCloudConnector(
       config,
       new BasicAuthProvider('u', 'p'),
+      cloudHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverAnsweringEverything(conn, seen);
@@ -139,6 +142,7 @@ describe('the credential is what it authenticates with, and nothing more', () =>
     const conn = new AdtOnPremConnector(
       config,
       new BasicAuthProvider('u', 'p'),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverAnsweringEverything(conn, seen);
@@ -167,6 +171,7 @@ describe('the credential is what it authenticates with, and nothing more', () =>
     const conn = new AdtOnPremConnector(
       config,
       new TokenAuthProvider({ getToken, refreshToken: getToken } as never),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverAnsweringEverything(conn, seen);
@@ -203,11 +208,23 @@ describe('cookie credentials reach the wire', () => {
   it.each([
     [
       'on-prem',
-      (p: SamlAuthProvider) => new AdtOnPremConnector(config, p, makeLogger()),
+      (p: SamlAuthProvider) =>
+        new AdtOnPremConnector(
+          config,
+          p,
+          onPremHttpTransport(config, makeLogger()),
+          makeLogger(),
+        ),
     ],
     [
       'cloud',
-      (p: SamlAuthProvider) => new AdtCloudConnector(config, p, makeLogger()),
+      (p: SamlAuthProvider) =>
+        new AdtCloudConnector(
+          config,
+          p,
+          cloudHttpTransport(config, makeLogger()),
+          makeLogger(),
+        ),
     ],
   ])('%s sends the SAML cookies on every request', async (_name, build) => {
     const seen: Seen[] = [];
@@ -343,6 +360,7 @@ describe('a rejected credential is retried only when it actually changed', () =>
     const conn = new AdtOnPremConnector(
       config,
       new TokenAuthProvider(async () => (refused ? 'GOOD' : 'STALE')),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverRejectingUntil(conn, seen, 'Bearer GOOD', () => {
@@ -366,6 +384,7 @@ describe('a rejected credential is retried only when it actually changed', () =>
     const conn = new AdtOnPremConnector(
       config,
       new BasicAuthProvider('u', 'wrong'),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     // Nothing this credential can say is accepted — a real refusal rather than
@@ -400,6 +419,7 @@ describe('a rejected credential is retried only when it actually changed', () =>
         n += 1;
         return `T${n}`;
       }),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     // Nothing is ever accepted, and the credential is different every time.
@@ -422,6 +442,7 @@ describe('a rejected credential is retried only when it actually changed', () =>
     const conn = new AdtOnPremConnector(
       config,
       new TokenAuthProvider(async () => (refused ? 'GOOD' : 'STALE')),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverRejectingUntil(conn, seen, 'Bearer GOOD', () => {
@@ -474,6 +495,7 @@ describe('the token provider is used the way its contract says', () => {
     const conn = new AdtOnPremConnector(
       config,
       new TokenAuthProvider(refresher as never),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverRejectingUntilShared(conn, seen, 'Bearer GOOD');
@@ -497,6 +519,7 @@ describe('the token provider is used the way its contract says', () => {
     const conn = new AdtOnPremConnector(
       config,
       new TokenAuthProvider(refresher as never),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverRejectingUntilShared(conn, seen, 'Bearer GOOD');
@@ -536,6 +559,7 @@ describe('a late refusal does not undo a session somebody else rebuilt', () => {
     const conn = new AdtOnPremConnector(
       config,
       new TokenAuthProvider(refresher as never),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
 
@@ -606,11 +630,23 @@ describe('a request is built from one reading of the credential', () => {
   it.each([
     [
       'on-prem',
-      (p: TokenAuthProvider) => new AdtOnPremConnector(config, p, makeLogger()),
+      (p: TokenAuthProvider) =>
+        new AdtOnPremConnector(
+          config,
+          p,
+          onPremHttpTransport(config, makeLogger()),
+          makeLogger(),
+        ),
     ],
     [
       'cloud',
-      (p: TokenAuthProvider) => new AdtCloudConnector(config, p, makeLogger()),
+      (p: TokenAuthProvider) =>
+        new AdtCloudConnector(
+          config,
+          p,
+          cloudHttpTransport(config, makeLogger()),
+          makeLogger(),
+        ),
     ],
   ])('%s asks once per request it sends', async (_name, build) => {
     const seen: Seen[] = [];

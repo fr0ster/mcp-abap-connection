@@ -38,11 +38,12 @@ export abstract class CredentialAbapConnection<
     config: SapConfig,
     /** Public because the type is the point: a caller can reach what it gave. */
     readonly credential: TCredential,
+    transport: IAdtTransport,
     logger: ILogger | null = null,
     sessionId?: string,
-    options?: { skipSessionType?: boolean; transport?: IAdtTransport },
+    options?: { skipSessionType?: boolean },
   ) {
-    super(config, logger, sessionId, options);
+    super(config, transport, logger, sessionId, options);
   }
 
   /**
@@ -223,7 +224,7 @@ export abstract class CredentialAbapConnection<
         // The credential does the exchange itself — a SAML session is earned by
         // it — and hands the token to the wire that will present it.
         this.setCsrfToken(
-          await this.credential.fetchCsrfToken(this.sessionTransport()),
+          await this.credential.fetchCsrfToken(this.credentialTransport()),
         );
       } else {
         // Otherwise the wire establishes itself. What that means is the wire's:

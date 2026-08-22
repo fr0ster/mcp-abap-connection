@@ -32,6 +32,7 @@ export type {
 } from './connection/AbapConnection.js';
 export { AdtCloudConnector } from './connection/AdtCloudConnector.js';
 export { AdtOnPremConnector } from './connection/AdtOnPremConnector.js';
+export { CloudHttpTransport } from './connection/CloudHttpTransport.js';
 // The session lifecycle vocabulary — ISessionLifecycleAware, ADT_SESSION_ERROR —
 // is deliberately NOT exported here. It lives in @mcp-abap-adt/interfaces, and a
 // consumer imports it from there: re-exporting a contract type gives it two
@@ -49,10 +50,14 @@ export {
 export { HttpTransport } from './connection/HttpTransport.js';
 export type {
   IAdtEstablishContext,
+  IAdtSessionContext,
   IAdtTransport,
   IAdtTransportRequest,
   IAdtTransportResponse,
+  ICloudTransport,
+  IOnPremTransport,
 } from './connection/IAdtTransport.js';
+export { OnPremHttpTransport } from './connection/OnPremHttpTransport.js';
 export {
   type IRfcConversation,
   RfcTransport,

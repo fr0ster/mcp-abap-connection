@@ -69,9 +69,9 @@ function overRfc(wire: ReturnType<typeof conversation>) {
   return new AdtOnPremConnector(
     config,
     new BasicAuthProvider('u', 'p'),
+    new RfcTransport(() => wire as never, null),
     null,
     undefined,
-    { transport: new RfcTransport(() => wire as never, null) },
   );
 }
 

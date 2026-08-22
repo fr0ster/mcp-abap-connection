@@ -16,7 +16,7 @@ import { TokenAuthProvider } from '../../auth/providers.js';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
-import { onPrem } from '../helpers/onPrem.js';
+import { cloudHttpTransport, onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
   baseUrl: string;
@@ -236,6 +236,7 @@ describe('a credential refused while establishing', () => {
           return 'FRESH';
         },
       }),
+      cloudHttpTransport({ url: stub.baseUrl, client: '100' } as SapConfig),
       null,
     );
 
@@ -409,6 +410,7 @@ describe('JWT request recovery after a token refresh', () => {
           };
         })(),
       ),
+      cloudHttpTransport({ url: stub.baseUrl, client: '100' } as SapConfig),
       null,
     );
   }

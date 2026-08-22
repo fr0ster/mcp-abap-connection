@@ -17,7 +17,8 @@
 import { BasicAuthProvider } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
-import type { IAdtTransport } from '../connection/IAdtTransport.js';
+import type { IOnPremTransport } from '../connection/IAdtTransport.js';
+import { onPremHttpTransport } from './helpers/onPrem.js';
 import { holdsItsSession } from './helpers/transportStub.js';
 
 const config: SapConfig = {
@@ -46,8 +47,9 @@ function recordingTransport() {
       data: '<service/>',
     };
   };
-  const transport: IAdtTransport = {
+  const transport: IOnPremTransport = {
     kind: 'test',
+    system: 'onprem' as const,
     ...holdsItsSession(send),
     send,
   };
@@ -60,9 +62,8 @@ describe('the transport a connection sends through', () => {
     const conn = new AdtOnPremConnector(
       config,
       new BasicAuthProvider('u', 'p'),
+      transport,
       null,
-      undefined,
-      { transport },
     );
 
     await conn.connect();
@@ -76,9 +77,8 @@ describe('the transport a connection sends through', () => {
     const conn = new AdtOnPremConnector(
       config,
       new BasicAuthProvider('u', 'p'),
+      transport,
       null,
-      undefined,
-      { transport },
     );
     await conn.connect();
     seen.length = 0;

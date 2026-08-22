@@ -54,16 +54,26 @@ export interface IAdtTransportResponse {
 }
 
 /** What a transport needs from above to establish itself. */
-export interface IAdtEstablishContext {
+/**
+ * What a wire needs from the connection to ask for a session, or give one back.
+ *
+ * The same shape the establishing call takes, minus the retry knobs: opening a
+ * session is one request, and one that is retried is one the caller cannot
+ * reason about — a second session may already be open by the time the first
+ * answer arrives.
+ */
+export interface IAdtSessionContext {
   /** The server, for a wire that addresses one. */
   baseUrl: string;
-  /**
-   * Read once per request the wire sends: a provider may renew behind the
-   * call, and a value held would be the stale one.
-   */
+  /** Read once per request: a provider may renew behind the call. */
   authHeaders: () => Promise<Record<string, string>>;
   /** Anything the conversation carries — the ADT connection id, today. */
   extraHeaders?: Record<string, string>;
+  /** Where to hand each answer, so the connection sees what the wire saw. */
+  observe: (headers: unknown) => void;
+}
+
+export interface IAdtEstablishContext extends IAdtSessionContext {
   /**
    * Where to hand each answer. The wire folds a response into its own state;
    * whether a new session id is an establishment or a replacement is a question
@@ -92,19 +102,28 @@ export interface IAdtTransport {
   readonly kind: string;
 
   /**
-   * Get the wire ready, if this transport owns one.
+   * Get a session, in whatever way this wire has one.
    *
-   * HTTP omits it — there is nothing to open, a request opens its own socket.
-   * RFC implements it, because an RFC conversation IS the session and has to
-   * exist before anything can be sent over it.
+   * An RFC conversation is opened, and IS the session. ABAP Cloud publishes a
+   * session as a resource and this asks for one. On-prem HTTP has neither —
+   * its session arrives as a cookie on the establishing call — so it does
+   * nothing here and says so by doing nothing.
+   *
+   * This used to be a `SessionStrategy` the connection selected and drove: a
+   * second wire abstraction beside this one, in the class every wire shares,
+   * describing a mechanism only some of them have.
    */
-  open?(): Promise<void>;
+  open?(context: IAdtSessionContext): Promise<void>;
 
   /**
-   * Give the wire back. Never throws, and a repeat call finds nothing owed —
-   * this is reached from `disconnect()`, which promises to settle.
+   * Give the session back.
+   *
+   * Never throws, and a repeat call finds nothing owed — this is reached from
+   * `disconnect()`, which promises to settle. What it does is the wire's: a
+   * DELETE on the address the server published, the platform's logoff, or
+   * closing the conversation.
    */
-  close?(): Promise<void>;
+  close?(context: IAdtSessionContext): Promise<void>;
 
   /**
    * Issue one request.
@@ -187,6 +206,28 @@ export interface IAdtTransport {
  * observing a failing response, and noticing a dead session in one, were
  * reachable over one wire only.
  */
+/**
+ * Which system a wire is for.
+ *
+ * A marker rather than a class, because a consumer writes their own transports
+ * — that is the whole reason the wire is an argument. Constraining a connector
+ * to the shipped classes would have made "bring your own wire" impossible while
+ * appearing to allow it, since these classes carry private state and so compare
+ * nominally.
+ *
+ * It is still the CALLER who says which system: declaring `system` is that
+ * statement, made once by whoever writes the transport rather than at every
+ * construction. Nothing reads it at runtime and nothing infers from it — its
+ * only job is to stop "ABAP Cloud over RFC" from compiling.
+ */
+export interface IOnPremTransport extends IAdtTransport {
+  readonly system: 'onprem';
+}
+
+export interface ICloudTransport extends IAdtTransport {
+  readonly system: 'cloud';
+}
+
 export function refusalOf(error: unknown): IAdtTransportResponse | null {
   const response = (error as { response?: unknown } | null | undefined)
     ?.response;

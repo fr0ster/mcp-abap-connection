@@ -13,7 +13,7 @@ import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
-import { onPrem } from './helpers/onPrem.js';
+import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
 
 const baseConfig: SapConfig = {
   url: 'https://sap.example.com',
@@ -108,6 +108,10 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
       new TokenAuthProvider('TOKEN'),
+      cloudHttpTransport(
+        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+        makeLogger(),
+      ),
       makeLogger(),
     );
     const seen: Seen[] = [];
@@ -561,6 +565,10 @@ describe('a session opened before a failed connect is not abandoned', () => {
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
       new TokenAuthProvider('TOKEN'),
+      cloudHttpTransport(
+        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+        makeLogger(),
+      ),
       makeLogger(),
     );
     const seen: Seen[] = [];
@@ -584,6 +592,10 @@ describe('a session opened before a failed connect is not abandoned', () => {
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
       new TokenAuthProvider('TOKEN'),
+      cloudHttpTransport(
+        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+        makeLogger(),
+      ),
       makeLogger(),
     ) as never as AdtOnPremConnector;
     const seen: Seen[] = [];

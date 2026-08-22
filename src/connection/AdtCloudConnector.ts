@@ -19,16 +19,25 @@
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
-import { CloudSecuritySessionStrategy } from '../session/CloudSecuritySessionStrategy.js';
-import type { SessionStrategy } from '../session/SessionStrategy.js';
+import type { CloudHttpTransport } from './CloudHttpTransport.js';
 import { CredentialAbapConnection } from './CredentialAbapConnection.js';
+import type { ICloudTransport } from './IAdtTransport.js';
 
 export class AdtCloudConnector<
   TCredential extends IAuthProvider = IAuthProvider,
+  /**
+   * Constrained to the cloud wire, so "cloud over RFC" does not compile.
+   * There is no such deployment, and a connector that accepted the transport
+   * would be offering a combination that cannot exist.
+   */
+  TTransport extends ICloudTransport = CloudHttpTransport,
 > extends CredentialAbapConnection<TCredential> {
+  declare readonly transport: TTransport;
+
   constructor(
     config: SapConfig,
     credential: TCredential,
+    transport: TTransport,
     logger: ILogger | null = null,
     sessionId?: string,
     /**
@@ -38,10 +47,6 @@ export class AdtCloudConnector<
      */
     options?: { skipSessionType?: boolean },
   ) {
-    super(config, credential, logger, sessionId, options);
-  }
-
-  protected override createSessionStrategy(): SessionStrategy {
-    return new CloudSecuritySessionStrategy(this.logger);
+    super(config, credential, transport, logger, sessionId, options);
   }
 }
