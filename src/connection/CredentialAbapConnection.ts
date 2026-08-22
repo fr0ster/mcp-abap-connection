@@ -19,11 +19,10 @@ import type {
   IAdtResponse,
   IAuthProvider,
 } from '@mcp-abap-adt/interfaces';
-import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
-import type { IAdtTransport } from './IAdtTransport.js';
+import { type IAdtTransport, refusalOf } from './IAdtTransport.js';
 
 /** A 401 from the server, whatever transport shape it arrives in. */
 function isUnauthorized(error: unknown): boolean {
@@ -253,7 +252,7 @@ export abstract class CredentialAbapConnection<
       // A rejecting response can still carry the cookies that matter; they are
       // taken by fetchCsrfToken itself, so nothing is read out of the error
       // here beyond saying whether any arrived.
-      if (error instanceof AxiosError && error.response?.headers) {
+      if (refusalOf(error)?.headers) {
         this.logger?.debug(
           `Cookies after a failed establishment: ${this.getCookies() ? 'present' : 'none'}`,
         );

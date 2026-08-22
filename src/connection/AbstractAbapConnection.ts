@@ -31,7 +31,11 @@ import {
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 import { HttpTransport } from './HttpTransport.js';
-import type { IAdtTransport, IAdtTransportRequest } from './IAdtTransport.js';
+import {
+  type IAdtTransport,
+  type IAdtTransportRequest,
+  refusalOf,
+} from './IAdtTransport.js';
 
 /**
  * The configured default release deadline, refused at construction if it is not
@@ -1028,12 +1032,13 @@ abstract class AbstractAbapConnection
    * still owes.
    */
   private isDeadSessionResponse(error: unknown): boolean {
-    if (!(error instanceof AxiosError) || !error.response) return false;
-    if (error.response.status !== 400) return false;
+    const refusal = refusalOf(error);
+    if (!refusal) return false;
+    if (refusal.status !== 400) return false;
 
     const text = [
-      error.response.statusText,
-      typeof error.response.data === 'string' ? error.response.data : '',
+      refusal.statusText,
+      typeof refusal.data === 'string' ? refusal.data : '',
     ]
       .join(' ')
       .toLowerCase();
@@ -1273,18 +1278,23 @@ abstract class AbstractAbapConnection
         message: error instanceof Error ? error.message : String(error),
         url: requestUrl,
         method: normalizedMethod,
-        status:
-          error instanceof AxiosError ? error.response?.status : undefined,
+        status: refusalOf(error)?.status,
         data: undefined,
       };
 
-      if (error instanceof AxiosError && error.response) {
+      const refusal = refusalOf(error);
+      if (refusal) {
         errorDetails.data =
-          typeof error.response.data === 'string'
-            ? error.response.data.slice(0, 200)
-            : JSON.stringify(error.response.data).slice(0, 200);
+          typeof refusal.data === 'string'
+            ? refusal.data.slice(0, 200)
+            : JSON.stringify(refusal.data).slice(0, 200);
 
-        this.observeResponse(error.response.headers, lease.generation);
+        // Every wire's refusal, not only axios's. A response the connection
+        // never observed is a session replacement it never noticed.
+        this.observeResponse(
+          refusal.headers as Record<string, unknown> | undefined,
+          lease.generation,
+        );
       }
 
       // The server telling us the session is gone is invisible to the identity
@@ -1327,17 +1337,16 @@ abstract class AbstractAbapConnection
       // discarded before the retry. Basic auth only — JWT/SAML lifecycles are
       // managed elsewhere.
       const isCachedTokenStale =
-        error instanceof AxiosError &&
         this.config.authType === 'basic' &&
         (normalizedMethod === 'POST' ||
           normalizedMethod === 'PUT' ||
           normalizedMethod === 'DELETE') &&
-        error.response?.status === 401 &&
+        refusalOf(error)?.status === 401 &&
         this.getCsrfToken() !== null;
 
       // Retry logic for CSRF token errors (403 with CSRF message) and the
       // login-form 401 pattern.
-      if (this.shouldRetryCsrf(error) || isCachedTokenStale) {
+      if (this.shouldRetryCsrf(error, normalizedMethod) || isCachedTokenStale) {
         this.logger?.debug(
           isCachedTokenStale
             ? 'Stale CSRF token / SAP session — invalidating and retrying'
@@ -1395,8 +1404,7 @@ abstract class AbstractAbapConnection
       // Retry logic for 401 errors on GET requests (authentication issue - need cookies)
       // Only for basic auth - JWT auth will be handled by refresh logic below
       if (
-        error instanceof AxiosError &&
-        error.response?.status === 401 &&
+        refusalOf(error)?.status === 401 &&
         normalizedMethod === 'GET' &&
         this.config.authType === 'basic' // Only for basic auth
       ) {
@@ -1587,12 +1595,13 @@ abstract class AbstractAbapConnection
     this.lifecycle.forgetIdentity();
   }
 
-  private shouldRetryCsrf(error: unknown): boolean {
-    if (!(error instanceof AxiosError)) {
+  private shouldRetryCsrf(error: unknown, method?: string): boolean {
+    const refusal = refusalOf(error);
+    if (!refusal) {
       return false;
     }
 
-    const responseData = error.response?.data;
+    const responseData = refusal.data;
     const responseText =
       typeof responseData === 'string'
         ? responseData
@@ -1605,20 +1614,21 @@ abstract class AbstractAbapConnection
 
     // Retry on 403 with CSRF message, or if response mentions CSRF token
     // Also retry on 401 for POST/PUT/DELETE if we don't have CSRF token yet (might need to get cookies first)
-    const method = error.config?.method?.toUpperCase();
+    // Handed in rather than read off `error.config`, which is axios's own
+    // record of the request and does not exist on another wire's refusal. The
+    // caller already normalised the method; asking the error for it was asking
+    // the HTTP client.
+    const normalized = method?.toUpperCase();
     const isPostPutDelete =
-      method && ['POST', 'PUT', 'DELETE'].includes(method);
+      normalized && ['POST', 'PUT', 'DELETE'].includes(normalized);
     const needsCsrfToken = !!isPostPutDelete && !this.transport.csrfToken();
 
     return (
-      (!!error.response &&
-        error.response.status === 403 &&
-        responseText.includes('CSRF')) ||
+      (refusal.status === 403 && responseText.includes('CSRF')) ||
       responseText.includes('CSRF token') ||
-      (needsCsrfToken && error.response?.status === 401)
+      (needsCsrfToken && refusal.status === 401)
     );
   }
 }
 
-// Export only for internal use by BaseAbapConnection and JwtAbapConnection
 export { AbstractAbapConnection };

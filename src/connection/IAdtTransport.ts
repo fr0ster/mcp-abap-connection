@@ -173,3 +173,26 @@ export interface IAdtTransport {
   /** Drop the session state this wire was holding. */
   forgetSession(): void;
 }
+
+/**
+ * The response a refusal carries, whichever client threw it.
+ *
+ * `IAdtTransport` promises exactly this about a failure and nothing more: the
+ * error has a `response`. `HttpTransport` throws an `AxiosError`, which happens
+ * to satisfy it; `RfcTransport` throws a plain `Error` with the field, which is
+ * what the contract asks for.
+ *
+ * Read structurally, because `instanceof AxiosError` is a question about which
+ * HTTP client is installed — an answer no other wire can give, and the reason
+ * observing a failing response, and noticing a dead session in one, were
+ * reachable over one wire only.
+ */
+export function refusalOf(error: unknown): IAdtTransportResponse | null {
+  const response = (error as { response?: unknown } | null | undefined)
+    ?.response;
+  if (!response || typeof response !== 'object') return null;
+  const candidate = response as { status?: unknown };
+  return typeof candidate.status === 'number'
+    ? (response as IAdtTransportResponse)
+    : null;
+}

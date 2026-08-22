@@ -319,6 +319,22 @@ describe('a rejected credential is retried only when it actually changed', () =>
     (conn as any).transport.send = instance;
   }
 
+  /**
+   * The credentials `/work` was attempted with, in order and without repeats.
+   *
+   * Counting raw attempts counted two things at once: the credential retry
+   * these tests are about, and the base's "401 on a GET with cookies in hand,
+   * try again" — which repeats the SAME credential and used to be invisible
+   * here only because the stub's refusal was not an AxiosError. Distinct
+   * credentials is what "was the credential retried" actually means.
+   */
+  const credentialsTried = (seen: Seen[]): (string | undefined)[] => {
+    const auths = seen
+      .filter((r) => r.url.includes('/work'))
+      .map((r) => r.headers.Authorization);
+    return auths.filter((auth, i) => i === 0 || auth !== auths[i - 1]);
+  };
+
   it('renews and retries once when the provider answers differently', async () => {
     // The provider renews once the token it gave has been refused — which is
     // when BaseTokenProvider would notice the expiry, not before.
@@ -341,11 +357,8 @@ describe('a rejected credential is retried only when it actually changed', () =>
     });
 
     expect(response.status).toBe(200);
-    const work = seen.filter((r) => r.url.includes('/work'));
-    // Exactly two: the refused one and the retry. Not three.
-    expect(work).toHaveLength(2);
-    expect(work[0].headers.Authorization).toBe('Bearer STALE');
-    expect(work[1].headers.Authorization).toBe('Bearer GOOD');
+    // Exactly two credentials: the refused one and the renewed one. Not three.
+    expect(credentialsTried(seen)).toEqual(['Bearer STALE', 'Bearer GOOD']);
   });
 
   it('does not retry when the credential is unchanged', async () => {
@@ -365,7 +378,9 @@ describe('a rejected credential is retried only when it actually changed', () =>
       conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
     ).rejects.toMatchObject({ response: { status: 401 } });
 
-    expect(seen.filter((r) => r.url.includes('/work'))).toHaveLength(1);
+    // One credential throughout: the refusal was real, so nothing was renewed
+    // and nothing was tried in its place.
+    expect(credentialsTried(seen)).toHaveLength(1);
   });
 
   /**
@@ -396,7 +411,9 @@ describe('a rejected credential is retried only when it actually changed', () =>
       conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
     ).rejects.toMatchObject({ response: { status: 401 } });
 
-    expect(seen.filter((r) => r.url.includes('/work'))).toHaveLength(2);
+    // Two credentials, not three: the retry goes to `super`, so a provider
+    // answering differently every time cannot keep looking like a change.
+    expect(credentialsTried(seen)).toHaveLength(2);
   });
 
   it('rebuilds once for concurrent requests, not once each', async () => {
