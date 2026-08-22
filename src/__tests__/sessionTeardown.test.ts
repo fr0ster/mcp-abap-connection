@@ -92,7 +92,7 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     }));
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 1000 });
+    await conn.disconnect();
 
     // Nothing was asked of the session resource, and the goodbye is the ICF one.
     expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(false);
@@ -125,7 +125,7 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     }));
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 1000 });
+    await conn.disconnect();
 
     expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(true);
     expect(seen.some((r) => r.method === 'DELETE')).toBe(true);
@@ -410,7 +410,7 @@ describe('requests stay on the server the session lives on', () => {
     pinning(conn, seen, 'appserver-c5zhg');
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 500 });
+    await conn.disconnect();
     const before = seen.length;
     await conn.connect();
 
@@ -678,7 +678,7 @@ describe('disconnect ends the server session', () => {
       .catch(() => undefined);
     await new Promise((r) => setTimeout(r, 5));
 
-    const disconnecting = conn.disconnect({ deadlineMs: 20 });
+    const disconnecting = conn.disconnect();
     await new Promise((r) => setTimeout(r, 80));
     gate?.();
 
@@ -698,8 +698,8 @@ describe('disconnect ends the server session', () => {
     attachMockAxios(conn, seen);
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 1000 });
-    await conn.disconnect({ deadlineMs: 1000 });
+    await conn.disconnect();
+    await conn.disconnect();
 
     expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
   });
@@ -726,8 +726,8 @@ describe('disconnect ends the server session', () => {
 
     await conn.connect();
     // Detaches while the logoff is still on its way.
-    await conn.disconnect({ deadlineMs: 20 });
-    await conn.disconnect({ deadlineMs: 20 });
+    await conn.disconnect();
+    await conn.disconnect();
 
     expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
     releaseLogoff?.();

@@ -435,6 +435,34 @@ abstract class AbstractAbapConnection
    * strategy can neither mark this connection connected nor tear it down.
    */
   /**
+   * Whether a 401 belongs to the credential rather than to the session.
+   *
+   * The session-level retries below exist to ACQUIRE COOKIES: discard a stale
+   * CSRF token and ask again, or retry a GET now that the refusal has brought
+   * cookies with it. They help exactly one kind of credential — one that
+   * authenticates from scratch on every request with a header it can always
+   * rebuild, so the only thing that can differ between two attempts is the
+   * session.
+   *
+   * Two kinds they do not help, and actively harm:
+   *
+   *   - one that can RENEW. Retrying swallows the refusal, and the credential
+   *     never learns the token it handed out was rejected.
+   *   - one that CARRIES cookies of its own — a SAML session negotiated
+   *     elsewhere and handed over. A 401 there says that session is dead, and
+   *     no number of retries with the same cookies will change it.
+   *
+   * Asked of the credential rather than read off `config.authType`, which is
+   * what this used to do. A config string is a claim about what was configured;
+   * `renew` and `cookies` are the object saying what it actually is — and a
+   * consumer's own provider gets the right answer without this class knowing it
+   * exists.
+   */
+  protected credentialAnswersRefusals(): boolean {
+    return false;
+  }
+
+  /**
    * What a wire needs from this connection to get a session, or give one back.
    *
    * A snapshot in the same sense `sessionTransport()` was: a close is
@@ -1111,12 +1139,18 @@ abstract class AbstractAbapConnection
         this.logger?.error(errorDetails.message, errorDetails);
       }
 
-      // Detect the "login-form 401" pattern: SAP returned 401 for a mutation while
-      // we have a cached CSRF token. The token and its bound SAP session must be
-      // discarded before the retry. Basic auth only — JWT/SAML lifecycles are
-      // managed elsewhere.
+      // The "login-form 401": SAP refused a mutation while we hold a cached CSRF
+      // token, so the token and the session it is bound to are dead and must be
+      // discarded before the retry.
+      //
+      // Not keyed on the credential any more. It used to be "basic auth only —
+      // JWT/SAML lifecycles are managed elsewhere", and elsewhere was
+      // JwtAbapConnection, which is gone. Credential renewal now lives a layer
+      // ABOVE this, in CredentialAbapConnection, which wraps the whole request:
+      // these retries happen first and it only sees a 401 that survived them.
+      // Nothing collides, so nothing needs to be excluded.
       const isCachedTokenStale =
-        this.config.authType === 'basic' &&
+        !this.credentialAnswersRefusals() &&
         (normalizedMethod === 'POST' ||
           normalizedMethod === 'PUT' ||
           normalizedMethod === 'DELETE') &&
@@ -1180,12 +1214,14 @@ abstract class AbstractAbapConnection
         }
       }
 
-      // Retry logic for 401 errors on GET requests (authentication issue - need cookies)
-      // Only for basic auth - JWT auth will be handled by refresh logic below
+      // A 401 on a GET where cookies have since arrived: the first request had
+      // none, and the session they name is what the retry needs. Guarded below
+      // on actually holding some, so a wire that issues no cookies — RFC —
+      // never takes it.
       if (
         refusalOf(error)?.status === 401 &&
         normalizedMethod === 'GET' &&
-        this.config.authType === 'basic' // Only for basic auth
+        !this.credentialAnswersRefusals()
       ) {
         // If we already have cookies from error response, retry immediately
         const afterError = this.transport.cookies();
@@ -1375,16 +1411,17 @@ abstract class AbstractAbapConnection
       return false;
     }
 
+    // The credential answers this one; retrying here would swallow the 401 it
+    // needs to see, or repeat cookies that are already dead.
+    if (this.credentialAnswersRefusals()) {
+      return false;
+    }
+
     const responseData = refusal.data;
     const responseText =
       typeof responseData === 'string'
         ? responseData
         : JSON.stringify(responseData || '');
-
-    // Don't retry for JWT auth - refresh logic will handle it
-    if (this.config.authType === 'jwt') {
-      return false;
-    }
 
     // Retry on 403 with CSRF message, or if response mentions CSRF token
     // Also retry on 401 for POST/PUT/DELETE if we don't have CSRF token yet (might need to get cookies first)

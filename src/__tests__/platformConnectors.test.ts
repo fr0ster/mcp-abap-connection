@@ -97,7 +97,7 @@ describe('the consumer decides the session mechanism, by which connector it take
     serverAnsweringEverything(conn, seen);
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 500 });
+    await conn.disconnect();
 
     // Never touched, even though this stub answers it — which is the whole
     // point: on-prem answers it too, so a probe would have chosen wrongly.
@@ -118,7 +118,7 @@ describe('the consumer decides the session mechanism, by which connector it take
     serverAnsweringEverything(conn, seen);
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 500 });
+    await conn.disconnect();
 
     const opened = seen.find((r) => r.url.includes('/core/http/sessions?'));
     expect(opened?.headers['x-sap-security-session']).toBe('create');
@@ -660,7 +660,7 @@ describe('a request is built from one reading of the credential', () => {
     serverAnsweringEverything(conn, seen);
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 500 });
+    await conn.disconnect();
 
     // Never more than one read per request that actually went out. More means
     // some request was assembled from two different answers.

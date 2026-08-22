@@ -81,7 +81,7 @@ describeIfRfc('the on-prem connector over RFC (integration)', () => {
   }, 15_000);
 
   afterAll(async () => {
-    await conn?.disconnect({ deadlineMs: 10_000 });
+    await conn?.disconnect();
   });
 
   it('travels over the wire it was given', () => {
@@ -176,7 +176,7 @@ describeIfRfc('the on-prem connector over RFC (integration)', () => {
   it('refuses a call once the conversation has been given back', async () => {
     const other = overRfc(buildConfig());
     await other.connect();
-    await other.disconnect({ deadlineMs: 10_000 });
+    await other.disconnect();
 
     await expect(
       other.makeAdtRequest({

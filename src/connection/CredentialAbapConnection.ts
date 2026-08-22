@@ -97,6 +97,18 @@ export abstract class CredentialAbapConnection<
     return headers;
   }
 
+  /**
+   * The credential says so itself: it can renew, or it carries a session of its
+   * own. A password does neither, which is why basic is the one the
+   * session-level retries were written for.
+   */
+  protected override credentialAnswersRefusals(): boolean {
+    return (
+      typeof this.credential.renew === 'function' ||
+      typeof this.credential.cookies === 'function'
+    );
+  }
+
   protected override getHttpsAgentOptions(): AgentOptions {
     return (
       this.credential.transportMaterial?.() ?? super.getHttpsAgentOptions()
