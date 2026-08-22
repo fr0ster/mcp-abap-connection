@@ -194,7 +194,7 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
   });
 });
 
-describe('JwtAbapConnection establishment retry', () => {
+describe('a credential refused while establishing', () => {
   let stub: Stub;
 
   beforeEach(async () => {
@@ -205,23 +205,20 @@ describe('JwtAbapConnection establishment retry', () => {
     await stub.close();
   });
 
-  // Two hazards live here, and the second replaced the first.
+  // The per-credential JWT class renewed and retried here, inside its own
+  // `fetchCsrfToken`. That is gone, and deliberately not reproduced: renewal is
+  // the PROVIDER's, and it happens on an expiry the provider can see — on every
+  // call that asks for a header, not on a 401. With a refresh token outliving
+  // the session many times over, a token the provider still believes in and the
+  // server refuses is the case that does not arise. And `connect()` is one call
+  // the caller makes, so a refusal is theirs to answer.
   //
-  // The retry used to be establishSession calling itself after refreshing, and
-  // an earlier version of it called connect() — which runs the establishment as
-  // a joinable transition, so the nested call joined the one already in flight,
-  // which was itself, and waited forever.
-  //
-  // establishSession no longer refreshes at all: fetchCsrfToken owns that, and
-  // owns it alone (issue #30). So the subject is the same — an establishment
-  // recovers from a 401 by refreshing once and finishing, rather than hanging —
-  // but the owner has moved, and this test follows it.
-  //
-  // The 401 comes from the stub, not from a stubbed fetchCsrfToken. The earlier
-  // version replaced fetchCsrfToken on the instance, which removed the very
-  // method that now does the work, and would pass against a connection that had
-  // no recovery in it at all.
-  it('recovers from a 401 during establishment without waiting on itself', async () => {
+  // The hazard the old test guarded is still guarded: an establishment that
+  // decides not to retry must not hang while deciding. It used to be
+  // establishSession calling connect(), which runs establishment as a joinable
+  // transition — so the nested call joined the one already in flight, which was
+  // itself, and waited forever.
+  it('surfaces the refusal instead of renewing behind the caller', async () => {
     let refreshed = 0;
     stub.rejectDiscovery = true;
 
@@ -232,34 +229,30 @@ describe('JwtAbapConnection establishment retry', () => {
         authType: 'jwt',
         jwtToken: 'STALE',
       } as SapConfig,
-      // The refresher IS the credential now: a token provider that renews is
-      // what the connector is handed, rather than a fourth constructor slot.
       new TokenAuthProvider({
         getToken: async () => 'FRESH',
         refreshToken: async () => {
           refreshed += 1;
-          // The credential is good from here on, which is what a refresh means.
-          stub.rejectDiscovery = false;
           return 'FRESH';
         },
       }),
       null,
     );
 
-    // The window is generous on purpose: the base retries the CSRF fetch
-    // `retryCount` times with `retryDelay` between attempts, so the 401 takes
-    // seconds to surface before the refresh even begins. A tight race here
-    // reports "hung" for a connection that was merely being patient.
+    // Generous on purpose: the wire retries the exchange before the refusal
+    // surfaces at all, so a tight race reports "hung" for a connection that was
+    // merely being patient.
     const outcome = await Promise.race([
-      conn.connect().then(() => 'settled'),
+      conn.connect().then(
+        () => 'connected',
+        () => 'refused',
+      ),
       new Promise((r) => setTimeout(() => r('hung'), 15000)),
     ]);
 
-    expect(outcome).toBe('settled');
-    expect(refreshed).toBe(1);
-    // Refused at least once, then fetched again after the refresh.
-    expect(stub.discoveryAttempts).toBeGreaterThanOrEqual(2);
-    expect(conn.isConnected()).toBe(true);
+    expect(outcome).toBe('refused');
+    expect(refreshed).toBe(0);
+    expect(conn.isConnected()).toBe(false);
   }, 20000);
 });
 
