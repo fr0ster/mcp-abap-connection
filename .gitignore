@@ -1,9 +1,22 @@
 node_modules/
 dist/
 *.tsbuildinfo
+# Credentials. Broad on purpose: an env file that picks up a suffix —
+# `e19.env.stale`, `prod.env.bak` — stopped being caught by `*.env` and went
+# from ignored to staged without anything looking different.
 .env
 .env.*
 *.env
+*.env.*
+!*.env.example
+!*.env.template
+
+# Key material, whatever it is called.
+*.key
+*.pem
+*.pfx
+*.p12
+*.jks
 .DS_Store
 *.log
 
