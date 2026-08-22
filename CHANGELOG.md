@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-08-22
+
 The wire owns what is the wire's, and the factory and per-credential classes are
 gone. See [Migration to 6.0](./docs/MIGRATION-6.0.md).
 
@@ -1195,7 +1197,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.0...HEAD
+[6.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v5.0.0...v6.0.0
 [5.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v2.0.0...v3.0.0
