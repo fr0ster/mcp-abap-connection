@@ -34,27 +34,6 @@ import {
 } from './IAdtTransport.js';
 
 /**
- * The configured default release deadline, refused at construction if it is not
- * a number. `parseInt` alone would not do: it answers `NaN` for `"abc"` and `5`
- * for `"5s"`, and both used to travel all the way to a teardown — the first as
- * a throw from every `disconnect()` in the process, the second as a silently
- * wrong bound nobody asked for.
- */
-function readReleaseDeadline(): number {
-  const raw = process.env.SAP_RELEASE_DEADLINE_MS;
-  if (raw === undefined || raw.trim() === '') {
-    return getReleaseDeadline();
-  }
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value < 0) {
-    throw new TypeError(
-      `SAP_RELEASE_DEADLINE_MS must be a finite, non-negative number of milliseconds, got ${JSON.stringify(raw)}`,
-    );
-  }
-  return value;
-}
-
-/**
  * Declares the capabilities explicitly rather than satisfying them by accident.
  * `AbapConnection` is the base contract every transport honours; these two are
  * the HTTP session's own, and naming them means a signature that drifts from
@@ -103,7 +82,6 @@ abstract class AbstractAbapConnection
   /** Reference count for nested beginCriticalSection()/endCriticalSection() pairs. */
   private criticalSectionDepth = 0;
   /** The default release deadline, validated once at construction. */
-  private readonly releaseDeadlineMs: number;
   /**
    * The logoff for the session this connection last held, while it is on its
    * way. One, because a connection holds one session: `connect()` opens it and
@@ -145,7 +123,6 @@ abstract class AbstractAbapConnection
    * Only a preflight answered with a session address opened one, and only that
    * is worth saying goodbye to when establishment then fails.
    */
-  private pendingRelease: { id: string; inFlight: Promise<void> } | null = null;
 
   protected constructor(
     private readonly config: SapConfig,
@@ -163,14 +140,6 @@ abstract class AbstractAbapConnection
     sessionId?: string,
     options?: { skipSessionType?: boolean },
   ) {
-    // Read and checked HERE, once, because the only other place it could be
-    // checked is disconnect() — and disconnect() belongs in a `finally`, where
-    // throwing replaces the error that sent the caller there. A misconfigured
-    // environment is a startup fault: it is the same on every call, it is not
-    // the caller's argument, and it is worth refusing a connection over rather
-    // than discovering at teardown.
-    this.releaseDeadlineMs = readReleaseDeadline();
-
     this.skipSessionType = options?.skipSessionType ?? false;
     // Generate sessionId (used for sap-adt-connection-id header)
     this.sessionId = sessionId || randomUUID();
@@ -370,42 +339,17 @@ abstract class AbstractAbapConnection
    * dropped the cookie. Generation fencing (see `SessionLifecycle.isCurrent`)
    * keeps their results from reaching this connection either way.
    *
-   * @param options.deadlineMs How long to spend telling the server, measured
-   *   from this call and including time spent queued behind another transition.
-   *   **Defaults to `SAP_RELEASE_DEADLINE_MS`, which is `0` — do not wait.**
-   *   Waiting is for steps whose successor needs the server to have caught up;
-   *   a teardown has none. The logoff is still sent at `0`, because saying so
-   *   is not conditional on caring when it lands; its outcome is logged when it
-   *   arrives rather than awaited. Pass a positive value to bound a wait you
-   *   have chosen to take. Anything that is not a finite, non-negative number
-   *   is reported and the default used instead — this method is called from a
-   *   `finally`, where throwing would replace the error that sent the caller
-   *   there. The configured default is checked once, at construction, so a
-   *   misconfigured `SAP_RELEASE_DEADLINE_MS` fails before a connection exists
-   *   rather than at every teardown.
+   * **Nothing to wait for.** This TELLS the server the session is finished and
+   * does not act on the answer — whether and when the session is freed is the
+   * server's affair. A `deadlineMs` used to bound a wait for that answer; it is
+   * accepted and ignored, and goes from the contract next. Waiting was also the
+   * one thing that could make a teardown unbounded, since the goodbye carries
+   * no request timeout by design.
    */
-  async disconnect(options?: { deadlineMs?: number }): Promise<void> {
-    // Nothing here throws, including on a bad argument. This method's place is
-    // a `finally` — a connection that was connected must be disconnected — and
-    // an exception raised there replaces the error that sent the caller into it.
-    // A nonsense deadline is reported and the configured default used instead,
-    // because refusing to release the session is a worse answer to a bad number
-    // than releasing it on the default schedule.
-    const requested = options?.deadlineMs;
-    const valid =
-      requested === undefined || (Number.isFinite(requested) && requested >= 0);
-    if (!valid) {
-      this.logger?.warn(
-        `disconnect(): ignoring deadlineMs=${requested}, which is not a finite, non-negative number; using ${this.releaseDeadlineMs}`,
-      );
-    }
-    const deadlineMs =
-      valid && requested !== undefined ? requested : this.releaseDeadlineMs;
-    // Started HERE, because the contract measures the deadline from the call
-    // and the transition below may sit in a queue first. A budget that started
-    // when the callback ran would give a queued teardown its full allowance
-    // again, which is the one thing the caller was bounding.
-    const startedAt = Date.now();
+  async disconnect(_options?: { deadlineMs?: number }): Promise<void> {
+    // Nothing here throws. This method's place is a `finally` — a connection
+    // that was connected must be disconnected — and an exception raised there
+    // replaces the error that sent the caller into it.
 
     // Synchronous, at the call: admission shuts and the generation moves before
     // anything is queued, so a caller who has asked to disconnect cannot have
@@ -431,60 +375,9 @@ abstract class AbstractAbapConnection
       const inFlight = Promise.resolve(this.transport.close?.(context)).then(
         () => undefined,
       );
-      // Recorded against the session it is releasing, so a later caller joins
-      // THIS release and never waits on one belonging to a session it never
-      // held. Never throws by contract, so nothing here can go unhandled.
-      if (session) this.pendingRelease = { id: session, inFlight };
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
-
-    // Its own release, and only that. Never another session's: an earlier one
-    // may never answer — the logoff carries no request timeout by design — and
-    // waiting on it would spend this caller's whole budget on a request nobody
-    // can finish.
-    const mine =
-      session && this.pendingRelease?.id === session
-        ? this.pendingRelease.inFlight
-        : null;
-
-    await this.awaitReleaseWithin(
-      Math.max(0, deadlineMs - (Date.now() - startedAt)),
-      mine,
-    );
-  }
-
-  /**
-   * Waits up to `budgetMs` for a release already on its way, then detaches.
-   *
-   * Detaching, not cancelling: when the budget runs out this stops waiting and
-   * the request carries on to the server. Each caller of `disconnect()` gets
-   * its own, so one caller's patience is never charged to another's.
-   */
-  private async awaitReleaseWithin(
-    budgetMs: number,
-    release: Promise<void> | null,
-  ): Promise<void> {
-    if (!release || budgetMs === 0) {
-      return;
-    }
-
-    // Detaching, not cancelling: when the budget runs out this stops waiting and
-    // the request carries on to the server. `unref` so a process that is
-    // otherwise done does not stay alive for the timer, and cleared when the
-    // release wins the race.
-    let expire: NodeJS.Timeout | undefined;
-    const deadline = new Promise<void>((resolve) => {
-      expire = setTimeout(resolve, budgetMs);
-      expire.unref?.();
-    });
-
-    // `release` never rejects — its handlers are attached at dispatch — so this
-    // needs no catch to keep "never throws" true.
-    await Promise.race([release, deadline]);
-    if (expire) {
-      clearTimeout(expire);
-    }
   }
 
   isConnected(): boolean {

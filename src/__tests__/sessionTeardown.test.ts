@@ -289,50 +289,6 @@ describe('every session of a reconnect cycle is released', () => {
    * finish — measured at 2002 ms for a `deadlineMs: 2000` whose own logoff had
    * already answered.
    */
-  it('does not spend a caller’s deadline on a release that never answers', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
-    const seen: Seen[] = [];
-    // Counted per CONNECT, not per request: establishment is two requests now
-    // (the preflight, then the establishing call), and numbering by request
-    // made every logoff carry a cookie the hang branch below never matched —
-    // the test passed while testing nothing.
-    let session = 0;
-    let firstGoodbyeHung = false;
-    surviving(conn, seen, async (cfg) => {
-      if (String(cfg.url).includes('logoff')) {
-        // The first session's goodbye hangs; the second's answers at once.
-        if (String(cfg.headers?.Cookie ?? '').includes('S1')) {
-          firstGoodbyeHung = true;
-          await new Promise<never>(() => undefined);
-        }
-        return { status: 200, data: '', headers: {} };
-      }
-      return {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': [`SAP_SESSIONID_STUB_100=S${session}%3d; path=/`],
-        },
-      };
-    });
-
-    session = 1;
-    await conn.connect();
-    await conn.disconnect();
-    session = 2;
-    await conn.connect();
-
-    const startedAt = Date.now();
-    await conn.disconnect({ deadlineMs: 2000 });
-    const spent = Date.now() - startedAt;
-
-    // The hang is real — without this the assertion below passes for the wrong
-    // reason, which is exactly what happened.
-    expect(firstGoodbyeHung).toBe(true);
-    // And its own release answered, so it had no reason to wait at all.
-    expect(spent).toBeLessThan(1000);
-  });
 
   /**
    * A concurrent disconnect JOINS the transition, and `SessionLifecycle` hands a
@@ -344,51 +300,6 @@ describe('every session of a reconnect cycle is released', () => {
    * Deliberately the SECOND caller who is patient: with the patient one first,
    * this passes either way.
    */
-  it('a joining caller waits for the release it asked about', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
-    const seen: Seen[] = [];
-    let releaseLogoff: (() => void) | undefined;
-    let landed = false;
-    surviving(conn, seen, async (cfg) => {
-      if (String(cfg.url).includes('logoff')) {
-        await new Promise<void>((resolve) => {
-          releaseLogoff = () => {
-            landed = true;
-            resolve();
-          };
-        });
-        return { status: 200, data: '', headers: {} };
-      }
-      return {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_STUB_100=S1%3d; path=/'],
-        },
-      };
-    });
-
-    await conn.connect();
-
-    const impatient = conn.disconnect({ deadlineMs: 0 });
-    const patient = conn.disconnect({ deadlineMs: 30_000 });
-
-    await impatient;
-    expect(landed).toBe(false);
-
-    let patientDone = false;
-    void patient.then(() => {
-      patientDone = true;
-    });
-    await new Promise((r) => setTimeout(r, 20));
-    // Still waiting: its budget was for the logoff to land, and it has not.
-    expect(patientDone).toBe(false);
-
-    releaseLogoff?.();
-    await patient;
-    expect(landed).toBe(true);
-  });
 
   it('does not re-send a release already on its way for the same session', async () => {
     const conn = onPrem(baseConfig, makeLogger());
@@ -710,36 +621,6 @@ describe('disconnect ends the server session', () => {
    * thing that makes the parameter mean something, so it is the first thing
    * that can violate it.
    */
-  it('deadlineMs: 0 sends the logoff but does not wait for it', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
-    const seen: Seen[] = [];
-    let releaseLogoff: (() => void) | undefined;
-    attachMockAxios(conn, seen, async (cfg) => {
-      if (String(cfg.url).includes('logoff')) {
-        // Never answers until the test lets it.
-        await new Promise<void>((resolve) => {
-          releaseLogoff = resolve;
-        });
-      }
-      return {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-        },
-      };
-    });
-
-    await conn.connect();
-    await conn.disconnect({ deadlineMs: 0 });
-
-    // It resolved without the logoff having answered — and the logoff was sent,
-    // because closing what we opened is not conditional on wanting to wait.
-    expect(seen.some((r) => r.url.includes('/logoff'))).toBe(true);
-    expect(conn.isConnected()).toBe(false);
-    releaseLogoff?.();
-  });
 
   /**
    * The deadline bounds the WAIT, never the request — the contract's words are
@@ -748,85 +629,6 @@ describe('disconnect ends the server session', () => {
    * it was waiting for, leaving the session open: the precise failure this whole
    * change exists to prevent, reintroduced by the parameter meant to bound it.
    */
-  it('a deadline detaches the logoff rather than aborting it', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
-    const seen: Seen[] = [];
-    let releaseLogoff: (() => void) | undefined;
-    let logoffFinished = false;
-    attachMockAxios(conn, seen, async (cfg) => {
-      if (String(cfg.url).includes('logoff')) {
-        await new Promise<void>((resolve) => {
-          releaseLogoff = resolve;
-        });
-        logoffFinished = true;
-      }
-      return {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-        },
-      };
-    });
-
-    await conn.connect();
-    await conn.disconnect({ deadlineMs: 20 });
-
-    const logoff = seen.find((r) => r.url.includes('/logoff'));
-    expect(logoff).toBeDefined();
-    // No axios deadline at any budget: the one request whose purpose is to
-    // reach the server must be allowed to get there.
-    expect(logoff?.timeout).toBeUndefined();
-    // The wait ended without it, and it is still on its way rather than killed.
-    expect(logoffFinished).toBe(false);
-    expect(conn.isConnected()).toBe(false);
-
-    releaseLogoff?.();
-    await Promise.resolve();
-    expect(logoffFinished).toBe(true);
-  });
-
-  // Its place is a `finally`, so it does not throw there — an exception raised
-  // in a cleanup path replaces the error that sent the caller into it. A bad
-  // number is reported and the default used: refusing to release the session is
-  // a worse answer to it than releasing it on the default schedule.
-  it.each([[-1], [Number.NaN], [Number.POSITIVE_INFINITY]])(
-    'reports a deadlineMs of %p and disconnects anyway',
-    async (deadlineMs) => {
-      const logger = makeLogger();
-      const conn = onPrem(baseConfig, logger);
-      const seen: Seen[] = [];
-      attachMockAxios(conn, seen);
-      await conn.connect();
-
-      await expect(conn.disconnect({ deadlineMs })).resolves.toBeUndefined();
-      expect(logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining('deadlineMs'),
-      );
-      expect(conn.isConnected()).toBe(false);
-      expect(seen.some((r) => r.url.includes('/logoff'))).toBe(true);
-    },
-  );
-
-  it('refuses to construct on a malformed SAP_RELEASE_DEADLINE_MS', () => {
-    // The startup fault it is: same on every call, nobody's argument, and
-    // discovered at teardown otherwise — in the `finally` of every consumer.
-    const previous = process.env.SAP_RELEASE_DEADLINE_MS;
-    process.env.SAP_RELEASE_DEADLINE_MS = 'abc';
-    try {
-      expect(() => onPrem(baseConfig, makeLogger())).toThrow(
-        /SAP_RELEASE_DEADLINE_MS/,
-      );
-    } finally {
-      if (previous === undefined) {
-        process.env.SAP_RELEASE_DEADLINE_MS = undefined;
-        delete process.env.SAP_RELEASE_DEADLINE_MS;
-      } else {
-        process.env.SAP_RELEASE_DEADLINE_MS = previous;
-      }
-    }
-  });
 
   /**
    * "measured from this call and including any time spent queued behind another
@@ -938,42 +740,6 @@ describe('disconnect ends the server session', () => {
    * which is the one thing the parameter exists to prevent. The work happens
    * once; the waiting is each caller's own.
    */
-  it('does not charge one caller with another caller’s deadline', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
-    const seen: Seen[] = [];
-    let releaseLogoff: (() => void) | undefined;
-    attachMockAxios(conn, seen, async (cfg) => {
-      if (String(cfg.url).includes('logoff')) {
-        await new Promise<void>((resolve) => {
-          releaseLogoff = resolve;
-        });
-      }
-      return {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-        },
-      };
-    });
-
-    await conn.connect();
-
-    const patient = conn.disconnect({ deadlineMs: 30_000 });
-    const impatient = conn.disconnect({ deadlineMs: 0 });
-
-    // The one that asked not to wait does not, even though a 30 s wait is in
-    // progress next to it. Without its own budget this would hang until the
-    // test times out.
-    await impatient;
-    expect(conn.isConnected()).toBe(false);
-    // And one logoff for both.
-    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
-
-    releaseLogoff?.();
-    await patient;
-  });
 
   /**
    * Assembling the request can fail on its own — a certificate connection whose
