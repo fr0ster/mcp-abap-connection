@@ -99,17 +99,11 @@ function holdWork(conn: AdtOnPremConnector) {
   const held = new Promise<void>((r) => {
     release = r;
   });
-  const real = (
-    conn as unknown as { getAxiosInstance: () => (cfg: unknown) => unknown }
-  ).getAxiosInstance.bind(conn);
-  (conn as unknown as { getAxiosInstance: () => unknown }).getAxiosInstance =
-    () => {
-      const instance = real();
-      return async (cfg: { url: string }) => {
-        if (cfg.url.includes('/work')) await held;
-        return (instance as (c: unknown) => unknown)(cfg);
-      };
-    };
+  const realSend = (conn as any).transport.send.bind((conn as any).transport);
+  (conn as any).transport.send = async (cfg: { url: string }) => {
+    if (cfg.url.includes('/work')) await held;
+    return realSend(cfg);
+  };
   return release;
 }
 

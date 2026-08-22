@@ -219,14 +219,28 @@ export abstract class CredentialAbapConnection<
    * the session check that follows, not this.
    */
   protected async establishSession(): Promise<void> {
-    const baseUrl = await this.getBaseUrl();
-    const discoveryUrl = `${baseUrl}/sap/bc/adt/discovery`;
-
     try {
-      const token = this.credential.fetchCsrfToken
-        ? await this.credential.fetchCsrfToken(this.sessionTransport())
-        : await this.fetchCsrfToken(discoveryUrl);
-      this.setCsrfToken(token);
+      if (this.credential.fetchCsrfToken) {
+        // The credential does the exchange itself — a SAML session is earned by
+        // it — and hands the token to the wire that will present it.
+        this.setCsrfToken(
+          await this.credential.fetchCsrfToken(this.sessionTransport()),
+        );
+      } else {
+        // Otherwise the wire establishes itself. What that means is the wire's:
+        // HTTP earns a CSRF token and the cookies that name the session; an RFC
+        // conversation was opened before this and already IS the session, so it
+        // does nothing and holds no token. Demanding one here was what made
+        // `connect()` impossible over RFC.
+        await this.transport.establish({
+          baseUrl: await this.getBaseUrl(),
+          authHeaders: () => this.getAuthHeaders(),
+          extraHeaders: { 'sap-adt-connection-id': this.getSessionId() ?? '' },
+          observe: (headers) =>
+            this.observeResponse(headers as Record<string, unknown>),
+          isFatal: (error) => this.isSessionVerdict(error),
+        });
+      }
       this.logger?.debug('Connected', {
         credential: this.credential.kind,
         hasCsrfToken: !!this.getCsrfToken(),

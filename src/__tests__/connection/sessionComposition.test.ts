@@ -420,30 +420,24 @@ describe('JWT request recovery after a token refresh', () => {
     await conn.connect();
 
     let attempts = 0;
-    const realAxios = (
-      conn as unknown as { getAxiosInstance: () => (cfg: unknown) => unknown }
-    ).getAxiosInstance.bind(conn);
-    (conn as unknown as { getAxiosInstance: () => unknown }).getAxiosInstance =
-      () => {
-        const instance = realAxios();
-        return async (cfg: { url: string }) => {
-          if (cfg.url.includes('/sap/bc/adt/work')) {
-            attempts += 1;
-            if (attempts === 1) {
-              const { AxiosError } = await import('axios');
-              throw new AxiosError('unauthorized', 'ERR', undefined, null, {
-                status: 401,
-                statusText: 'Unauthorized',
-                data: '',
-                headers: {},
-                // biome-ignore lint/suspicious/noExplicitAny: minimal shape
-                config: {} as any,
-              });
-            }
-          }
-          return (instance as (c: unknown) => unknown)(cfg);
-        };
-      };
+    const realSend = (conn as any).transport.send.bind((conn as any).transport);
+    (conn as any).transport.send = async (cfg: { url: string }) => {
+      if (cfg.url.includes('/sap/bc/adt/work')) {
+        attempts += 1;
+        if (attempts === 1) {
+          const { AxiosError } = await import('axios');
+          throw new AxiosError('unauthorized', 'ERR', undefined, null, {
+            status: 401,
+            statusText: 'Unauthorized',
+            data: '',
+            headers: {},
+            // biome-ignore lint/suspicious/noExplicitAny: minimal shape
+            config: {} as any,
+          });
+        }
+      }
+      return realSend(cfg);
+    };
 
     const response = await conn.makeAdtRequest({
       url: '/sap/bc/adt/work',
@@ -482,15 +476,15 @@ describe('a teardown requested during establishment', () => {
     const started = new Promise<void>((r) => {
       markStarted = r;
     });
-    const original = (
-      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
-    ).fetchCsrfToken.bind(conn);
-    (
-      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
-    ).fetchCsrfToken = async (url: string) => {
+    // The wire establishes itself now, so that is where establishment can be
+    // caught mid-flight.
+    const original = (conn as any).transport.establish.bind(
+      (conn as any).transport,
+    );
+    (conn as any).transport.establish = async (context: unknown) => {
       markStarted();
       await held;
-      return original(url);
+      return original(context);
     };
     return { release, started };
   }
@@ -567,17 +561,11 @@ describe('an abandoned establishment leaves in-flight work alone', () => {
     const requestHeld = new Promise<void>((r) => {
       releaseRequest = r;
     });
-    const realAxios = (
-      conn as unknown as { getAxiosInstance: () => (cfg: unknown) => unknown }
-    ).getAxiosInstance.bind(conn);
-    (conn as unknown as { getAxiosInstance: () => unknown }).getAxiosInstance =
-      () => {
-        const instance = realAxios();
-        return async (cfg: { url: string }) => {
-          if (cfg.url.includes('/slow')) await requestHeld;
-          return (instance as (c: unknown) => unknown)(cfg);
-        };
-      };
+    const realSend = (conn as any).transport.send.bind((conn as any).transport);
+    (conn as any).transport.send = async (cfg: { url: string }) => {
+      if (cfg.url.includes('/slow')) await requestHeld;
+      return realSend(cfg);
+    };
 
     const inFlight = conn.makeAdtRequest({
       url: '/sap/bc/adt/slow',
@@ -593,14 +581,12 @@ describe('an abandoned establishment leaves in-flight work alone', () => {
     const establishmentHeld = new Promise<void>((r) => {
       releaseEstablishment = r;
     });
-    const originalFetch = (
-      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
-    ).fetchCsrfToken.bind(conn);
-    (
-      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
-    ).fetchCsrfToken = async (url: string) => {
+    const originalEstablish = (conn as any).transport.establish.bind(
+      (conn as any).transport,
+    );
+    (conn as any).transport.establish = async (context: unknown) => {
       await establishmentHeld;
-      return originalFetch(url);
+      return originalEstablish(context);
     };
     const baseline = (conn as unknown as { teardownEpoch: number })
       .teardownEpoch;

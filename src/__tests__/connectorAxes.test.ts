@@ -16,6 +16,7 @@ import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { IAdtTransport } from '../connection/IAdtTransport.js';
+import { holdsNoSession } from './helpers/transportStub.js';
 
 const config: SapConfig = {
   url: 'https://sap.example.com',
@@ -27,6 +28,7 @@ const config: SapConfig = {
 
 const transport: IAdtTransport = {
   kind: 'stub',
+  ...holdsNoSession,
   send: async () => ({ status: 200, headers: {}, data: '' }),
 };
 

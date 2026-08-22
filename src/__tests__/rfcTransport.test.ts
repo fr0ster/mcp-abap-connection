@@ -86,6 +86,43 @@ describe('RfcTransport', () => {
     );
   });
 
+  it('supplies an Accept when the caller named none', async () => {
+    // Measured against E19: without one, ADT answers 400
+    // `ExceptionResourceBadRequest: Accept header missing`. Over HTTP axios
+    // supplies the default and nobody notices; `SADT_REST_RFC_ENDPOINT`
+    // forwards only what it is handed, so the same call dies on this wire.
+    const { transport, calls } = transportWith(okResponse);
+    await transport.open();
+
+    await transport.send({
+      method: 'GET',
+      url: '/sap/bc/adt/core/discovery',
+    });
+
+    expect(calls[0].params.REQUEST.HEADER_FIELDS).toContainEqual({
+      NAME: 'Accept',
+      VALUE: '*/*',
+    });
+  });
+
+  it('leaves an Accept the caller named alone', async () => {
+    const { transport, calls } = transportWith(okResponse);
+    await transport.open();
+
+    await transport.send({
+      method: 'GET',
+      url: '/sap/bc/adt/core/discovery',
+      headers: { Accept: 'application/atomsvc+xml' },
+    });
+
+    const accepts = calls[0].params.REQUEST.HEADER_FIELDS.filter(
+      (h: { NAME: string }) => h.NAME.toLowerCase() === 'accept',
+    );
+    expect(accepts).toEqual([
+      { NAME: 'Accept', VALUE: 'application/atomsvc+xml' },
+    ]);
+  });
+
   it('reads the answer back into a status, headers and a body', async () => {
     const { transport } = transportWith(okResponse);
     await transport.open();

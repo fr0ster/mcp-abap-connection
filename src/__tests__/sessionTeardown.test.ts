@@ -64,7 +64,7 @@ function attachMockAxios(
     request: { clear: jest.fn() },
     response: { clear: jest.fn() },
   };
-  (conn as any).axiosInstance = instance;
+  (conn as any).transport.send = instance;
 }
 
 /**
@@ -178,7 +178,10 @@ describe('a connection the server gave no session says so', () => {
 
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
-    expect(message).toMatch(/SAP_SESSIONID/); // what was missing
+    // Names the WIRE rather than the cookie: what a session is addressed by is
+    // the wire's business, and the base no longer knows that HTTP's answer is a
+    // SAP_SESSIONID.
+    expect(message).toMatch(/wire reports it is on none/); // what was missing
     expect(message).toMatch(/lock/i); // what it costs
     expect(message).toMatch(/limited per user/); // the likely cause
     expect(message).toMatch(/does not retry/); // whose call it is
@@ -228,11 +231,7 @@ describe('every session of a reconnect cycle is released', () => {
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => instance,
-      set: () => undefined,
-      configurable: true,
-    });
+    (conn as any).transport.send = instance;
   }
 
   /**
@@ -443,15 +442,10 @@ describe('requests stay on the server the session lives on', () => {
         },
       };
     };
-    (instance as any).interceptors = {
-      request: { clear: jest.fn() },
-      response: { clear: jest.fn() },
-    };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => instance,
-      set: () => undefined,
-      configurable: true,
-    });
+    // UNDER the wire, not instead of it: the affinity headers this test is
+    // about are what the wire adds to its own requests, so a stub that replaced
+    // `send()` would be measuring a wire that never ran.
+    (conn as any).transport.client = () => instance;
   }
 
   it('asks the server to name itself, then sends that name back', async () => {
@@ -557,11 +551,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => instance,
-      set: () => undefined,
-      configurable: true,
-    });
+    (conn as any).transport.send = instance;
   }
 
   it('says goodbye to it when establishing fails afterwards', async () => {
@@ -618,11 +608,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => instance,
-      set: () => undefined,
-      configurable: true,
-    });
+    (conn as any).transport.send = instance;
     // The debris: a cookie left behind by the response that rejected us. It
     // looks exactly like a session and is not one, which is why "there are
     // cookies" cannot be the test for whether to say goodbye.

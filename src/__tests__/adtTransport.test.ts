@@ -18,6 +18,7 @@ import { BasicAuthProvider } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { IAdtTransport } from '../connection/IAdtTransport.js';
+import { holdsItsSession } from './helpers/transportStub.js';
 
 const config: SapConfig = {
   url: 'https://sap.example.com',
@@ -30,23 +31,25 @@ const config: SapConfig = {
 /** A transport that answers everything and records what it was asked. */
 function recordingTransport() {
   const seen: Array<{ method?: string; url?: string }> = [];
+  const send = async (request: { method: string; url: string }) => {
+    seen.push({ method: request.method, url: request.url });
+    return {
+      status: 200,
+      statusText: 'OK',
+      headers: {
+        'x-csrf-token': 'TOKEN',
+        // A session cookie, because a connection with no SAP_SESSIONID is
+        // one nothing can be locked over, and connect() says so rather than
+        // pretending. The transport under test is not the subject of that.
+        'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+      },
+      data: '<service/>',
+    };
+  };
   const transport: IAdtTransport = {
     kind: 'test',
-    send: async (request) => {
-      seen.push({ method: request.method, url: request.url });
-      return {
-        status: 200,
-        statusText: 'OK',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          // A session cookie, because a connection with no SAP_SESSIONID is
-          // one nothing can be locked over, and connect() says so rather than
-          // pretending. The transport under test is not the subject of that.
-          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-        },
-        data: '<service/>',
-      };
-    },
+    ...holdsItsSession(send),
+    send,
   };
   return { transport, seen };
 }

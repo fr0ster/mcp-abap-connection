@@ -4,11 +4,11 @@
  * Requires:
  *   - SAP NW RFC SDK installed (SAPNWRFC_HOME set)
  *   - @mcp-abap-adt/sap-rfc-lite installed
- *   - An env file (e.g. e77.env) with SAP_URL, SAP_USERNAME, SAP_PASSWORD,
+ *   - An env file (e.g. e19.env) with SAP_URL, SAP_USERNAME, SAP_PASSWORD,
  *     SAP_CLIENT, SAP_CONNECTION_TYPE=rfc
  *
  * Run:
- *   SAP_ENV_FILE=e77.env npx jest --testPathPattern=rfc-connection
+ *   SAP_ENV_FILE=e19.env npx jest --testPathPattern=rfc-connection
  */
 
 import * as dotenv from 'dotenv';
@@ -17,8 +17,8 @@ import { createAbapConnection } from '../connection/connectionFactory.js';
 import { RfcAbapConnection } from '../connection/RfcAbapConnection.js';
 import type { ILogger } from '../logger.js';
 
-// Load env file — default to e77.env, override via SAP_ENV_FILE
-const envFile = process.env.SAP_ENV_FILE || 'e77.env';
+// Load env file — default to e19.env, override via SAP_ENV_FILE
+const envFile = process.env.SAP_ENV_FILE || 'e19.env';
 dotenv.config({ path: envFile });
 
 const logger: ILogger = {

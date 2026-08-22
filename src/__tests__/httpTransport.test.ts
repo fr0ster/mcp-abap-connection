@@ -75,7 +75,12 @@ describe('HttpTransport', () => {
       expect.objectContaining({
         method: 'GET',
         url: 'https://h/sap/bc/adt/discovery',
-        headers: { Accept: 'application/xml' },
+        // The caller's headers, plus what the wire adds of its own accord —
+        // today the affinity ask, and the cookies once it holds any.
+        headers: expect.objectContaining({
+          Accept: 'application/xml',
+          'sap-adt-saplb': 'fetch',
+        }),
         params: { q: '1' },
         timeout: 1234,
       }),

@@ -16,6 +16,7 @@ import { CSRF_CONFIG } from '../connection/csrfConfig.js';
 import { JwtAbapConnection } from '../connection/JwtAbapConnection.js';
 import type { ILogger } from '../logger.js';
 import { markConnectedForTest } from './helpers/session.js';
+import { heldCookies, seedCookies } from './helpers/transportStub.js';
 
 // Mock logger
 const mockLogger: ILogger = {
@@ -224,18 +225,17 @@ describe('JwtAbapConnection error classification', () => {
     // A cached CSRF token and cookies, so the POST goes straight out. Without
     // them the mutation first fetches a token, and that fetch retries with
     // delays — the test then times out somewhere that is not its subject.
-    (conn as any).csrfToken = 'cached-token';
+    (conn as any).transport.adoptCsrfToken('cached-token');
     // Both halves of what a server that opened a session leaves behind: the
     // header to send back, and the store the identity is derived from. Seeding
     // only the header modelled a system that issues no session at all, which
     // establishment now refuses — correctly, and not what these tests are about.
-    (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
-    (conn as any).cookieStore.set('SAP_SESSIONID_STUB_100', 'S1');
+    seedCookies(conn, 'SAP_SESSIONID_STUB_100=S1');
     // Discovery answers; only the ADT request fails. A transport that rejected
     // everything would make the recovery establishment retry with delays too,
     // and the test would time out in the session layer rather than say
     // anything about classification.
-    (conn as any).axiosInstance = jest.fn(async (cfg: { url?: string }) => {
+    (conn as any).transport.send = jest.fn(async (cfg: { url?: string }) => {
       if ((cfg.url ?? '').includes('/discovery')) {
         return {
           status: 200,
@@ -468,18 +468,20 @@ describe('JwtAbapConnection nested CSRF failures share one renewal', () => {
     // header to send back, and the store the identity is derived from. Seeding
     // only the header modelled a system that issues no session at all, which
     // establishment now refuses — correctly, and not what these tests are about.
-    (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
-    (conn as any).cookieStore.set('SAP_SESSIONID_STUB_100', 'S1');
+    seedCookies(conn, 'SAP_SESSIONID_STUB_100=S1');
 
-    const basePrototype = Object.getPrototypeOf(JwtAbapConnection.prototype);
+    // The nested level: getting the wire ready before a mutation. It used to be
+    // the connection's `fetchCsrfToken`; it is the wire establishing itself now,
+    // and that is where the 401s this test is about arrive.
     let csrfCalls = 0;
     jest
-      .spyOn(basePrototype as any, 'fetchCsrfToken')
+      .spyOn((conn as any).transport, 'establish')
       .mockImplementation(async () => {
         csrfCalls += 1;
-        // Two operations × (first attempt + post-refresh retry) = four
-        // refusals. Everything after the recovery succeeds.
-        if (csrfCalls <= 4) {
+        // One refusal per operation, which is what drives both to the renewal.
+        // The establishment the recovery then performs succeeds, and so does
+        // every attempt after it.
+        if (csrfCalls <= 2) {
           throw new AxiosError('unauthorized', '401', {} as never, null, {
             status: 401,
             statusText: '',
@@ -488,12 +490,19 @@ describe('JwtAbapConnection nested CSRF failures share one renewal', () => {
             config: {} as never,
           } as never);
         }
-        return 'CSRF-OK';
+        // The establishing call succeeded, so the server issued a session —
+        // which is what the connection then checks for. A mock that answered
+        // 'CSRF-OK' and left no cookie modelled a system that opens no session,
+        // and establishment refuses that, correctly.
+        seedCookies(conn, 'SAP_SESSIONID_STUB_100=S2');
+        // Handed to the wire, not returned: the token is the wire's now, and
+        // whoever asks reads it from there.
+        (conn as any).transport.adoptCsrfToken('CSRF-OK');
       });
 
     const recover = jest.spyOn(conn as any, 'recoverSession');
     let adtCalls = 0;
-    (conn as any).axiosInstance = jest.fn(async (cfg: { url?: string }) => {
+    (conn as any).transport.send = jest.fn(async (cfg: { url?: string }) => {
       adtCalls += 1;
       // One refusal per operation, so both climb to the outer handler; the
       // retries after the shared recovery succeed.
@@ -585,13 +594,12 @@ describe('JwtAbapConnection credential renewal', () => {
       refreshToken: refreshToken as unknown as () => Promise<string>,
     });
     markConnectedForTest(conn);
-    (conn as any).csrfToken = 'cached-token';
+    (conn as any).transport.adoptCsrfToken('cached-token');
     // Both halves of what a server that opened a session leaves behind: the
     // header to send back, and the store the identity is derived from. Seeding
     // only the header modelled a system that issues no session at all, which
     // establishment now refuses — correctly, and not what these tests are about.
-    (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
-    (conn as any).cookieStore.set('SAP_SESSIONID_STUB_100', 'S1');
+    seedCookies(conn, 'SAP_SESSIONID_STUB_100=S1');
     let adtCalls = 0;
     const transport = jest.fn(async (cfg: { url?: string }) => {
       if ((cfg.url ?? '').includes('/discovery')) return discoveryOk(cfg);
@@ -627,11 +635,7 @@ describe('JwtAbapConnection credential renewal', () => {
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => transport,
-      set: () => undefined,
-      configurable: true,
-    });
+    (conn as any).transport.send = transport;
     return { conn, transport, adtCalls: () => adtCalls };
   }
 
@@ -821,15 +825,14 @@ describe('JwtAbapConnection operation scope', () => {
       refreshToken: refreshToken as unknown as () => Promise<string>,
     });
     markConnectedForTest(conn);
-    (conn as any).csrfToken = 'cached-token';
+    (conn as any).transport.adoptCsrfToken('cached-token');
     // Both halves of what a server that opened a session leaves behind: the
     // header to send back, and the store the identity is derived from. Seeding
     // only the header modelled a system that issues no session at all, which
     // establishment now refuses — correctly, and not what these tests are about.
-    (conn as any).cookies = 'SAP_SESSIONID_STUB_100=S1';
-    (conn as any).cookieStore.set('SAP_SESSIONID_STUB_100', 'S1');
+    seedCookies(conn, 'SAP_SESSIONID_STUB_100=S1');
     let adtCalls = 0;
-    (conn as any).axiosInstance = jest.fn(async (cfg: { url?: string }) => {
+    (conn as any).transport.send = jest.fn(async (cfg: { url?: string }) => {
       if ((cfg.url ?? '').includes('/discovery')) return discoveryOk(cfg);
       // The session preflight and the ICF logoff belong to connect/disconnect,
       // not to the ADT conversation these tests count.

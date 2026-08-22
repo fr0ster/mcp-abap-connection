@@ -82,11 +82,7 @@ function serverAnsweringEverything(conn: object, seen: Seen[]): void {
     request: { clear: jest.fn() },
     response: { clear: jest.fn() },
   };
-  Object.defineProperty(conn, 'axiosInstance', {
-    get: () => instance,
-    set: () => undefined,
-    configurable: true,
-  });
+  (conn as any).transport.send = instance;
 }
 
 describe('the consumer decides the session mechanism, by which connector it takes', () => {
@@ -339,11 +335,7 @@ function serverRejectingUntilShared(
     request: { clear: jest.fn() },
     response: { clear: jest.fn() },
   };
-  Object.defineProperty(conn, 'axiosInstance', {
-    get: () => instance,
-    set: () => undefined,
-    configurable: true,
-  });
+  (conn as any).transport.send = instance;
 }
 
 describe('a rejected credential is retried only when it actually changed', () => {
@@ -383,11 +375,7 @@ describe('a rejected credential is retried only when it actually changed', () =>
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => instance,
-      set: () => undefined,
-      configurable: true,
-    });
+    (conn as any).transport.send = instance;
   }
 
   it('renews and retries once when the provider answers differently', async () => {
@@ -628,11 +616,7 @@ describe('a late refusal does not undo a session somebody else rebuilt', () => {
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => instance,
-      set: () => undefined,
-      configurable: true,
-    });
+    (conn as any).transport.send = instance;
 
     await conn.connect();
 

@@ -33,7 +33,7 @@ function attachMockAxios(
   conn: AdtOnPremConnector,
   fn: (cfg: any) => Promise<any>,
 ): void {
-  (conn as any).axiosInstance = fn;
+  (conn as any).transport.send = fn;
 }
 
 describe('critical section (uninterruptible lock → unlock)', () => {

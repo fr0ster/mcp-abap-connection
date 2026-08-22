@@ -18,8 +18,10 @@
  * would disagree the first time one of them was cleared.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { ILogger } from '../logger.js';
 import type {
+  IAdtEstablishContext,
   IAdtTransport,
   IAdtTransportRequest,
   IAdtTransportResponse,
@@ -73,6 +75,65 @@ export class RfcTransport implements IAdtTransport {
   readonly kind = 'rfc';
 
   private conversation: IRfcConversation | null = null;
+  /** Names the conversation, and so the ABAP session it carries. */
+  private conversationId = '';
+
+  /**
+   * Nothing to fold in. `SADT_REST_RFC_ENDPOINT` answers with two header
+   * fields — `~server_protocol` and `content-type` — on every call, including
+   * one that asks for a token with `x-csrf-token: fetch`, and on a stateful
+   * POST. Measured on E19. There is no ICM in this path, so there is no ICF
+   * session to cookie and no application server to be redispatched between.
+   */
+  ingest(): void {}
+
+  /** None, and never any: see `ingest()`. */
+  cookies(): null {
+    return null;
+  }
+
+  /**
+   * Nothing to establish. `open()` made the ABAP session, and there is no token
+   * to earn: this endpoint answers `x-csrf-token: fetch` with the same two
+   * header fields it answers everything else with. A wire with no
+   * cross-site request to forge against needs no token to prove one was not.
+   */
+  async establish(_context: IAdtEstablishContext): Promise<void> {}
+
+  /** None: see `establish()`. */
+  csrfToken(): null {
+    return null;
+  }
+
+  /**
+   * Ignored. Nothing on this wire reads a token, and keeping one would be
+   * state that never leaves the object.
+   */
+  adoptCsrfToken(): void {}
+
+  /**
+   * The conversation, which IS the session — so it is fingerprinted by its own
+   * existence rather than by an address the server hands out.
+   */
+  sessionFingerprint(): Map<string, string> {
+    const fingerprint = new Map<string, string>();
+    if (this.conversation?.alive) {
+      fingerprint.set('rfc-conversation', this.conversationId);
+    }
+    return fingerprint;
+  }
+
+  /** None: there is no dispatcher in front of this wire to stay bound to. */
+  affinityHeaders(): Record<string, string> {
+    return {};
+  }
+
+  /**
+   * Nothing to forget separately. The session ends when the conversation does,
+   * and that is `close()` — a wire whose state could be dropped while the
+   * conversation stayed open would be claiming a session it had disowned.
+   */
+  forgetSession(): void {}
 
   /**
    * The client is built by a factory rather than constructed here: the SDK is
@@ -94,6 +155,11 @@ export class RfcTransport implements IAdtTransport {
       throw new Error(`Failed to open RFC connection: ${message(e)}`);
     }
     this.conversation = conversation;
+    // Minted here, where the session begins. A conversation opened after an
+    // earlier one closed is a DIFFERENT ABAP session, and the fingerprint has
+    // to say so — a constant would report `unchanged` across a reconnect and
+    // hide exactly the replacement the identity policy exists to catch.
+    this.conversationId = randomUUID();
     this.logger?.debug('RFC conversation opened (stateful by nature)');
   }
 
@@ -102,6 +168,7 @@ export class RfcTransport implements IAdtTransport {
     const conversation = this.conversation;
     if (!conversation) return;
     this.conversation = null;
+    this.conversationId = '';
     try {
       await conversation.close();
       this.logger?.debug('RFC conversation closed');
@@ -132,6 +199,14 @@ export class RfcTransport implements IAdtTransport {
     const headerFields = Object.entries(request.headers ?? {}).map(
       ([NAME, VALUE]) => ({ NAME, VALUE: String(VALUE) }),
     );
+
+    // ADT refuses a request with no Accept — `400 ExceptionResourceBadRequest:
+    // Accept header missing`, measured on E19. Over HTTP axios supplies the
+    // default and nobody notices; this endpoint forwards only what it is
+    // handed, so without this the same call dies on this wire alone.
+    if (!headerFields.some((h) => h.NAME.toLowerCase() === 'accept')) {
+      headerFields.push({ NAME: 'Accept', VALUE: '*/*' });
+    }
 
     const body =
       request.data !== undefined && request.data !== null

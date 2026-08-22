@@ -81,19 +81,47 @@ describe('a credential that owns its CSRF fetch', () => {
 });
 
 describe('a credential that does not', () => {
-  it('leaves the fetch to the connection, as before', async () => {
+  // Left to the WIRE, which is the change: the exchange is HTTP's — an endpoint
+  // to ask and a token to earn — and the RFC wire has neither. Asked of the
+  // connection, it was one implementation for both, and the RFC one could not
+  // succeed.
+  it('leaves the exchange to the wire it travels over', async () => {
     const credential: IAuthProvider = {
       kind: 'test-basic',
       authorizationHeader: async () => 'Basic dTpw',
     };
     const conn = new AdtOnPremConnector(config, credential, null);
-    const own = jest
-      .spyOn(conn as any, 'fetchCsrfToken')
-      .mockResolvedValue('CSRF-FROM-CONNECTION');
+    const wire = jest
+      .spyOn((conn as any).transport, 'establish')
+      .mockImplementation(async () => {
+        (conn as any).transport.adoptCsrfToken('CSRF-FROM-THE-WIRE');
+      });
 
     await (conn as any).establishSession();
 
-    expect(own).toHaveBeenCalledTimes(1);
-    expect((conn as any).getCsrfToken()).toBe('CSRF-FROM-CONNECTION');
+    expect(wire).toHaveBeenCalledTimes(1);
+    expect((conn as any).getCsrfToken()).toBe('CSRF-FROM-THE-WIRE');
+  });
+
+  it('hands the wire the server, the credential, and somewhere to report', async () => {
+    const credential: IAuthProvider = {
+      kind: 'test-basic',
+      authorizationHeader: async () => 'Basic dTpw',
+    };
+    const conn = new AdtOnPremConnector(config, credential, null);
+    const wire = jest
+      .spyOn((conn as any).transport, 'establish')
+      .mockResolvedValue(undefined);
+
+    await (conn as any).establishSession();
+
+    const context = wire.mock.calls[0][0] as {
+      baseUrl: string;
+      authHeaders: () => Promise<Record<string, string>>;
+      observe: unknown;
+    };
+    expect(context.baseUrl).toBe(config.url);
+    expect((await context.authHeaders()).Authorization).toBe('Basic dTpw');
+    expect(typeof context.observe).toBe('function');
   });
 });

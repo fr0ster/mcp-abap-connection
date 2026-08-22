@@ -212,41 +212,35 @@ describe('a session verdict raised during a retry', () => {
     await conn.connect();
 
     let attempts = 0;
-    const realAxios = (
-      conn as unknown as { getAxiosInstance: () => (cfg: unknown) => unknown }
-    ).getAxiosInstance.bind(conn);
-    (conn as unknown as { getAxiosInstance: () => unknown }).getAxiosInstance =
-      () => {
-        const instance = realAxios();
-        return async (cfg: { url: string }) => {
-          if (!cfg.url.includes('/work')) {
-            return (instance as (c: unknown) => unknown)(cfg);
-          }
-          attempts += 1;
-          if (attempts === 1) {
-            // A CSRF rejection: the connector refetches the token and retries.
-            const { AxiosError } = await import('axios');
-            throw new AxiosError('forbidden', 'ERR', undefined, null, {
-              status: 403,
-              statusText: 'Forbidden',
-              data: 'CSRF token validation failed',
-              headers: {},
-              // biome-ignore lint/suspicious/noExplicitAny: minimal shape
-              config: {} as any,
-            });
-          }
-          // …and the retry comes back on a DIFFERENT session.
-          return {
-            status: 200,
-            statusText: 'OK',
-            data: '',
-            headers: {
-              'set-cookie': ['SAP_SESSIONID_STUB_100=S-OTHER; Path=/'],
-            },
-            config: {},
-          };
-        };
+    const realSend = (conn as any).transport.send.bind((conn as any).transport);
+    (conn as any).transport.send = async (cfg: { url: string }) => {
+      if (!cfg.url.includes('/work')) {
+        return realSend(cfg);
+      }
+      attempts += 1;
+      if (attempts === 1) {
+        // A CSRF rejection: the connector refetches the token and retries.
+        const { AxiosError } = await import('axios');
+        throw new AxiosError('forbidden', 'ERR', undefined, null, {
+          status: 403,
+          statusText: 'Forbidden',
+          data: 'CSRF token validation failed',
+          headers: {},
+          // biome-ignore lint/suspicious/noExplicitAny: minimal shape
+          config: {} as any,
+        });
+      }
+      // …and the retry comes back on a DIFFERENT session.
+      return {
+        status: 200,
+        statusText: 'OK',
+        data: '',
+        headers: {
+          'set-cookie': ['SAP_SESSIONID_STUB_100=S-OTHER; Path=/'],
+        },
+        config: {},
       };
+    };
 
     await expect(
       conn.makeAdtRequest({
@@ -296,17 +290,11 @@ describe('a dead session', () => {
     await conn.connect();
 
     let attempts = 0;
-    const realAxios = (
-      conn as unknown as { getAxiosInstance: () => (cfg: unknown) => unknown }
-    ).getAxiosInstance.bind(conn);
-    (conn as unknown as { getAxiosInstance: () => unknown }).getAxiosInstance =
-      () => {
-        const instance = realAxios();
-        return async (cfg: { url: string }) => {
-          if (cfg.url.includes('/work')) attempts += 1;
-          return (instance as (c: unknown) => unknown)(cfg);
-        };
-      };
+    const realSend = (conn as any).transport.send.bind((conn as any).transport);
+    (conn as any).transport.send = async (cfg: { url: string }) => {
+      if (cfg.url.includes('/work')) attempts += 1;
+      return realSend(cfg);
+    };
 
     stub.deadSession = true;
     await expect(get(conn)).rejects.toMatchObject({
