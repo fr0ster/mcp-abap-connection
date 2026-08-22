@@ -220,6 +220,34 @@ export abstract class CredentialAbapConnection<
    */
   protected async establishSession(): Promise<void> {
     try {
+      await this.establishOnce();
+    } catch (error) {
+      // A refused establishment is the other place a credential can turn out to
+      // be stale, and it was the per-credential JWT class that used to handle
+      // it: a token the provider still believes in, refused by the server, and
+      // a `connect()` that failed for a reason a renewal would have fixed.
+      //
+      // Exactly once, and NOT conditioned on the header changing — which is
+      // the rule one level up, in `makeAdtRequest`, and the wrong rule here. A
+      // renewal can put the credential right without altering the string it
+      // produces: a re-minted assertion behind the same bearer, a session the
+      // provider re-negotiates. There the guard prevents an endless renewal
+      // across many requests; here a single extra attempt cannot loop.
+      if (!isUnauthorized(error) || !this.credential.renew) throw error;
+
+      await this.credential.renew();
+      this.logger?.debug(
+        'The credential was refused; renewed it and establishing once more',
+      );
+      // The wire is holding whatever the refused exchange left behind.
+      this.transport.forgetSession();
+      await this.establishOnce();
+    }
+  }
+
+  /** One attempt at it, so the retry above has something to repeat. */
+  private async establishOnce(): Promise<void> {
+    try {
       if (this.credential.fetchCsrfToken) {
         // The credential does the exchange itself — a SAML session is earned by
         // it — and hands the token to the wire that will present it.

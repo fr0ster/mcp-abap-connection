@@ -12,7 +12,9 @@
  */
 
 import { createServer, type Server } from 'node:http';
+import { TokenAuthProvider } from '../../auth/providers.js';
 import type { SapConfig } from '../../config/sapConfig.js';
+import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { onPrem } from '../helpers/onPrem.js';
 
@@ -220,22 +222,19 @@ describe('JwtAbapConnection establishment retry', () => {
   // method that now does the work, and would pass against a connection that had
   // no recovery in it at all.
   it('recovers from a 401 during establishment without waiting on itself', async () => {
-    const { JwtAbapConnection } = await import(
-      '../../connection/JwtAbapConnection.js'
-    );
     let refreshed = 0;
     stub.rejectDiscovery = true;
 
-    const conn = new JwtAbapConnection(
+    const conn = new AdtCloudConnector(
       {
         url: stub.baseUrl,
         client: '100',
         authType: 'jwt',
         jwtToken: 'STALE',
       } as SapConfig,
-      null,
-      undefined,
-      {
+      // The refresher IS the credential now: a token provider that renews is
+      // what the connector is handed, rather than a fourth constructor slot.
+      new TokenAuthProvider({
         getToken: async () => 'FRESH',
         refreshToken: async () => {
           refreshed += 1;
@@ -243,7 +242,8 @@ describe('JwtAbapConnection establishment retry', () => {
           stub.rejectDiscovery = false;
           return 'FRESH';
         },
-      },
+      }),
+      null,
     );
 
     // The window is generous on purpose: the base retries the CSRF fetch
@@ -389,25 +389,34 @@ describe('JWT request recovery after a token refresh', () => {
   });
 
   async function jwtConnection(refreshed: { count: number }) {
-    const { JwtAbapConnection } = await import(
-      '../../connection/JwtAbapConnection.js'
-    );
-    return new JwtAbapConnection(
+    return new AdtCloudConnector(
       {
         url: stub.baseUrl,
         client: '100',
         authType: 'jwt',
         jwtToken: 'STALE',
       } as SapConfig,
+      // The refresher IS the credential now: a token provider that renews is
+      // what the connector is handed, rather than a fourth constructor slot.
+      // The token genuinely CHANGES on renewal, because that is what the
+      // surviving class retries on: a provider that answers the same thing was
+      // not holding a stale token, and repeating it would only ask twice. The
+      // per-credential class this replaces retried either way; the rule is
+      // documented on `makeAdtRequest` and pinned by its own test.
+      new TokenAuthProvider(
+        (() => {
+          let token = 'STALE';
+          return {
+            getToken: async () => token,
+            refreshToken: async () => {
+              refreshed.count += 1;
+              token = 'FRESH';
+              return token;
+            },
+          };
+        })(),
+      ),
       null,
-      undefined,
-      {
-        getToken: async () => 'FRESH',
-        refreshToken: async () => {
-          refreshed.count += 1;
-          return 'FRESH';
-        },
-      },
     );
   }
 

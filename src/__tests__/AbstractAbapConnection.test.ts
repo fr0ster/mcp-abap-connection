@@ -1,8 +1,8 @@
 import { AxiosError } from 'axios';
+import { SamlAuthProvider, TokenAuthProvider } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
-import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
-import { JwtAbapConnection } from '../connection/JwtAbapConnection.js';
-import { SamlAbapConnection } from '../connection/SamlAbapConnection.js';
+import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
+import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
 import { onPrem } from './helpers/onPrem.js';
 import { markConnectedForTest } from './helpers/session.js';
@@ -298,7 +298,11 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
       jwtToken: 'jwt-abc',
       client: '100',
     };
-    const conn = new JwtAbapConnection(jwtConfig, mockLogger);
+    const conn = new AdtCloudConnector(
+      jwtConfig,
+      new TokenAuthProvider('jwt-abc'),
+      mockLogger,
+    );
     markConnectedForTest(conn);
     (conn as any).transport.adoptCsrfToken('stale-token');
     seedCookies(conn, 'SAP_SESSIONID_HQ6=dead');
@@ -338,7 +342,11 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
       sessionCookies: 'MYSAPSSO2=abc',
       client: '100',
     };
-    const conn = new SamlAbapConnection(samlConfig, mockLogger);
+    const conn = new AdtOnPremConnector(
+      samlConfig,
+      new SamlAuthProvider('MYSAPSSO2=abc'),
+      mockLogger,
+    );
     markConnectedForTest(conn);
     (conn as any).transport.adoptCsrfToken('stale-token');
     seedCookies(conn, 'MYSAPSSO2=abc; SAP_SESSIONID_HQ6=dead');

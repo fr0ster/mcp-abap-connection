@@ -18,7 +18,6 @@ import {
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
-import { createAbapConnection } from '../connection/connectionFactory.js';
 import type { ILogger } from '../logger.js';
 
 const config: SapConfig = {
@@ -189,64 +188,6 @@ describe('the credential is what it authenticates with, and nothing more', () =>
     // No reconnect, no new session — the provider simply answered differently,
     // and the next request carried it.
     expect(seen.at(-1)?.headers.Authorization).toBe('Bearer RENEWED');
-  });
-});
-
-/**
- * The factory does what the caller says.
- *
- * `authType` still says HOW to authenticate — it always meant that. What it no
- * longer does is decide which system this is.
- */
-describe('createAbapConnection does what the caller states', () => {
-  it('gives the cloud connector for a basic credential when asked for cloud', () => {
-    const conn = createAbapConnection(
-      config,
-      makeLogger(),
-      undefined,
-      undefined,
-      {
-        system: 'cloud',
-      },
-    );
-
-    expect(conn).toBeInstanceOf(AdtCloudConnector);
-  });
-
-  it('builds a token connector for jwt, using the refresher it was given', async () => {
-    const refresher = {
-      getToken: jest.fn(async () => 'FROM-REFRESHER'),
-      refreshToken: jest.fn(async () => 'FROM-REFRESHER'),
-    };
-    const seen: Seen[] = [];
-    const conn = createAbapConnection(
-      { ...config, authType: 'jwt', jwtToken: 'ignored' } as SapConfig,
-      makeLogger(),
-      undefined,
-      refresher as never,
-      { system: 'cloud' },
-    );
-    serverAnsweringEverything(conn, seen);
-
-    await conn.connect();
-
-    // The refresher, not the static token beside it: a caller that supplies one
-    // supplied it to be used.
-    expect(seen[0].headers.Authorization).toBe('Bearer FROM-REFRESHER');
-    expect(conn).toBeInstanceOf(AdtCloudConnector);
-  });
-
-  it('warns when nothing was stated, and falls back to the old choice', () => {
-    const logger = makeLogger();
-
-    const conn = createAbapConnection(config, logger);
-
-    // Still works — existing callers are not broken — but it is said out loud.
-    expect(conn).not.toBeInstanceOf(AdtCloudConnector);
-    expect(conn).not.toBeInstanceOf(AdtOnPremConnector);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('options.system'),
-    );
   });
 });
 

@@ -16,8 +16,9 @@ import type {
   IAbapConnection,
   ISessionLifecycleAware,
 } from '@mcp-abap-adt/interfaces';
-import { BaseAbapConnection } from '../../connection/BaseAbapConnection.js';
-import { RfcAbapConnection } from '../../connection/RfcAbapConnection.js';
+import { BasicAuthProvider } from '../../auth/providers.js';
+import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
+import { RfcTransport } from '../../connection/RfcTransport.js';
 
 const httpConfig = {
   url: 'https://h:44300',
@@ -26,6 +27,16 @@ const httpConfig = {
   password: 'P',
   client: '100',
 } as any;
+
+/** The same connector, over the wire whose conversation IS its session. */
+const onPremOverRfc = () =>
+  new AdtOnPremConnector(
+    rfcConfig,
+    new BasicAuthProvider('U', 'P'),
+    null,
+    undefined,
+    { transport: new RfcTransport(() => ({}) as never, null) },
+  );
 
 const rfcConfig = {
   url: 'https://h:44300',
@@ -64,8 +75,10 @@ function ownsSession(_conn: IAbapConnection & ISessionLifecycleAware): void {}
 // of. That conflated two things: RFC needs no session RESOURCE opened — its
 // conversation is the session, and there is no endpoint to tell — but the
 // conversation is still opened, still observable and still torn down.
-ownsSession(new BaseAbapConnection(httpConfig, null));
-ownsSession(new RfcAbapConnection(rfcConfig, null));
+ownsSession(
+  new AdtOnPremConnector(httpConfig, new BasicAuthProvider('U', 'P'), null),
+);
+ownsSession(onPremOverRfc());
 
 /** A connection that genuinely stops at IAbapConnection: a stub, a recorder. */
 const bare: IAbapConnection = {
@@ -83,7 +96,7 @@ describe('narrowing to a connection capability', () => {
   // assignment ever needs a cast, the implements clause has been lost.
   it('an HTTP connection satisfies the atom at compile time', () => {
     const conn: IAbapConnection & ISessionLifecycleAware =
-      new BaseAbapConnection(httpConfig, null);
+      new AdtOnPremConnector(httpConfig, new BasicAuthProvider('U', 'P'), null);
     expect(typeof conn.disconnect).toBe('function');
     expect(typeof conn.getSessionIdentity).toBe('function');
   });
@@ -93,7 +106,7 @@ describe('narrowing to a connection capability', () => {
   // conversation the native client holds IS the session. That is an empty
   // strategy, not an absent lifecycle.
   it('an RFC connection carries the atom, with nothing to tell the server', async () => {
-    const conn: IAbapConnection = new RfcAbapConnection(rfcConfig, null);
+    const conn: IAbapConnection = onPremOverRfc();
 
     expect(supportsSessionLifecycle(conn)).toBe(true);
     if (!supportsSessionLifecycle(conn)) throw new Error('unreachable');
@@ -105,7 +118,11 @@ describe('narrowing to a connection capability', () => {
   });
 
   it('the predicate admits an HTTP connection', () => {
-    const conn: IAbapConnection = new BaseAbapConnection(httpConfig, null);
+    const conn: IAbapConnection = new AdtOnPremConnector(
+      httpConfig,
+      new BasicAuthProvider('U', 'P'),
+      null,
+    );
     expect(supportsSessionLifecycle(conn)).toBe(true);
     expect(supportsSessionLifecycle(conn)).toBe(true);
   });
@@ -119,10 +136,11 @@ describe('narrowing to a connection capability', () => {
   // to call.
   it('rejects a connection that implements only part of an atom', () => {
     const half = {
-      ...(new BaseAbapConnection(httpConfig, null) as unknown as Record<
-        string,
-        unknown
-      >),
+      ...(new AdtOnPremConnector(
+        httpConfig,
+        new BasicAuthProvider('U', 'P'),
+        null,
+      ) as unknown as Record<string, unknown>),
       isConnected: () => true,
       getSessionIdentity: () => null,
       disconnect: undefined,

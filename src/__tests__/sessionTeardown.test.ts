@@ -8,7 +8,9 @@
  * LOCK, handing back a handle the next request cannot use.
  */
 
+import { TokenAuthProvider } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
+import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
 import { onPrem } from './helpers/onPrem.js';
@@ -103,11 +105,9 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
   });
 
   it('cloud opens the session resource and gives it back by DELETE', async () => {
-    const { JwtAbapConnection } = await import(
-      '../connection/JwtAbapConnection.js'
-    );
-    const conn = new JwtAbapConnection(
+    const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      new TokenAuthProvider('TOKEN'),
       makeLogger(),
     );
     const seen: Seen[] = [];
@@ -558,11 +558,9 @@ describe('a session opened before a failed connect is not abandoned', () => {
     // A CLOUD connection: it is the one that opens a session resource, so it is
     // the one that can leave one open when establishing fails after the
     // preflight. On-prem opens nothing to leave behind.
-    const { JwtAbapConnection } = await import(
-      '../connection/JwtAbapConnection.js'
-    );
-    const conn = new JwtAbapConnection(
+    const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      new TokenAuthProvider('TOKEN'),
       makeLogger(),
     );
     const seen: Seen[] = [];
@@ -583,11 +581,9 @@ describe('a session opened before a failed connect is not abandoned', () => {
   });
 
   it('says nothing when the preflight opened nothing', async () => {
-    const { JwtAbapConnection } = await import(
-      '../connection/JwtAbapConnection.js'
-    );
-    const conn = new JwtAbapConnection(
+    const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      new TokenAuthProvider('TOKEN'),
       makeLogger(),
     ) as never as AdtOnPremConnector;
     const seen: Seen[] = [];
