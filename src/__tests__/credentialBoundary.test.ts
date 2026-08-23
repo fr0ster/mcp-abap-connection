@@ -41,6 +41,11 @@ function refusedCredential() {
   // point of the test is that nothing CALLS it.
   const credential: IRenewableCredential = {
     kind: 'token',
+    // Empty where there is nothing to say: since interfaces 20.0.0 a credential
+    // states all of itself, so nothing has to ask whether it does.
+    prepare: async () => {},
+    cookies: () => null,
+    transportMaterial: () => ({}),
     authorizationHeader: async () => {
       asked.header += 1;
       return 'Bearer STALE';

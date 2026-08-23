@@ -55,6 +55,29 @@ gone. See [Migration to 6.0](./docs/MIGRATION-6.0.md).
   provider can see, on every call that asks for a header. The request path is
   unchanged: a 401 asks again, and retries once if the answer differs.
 
+### Changed — BREAKING
+
+- **The base classes ask nothing.** `AbstractAbapConnection` and
+  `CredentialAbapConnection` contain no config-driven conditional, no optional-member
+  call, and no dispatch on a type or a shape. What a collaborator can do is stated by
+  its type, not discovered at runtime:
+
+  - `IAdtTransport.open()` / `close()` are required — a wire with nothing to open
+    writes an empty method, which is true of it;
+  - `IAuthProvider.prepare()`, `cookies()` and `transportMaterial()` are required for
+    the same reason (needs `@mcp-abap-adt/interfaces` 20.0.0);
+  - `fetchCsrfToken()` is the atom `ICredentialOwningItsFetch`, narrowed to — the one
+    question left, and the only one whose answer changes what the connection DOES
+    rather than what it sends;
+  - `skipSessionType` is gone: it described BASIS 7.40, and a deployment is a wire, so
+    it is `LegacyOnPremHttpTransport`;
+  - whether a session exists is `IAdtTransport.sessionEstablished()` — a verdict each
+    wire gives about itself, instead of the connection reading a fingerprint and a flag
+    and deciding for all of them at once.
+
+  A credential you wrote gains three usually-empty members; see
+  [the migration guide](./docs/MIGRATION-6.0.md#writing-your-own-credential).
+
 ### Removed
 
 - **The connection no longer answers a `401` for you.** It called `renew()` on the

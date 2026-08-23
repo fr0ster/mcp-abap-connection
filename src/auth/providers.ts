@@ -21,6 +21,19 @@ import type {
 export class BasicAuthProvider implements IAuthProvider {
   readonly kind = 'basic';
 
+  /** Nothing to get ready: this credential is complete as constructed. */
+  async prepare(): Promise<void> {}
+
+  /** Not cookies. This one authenticates with a header. */
+  cookies(): string | null {
+    return null;
+  }
+
+  /** No TLS material: this credential lives in a header, not in the transport. */
+  transportMaterial(): ICertificateMaterial {
+    return {};
+  }
+
   constructor(
     private readonly username: string,
     private readonly password: string,
@@ -45,6 +58,19 @@ export class BasicAuthProvider implements IAuthProvider {
  */
 export class TokenAuthProvider implements IRenewableCredential {
   readonly kind = 'token';
+
+  /** Nothing to get ready: this credential is complete as constructed. */
+  async prepare(): Promise<void> {}
+
+  /** Not cookies. This one authenticates with a header. */
+  cookies(): string | null {
+    return null;
+  }
+
+  /** No TLS material: this credential lives in a header, not in the transport. */
+  transportMaterial(): ICertificateMaterial {
+    return {};
+  }
 
   /**
    * A token, or something that can produce one.
@@ -114,6 +140,14 @@ export class TokenAuthProvider implements IRenewableCredential {
 export class SamlAuthProvider implements IAuthProvider {
   readonly kind = 'saml';
 
+  /** Nothing to get ready: this credential is complete as constructed. */
+  async prepare(): Promise<void> {}
+
+  /** No TLS material: this credential lives in a header, not in the transport. */
+  transportMaterial(): ICertificateMaterial {
+    return {};
+  }
+
   constructor(private readonly sessionCookies: string) {}
 
   /** Not a header: this credential authenticates with the cookies below. */
@@ -136,6 +170,12 @@ export class SamlAuthProvider implements IAuthProvider {
  */
 export class CertificateAuthProvider implements IAuthProvider {
   readonly kind = 'certificate';
+
+  /** Not cookies. This one authenticates with a header. */
+  cookies(): string | null {
+    return null;
+  }
+
   private material: ICertificateMaterial | null = null;
 
   constructor(

@@ -18,6 +18,7 @@ import type {
   IAbapRequestOptions,
   IAdtResponse,
   IAuthProvider,
+  ICredentialOwningItsFetch,
 } from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
@@ -29,6 +30,21 @@ function isUnauthorized(error: unknown): boolean {
   const status = (error as { response?: { status?: number } })?.response
     ?.status;
   return status === 401;
+}
+
+/**
+ * Does this credential earn the CSRF token itself?
+ *
+ * Evidence, not a cast, and the recipe the contract publishes. Written here
+ * rather than imported because a predicate belongs to whoever narrows.
+ */
+function ownsItsFetch(
+  credential: IAuthProvider,
+): credential is ICredentialOwningItsFetch {
+  return (
+    typeof (credential as Partial<ICredentialOwningItsFetch>).fetchCsrfToken ===
+    'function'
+  );
 }
 
 export abstract class CredentialAbapConnection<
@@ -56,7 +72,7 @@ export abstract class CredentialAbapConnection<
   /** The header last put on the wire, so a change can be seen. */
 
   protected override async prepareCredential(): Promise<void> {
-    await this.credential.prepare?.();
+    await this.credential.prepare();
   }
 
   /**
@@ -86,7 +102,7 @@ export abstract class CredentialAbapConnection<
       headers.Authorization = authorization;
     }
 
-    const cookies = this.credential.cookies?.();
+    const cookies = this.credential.cookies();
     if (cookies) {
       headers.Cookie = cookies;
     }
@@ -94,18 +110,23 @@ export abstract class CredentialAbapConnection<
   }
 
   protected override getHttpsAgentOptions(): AgentOptions {
-    return (
-      this.credential.transportMaterial?.() ?? super.getHttpsAgentOptions()
-    );
+    return this.credential.transportMaterial();
   }
 
   protected async establishSession(): Promise<void> {
     try {
-      if (this.credential.fetchCsrfToken) {
-        // The credential does the exchange itself — a SAML session is earned by
-        // it — and hands the token to the wire that will present it.
+      const credential: IAuthProvider = this.credential;
+      if (ownsItsFetch(credential)) {
+        // The credential does the exchange itself — SPNEGO's token is consumed
+        // by one request, so the way in and the fetch are the same act — and
+        // hands the token to the wire that will present it.
+        //
+        // The one question left about a credential, and narrowed to rather than
+        // probed: the atom says which credentials this is true of, and this is
+        // the only place where the answer changes what the connection DOES
+        // rather than what it sends.
         this.setCsrfToken(
-          await this.credential.fetchCsrfToken(this.credentialTransport()),
+          await credential.fetchCsrfToken(this.credentialTransport()),
         );
       } else {
         // Otherwise the wire establishes itself. What that means is the wire's:

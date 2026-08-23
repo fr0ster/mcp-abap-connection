@@ -85,6 +85,11 @@ describe('a logoff still in flight when the next session opens', () => {
     let slow = false;
     const credential: IAuthProvider = {
       kind: 'slow',
+      // Empty where there is nothing to say: since interfaces 20.0.0 a credential
+      // states all of itself, so nothing has to ask whether it does.
+      prepare: async () => {},
+      cookies: () => null,
+      transportMaterial: () => ({}),
       authorizationHeader: async () => {
         if (slow) await new Promise((r) => setTimeout(r, 40));
         return 'Basic dTpw';

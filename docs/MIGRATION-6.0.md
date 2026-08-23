@@ -217,6 +217,40 @@ with it.
 Everything else is unchanged: it resolves rather than throws, always settles,
 and a repeat call performs whatever is still owed.
 
+## Writing your own credential
+
+The shipped ones need no change from you — they are handed to a connector and
+that is all. If you wrote your own against `IAuthProvider`, it now states all of
+itself. Five members, and three of them are usually empty:
+
+```diff
+ class MyCredential implements IAuthProvider {
+   readonly kind = 'mine';
++  async prepare(): Promise<void> {}
+   async authorizationHeader(): Promise<string | null> { … }
++  cookies(): string | null { return null; }
++  transportMaterial(): ICertificateMaterial { return {}; }
+ }
+```
+
+Empty is not ceremony: "nothing to prepare", "I am not cookies", "I contribute
+no TLS material" are facts about a credential, and a fact is stated rather than
+left for a connection to discover by checking whether a method exists. What it
+buys is that no base class asks anything — every question about a collaborator
+is answered by the type.
+
+The exception is a credential whose way in IS a round trip — SPNEGO, whose token
+is consumed by one request, so the exchange and the fetch are the same act. That
+one is an atom, because an empty implementation would be a *lie*: it would report
+a token that was never earned.
+
+```diff
+- class SpnegoCredential implements IAuthProvider {
++ class SpnegoCredential implements ICredentialOwningItsFetch {
+```
+
+Needs `@mcp-abap-adt/interfaces` 20.0.0.
+
 ## A refused credential
 
 The connector used to answer a `401` for you: it called `renew()` on the
