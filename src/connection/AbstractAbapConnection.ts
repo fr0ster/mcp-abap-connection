@@ -3,7 +3,6 @@ import { Agent } from 'node:https';
 import {
   ADT_SESSION_ERROR,
   type IAdtResponse,
-  type ICredentialTransport,
   type ISessionLifecycleAware,
   isNetworkError,
 } from '@mcp-abap-adt/interfaces';
@@ -456,11 +455,22 @@ abstract class AbstractAbapConnection
   }
 
   /**
+   * Ask the server to open a session before the establishing call needs one.
+   *
+   * The strategy is chosen by what the server publishes, not by which system we
+   * believe it to be: ABAP Cloud offers a session resource and issues
+   * `SAP_SESSIONID` to whoever asks for one — with `x-sap-security-session:
+   * create` — while on-prem has no such resource and its session arrives with
+   * the establishing request. Believing cloud simply "issues no SAP_SESSIONID"
+   * is what happens when nobody asks.
+   */
+
+  /**
    * What a wire needs from this connection to get a session, or give one back.
    *
-   * A snapshot in the same sense `sessionTransport()` was: a close is
-   * dispatched without being awaited, so this must not read the connection
-   * again once the teardown has cleared it.
+   * A snapshot in the sense that matters: a close is dispatched without being
+   * awaited, so nothing here may read the connection again once the teardown
+   * has cleared it.
    */
   protected sessionContext(): IAdtSessionContext {
     return {
@@ -471,71 +481,6 @@ abstract class AbstractAbapConnection
         this.observeResponse(headers as Record<string, unknown>),
     };
   }
-
-  protected credentialTransport(): ICredentialTransport {
-    // A SNAPSHOT, not a view. The close is dispatched without being awaited —
-    // a teardown does not wait for it — so `clearSessionState()` runs while the
-    // strategy is still suspended on its first `await`. Reading the connection
-    // then would find the axios instance already dropped and the cookies gone,
-    // and the request would go out through a freshly built client with no
-    // session on it, or not at all. Taken here, while they are still true.
-    // The transport itself needs no snapshot — it is readonly and outlives the
-    // session — but the cookies do: `forgetSession()` runs while the strategy
-    // is still suspended on its first await.
-    return {
-      baseUrl: this.baseUrl,
-      send: async (request: Parameters<ICredentialTransport['send']>[0]) => {
-        const response = await this.transport.send({
-          method: request.method,
-          url: request.url,
-          headers: request.headers,
-          ...(request.timeoutMs !== undefined
-            ? { timeout: request.timeoutMs }
-            : {}),
-          // A 404 is an answer — "this system has no session resource" — and a
-          // 403 on a close is the server declining a message. Both belong to
-          // the strategy to read, not to axios to throw over.
-          validateStatus: () => true,
-        });
-        // Only the open: its cookies ARE the session — SAP_SESSIONID arrives
-        // there — and they go through the same path every other response uses.
-        // No generation, because like the establishing CSRF fetch this is what
-        // creates the session a generation would be compared against. A close
-        // is deliberately not observed: its cookies would read as the session
-        // having been replaced under a connection that is being torn down.
-        if (request.adoptCookies) {
-          // Cookies adopted, verdict NOT asked for. The identity policy answers
-          // "did the server move us to a different session while we were
-          // working" — and this request is us opening one, with the
-          // establishing call still to come. Two requests we make ourselves,
-          // back to back, are one establishment; policing between them would
-          // read our own second call as somebody replacing our first.
-          const headers = response.headers as
-            | Record<string, unknown>
-            | undefined;
-          // The open is the first answer that can name the application server,
-          // and every request after it should already be pinned there.
-          this.transport.ingest(headers);
-        }
-        return {
-          status: response.status,
-          headers: response.headers,
-          data: response.data,
-        };
-      },
-    };
-  }
-
-  /**
-   * Ask the server to open a session before the establishing call needs one.
-   *
-   * The strategy is chosen by what the server publishes, not by which system we
-   * believe it to be: ABAP Cloud offers a session resource and issues
-   * `SAP_SESSIONID` to whoever asks for one — with `x-sap-security-session:
-   * create` — while on-prem has no such resource and its session arrives with
-   * the establishing request. Believing cloud simply "issues no SAP_SESSIONID"
-   * is what happens when nobody asks.
-   */
 
   private async establishAndCommit(baselineEpoch: number): Promise<void> {
     if (this.lifecycle.teardownEpoch !== baselineEpoch) {

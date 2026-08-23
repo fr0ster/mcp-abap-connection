@@ -1,20 +1,15 @@
 /**
- * What a credential is given when it fetches the CSRF token itself.
+ * Who earns the CSRF token: the wire, always.
  *
- * `IAuthProvider.fetchCsrfToken` was cut for SPNEGO — "its token is consumed by
- * one request and the exchange IS the fetch" — and the call site in
- * CredentialAbapConnection has been wired all along. No provider ever
- * implemented it, so the seam was never used, and it was handed a URL string:
- * everything a credential needs to actually make that request, and everything
- * the request produces, was on the other side of it.
+ * There was a second path here — a credential could run the exchange itself,
+ * and the connection asked which of the two would do the work. It asked for
+ * nobody: no shipped credential implemented it, and the seam had been built
+ * twice, once as a transport-shaped parameter and once as a capability atom.
  *
- * A URL cannot carry the exchange. The SPNEGO round trip is what the server
- * answers with the session cookie, and a credential returning only a token
- * string has nowhere to put that cookie — after which every later request goes
- * out with an already-spent Negotiate token.
- *
- * So the seam passes a transport, the shape `src/session/` already uses for the
- * same reason.
+ * A credential whose way in IS a round trip does not need the connection to
+ * arbitrate. The wire asks `authHeaders()` PER ATTEMPT, so a one-shot token is
+ * offered on the establishing call and withheld afterwards by the credential
+ * itself, with nobody deciding anything.
  */
 
 import type {
@@ -54,58 +49,7 @@ function credentialOwningTheFetch() {
   return { credential, given };
 }
 
-describe('a credential that owns its CSRF fetch', () => {
-  it('is handed a transport it can send with, not a URL to look at', async () => {
-    const { credential, given } = credentialOwningTheFetch();
-    const conn = new AdtOnPremConnector(
-      config,
-      credential,
-      onPremHttpTransport(config, null),
-      null,
-    );
-
-    await (conn as any).establishSession();
-
-    expect(given).toHaveLength(1);
-    expect(typeof given[0]).not.toBe('string');
-    expect(given[0]).toEqual(
-      expect.objectContaining({
-        baseUrl: expect.any(String),
-        send: expect.any(Function),
-      }),
-    );
-  });
-
-  it('is told where the system is, so it need not parse a URL back apart', async () => {
-    const { credential, given } = credentialOwningTheFetch();
-    const conn = new AdtOnPremConnector(
-      config,
-      credential,
-      onPremHttpTransport(config, null),
-      null,
-    );
-
-    await (conn as any).establishSession();
-
-    expect((given[0] as { baseUrl: string }).baseUrl).toBe(
-      'https://sap.example.com',
-    );
-  });
-
-  it('has its token taken as the connection csrf token', async () => {
-    const { credential } = credentialOwningTheFetch();
-    const conn = new AdtOnPremConnector(
-      config,
-      credential,
-      onPremHttpTransport(config, null),
-      null,
-    );
-
-    await (conn as any).establishSession();
-
-    expect((conn as any).getCsrfToken()).toBe('CSRF-FROM-CREDENTIAL');
-  });
-});
+describe('a credential that owns its CSRF fetch', () => {});
 
 describe('a credential that does not', () => {
   // Left to the WIRE, which is the change: the exchange is HTTP's — an endpoint

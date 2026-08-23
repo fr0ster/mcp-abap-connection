@@ -18,7 +18,6 @@ import type {
   IAbapRequestOptions,
   IAdtResponse,
   IAuthProvider,
-  ICredentialOwningItsFetch,
 } from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
@@ -30,21 +29,6 @@ function isUnauthorized(error: unknown): boolean {
   const status = (error as { response?: { status?: number } })?.response
     ?.status;
   return status === 401;
-}
-
-/**
- * Does this credential earn the CSRF token itself?
- *
- * Evidence, not a cast, and the recipe the contract publishes. Written here
- * rather than imported because a predicate belongs to whoever narrows.
- */
-function ownsItsFetch(
-  credential: IAuthProvider,
-): credential is ICredentialOwningItsFetch {
-  return (
-    typeof (credential as Partial<ICredentialOwningItsFetch>).fetchCsrfToken ===
-    'function'
-  );
 }
 
 export abstract class CredentialAbapConnection<
@@ -115,34 +99,26 @@ export abstract class CredentialAbapConnection<
 
   protected async establishSession(): Promise<void> {
     try {
-      const credential: IAuthProvider = this.credential;
-      if (ownsItsFetch(credential)) {
-        // The credential does the exchange itself — SPNEGO's token is consumed
-        // by one request, so the way in and the fetch are the same act — and
-        // hands the token to the wire that will present it.
-        //
-        // The one question left about a credential, and narrowed to rather than
-        // probed: the atom says which credentials this is true of, and this is
-        // the only place where the answer changes what the connection DOES
-        // rather than what it sends.
-        this.setCsrfToken(
-          await credential.fetchCsrfToken(this.credentialTransport()),
-        );
-      } else {
-        // Otherwise the wire establishes itself. What that means is the wire's:
-        // HTTP earns a CSRF token and the cookies that name the session; an RFC
-        // conversation was opened before this and already IS the session, so it
-        // does nothing and holds no token. Demanding one here was what made
-        // `connect()` impossible over RFC.
-        await this.transport.establish({
-          baseUrl: await this.getBaseUrl(),
-          authHeaders: () => this.getAuthHeaders(),
-          extraHeaders: { 'sap-adt-connection-id': this.getSessionId() ?? '' },
-          observe: (headers) =>
-            this.observeResponse(headers as Record<string, unknown>),
-          isFatal: (error) => this.isSessionVerdict(error),
-        });
-      }
+      // The wire establishes itself, always. What that means is the wire's:
+      // HTTP earns a CSRF token and the cookies that name the session; an RFC
+      // conversation was opened before this and already IS the session, so it
+      // does nothing and holds no token. Demanding one here was what made
+      // `connect()` impossible over RFC.
+      //
+      // There is no second path. A credential that wanted to run the exchange
+      // itself would need the connection to ask which of the two does the work,
+      // and a credential whose way in IS a round trip does not need that: the
+      // wire asks `authHeaders()` PER ATTEMPT, so a one-shot token is offered
+      // on the establishing call and withheld afterwards by the credential
+      // itself, with nobody deciding anything.
+      await this.transport.establish({
+        baseUrl: await this.getBaseUrl(),
+        authHeaders: () => this.getAuthHeaders(),
+        extraHeaders: { 'sap-adt-connection-id': this.getSessionId() ?? '' },
+        observe: (headers) =>
+          this.observeResponse(headers as Record<string, unknown>),
+        isFatal: (error) => this.isSessionVerdict(error),
+      });
       this.logger?.debug('Connected', {
         credential: this.credential.kind,
         hasCsrfToken: !!this.getCsrfToken(),
@@ -152,8 +128,8 @@ export abstract class CredentialAbapConnection<
       this.logger?.warn(
         `Could not establish (${this.credential.kind}): ${error instanceof Error ? error.message : String(error)}`,
       );
-      // A rejecting response can still carry the cookies that matter; they are
-      // taken by fetchCsrfToken itself, so nothing is read out of the error
+      // A rejecting response can still carry the cookies that matter; the wire
+      // folds them in as it establishes, so nothing is read out of the error
       // here beyond saying whether any arrived.
       if (refusalOf(error)?.headers) {
         this.logger?.debug(
