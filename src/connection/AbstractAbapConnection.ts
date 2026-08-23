@@ -68,7 +68,6 @@ abstract class AbstractAbapConnection
   private baseUrl: string;
   private sessionId: string | null = null;
   private sessionMode: 'stateless' | 'stateful' = 'stateless';
-  private skipSessionType: boolean;
   /**
    * When true, requests are treated as part of an uninterruptible critical
    * section (e.g. a lock → modify → unlock chain). In this state a short
@@ -138,9 +137,7 @@ abstract class AbstractAbapConnection
     readonly transport: IAdtTransport,
     protected readonly logger: ILogger | null,
     sessionId?: string,
-    options?: { skipSessionType?: boolean },
   ) {
-    this.skipSessionType = options?.skipSessionType ?? false;
     // Generate sessionId (used for sap-adt-connection-id header)
     this.sessionId = sessionId || randomUUID();
 
@@ -165,16 +162,12 @@ abstract class AbstractAbapConnection
    * - stateful: SAP maintains session state between requests (locks, transactions)
    * - stateless: Each request is independent
    *
-   * When skipSessionType is enabled (via constructor options), this is a no-op:
-   * the x-sap-adt-sessiontype header will never be sent. This is needed for
-   * older BASIS versions (e.g. 7.40) where the stateful header causes locks
-   * to be stored in ABAP session memory instead of the global enqueue table,
-   * resulting in HTTP 423 on subsequent PUT requests.
+   * Whether the header actually goes out is the WIRE's: a system where the
+   * stateful header makes the server store locks in session memory instead of
+   * the enqueue table — BASIS 7.40 — is a different deployment, and a
+   * deployment is a transport, not a flag on the connection.
    */
   setSessionType(type: 'stateful' | 'stateless'): void {
-    if (this.skipSessionType) {
-      return;
-    }
     this.sessionMode = type;
     this.logger?.debug(`Session type set to: ${type}`, {
       sessionId: this.sessionId?.substring(0, 8),
@@ -666,8 +659,7 @@ abstract class AbstractAbapConnection
     // bearer obtainable here, so the question stayed open. If a cloud system
     // turns out to hold sessions without issuing this cookie, this is the rule
     // to revisit — and it will say so loudly rather than fail quietly.
-    const fingerprint = this.sessionFingerprint();
-    if (fingerprint.size === 0 && !this.skipSessionType) {
+    if (!this.transport.sessionEstablished()) {
       // Goodbye first, for the same reason the catch above does it: the
       // preflight may have opened a session — on cloud it does — and this path
       // is about to drop the cookies that are the only permission to close it.
@@ -691,7 +683,7 @@ abstract class AbstractAbapConnection
       );
     }
 
-    this.lifecycle.markConnected(fingerprint);
+    this.lifecycle.markConnected(this.sessionFingerprint());
   }
 
   /** The teardown epoch, for a recovery to capture before it starts. */

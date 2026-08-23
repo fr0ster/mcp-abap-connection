@@ -40,13 +40,7 @@ export class AdtCloudConnector<
     transport: TTransport,
     logger: ILogger | null = null,
     sessionId?: string,
-    /**
-     * No `transport`. ABAP Cloud has one, so offering the choice would be
-     * offering something that does not exist — and the first caller to take it
-     * would find that out at runtime instead of here.
-     */
-    options?: { skipSessionType?: boolean },
   ) {
-    super(config, credential, transport, logger, sessionId, options);
+    super(config, credential, transport, logger, sessionId);
   }
 }

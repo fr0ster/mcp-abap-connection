@@ -36,7 +36,6 @@ export function onPrem(
   config: SapConfig,
   logger: ILogger | null = null,
   sessionId?: string,
-  options?: { skipSessionType?: boolean },
 ): AdtOnPremConnector<BasicAuthProvider, OnPremHttpTransport> {
   return new AdtOnPremConnector(
     config,
@@ -44,7 +43,6 @@ export function onPrem(
     onPremHttpTransport(config, logger),
     logger,
     sessionId,
-    options,
   );
 }
 

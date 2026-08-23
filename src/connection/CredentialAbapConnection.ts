@@ -41,9 +41,8 @@ export abstract class CredentialAbapConnection<
     transport: IAdtTransport,
     logger: ILogger | null = null,
     sessionId?: string,
-    options?: { skipSessionType?: boolean },
   ) {
-    super(config, transport, logger, sessionId, options);
+    super(config, transport, logger, sessionId);
   }
 
   /**

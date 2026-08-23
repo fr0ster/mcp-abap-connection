@@ -57,6 +57,10 @@ function rfcTransport(): {
     // A stub is a wire like any other, and says which system it is for.
     system: 'onprem',
     ...holdsNoSession,
+    // The conversation IS the session, so this wire holds one the moment it is
+    // open — which is the fact that used to be a `skipSessionType` flag on the
+    // connection and is now the wire's own answer.
+    sessionEstablished: () => true,
     // The conversation IS the session, so this wire is never on none — which is
     // what `RfcTransport` reports, and what the fingerprint check reads.
     sessionFingerprint: () => new Map([['rfc-conversation', 'C1']]),

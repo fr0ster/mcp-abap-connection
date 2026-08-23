@@ -30,7 +30,7 @@ export class OnPremHttpTransport
   extends HttpTransport
   implements IOnPremTransport
 {
-  override readonly kind = 'onprem-http';
+  override readonly kind: string = 'onprem-http';
 
   /** Which system this wire is for. Read by the compiler, never at runtime. */
   readonly system = 'onprem' as const;

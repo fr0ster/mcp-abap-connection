@@ -57,6 +57,7 @@ export type {
   ICloudTransport,
   IOnPremTransport,
 } from './connection/IAdtTransport.js';
+export { LegacyOnPremHttpTransport } from './connection/LegacyOnPremHttpTransport.js';
 export { OnPremHttpTransport } from './connection/OnPremHttpTransport.js';
 export {
   type IRfcConversation,

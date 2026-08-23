@@ -139,6 +139,16 @@ export class HttpTransport implements IAdtTransport {
   }
 
   /**
+   * A session exists when the server named one.
+   *
+   * `SAP_SESSIONID` is what a lock is bound to, so its absence means there is
+   * nothing to hold one — the connection can read and can keep nothing.
+   */
+  sessionEstablished(): boolean {
+    return this.sessionFingerprint().size > 0;
+  }
+
+  /**
    * Headers that keep this connection on the server its session lives on.
    *
    * `sap-adt-saplb: fetch` asks the server to name itself — it answers on every

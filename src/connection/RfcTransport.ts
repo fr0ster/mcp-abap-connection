@@ -119,6 +119,11 @@ export class RfcTransport implements IOnPremTransport {
    * The conversation, which IS the session — so it is fingerprinted by its own
    * existence rather than by an address the server hands out.
    */
+  /** The conversation IS the session, so it exists exactly while that does. */
+  sessionEstablished(): boolean {
+    return this.conversation?.alive ?? false;
+  }
+
   sessionFingerprint(): Map<string, string> {
     const fingerprint = new Map<string, string>();
     if (this.conversation?.alive) {

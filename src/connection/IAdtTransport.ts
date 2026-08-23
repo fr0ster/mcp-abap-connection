@@ -164,6 +164,21 @@ export interface IAdtTransport {
    */
   sessionFingerprint(): Map<string, string>;
 
+  /**
+   * Does this wire hold a session it can work over?
+   *
+   * A verdict, not a fact for somebody else to interpret. The connection used
+   * to read a fingerprint and a `skipSessionType` flag and decide for every
+   * wire at once — which meant carrying, in the class they all share, a
+   * property of one deployment: BASIS 7.40, where the stateful header makes the
+   * server store locks in session memory instead of the enqueue table.
+   *
+   * Each wire answers for itself. HTTP has a session when the server named one.
+   * An RFC conversation IS the session. A wire whose system names no session is
+   * not a broken HTTP one — it is answering truthfully about itself.
+   */
+  sessionEstablished(): boolean;
+
   /** Headers that keep this connection on the server its session lives on. */
   affinityHeaders(): Record<string, string>;
 

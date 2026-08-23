@@ -16,6 +16,9 @@ export const holdsNoSession = {
   open: async () => {},
   close: async () => {},
   establish: async () => {},
+  // A stub holds no session, and says so — the wire answers this for itself
+  // now, instead of the connection reading a fingerprint and a flag.
+  sessionEstablished: () => false,
   csrfToken: () => null,
   adoptCsrfToken: () => {},
   ingest: () => {},
@@ -48,6 +51,7 @@ export function holdsItsSession(
     // give back at this level.
     open: async () => {},
     close: async () => {},
+    sessionEstablished: () => state.sessionEstablished(),
     /**
      * What an HTTP wire does: ask the discovery endpoint, fold the answer in.
      * A stub that established by doing nothing would be a wire that reports no

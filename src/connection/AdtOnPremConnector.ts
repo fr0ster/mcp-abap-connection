@@ -49,14 +49,7 @@ export class AdtOnPremConnector<
     transport: TTransport,
     logger: ILogger | null = null,
     sessionId?: string,
-    /**
-     * `transport` is the second axis, and on-prem is where it is a real
-     * choice: the same ADT call travels over HTTP, or over RFC on a system
-     * where stateful HTTP sessions are not usable. Omitted means HTTP — the
-     * documented default, not something worked out from the config.
-     */
-    options?: { skipSessionType?: boolean; transport?: TTransport },
   ) {
-    super(config, credential, transport, logger, sessionId, options);
+    super(config, credential, transport, logger, sessionId);
   }
 }
