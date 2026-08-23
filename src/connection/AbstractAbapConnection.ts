@@ -304,7 +304,7 @@ abstract class AbstractAbapConnection
       // conversation opened, a cloud session resource asked for, nothing at
       // all on a wire whose session arrives with the establishing call. Which
       // of those it is belongs to the transport the caller handed in.
-      await this.transport.open?.(this.sessionContext());
+      await this.transport.open(this.sessionContext());
 
       await this.establishAndCommit(baselineEpoch);
     });
@@ -371,7 +371,7 @@ abstract class AbstractAbapConnection
       // The context is taken now, while the session is still true: the clear
       // below runs while the close is suspended on its first await.
       const context = this.sessionContext();
-      const inFlight = Promise.resolve(this.transport.close?.(context)).then(
+      const inFlight = Promise.resolve(this.transport.close(context)).then(
         () => undefined,
       );
       this.clearSessionState();
@@ -604,7 +604,7 @@ abstract class AbstractAbapConnection
       // session has an address or it does not, and an on-prem one was
       // established or the cookie is debris from the refusal. The connection
       // asks, and each wire answers by doing nothing when it has nothing.
-      const goodbye = this.transport.close?.(this.sessionContext());
+      const goodbye = this.transport.close(this.sessionContext());
       this.invalidateSession();
       // And the identity with it. The rejecting response was still observed, so
       // its cookie was recorded as a session that had just been established —
@@ -673,7 +673,7 @@ abstract class AbstractAbapConnection
       // is about to drop the cookies that are the only permission to close it.
       // Refusing to connect must not leak the session the refusal is about.
       try {
-        void this.transport.close?.(this.sessionContext());
+        void this.transport.close(this.sessionContext());
       } catch (error) {
         this.logger?.debug(
           `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,

@@ -105,15 +105,20 @@ export interface IAdtTransport {
    * Get a session, in whatever way this wire has one.
    *
    * An RFC conversation is opened, and IS the session. ABAP Cloud publishes a
-   * session as a resource and this asks for one. On-prem HTTP has neither —
-   * its session arrives as a cookie on the establishing call — so it does
-   * nothing here and says so by doing nothing.
+   * session as a resource and this asks for one. On-prem HTTP has neither — its
+   * session arrives as a cookie on the establishing call — so its
+   * implementation is empty.
+   *
+   * **Required, not optional.** A wire with nothing to open writes an empty
+   * method, which is true of it; the alternative was the connection asking
+   * `open?.()` at every teardown — a runtime question about a collaborator it
+   * was handed, which is the thing a contract exists to answer instead.
    *
    * This used to be a `SessionStrategy` the connection selected and drove: a
    * second wire abstraction beside this one, in the class every wire shares,
    * describing a mechanism only some of them have.
    */
-  open?(context: IAdtSessionContext): Promise<void>;
+  open(context: IAdtSessionContext): Promise<void>;
 
   /**
    * Give the session back.
@@ -123,7 +128,7 @@ export interface IAdtTransport {
    * DELETE on the address the server published, the platform's logoff, or
    * closing the conversation.
    */
-  close?(context: IAdtSessionContext): Promise<void>;
+  close(context: IAdtSessionContext): Promise<void>;
 
   /**
    * Issue one request.

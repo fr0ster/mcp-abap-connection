@@ -46,7 +46,7 @@ export class CloudHttpTransport
   /** The address this server published for our session — the only close target. */
   private resource: string | null = null;
 
-  async open(context: IAdtSessionContext): Promise<void> {
+  override async open(context: IAdtSessionContext): Promise<void> {
     try {
       // Read ONCE. The contract lets a provider answer differently each time —
       // a token provider renews behind the call — so two reads can build one
@@ -99,7 +99,7 @@ export class CloudHttpTransport
     }
   }
 
-  async close(context: IAdtSessionContext): Promise<void> {
+  override async close(context: IAdtSessionContext): Promise<void> {
     const resource = this.resource;
     this.resource = null;
     // Read SYNCHRONOUSLY, before the first await. A close is dispatched

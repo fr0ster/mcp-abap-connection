@@ -64,7 +64,7 @@ export class OnPremHttpTransport
    * decision that is now this class's, below.
    */
 
-  async close(context: IAdtSessionContext): Promise<void> {
+  override async close(context: IAdtSessionContext): Promise<void> {
     // Read synchronously, for the same reason as the cloud wire: the teardown
     // clears the jar while this is suspended on its first await.
     const cookies = this.cookies();

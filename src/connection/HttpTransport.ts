@@ -26,6 +26,7 @@ import { mergeCookieHeaders } from '../utils/cookies.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 import type {
   IAdtEstablishContext,
+  IAdtSessionContext,
   IAdtTransport,
   IAdtTransportRequest,
   IAdtTransportResponse,
@@ -351,6 +352,24 @@ export class HttpTransport implements IAdtTransport {
     }
     return this.instance;
   }
+
+  /**
+   * Nothing to ask for: an HTTP session arrives with the establishing call.
+   *
+   * Empty rather than absent. "There is no session resource here" is a fact
+   * about this wire, and a fact is stated, not left for a caller to discover by
+   * checking whether the method exists.
+   */
+  async open(_context: IAdtSessionContext): Promise<void> {}
+
+  /**
+   * Nothing to give back at this level.
+   *
+   * The two concrete wires override it — the cloud one DELETEs the session
+   * resource, the on-prem one sends the platform logoff. A bare HTTP wire has
+   * neither, and says so by doing nothing.
+   */
+  async close(_context: IAdtSessionContext): Promise<void> {}
 
   /**
    * Throws for a status the request does not admit — by doing nothing, because

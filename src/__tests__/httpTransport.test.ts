@@ -21,13 +21,20 @@ describe('HttpTransport', () => {
     expect(transport.kind).toBe('http');
   });
 
-  it('owns no wire to open or close', () => {
+  it('has nothing to open or give back, and says so by doing nothing', async () => {
     const transport: IAdtTransport = new HttpTransport();
+    const context = {
+      baseUrl: 'https://h',
+      authHeaders: async () => ({}),
+      observe: () => {},
+    };
 
-    // A request opens its own socket; there is no conversation to establish.
-    // The optional members exist for transports that DO own one.
-    expect(transport.open).toBeUndefined();
-    expect(transport.close).toBeUndefined();
+    // The members exist — they are the contract, so the connection calls them
+    // rather than asking whether they are there. What is true of a bare HTTP
+    // wire is that they do nothing: a request opens its own socket, and there
+    // is no session resource to give back.
+    await expect(transport.open(context)).resolves.toBeUndefined();
+    await expect(transport.close(context)).resolves.toBeUndefined();
   });
 
   it('reads its TLS material when it builds the client, not before', () => {

@@ -10,6 +10,11 @@ import { HttpTransport } from '../../connection/HttpTransport.js';
  * holds nothing, and it is on no session.
  */
 export const holdsNoSession = {
+  // Required members, empty because they are true of a stub: nothing to open,
+  // nothing to give back. Stated rather than omitted — which is the point of
+  // making them contract instead of a question the connection asks.
+  open: async () => {},
+  close: async () => {},
   establish: async () => {},
   csrfToken: () => null,
   adoptCsrfToken: () => {},
@@ -38,6 +43,11 @@ export function holdsItsSession(
 ) {
   const state = new HttpTransport();
   return {
+    // Empty, and true of it: an HTTP wire's session arrives with the
+    // establishing call below, so there is nothing to ask for and nothing to
+    // give back at this level.
+    open: async () => {},
+    close: async () => {},
     /**
      * What an HTTP wire does: ask the discovery endpoint, fold the answer in.
      * A stub that established by doing nothing would be a wire that reports no
