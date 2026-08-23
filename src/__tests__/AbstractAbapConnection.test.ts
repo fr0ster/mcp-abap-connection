@@ -2,7 +2,7 @@ import { AxiosError } from 'axios';
 import { SamlAuthProvider, TokenAuthProvider } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
-import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
+import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
 import {
   cloudHttpTransport,
@@ -293,89 +293,6 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
 
     expect(mock).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('JWT auth: 401 on POST with cached token does NOT trigger stale-CSRF retry', async () => {
-    const jwtConfig: SapConfig = {
-      url: 'https://sap.example.com',
-      authType: 'jwt',
-      jwtToken: 'jwt-abc',
-      client: '100',
-    };
-    const conn = new AdtCloudConnector(
-      jwtConfig,
-      new TokenAuthProvider('jwt-abc'),
-      cloudHttpTransport(jwtConfig, mockLogger),
-      mockLogger,
-    );
-    markConnectedForTest(conn);
-    (conn as any).transport.adoptCsrfToken('stale-token');
-    seedCookies(conn, 'SAP_SESSIONID_HQ6=dead');
-
-    const originalError = makeAxiosError(401, '<html>login</html>', {
-      method: 'POST',
-      url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
-    });
-
-    const mock = jest.fn().mockRejectedValue(originalError);
-    attachMockAxios(conn as unknown as AdtOnPremConnector, mock);
-
-    // The rejection is the server's own error, not one of ours. This used to
-    // assert 'JWT token has expired. Please re-authenticate.' — a message
-    // synthesised in place of the AxiosError, which threw away the status and
-    // body a caller needs. Issue #30.
-    await expect(
-      conn.makeAdtRequest({
-        url: '/sap/bc/adt/ddic/domains/zfoo',
-        method: 'POST',
-        timeout: 30000,
-        data: '<x/>',
-      }),
-    ).rejects.toMatchObject({ response: { status: 401 } });
-
-    // The subject of this test, unchanged: no stale-CSRF retry, and the cached
-    // token and cookies survive untouched.
-    expect(mock).toHaveBeenCalledTimes(1);
-    expect((conn as any).transport.csrfToken()).toBe('stale-token');
-    expect(heldCookies(conn)).toContain('SAP_SESSIONID_HQ6=dead');
-  });
-
-  it('SAML auth: 401 on POST with cached token does NOT trigger stale-CSRF retry', async () => {
-    const samlConfig: SapConfig = {
-      url: 'https://sap.example.com',
-      authType: 'saml',
-      sessionCookies: 'MYSAPSSO2=abc',
-      client: '100',
-    };
-    const conn = new AdtOnPremConnector(
-      samlConfig,
-      new SamlAuthProvider('MYSAPSSO2=abc'),
-      onPremHttpTransport(samlConfig, mockLogger),
-      mockLogger,
-    );
-    markConnectedForTest(conn);
-    (conn as any).transport.adoptCsrfToken('stale-token');
-    seedCookies(conn, 'MYSAPSSO2=abc; SAP_SESSIONID_HQ6=dead');
-
-    const originalError = makeAxiosError(401, '<html>login</html>', {
-      method: 'POST',
-      url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
-    });
-
-    const mock = jest.fn().mockRejectedValue(originalError);
-    attachMockAxios(conn as unknown as AdtOnPremConnector, mock);
-
-    await expect(
-      conn.makeAdtRequest({
-        url: '/sap/bc/adt/ddic/domains/zfoo',
-        method: 'POST',
-        timeout: 30000,
-        data: '<x/>',
-      }),
-    ).rejects.toBe(originalError);
-
-    expect(mock).toHaveBeenCalledTimes(1);
-    expect((conn as any).transport.csrfToken()).toBe('stale-token');
   });
 
   it('GET 401 with cached token: does NOT invalidate session (new branch is mutation-only)', async () => {

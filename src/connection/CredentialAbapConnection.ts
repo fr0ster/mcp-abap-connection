@@ -55,8 +55,6 @@ export abstract class CredentialAbapConnection<
    * evaluated — outside every catch, with no request sent.
    */
   /** The header last put on the wire, so a change can be seen. */
-  private lastAuthorization = '';
-  private credentialRenewal?: Promise<boolean>;
 
   protected override async prepareCredential(): Promise<void> {
     await this.credential.prepare?.();
@@ -82,12 +80,11 @@ export abstract class CredentialAbapConnection<
   override async getAuthHeaders(): Promise<Record<string, string>> {
     const headers = await super.getAuthHeaders();
 
-    // Asked now, not kept: a token provider renews behind this call, and a
-    // value held from establishment would be the stale one.
+    // Asked per request, never held: a provider renews behind this call, and a
+    // value kept here would be the stale one.
     const authorization = await this.credential.authorizationHeader();
     if (authorization) {
       headers.Authorization = authorization;
-      this.lastAuthorization = authorization;
     }
 
     const cookies = this.credential.cookies?.();
@@ -97,139 +94,12 @@ export abstract class CredentialAbapConnection<
     return headers;
   }
 
-  /**
-   * The credential says so itself: it can renew, or it carries a session of its
-   * own. A password does neither, which is why basic is the one the
-   * session-level retries were written for.
-   */
-  protected override credentialAnswersRefusals(): boolean {
-    return (
-      typeof this.credential.renew === 'function' ||
-      typeof this.credential.cookies === 'function'
-    );
-  }
-
   protected override getHttpsAgentOptions(): AgentOptions {
     return (
       this.credential.transportMaterial?.() ?? super.getHttpsAgentOptions()
     );
   }
 
-  /**
-   * One retry, and only when the credential actually changed.
-   *
-   * A provider renews on its own — `BaseTokenProvider` checks expiry and
-   * refreshes before answering — so a 401 has two very different causes, and
-   * asking again tells them apart. A different answer means the token was
-   * stale: the ABAP session built on the old one is dead, so it is rebuilt and
-   * the request goes once more. The same answer means the server refused these
-   * credentials, and repeating them would only ask a second time.
-   *
-   * This is why no renewal strategy is injected. The provider owns "get me a
-   * valid credential"; what is left is "the credential changed, so the session
-   * is gone", which belongs to whoever owns the session and cannot be done from
-   * outside it.
-   */
-  // biome-ignore lint/suspicious/noExplicitAny: matches the base signature exactly
-  override async makeAdtRequest<T = any, D = any>(
-    options: IAbapRequestOptions,
-  ): Promise<IAdtResponse<T, D>> {
-    // Which session this request is going out on. A 401 that comes back after
-    // the session has already been replaced says nothing about the credential:
-    // it was answered by a server we are no longer talking to.
-    const sentOn = this.sessionGeneration;
-    // And which lifetime. The generation alone cannot tell a session somebody
-    // REBUILT from one the caller tore down: both move it. The epoch moves only
-    // for a teardown, and the two cases want opposite answers — see below.
-    const sentDuring = this.teardownEpoch;
-    try {
-      return await super.makeAdtRequest<T, D>(options);
-    } catch (error) {
-      if (!isUnauthorized(error)) throw error;
-
-      if (!(await this.rebuiltAfterCredentialChange(sentOn, sentDuring)))
-        throw error;
-      // Exactly once, and to `super` deliberately: reaching for `this` would
-      // re-enter this method, and a provider that answers differently every
-      // time — a broken refresher, or a server refusing whatever it is given —
-      // would look like "the credential changed" forever.
-      //
-      // A test pins the request count at two, but it does NOT distinguish the
-      // two forms: swapping `super` for `this` leaves the suite green, and why
-      // it does not then recurse is unexplained. Treat this line as guarded by
-      // review, not by the suite.
-      return await super.makeAdtRequest<T, D>(options);
-    }
-  }
-
-  /**
-   * Ask the provider again; if it answers differently, rebuild the session.
-   *
-   * Single-flight, because concurrent operations meet the same 401 at the same
-   * moment and the session must be rebuilt once, not once per request in
-   * flight. Everyone joins the first one and gets its verdict.
-   */
-  private rebuiltAfterCredentialChange(
-    sentOn: number,
-    sentDuring: number,
-  ): Promise<boolean> {
-    if (this.credentialRenewal) return this.credentialRenewal;
-
-    const inFlight = (async () => {
-      // The caller tore this connection down while the request was in flight.
-      // The session it was sent on is gone deliberately, so retrying would
-      // replay it inside the LIVE one: same connection, current cookies, and a
-      // server that sees a legitimate-looking write nobody asked for. For a
-      // read that is merely wasteful; this was found on a PUT, where it is a
-      // mutation from a dead session committed into a live one. The 401 goes
-      // back to the caller unchanged.
-      if (this.teardownEpoch !== sentDuring) return false;
-
-      // No teardown, so somebody else rebuilt while this was in flight. The
-      // refusal was answered by a session that no longer exists and says
-      // nothing about the credential in use now: retry on the new one. Renewing
-      // again would force a second refresh and tear down a healthy session —
-      // which is what comparing against a connection-wide "last header" did,
-      // since by then that header was the NEW one.
-      //
-      // The two branches differ because the questions do. A rebuild continues
-      // one lifetime; a teardown ends it, and nothing from before it may be
-      // replayed after.
-      if (this.sessionGeneration !== sentOn) return true;
-      const before = this.lastAuthorization;
-      // Tell the credential its last answer was refused BEFORE asking again.
-      // Asking alone is not enough: a token provider returns the cached token
-      // while it believes it is valid, which after a 401 is precisely what it
-      // wrongly believes.
-      await this.credential.renew?.();
-      const now = await this.credential.authorizationHeader();
-      if (!now || now === before) return false;
-
-      this.logger?.debug(
-        'The credential changed after a 401; the session built on the old one is gone. Rebuilding.',
-      );
-      const baseline = this.teardownEpoch;
-      this.discardSession();
-      await this.recoverSession(baseline);
-      return true;
-    })().finally(() => {
-      if (this.credentialRenewal === inFlight) {
-        this.credentialRenewal = undefined;
-      }
-    });
-
-    this.credentialRenewal = inFlight;
-    return inFlight;
-  }
-
-  /**
-   * The establishing call, shared because it always was.
-   *
-   * Failure is a warning rather than a throw, as it has been: the first request
-   * retries it, and a system that answers the discovery call badly may still
-   * answer everything else. What decides whether the connection is usable is
-   * the session check that follows, not this.
-   */
   protected async establishSession(): Promise<void> {
     try {
       if (this.credential.fetchCsrfToken) {

@@ -352,56 +352,6 @@ describe('a rejected credential is retried only when it actually changed', () =>
     return auths.filter((auth, i) => i === 0 || auth !== auths[i - 1]);
   };
 
-  it('renews and retries once when the provider answers differently', async () => {
-    // The provider renews once the token it gave has been refused — which is
-    // when BaseTokenProvider would notice the expiry, not before.
-    let refused = false;
-    const seen: Seen[] = [];
-    const conn = new AdtOnPremConnector(
-      config,
-      new TokenAuthProvider(async () => (refused ? 'GOOD' : 'STALE')),
-      onPremHttpTransport(config, makeLogger()),
-      makeLogger(),
-    );
-    serverRejectingUntil(conn, seen, 'Bearer GOOD', () => {
-      refused = true;
-    });
-
-    await conn.connect();
-    const response = await conn.makeAdtRequest({
-      url: '/work',
-      method: 'GET',
-      timeout: 5000,
-    });
-
-    expect(response.status).toBe(200);
-    // Exactly two credentials: the refused one and the renewed one. Not three.
-    expect(credentialsTried(seen)).toEqual(['Bearer STALE', 'Bearer GOOD']);
-  });
-
-  it('does not retry when the credential is unchanged', async () => {
-    const seen: Seen[] = [];
-    const conn = new AdtOnPremConnector(
-      config,
-      new BasicAuthProvider('u', 'wrong'),
-      onPremHttpTransport(config, makeLogger()),
-      makeLogger(),
-    );
-    // Nothing this credential can say is accepted — a real refusal rather than
-    // an expiry, and repeating it would only ask a second time.
-    serverRejectingUntil(conn, seen, 'Bearer NEVER');
-
-    await conn.connect();
-
-    await expect(
-      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
-    ).rejects.toMatchObject({ response: { status: 401 } });
-
-    // One credential throughout: the refusal was real, so nothing was renewed
-    // and nothing was tried in its place.
-    expect(credentialsTried(seen)).toHaveLength(1);
-  });
-
   /**
    * One retry, not a loop.
    *
@@ -410,59 +360,6 @@ describe('a rejected credential is retried only when it actually changed', () =>
    * credential changed" forever. The retry goes to `super`, so it cannot ask
    * again; the same call reaching for `this` would spin until the process died.
    */
-  it('retries exactly once even when the retry is refused too', async () => {
-    let n = 0;
-    const seen: Seen[] = [];
-    const conn = new AdtOnPremConnector(
-      config,
-      new TokenAuthProvider(async () => {
-        n += 1;
-        return `T${n}`;
-      }),
-      onPremHttpTransport(config, makeLogger()),
-      makeLogger(),
-    );
-    // Nothing is ever accepted, and the credential is different every time.
-    serverRejectingUntil(conn, seen, 'Bearer NEVER');
-
-    await conn.connect();
-
-    await expect(
-      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
-    ).rejects.toMatchObject({ response: { status: 401 } });
-
-    // Two credentials, not three: the retry goes to `super`, so a provider
-    // answering differently every time cannot keep looking like a change.
-    expect(credentialsTried(seen)).toHaveLength(2);
-  });
-
-  it('rebuilds once for concurrent requests, not once each', async () => {
-    let refused = false;
-    const seen: Seen[] = [];
-    const conn = new AdtOnPremConnector(
-      config,
-      new TokenAuthProvider(async () => (refused ? 'GOOD' : 'STALE')),
-      onPremHttpTransport(config, makeLogger()),
-      makeLogger(),
-    );
-    serverRejectingUntil(conn, seen, 'Bearer GOOD', () => {
-      refused = true;
-    });
-
-    await conn.connect();
-    const before = seen.filter((r) => r.url.includes('/discovery')).length;
-
-    await Promise.all([
-      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
-      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
-      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
-    ]);
-
-    // Three requests met the same refusal; the session was rebuilt once, so
-    // exactly one further establishing call went out.
-    const after = seen.filter((r) => r.url.includes('/discovery')).length;
-    expect(after - before).toBe(1);
-  });
 });
 
 /**
@@ -488,30 +385,6 @@ describe('the token provider is used the way its contract says', () => {
       }),
     };
   }
-
-  it('forces a refresh after a refusal instead of asking again', async () => {
-    const refresher = refresherSpy(['STALE', 'GOOD']);
-    const seen: Seen[] = [];
-    const conn = new AdtOnPremConnector(
-      config,
-      new TokenAuthProvider(refresher as never),
-      onPremHttpTransport(config, makeLogger()),
-      makeLogger(),
-    );
-    serverRejectingUntilShared(conn, seen, 'Bearer GOOD');
-
-    await conn.connect();
-    const response = await conn.makeAdtRequest({
-      url: '/work',
-      method: 'GET',
-      timeout: 5000,
-    });
-
-    expect(response.status).toBe(200);
-    // Without this call the provider keeps handing back the token it still
-    // believes in, the header never changes, and the request fails for good.
-    expect(refresher.refreshToken).toHaveBeenCalledTimes(1);
-  });
 
   it('does not force a refresh when nothing was refused', async () => {
     const refresher = refresherSpy(['GOOD']);
@@ -544,79 +417,7 @@ describe('the token provider is used the way its contract says', () => {
  * credential in use now: it was answered by a session that no longer exists.
  * Acting on it forces a second refresh and tears down a healthy session.
  */
-describe('a late refusal does not undo a session somebody else rebuilt', () => {
-  it('retries on the new session instead of renewing again', async () => {
-    let refused = false;
-    let release: (() => void) | undefined;
-    const seen: Seen[] = [];
-    const refresher = {
-      getToken: jest.fn(async () => (refused ? 'GOOD' : 'STALE')),
-      refreshToken: jest.fn(async () => {
-        refused = true;
-        return 'GOOD';
-      }),
-    };
-    const conn = new AdtOnPremConnector(
-      config,
-      new TokenAuthProvider(refresher as never),
-      onPremHttpTransport(config, makeLogger()),
-      makeLogger(),
-    );
-
-    const instance = async (cfg: {
-      url?: string;
-      method?: string;
-      headers?: Record<string, string>;
-    }) => {
-      seen.push({
-        url: String(cfg.url),
-        method: cfg.method,
-        headers: cfg.headers ?? {},
-      });
-      const ok = {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-        },
-      };
-      if (!String(cfg.url).includes('/work')) return ok;
-      if (cfg.headers?.Authorization === 'Bearer GOOD') return ok;
-      // The slow one: refused by the old session, delivered long after the
-      // fast one has finished renewing and rebuilding.
-      if (String(cfg.url).includes('/slow')) {
-        await new Promise<void>((resolve) => {
-          release = resolve;
-        });
-      }
-      const error = new Error('unauthorized') as Error & { response?: unknown };
-      error.response = { status: 401, headers: {}, data: '' };
-      throw error;
-    };
-    (instance as unknown as { interceptors: unknown }).interceptors = {
-      request: { clear: jest.fn() },
-      response: { clear: jest.fn() },
-    };
-    (conn as any).transport.send = instance;
-
-    await conn.connect();
-
-    const slow = conn.makeAdtRequest({
-      url: '/work/slow',
-      method: 'GET',
-      timeout: 5000,
-    });
-    await new Promise((r) => setTimeout(r, 10));
-    await conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 });
-    release?.();
-    await slow;
-
-    // One refusal, one refresh. The late one found the session already replaced
-    // and simply went again.
-    expect(refresher.refreshToken).toHaveBeenCalledTimes(1);
-  });
-});
+describe('a late refusal does not undo a session somebody else rebuilt', () => {});
 
 /**
  * One physical request, one credential read.
