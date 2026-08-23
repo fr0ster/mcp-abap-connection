@@ -113,7 +113,7 @@ export async function cloudFixture(): Promise<ConnectorFixture> {
         client: config.client,
         baseUrl: config.url,
       });
-      (transport as unknown as { send: unknown }).send = wire.send;
+      (transport as unknown as { instance: unknown }).instance = wire.send;
       const conn = new AdtCloudConnector(
         config,
         new TokenAuthProvider('a-token'),
@@ -136,7 +136,7 @@ export async function onPremHttpFixture(): Promise<ConnectorFixture> {
         client: config.client,
         baseUrl: config.url,
       });
-      (transport as unknown as { send: unknown }).send = wire.send;
+      (transport as unknown as { instance: unknown }).instance = wire.send;
       const conn = new AdtOnPremConnector(
         config,
         new BasicAuthProvider('u', 'p'),

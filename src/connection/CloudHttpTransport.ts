@@ -108,6 +108,9 @@ export class CloudHttpTransport
     // cookie, which is the one thing that proves the session is ours to end.
     const cookies = this.cookies();
     const csrf = this.csrfToken();
+    // Snapshotted for the same reason: the DELETE must reach the server holding
+    // this session, not whichever one the wire is pinned to when it goes out.
+    const affinity = this.affinityHeaders();
     if (!resource || !cookies) {
       // No address to send it to, or no cookie to prove the session is ours —
       // holding the cookie is the whole permission to end one.
@@ -116,10 +119,11 @@ export class CloudHttpTransport
 
     try {
       const auth = await context.authHeaders();
-      await this.send({
+      await this.sendDetached({
         method: 'DELETE',
         url: new URL(resource, context.baseUrl).toString(),
         headers: {
+          ...affinity,
           ...auth,
           ...context.extraHeaders,
           Cookie: mergeCookieHeaders(auth.Cookie, cookies),

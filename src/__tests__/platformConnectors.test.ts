@@ -82,7 +82,7 @@ function serverAnsweringEverything(conn: object, seen: Seen[]): void {
     request: { clear: jest.fn() },
     response: { clear: jest.fn() },
   };
-  (conn as any).transport.send = instance;
+  (conn as any).transport.instance = instance;
 }
 
 describe('the consumer decides the session mechanism, by which connector it takes', () => {
@@ -293,7 +293,7 @@ function serverRejectingUntilShared(
     request: { clear: jest.fn() },
     response: { clear: jest.fn() },
   };
-  (conn as any).transport.send = instance;
+  (conn as any).transport.instance = instance;
 }
 
 describe('a rejected credential is retried only when it actually changed', () => {
@@ -333,7 +333,7 @@ describe('a rejected credential is retried only when it actually changed', () =>
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    (conn as any).transport.send = instance;
+    (conn as any).transport.instance = instance;
   }
 
   /**

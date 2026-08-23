@@ -359,6 +359,33 @@ export class HttpTransport implements IAdtTransport {
    * to add it.
    */
   async send(request: IAdtTransportRequest): Promise<IAdtTransportResponse> {
+    return this.dispatch(request, this.dress(request.headers));
+  }
+
+  /**
+   * Send EXACTLY these headers, with nothing of the wire's live state mixed in.
+   *
+   * For a goodbye, and only for a goodbye. `disconnect()` dispatches the logoff
+   * without awaiting it, so the request is still being assembled while the
+   * connection is already free to `connect()` again — and by the time it goes
+   * out, the jar can hold a different session. Dressing it then merges the LIVE
+   * `SAP_SESSIONID` over the snapshot, and `mergeCookieHeaders` lets the later
+   * value win on a repeated name, so the goodbye for the old session arrives
+   * addressed to the new one and closes it.
+   *
+   * Reading the cookies synchronously is necessary and was not sufficient: the
+   * snapshot survived only until the send path put the jar back on top of it.
+   */
+  protected async sendDetached(
+    request: IAdtTransportRequest,
+  ): Promise<IAdtTransportResponse> {
+    return this.dispatch(request, { ...request.headers });
+  }
+
+  private async dispatch(
+    request: IAdtTransportRequest,
+    headers: Record<string, string>,
+  ): Promise<IAdtTransportResponse> {
     const response = await this.client()({
       method: request.method,
       // The connection hands over a PATH; putting a server in front of it is
@@ -367,7 +394,7 @@ export class HttpTransport implements IAdtTransport {
       // dumps with STRING_OFFSET_TOO_LARGE. Neither can be done for both from
       // above, which is why addressing sits here.
       url: this.address(request.url),
-      headers: this.dress(request.headers),
+      headers,
       ...(request.data !== undefined ? { data: request.data } : {}),
       ...(request.params !== undefined ? { params: request.params } : {}),
       ...(request.timeout !== undefined ? { timeout: request.timeout } : {}),

@@ -69,6 +69,10 @@ export class OnPremHttpTransport
     // clears the jar while this is suspended on its first await.
     const cookies = this.cookies();
     const established = this.established;
+    // Snapshotted too, and for the same reason as the cookies: the goodbye must
+    // reach the application server that holds THIS session, and by the time it
+    // goes out the wire may be pinned to the one holding the next.
+    const affinity = this.affinityHeaders();
     if (!established || !cookies) {
       // Holding the cookie is the whole permission to end a session, and it is
       // why nothing is sent without one. The session limit is per user and the
@@ -82,10 +86,11 @@ export class OnPremHttpTransport
       // Read once: a provider may answer differently on a second call, and one
       // request must be built from one credential.
       const auth = await context.authHeaders();
-      await this.send({
+      await this.sendDetached({
         method: 'GET',
         url: `${context.baseUrl}${ICF_LOGOFF_PATH}`,
         headers: {
+          ...affinity,
           ...auth,
           ...context.extraHeaders,
           Cookie: mergeCookieHeaders(auth.Cookie, cookies),

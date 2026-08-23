@@ -17,7 +17,10 @@
  * session if it had changed. That is the connection managing a lifetime it does
  * not own, and it is gone. A refusal surfaces.
  */
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
+import type {
+  IAuthProvider,
+  IRenewableCredential,
+} from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
@@ -32,7 +35,11 @@ const config: SapConfig = {
 /** A provider that would renew if anyone asked it to. Nobody does. */
 function refusedCredential() {
   const asked = { header: 0, renew: 0 };
-  const credential: IAuthProvider = {
+  // Renewable, because it HAS renew() — which since interfaces 19.0.0 is an
+  // atom rather than an optional member of every credential. Typing it
+  // `IAuthProvider` would not compile, and that is the contract working: the
+  // point of the test is that nothing CALLS it.
+  const credential: IRenewableCredential = {
     kind: 'token',
     authorizationHeader: async () => {
       asked.header += 1;

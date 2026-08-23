@@ -66,7 +66,7 @@ function attachMockAxios(
     request: { clear: jest.fn() },
     response: { clear: jest.fn() },
   };
-  (conn as any).transport.send = instance;
+  (conn as any).transport.instance = instance;
 }
 
 /**
@@ -235,7 +235,7 @@ describe('every session of a reconnect cycle is released', () => {
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    (conn as any).transport.send = instance;
+    (conn as any).transport.instance = instance;
   }
 
   /**
@@ -466,7 +466,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    (conn as any).transport.send = instance;
+    (conn as any).transport.instance = instance;
   }
 
   it('says goodbye to it when establishing fails afterwards', async () => {
@@ -527,7 +527,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    (conn as any).transport.send = instance;
+    (conn as any).transport.instance = instance;
     // The debris: a cookie left behind by the response that rejected us. It
     // looks exactly like a session and is not one, which is why "there are
     // cookies" cannot be the test for whether to say goodbye.
