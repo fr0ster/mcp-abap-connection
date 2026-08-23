@@ -12,10 +12,7 @@
  * itself, with nobody deciding anything.
  */
 
-import type {
-  IAuthProvider,
-  ICredentialOwningItsFetch,
-} from '@mcp-abap-adt/interfaces';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { onPremHttpTransport } from './helpers/onPrem.js';
@@ -27,27 +24,6 @@ const config: SapConfig = {
   password: 'p',
   client: '100',
 };
-
-/** A credential that fetches the token its own way, and records what it got. */
-function credentialOwningTheFetch() {
-  const given: unknown[] = [];
-  // The atom, because it earns the token itself — which is the one thing about
-  // a credential the connection still asks, and it asks by narrowing.
-  const credential: ICredentialOwningItsFetch = {
-    kind: 'test-spnego',
-    // Empty where there is nothing to say: since interfaces 20.0.0 a credential
-    // states all of itself, so nothing has to ask whether it does.
-    prepare: async () => {},
-    cookies: () => null,
-    transportMaterial: () => ({}),
-    authorizationHeader: async () => 'Negotiate AAAA',
-    fetchCsrfToken: async (transport: unknown) => {
-      given.push(transport);
-      return 'CSRF-FROM-CREDENTIAL';
-    },
-  };
-  return { credential, given };
-}
 
 describe('a credential that owns its CSRF fetch', () => {});
 
