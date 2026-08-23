@@ -57,6 +57,23 @@ gone. See [Migration to 6.0](./docs/MIGRATION-6.0.md).
 
 ### Removed
 
+- **`disconnect({ deadlineMs })`** takes no arguments, and `SAP_RELEASE_DEADLINE_MS`
+  is gone with it. The parameter bounded a wait for the goodbye to be *answered*,
+  and the method does not act on that answer: it tells the server the session is
+  finished, and whether and when the session is freed is the server's affair. The
+  default was already `0`. Waiting bought a caller nothing while being the one
+  thing that could make a teardown unbounded — the goodbye carries no request
+  timeout by design, so a server that never answered would have held the teardown
+  for the whole deadline. Needs `@mcp-abap-adt/interfaces` 18.0.0, where the
+  parameter leaves the contract. Verified against a live BTP trial before the
+  contract moved: `disconnect()` returned in 1 ms and the goodbye still went out.
+
+- **`SessionStrategy`** and its two implementations. A session mechanism only some
+  wires have, described from inside the class every wire shares and driven by the
+  connection — a second wire abstraction beside `IAdtTransport`. It is the
+  transport's `open()`/`close()` now, which is also what made `connect()` possible
+  over RFC at all.
+
 - **`createAbapConnection()`** and the connection classes it built:
   `BaseAbapConnection` (`OnPremAbapConnection`), `JwtAbapConnection`
   (`CloudAbapConnection`), `SamlAbapConnection`, `CertificateAbapConnection`,

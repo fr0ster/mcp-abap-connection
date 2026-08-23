@@ -256,9 +256,8 @@ import {
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new RfcTransport(rfcConversationFrom(config), logger),
   logger,
-  undefined,
-  { transport: new RfcTransport(rfcConversationFrom(config), logger) },
 );
 
 await connection.connect();
@@ -599,9 +598,8 @@ import {
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new RfcTransport(rfcConversationFrom(config), logger),
   logger,
-  undefined,
-  { transport: new RfcTransport(rfcConversationFrom(config), logger) },
 );
 ```
 
