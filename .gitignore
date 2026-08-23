@@ -1,3 +1,9 @@
+# Both spellings on purpose. `node_modules/` matches a directory and NOT a
+# symlink to one, so a worktree that borrows the main checkout's install can
+# hand `git add -A` an absolute symlink into somebody's home directory. It
+# happened in mcp-abap-adt-interfaces; this is the same trap, closed before it
+# does.
+node_modules
 node_modules/
 dist/
 *.tsbuildinfo
