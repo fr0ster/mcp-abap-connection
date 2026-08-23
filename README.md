@@ -57,10 +57,15 @@ The package uses a clean separation of concerns:
 - **Auth providers** (`BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`,
   `CertificateAuthProvider`):
   - What a connection authenticates with, passed in
-  - A token provider renews on its own; the connector asks it per request and, on a
-    `401`, tells it the answer was refused before asking again
+  - A token provider renews on its own, and the connector asks it per request — which
+    is how a token that expired between two requests is replaced with nobody
+    deciding to replace it
+  - A `401` **surfaces**. Whether a refusal meant "the token is stale" or "these
+    credentials are refused" is a judgement made with what you know, so the
+    connector does not answer it for you. A credential that can be told to get a
+    new one says so through `IRenewableCredential`, which you narrow to
 
-- **Transports** (`HttpTransport`, `RfcTransport`):
+- **Transports** (`OnPremHttpTransport`, `CloudHttpTransport`, `RfcTransport`):
   - What a request travels over, and everything that is true of that wire.
     `HttpTransport` keeps the cookie jar, the CSRF token and the affinity
     headers; `RfcTransport` translates into `SADT_REST_RFC_ENDPOINT` and keeps a

@@ -57,6 +57,17 @@ gone. See [Migration to 6.0](./docs/MIGRATION-6.0.md).
 
 ### Removed
 
+- **The connection no longer answers a `401` for you.** It called `renew()` on the
+  credential, compared the header against the previous one, and rebuilt the session
+  if it had changed — a credential lifetime managed from inside the connection.
+  Renewal on an expiry the provider can SEE still happens, inside
+  `authorizationHeader()`, which is asked per request; the other case — a token the
+  provider still believes in and the server refuses — is a judgement made with what
+  the caller knows, so the refusal surfaces. A refused credential is not a lost
+  session, so the connection stays usable. `TokenAuthProvider` declares
+  `IRenewableCredential` (interfaces 19.0.0), which is what a consumer narrows to
+  before calling `renew()` itself.
+
 - **`disconnect({ deadlineMs })`** takes no arguments, and `SAP_RELEASE_DEADLINE_MS`
   is gone with it. The parameter bounded a wait for the goodbye to be *answered*,
   and the method does not act on that answer: it tells the server the session is

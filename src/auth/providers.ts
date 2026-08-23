@@ -12,6 +12,7 @@ import type {
   IAuthProvider,
   ICertificateMaterial,
   ICertificateMaterialLoader,
+  IRenewableCredential,
   ISapConfig,
   ITokenRefresher,
 } from '@mcp-abap-adt/interfaces';
@@ -42,7 +43,7 @@ export class BasicAuthProvider implements IAuthProvider {
  * credential behind it is renewed mid-flight is the connection's business and
  * stays there; see `JwtAbapConnection`, which still owns that machinery.
  */
-export class TokenAuthProvider implements IAuthProvider {
+export class TokenAuthProvider implements IRenewableCredential {
   readonly kind = 'token';
 
   /**
@@ -77,6 +78,17 @@ export class TokenAuthProvider implements IAuthProvider {
 
   /**
    * The token was refused, so force a new one.
+   *
+   * Declared through `IRenewableCredential` rather than as an optional member
+   * of every credential, so a consumer narrows to it: a password has nothing
+   * behind it to ask again, and a SAML session was negotiated elsewhere.
+   *
+   * **Nothing in this package calls it.** A token that EXPIRED is replaced
+   * inside `authorizationHeader()` above, which is asked per request — nobody
+   * decides anything. This is the other case, a token the source still believes
+   * in and the server refuses, and whether a refusal meant that is a judgement
+   * made with what the caller knows. So the refusal surfaces, and this is the
+   * seam the caller decides with.
    *
    * `getToken()` is documented to return the cached token while it believes it
    * is still valid — which is exactly the situation after a 401 on a token the

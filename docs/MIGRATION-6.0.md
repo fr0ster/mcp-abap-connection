@@ -217,6 +217,55 @@ with it.
 Everything else is unchanged: it resolves rather than throws, always settles,
 and a repeat call performs whatever is still owed.
 
+## A refused credential
+
+The connector used to answer a `401` for you: it called `renew()` on the
+credential, compared the header with the previous one, and rebuilt the session if
+it had changed. It does not any more, and nothing replaces it — the refusal
+surfaces.
+
+Renewal splits in two, and only one half was ever automatic:
+
+- a token that **expired** is replaced inside `authorizationHeader()`, which is
+  asked per request. Nobody decides anything, and nothing changed here;
+- a token the provider still **believes in** and the server refuses is a
+  different thing, and whether that is what happened is a judgement made with
+  what you know.
+
+So handle it where you can:
+
+```diff
+-await conn.makeAdtRequest(options); // a 401 was retried underneath you
++try {
++  await conn.makeAdtRequest(options);
++} catch (error) {
++  if (isUnauthorized(error) && isRenewable(credential)) {
++    await credential.renew();
++    // ... and decide for yourself whether to try again
++  }
++  throw error;
++}
+```
+
+`isRenewable` is the narrowing the contract recommends, since only some
+credentials have it — a password has nothing behind it to ask again, and a SAML
+session was negotiated elsewhere:
+
+```typescript
+import type { IAuthProvider, IRenewableCredential } from '@mcp-abap-adt/interfaces';
+
+function isRenewable(c: IAuthProvider): c is IRenewableCredential {
+  return typeof (c as Partial<IRenewableCredential>).renew === 'function';
+}
+```
+
+Needs `@mcp-abap-adt/interfaces` 19.0.0, where `renew()` becomes that atom
+instead of an optional member every credential carried.
+
+**The connection is not torn down over it.** A refused credential is not a lost
+session, and discarding one the server never complained about would throw away
+work you can still finish.
+
 ## Kerberos
 
 `KerberosAbapConnection` is removed without a direct replacement. It was
