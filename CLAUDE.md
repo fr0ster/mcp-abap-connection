@@ -76,7 +76,11 @@ fact belongs on the transport instead.
   answer a different path either
 - `RfcTransport` supplies a default `Accept`: axios adds one over HTTP, and ADT
   refuses a request without it (`400 ExceptionResourceBadRequest`)
-- `skipSessionType` option exists for BASIS 7.40 where stateful header causes locking issues
+- BASIS 7.40 is a WIRE, not a flag: `LegacyOnPremHttpTransport` never sends the
+  stateful header (which on that release keeps locks in session memory instead of
+  the enqueue table, so the next `PUT` comes back 423) and reports a session as
+  established, because that system names none. The old `skipSessionType` option
+  is gone — taking the class is how you say which deployment this is
 - Timeouts configurable via env vars: `SAP_TIMEOUT_DEFAULT`, `SAP_TIMEOUT_CSRF`, `SAP_TIMEOUT_LONG`
 
 **Taking the RFC wire** needs the SAP NW RFC SDK on the machine and
