@@ -5,7 +5,11 @@
  * Session cookies are expected from prior login flow.
  */
 
-const { createAbapConnection } = require('@mcp-abap-adt/connection');
+const {
+  OnPremHttpTransport,
+  AdtOnPremConnector,
+  SamlAuthProvider,
+} = require('@mcp-abap-adt/connection');
 
 async function main() {
   const config = {
@@ -22,7 +26,16 @@ async function main() {
   }
 
   console.log('Creating SAML connection to', config.url);
-  const connection = createAbapConnection(config, console);
+  // The cookies ARE the credential — there is no Authorization header at all.
+  const connection = new AdtOnPremConnector(
+    config,
+    new SamlAuthProvider(config.sessionCookies),
+    new OnPremHttpTransport(() => ({}), console, {
+      client: config.client,
+      baseUrl: config.url,
+    }),
+    console,
+  );
 
   try {
     console.log('Connecting using session cookies...');

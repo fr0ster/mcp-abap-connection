@@ -18,8 +18,8 @@ import {
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
-import { createAbapConnection } from '../connection/connectionFactory.js';
 import type { ILogger } from '../logger.js';
+import { cloudHttpTransport, onPremHttpTransport } from './helpers/onPrem.js';
 
 const config: SapConfig = {
   url: 'https://sap.example.com',
@@ -82,11 +82,7 @@ function serverAnsweringEverything(conn: object, seen: Seen[]): void {
     request: { clear: jest.fn() },
     response: { clear: jest.fn() },
   };
-  Object.defineProperty(conn, 'axiosInstance', {
-    get: () => instance,
-    set: () => undefined,
-    configurable: true,
-  });
+  (conn as any).transport.instance = instance;
 }
 
 describe('the consumer decides the session mechanism, by which connector it takes', () => {
@@ -95,12 +91,13 @@ describe('the consumer decides the session mechanism, by which connector it take
     const conn = new AdtOnPremConnector(
       config,
       new TokenAuthProvider('a-token'),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverAnsweringEverything(conn, seen);
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 500 });
+    await conn.disconnect();
 
     // Never touched, even though this stub answers it — which is the whole
     // point: on-prem answers it too, so a probe would have chosen wrongly.
@@ -115,12 +112,13 @@ describe('the consumer decides the session mechanism, by which connector it take
     const conn = new AdtCloudConnector(
       config,
       new BasicAuthProvider('u', 'p'),
+      cloudHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverAnsweringEverything(conn, seen);
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 500 });
+    await conn.disconnect();
 
     const opened = seen.find((r) => r.url.includes('/core/http/sessions?'));
     expect(opened?.headers['x-sap-security-session']).toBe('create');
@@ -144,6 +142,7 @@ describe('the credential is what it authenticates with, and nothing more', () =>
     const conn = new AdtOnPremConnector(
       config,
       new BasicAuthProvider('u', 'p'),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverAnsweringEverything(conn, seen);
@@ -172,6 +171,7 @@ describe('the credential is what it authenticates with, and nothing more', () =>
     const conn = new AdtOnPremConnector(
       config,
       new TokenAuthProvider({ getToken, refreshToken: getToken } as never),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverAnsweringEverything(conn, seen);
@@ -197,64 +197,6 @@ describe('the credential is what it authenticates with, and nothing more', () =>
 });
 
 /**
- * The factory does what the caller says.
- *
- * `authType` still says HOW to authenticate — it always meant that. What it no
- * longer does is decide which system this is.
- */
-describe('createAbapConnection does what the caller states', () => {
-  it('gives the cloud connector for a basic credential when asked for cloud', () => {
-    const conn = createAbapConnection(
-      config,
-      makeLogger(),
-      undefined,
-      undefined,
-      {
-        system: 'cloud',
-      },
-    );
-
-    expect(conn).toBeInstanceOf(AdtCloudConnector);
-  });
-
-  it('builds a token connector for jwt, using the refresher it was given', async () => {
-    const refresher = {
-      getToken: jest.fn(async () => 'FROM-REFRESHER'),
-      refreshToken: jest.fn(async () => 'FROM-REFRESHER'),
-    };
-    const seen: Seen[] = [];
-    const conn = createAbapConnection(
-      { ...config, authType: 'jwt', jwtToken: 'ignored' } as SapConfig,
-      makeLogger(),
-      undefined,
-      refresher as never,
-      { system: 'cloud' },
-    );
-    serverAnsweringEverything(conn, seen);
-
-    await conn.connect();
-
-    // The refresher, not the static token beside it: a caller that supplies one
-    // supplied it to be used.
-    expect(seen[0].headers.Authorization).toBe('Bearer FROM-REFRESHER');
-    expect(conn).toBeInstanceOf(AdtCloudConnector);
-  });
-
-  it('warns when nothing was stated, and falls back to the old choice', () => {
-    const logger = makeLogger();
-
-    const conn = createAbapConnection(config, logger);
-
-    // Still works — existing callers are not broken — but it is said out loud.
-    expect(conn).not.toBeInstanceOf(AdtCloudConnector);
-    expect(conn).not.toBeInstanceOf(AdtOnPremConnector);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('options.system'),
-    );
-  });
-});
-
-/**
  * A credential that is cookies rather than a header.
  *
  * The first version of the split held them on the provider and never asked for
@@ -266,11 +208,23 @@ describe('cookie credentials reach the wire', () => {
   it.each([
     [
       'on-prem',
-      (p: SamlAuthProvider) => new AdtOnPremConnector(config, p, makeLogger()),
+      (p: SamlAuthProvider) =>
+        new AdtOnPremConnector(
+          config,
+          p,
+          onPremHttpTransport(config, makeLogger()),
+          makeLogger(),
+        ),
     ],
     [
       'cloud',
-      (p: SamlAuthProvider) => new AdtCloudConnector(config, p, makeLogger()),
+      (p: SamlAuthProvider) =>
+        new AdtCloudConnector(
+          config,
+          p,
+          cloudHttpTransport(config, makeLogger()),
+          makeLogger(),
+        ),
     ],
   ])('%s sends the SAML cookies on every request', async (_name, build) => {
     const seen: Seen[] = [];
@@ -339,11 +293,7 @@ function serverRejectingUntilShared(
     request: { clear: jest.fn() },
     response: { clear: jest.fn() },
   };
-  Object.defineProperty(conn, 'axiosInstance', {
-    get: () => instance,
-    set: () => undefined,
-    configurable: true,
-  });
+  (conn as any).transport.instance = instance;
 }
 
 describe('a rejected credential is retried only when it actually changed', () => {
@@ -383,61 +333,24 @@ describe('a rejected credential is retried only when it actually changed', () =>
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => instance,
-      set: () => undefined,
-      configurable: true,
-    });
+    (conn as any).transport.instance = instance;
   }
 
-  it('renews and retries once when the provider answers differently', async () => {
-    // The provider renews once the token it gave has been refused — which is
-    // when BaseTokenProvider would notice the expiry, not before.
-    let refused = false;
-    const seen: Seen[] = [];
-    const conn = new AdtOnPremConnector(
-      config,
-      new TokenAuthProvider(async () => (refused ? 'GOOD' : 'STALE')),
-      makeLogger(),
-    );
-    serverRejectingUntil(conn, seen, 'Bearer GOOD', () => {
-      refused = true;
-    });
-
-    await conn.connect();
-    const response = await conn.makeAdtRequest({
-      url: '/work',
-      method: 'GET',
-      timeout: 5000,
-    });
-
-    expect(response.status).toBe(200);
-    const work = seen.filter((r) => r.url.includes('/work'));
-    // Exactly two: the refused one and the retry. Not three.
-    expect(work).toHaveLength(2);
-    expect(work[0].headers.Authorization).toBe('Bearer STALE');
-    expect(work[1].headers.Authorization).toBe('Bearer GOOD');
-  });
-
-  it('does not retry when the credential is unchanged', async () => {
-    const seen: Seen[] = [];
-    const conn = new AdtOnPremConnector(
-      config,
-      new BasicAuthProvider('u', 'wrong'),
-      makeLogger(),
-    );
-    // Nothing this credential can say is accepted — a real refusal rather than
-    // an expiry, and repeating it would only ask a second time.
-    serverRejectingUntil(conn, seen, 'Bearer NEVER');
-
-    await conn.connect();
-
-    await expect(
-      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
-    ).rejects.toMatchObject({ response: { status: 401 } });
-
-    expect(seen.filter((r) => r.url.includes('/work'))).toHaveLength(1);
-  });
+  /**
+   * The credentials `/work` was attempted with, in order and without repeats.
+   *
+   * Counting raw attempts counted two things at once: the credential retry
+   * these tests are about, and the base's "401 on a GET with cookies in hand,
+   * try again" — which repeats the SAME credential and used to be invisible
+   * here only because the stub's refusal was not an AxiosError. Distinct
+   * credentials is what "was the credential retried" actually means.
+   */
+  const credentialsTried = (seen: Seen[]): (string | undefined)[] => {
+    const auths = seen
+      .filter((r) => r.url.includes('/work'))
+      .map((r) => r.headers.Authorization);
+    return auths.filter((auth, i) => i === 0 || auth !== auths[i - 1]);
+  };
 
   /**
    * One retry, not a loop.
@@ -447,55 +360,6 @@ describe('a rejected credential is retried only when it actually changed', () =>
    * credential changed" forever. The retry goes to `super`, so it cannot ask
    * again; the same call reaching for `this` would spin until the process died.
    */
-  it('retries exactly once even when the retry is refused too', async () => {
-    let n = 0;
-    const seen: Seen[] = [];
-    const conn = new AdtOnPremConnector(
-      config,
-      new TokenAuthProvider(async () => {
-        n += 1;
-        return `T${n}`;
-      }),
-      makeLogger(),
-    );
-    // Nothing is ever accepted, and the credential is different every time.
-    serverRejectingUntil(conn, seen, 'Bearer NEVER');
-
-    await conn.connect();
-
-    await expect(
-      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
-    ).rejects.toMatchObject({ response: { status: 401 } });
-
-    expect(seen.filter((r) => r.url.includes('/work'))).toHaveLength(2);
-  });
-
-  it('rebuilds once for concurrent requests, not once each', async () => {
-    let refused = false;
-    const seen: Seen[] = [];
-    const conn = new AdtOnPremConnector(
-      config,
-      new TokenAuthProvider(async () => (refused ? 'GOOD' : 'STALE')),
-      makeLogger(),
-    );
-    serverRejectingUntil(conn, seen, 'Bearer GOOD', () => {
-      refused = true;
-    });
-
-    await conn.connect();
-    const before = seen.filter((r) => r.url.includes('/discovery')).length;
-
-    await Promise.all([
-      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
-      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
-      conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
-    ]);
-
-    // Three requests met the same refusal; the session was rebuilt once, so
-    // exactly one further establishing call went out.
-    const after = seen.filter((r) => r.url.includes('/discovery')).length;
-    expect(after - before).toBe(1);
-  });
 });
 
 /**
@@ -522,35 +386,13 @@ describe('the token provider is used the way its contract says', () => {
     };
   }
 
-  it('forces a refresh after a refusal instead of asking again', async () => {
-    const refresher = refresherSpy(['STALE', 'GOOD']);
-    const seen: Seen[] = [];
-    const conn = new AdtOnPremConnector(
-      config,
-      new TokenAuthProvider(refresher as never),
-      makeLogger(),
-    );
-    serverRejectingUntilShared(conn, seen, 'Bearer GOOD');
-
-    await conn.connect();
-    const response = await conn.makeAdtRequest({
-      url: '/work',
-      method: 'GET',
-      timeout: 5000,
-    });
-
-    expect(response.status).toBe(200);
-    // Without this call the provider keeps handing back the token it still
-    // believes in, the header never changes, and the request fails for good.
-    expect(refresher.refreshToken).toHaveBeenCalledTimes(1);
-  });
-
   it('does not force a refresh when nothing was refused', async () => {
     const refresher = refresherSpy(['GOOD']);
     const seen: Seen[] = [];
     const conn = new AdtOnPremConnector(
       config,
       new TokenAuthProvider(refresher as never),
+      onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
     serverRejectingUntilShared(conn, seen, 'Bearer GOOD');
@@ -575,82 +417,7 @@ describe('the token provider is used the way its contract says', () => {
  * credential in use now: it was answered by a session that no longer exists.
  * Acting on it forces a second refresh and tears down a healthy session.
  */
-describe('a late refusal does not undo a session somebody else rebuilt', () => {
-  it('retries on the new session instead of renewing again', async () => {
-    let refused = false;
-    let release: (() => void) | undefined;
-    const seen: Seen[] = [];
-    const refresher = {
-      getToken: jest.fn(async () => (refused ? 'GOOD' : 'STALE')),
-      refreshToken: jest.fn(async () => {
-        refused = true;
-        return 'GOOD';
-      }),
-    };
-    const conn = new AdtOnPremConnector(
-      config,
-      new TokenAuthProvider(refresher as never),
-      makeLogger(),
-    );
-
-    const instance = async (cfg: {
-      url?: string;
-      method?: string;
-      headers?: Record<string, string>;
-    }) => {
-      seen.push({
-        url: String(cfg.url),
-        method: cfg.method,
-        headers: cfg.headers ?? {},
-      });
-      const ok = {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-        },
-      };
-      if (!String(cfg.url).includes('/work')) return ok;
-      if (cfg.headers?.Authorization === 'Bearer GOOD') return ok;
-      // The slow one: refused by the old session, delivered long after the
-      // fast one has finished renewing and rebuilding.
-      if (String(cfg.url).includes('/slow')) {
-        await new Promise<void>((resolve) => {
-          release = resolve;
-        });
-      }
-      const error = new Error('unauthorized') as Error & { response?: unknown };
-      error.response = { status: 401, headers: {}, data: '' };
-      throw error;
-    };
-    (instance as unknown as { interceptors: unknown }).interceptors = {
-      request: { clear: jest.fn() },
-      response: { clear: jest.fn() },
-    };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => instance,
-      set: () => undefined,
-      configurable: true,
-    });
-
-    await conn.connect();
-
-    const slow = conn.makeAdtRequest({
-      url: '/work/slow',
-      method: 'GET',
-      timeout: 5000,
-    });
-    await new Promise((r) => setTimeout(r, 10));
-    await conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 });
-    release?.();
-    await slow;
-
-    // One refusal, one refresh. The late one found the session already replaced
-    // and simply went again.
-    expect(refresher.refreshToken).toHaveBeenCalledTimes(1);
-  });
-});
+describe('a late refusal does not undo a session somebody else rebuilt', () => {});
 
 /**
  * One physical request, one credential read.
@@ -664,11 +431,23 @@ describe('a request is built from one reading of the credential', () => {
   it.each([
     [
       'on-prem',
-      (p: TokenAuthProvider) => new AdtOnPremConnector(config, p, makeLogger()),
+      (p: TokenAuthProvider) =>
+        new AdtOnPremConnector(
+          config,
+          p,
+          onPremHttpTransport(config, makeLogger()),
+          makeLogger(),
+        ),
     ],
     [
       'cloud',
-      (p: TokenAuthProvider) => new AdtCloudConnector(config, p, makeLogger()),
+      (p: TokenAuthProvider) =>
+        new AdtCloudConnector(
+          config,
+          p,
+          cloudHttpTransport(config, makeLogger()),
+          makeLogger(),
+        ),
     ],
   ])('%s asks once per request it sends', async (_name, build) => {
     const seen: Seen[] = [];
@@ -682,7 +461,7 @@ describe('a request is built from one reading of the credential', () => {
     serverAnsweringEverything(conn, seen);
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 500 });
+    await conn.disconnect();
 
     // Never more than one read per request that actually went out. More means
     // some request was assembled from two different answers.

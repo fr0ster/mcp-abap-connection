@@ -10,9 +10,13 @@
  * Admission is NOT enforced yet (that is the breaking switch), so a request on
  * an unconnected connection still goes through here.
  */
+
 import { createServer, type Server } from 'node:http';
+import { TokenAuthProvider } from '../../auth/providers.js';
 import type { SapConfig } from '../../config/sapConfig.js';
-import { BaseAbapConnection } from '../../connection/BaseAbapConnection.js';
+import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
+import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
+import { cloudHttpTransport, onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
   baseUrl: string;
@@ -98,7 +102,7 @@ const configFor = (baseUrl: string): SapConfig => ({
   password: 'STUB',
 });
 
-describe('session lifecycle composed into BaseAbapConnection', () => {
+describe('session lifecycle composed into AdtOnPremConnector', () => {
   let stub: Stub;
 
   beforeEach(async () => {
@@ -110,13 +114,13 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
   });
 
   it('starts disconnected, with no identity', () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     expect(conn.isConnected()).toBe(false);
     expect(conn.getSessionIdentity()).toBeNull();
   });
 
   it('publishes usability and the identity after connect()', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     expect(conn.isConnected()).toBe(true);
@@ -126,14 +130,14 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
   // The CSRF cookie changes on a token refresh WITHIN one session, so folding
   // it into the identity would report an ordinary refresh as a new session.
   it('keeps the CSRF cookie out of the identity', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     expect(conn.getSessionIdentity()).not.toContain('XSRF');
   });
 
   it('establishes once for concurrent connects, and once more is a no-op', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
 
     await Promise.all([conn.connect(), conn.connect()]);
     expect(stub.sessions).toHaveLength(1);
@@ -143,7 +147,7 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
   });
 
   it('reports not-connected and drops the identity after disconnect()', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     await conn.disconnect();
@@ -152,7 +156,7 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
   });
 
   it('connects again after a disconnect, on a fresh session', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     await conn.disconnect();
 
@@ -167,7 +171,7 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
   // outside the transition leaves every caller but the first reporting an empty
   // teardown — abandoned locks announced to nobody.
   it('tears down once for concurrent disconnects', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     let cleared = 0;
@@ -190,7 +194,7 @@ describe('session lifecycle composed into BaseAbapConnection', () => {
   });
 });
 
-describe('JwtAbapConnection establishment retry', () => {
+describe('a credential refused while establishing', () => {
   let stub: Stub;
 
   beforeEach(async () => {
@@ -201,63 +205,55 @@ describe('JwtAbapConnection establishment retry', () => {
     await stub.close();
   });
 
-  // Two hazards live here, and the second replaced the first.
+  // The per-credential JWT class renewed and retried here, inside its own
+  // `fetchCsrfToken`. That is gone, and deliberately not reproduced: renewal is
+  // the PROVIDER's, and it happens on an expiry the provider can see — on every
+  // call that asks for a header, not on a 401. With a refresh token outliving
+  // the session many times over, a token the provider still believes in and the
+  // server refuses is the case that does not arise. And `connect()` is one call
+  // the caller makes, so a refusal is theirs to answer.
   //
-  // The retry used to be establishSession calling itself after refreshing, and
-  // an earlier version of it called connect() — which runs the establishment as
-  // a joinable transition, so the nested call joined the one already in flight,
-  // which was itself, and waited forever.
-  //
-  // establishSession no longer refreshes at all: fetchCsrfToken owns that, and
-  // owns it alone (issue #30). So the subject is the same — an establishment
-  // recovers from a 401 by refreshing once and finishing, rather than hanging —
-  // but the owner has moved, and this test follows it.
-  //
-  // The 401 comes from the stub, not from a stubbed fetchCsrfToken. The earlier
-  // version replaced fetchCsrfToken on the instance, which removed the very
-  // method that now does the work, and would pass against a connection that had
-  // no recovery in it at all.
-  it('recovers from a 401 during establishment without waiting on itself', async () => {
-    const { JwtAbapConnection } = await import(
-      '../../connection/JwtAbapConnection.js'
-    );
+  // The hazard the old test guarded is still guarded: an establishment that
+  // decides not to retry must not hang while deciding. It used to be
+  // establishSession calling connect(), which runs establishment as a joinable
+  // transition — so the nested call joined the one already in flight, which was
+  // itself, and waited forever.
+  it('surfaces the refusal instead of renewing behind the caller', async () => {
     let refreshed = 0;
     stub.rejectDiscovery = true;
 
-    const conn = new JwtAbapConnection(
+    const conn = new AdtCloudConnector(
       {
         url: stub.baseUrl,
         client: '100',
         authType: 'jwt',
         jwtToken: 'STALE',
       } as SapConfig,
-      null,
-      undefined,
-      {
+      new TokenAuthProvider({
         getToken: async () => 'FRESH',
         refreshToken: async () => {
           refreshed += 1;
-          // The credential is good from here on, which is what a refresh means.
-          stub.rejectDiscovery = false;
           return 'FRESH';
         },
-      },
+      }),
+      cloudHttpTransport({ url: stub.baseUrl, client: '100' } as SapConfig),
+      null,
     );
 
-    // The window is generous on purpose: the base retries the CSRF fetch
-    // `retryCount` times with `retryDelay` between attempts, so the 401 takes
-    // seconds to surface before the refresh even begins. A tight race here
-    // reports "hung" for a connection that was merely being patient.
+    // Generous on purpose: the wire retries the exchange before the refusal
+    // surfaces at all, so a tight race reports "hung" for a connection that was
+    // merely being patient.
     const outcome = await Promise.race([
-      conn.connect().then(() => 'settled'),
+      conn.connect().then(
+        () => 'connected',
+        () => 'refused',
+      ),
       new Promise((r) => setTimeout(() => r('hung'), 15000)),
     ]);
 
-    expect(outcome).toBe('settled');
-    expect(refreshed).toBe(1);
-    // Refused at least once, then fetched again after the refresh.
-    expect(stub.discoveryAttempts).toBeGreaterThanOrEqual(2);
-    expect(conn.isConnected()).toBe(true);
+    expect(outcome).toBe('refused');
+    expect(refreshed).toBe(0);
+    expect(conn.isConnected()).toBe(false);
   }, 20000);
 });
 
@@ -273,7 +269,7 @@ describe('explicit connect is required', () => {
   });
 
   it('refuses a request when connect() was never called', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
 
     await expect(
       conn.makeAdtRequest({
@@ -287,7 +283,7 @@ describe('explicit connect is required', () => {
   });
 
   it('serves requests after connect(), and refuses them after disconnect()', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     await expect(
@@ -312,7 +308,7 @@ describe('explicit connect is required', () => {
   // The swallow used to hide this: connect() resolved over a broken system and
   // the failure surfaced later, on a request, as something else entirely.
   it('rejects when the session cannot be established', async () => {
-    const conn = new BaseAbapConnection(
+    const conn = onPrem(
       configFor('http://127.0.0.1:1'), // nothing listens there
       null,
     );
@@ -338,10 +334,7 @@ describe('explicit connect is required', () => {
     const { port } = rejecting.address() as { port: number };
 
     try {
-      const conn = new BaseAbapConnection(
-        configFor(`http://127.0.0.1:${port}`),
-        null,
-      );
+      const conn = onPrem(configFor(`http://127.0.0.1:${port}`), null);
       await expect(conn.connect()).rejects.toThrow();
 
       expect(
@@ -360,7 +353,7 @@ describe('explicit connect is required', () => {
   // legitimately pass no timeout at all. The request is not aborted — it simply
   // no longer holds the teardown, or everything queued behind it, open.
   it('does not wait for an in-flight request', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     const order: string[] = [];
@@ -378,88 +371,6 @@ describe('explicit connect is required', () => {
   });
 });
 
-describe('JWT request recovery after a token refresh', () => {
-  let stub: Stub;
-
-  beforeEach(async () => {
-    stub = await startStub();
-  });
-
-  afterEach(async () => {
-    await stub.close();
-  });
-
-  async function jwtConnection(refreshed: { count: number }) {
-    const { JwtAbapConnection } = await import(
-      '../../connection/JwtAbapConnection.js'
-    );
-    return new JwtAbapConnection(
-      {
-        url: stub.baseUrl,
-        client: '100',
-        authType: 'jwt',
-        jwtToken: 'STALE',
-      } as SapConfig,
-      null,
-      undefined,
-      {
-        getToken: async () => 'FRESH',
-        refreshToken: async () => {
-          refreshed.count += 1;
-          return 'FRESH';
-        },
-      },
-    );
-  }
-
-  // The renewal discards the session, and admission then refuses the retry
-  // unless the session is re-established first. Without recoverSession() the
-  // request fails with NOT_CONNECTED having never reached the server again.
-  it('re-establishes the session and retries, rather than refusing itself', async () => {
-    const refreshed = { count: 0 };
-    const conn = await jwtConnection(refreshed);
-    await conn.connect();
-
-    let attempts = 0;
-    const realAxios = (
-      conn as unknown as { getAxiosInstance: () => (cfg: unknown) => unknown }
-    ).getAxiosInstance.bind(conn);
-    (conn as unknown as { getAxiosInstance: () => unknown }).getAxiosInstance =
-      () => {
-        const instance = realAxios();
-        return async (cfg: { url: string }) => {
-          if (cfg.url.includes('/sap/bc/adt/work')) {
-            attempts += 1;
-            if (attempts === 1) {
-              const { AxiosError } = await import('axios');
-              throw new AxiosError('unauthorized', 'ERR', undefined, null, {
-                status: 401,
-                statusText: 'Unauthorized',
-                data: '',
-                headers: {},
-                // biome-ignore lint/suspicious/noExplicitAny: minimal shape
-                config: {} as any,
-              });
-            }
-          }
-          return (instance as (c: unknown) => unknown)(cfg);
-        };
-      };
-
-    const response = await conn.makeAdtRequest({
-      url: '/sap/bc/adt/work',
-      method: 'GET',
-      timeout: 5000,
-    });
-
-    expect(response.status).toBe(200);
-    expect(refreshed.count).toBe(1);
-    expect(attempts).toBe(2); // the retry actually reached the server
-    expect(conn.isConnected()).toBe(true);
-    expect(stub.sessions.length).toBeGreaterThan(1); // a NEW session was opened
-  });
-});
-
 describe('a teardown requested during establishment', () => {
   let stub: Stub;
 
@@ -472,7 +383,7 @@ describe('a teardown requested during establishment', () => {
   });
 
   /** Holds establishment open until the test lets it finish. */
-  function stallEstablishment(conn: BaseAbapConnection) {
+  function stallEstablishment(conn: AdtOnPremConnector) {
     let release!: () => void;
     let markStarted!: () => void;
     const held = new Promise<void>((r) => {
@@ -483,15 +394,15 @@ describe('a teardown requested during establishment', () => {
     const started = new Promise<void>((r) => {
       markStarted = r;
     });
-    const original = (
-      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
-    ).fetchCsrfToken.bind(conn);
-    (
-      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
-    ).fetchCsrfToken = async (url: string) => {
+    // The wire establishes itself now, so that is where establishment can be
+    // caught mid-flight.
+    const original = (conn as any).transport.establish.bind(
+      (conn as any).transport,
+    );
+    (conn as any).transport.establish = async (context: unknown) => {
       markStarted();
       await held;
-      return original(url);
+      return original(context);
     };
     return { release, started };
   }
@@ -500,7 +411,7 @@ describe('a teardown requested during establishment', () => {
   // it, clearing the teardown state and handing back a session the caller had
   // already asked to close.
   it('does not publish a connect that finished after a disconnect was requested', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     await conn.disconnect();
 
@@ -522,7 +433,7 @@ describe('a teardown requested during establishment', () => {
   });
 
   it('does not publish a recovery that finished after a disconnect was requested', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     const baseline = (conn as unknown as { teardownEpoch: number })
       .teardownEpoch;
@@ -560,7 +471,7 @@ describe('an abandoned establishment leaves in-flight work alone', () => {
   // guarantee. What replaces it is fencing: the request runs to completion
   // untouched, and its result cannot reach the connection.
   it('leaves the clearing to the teardown, and fences the request', async () => {
-    const conn = new BaseAbapConnection(configFor(stub.baseUrl), null);
+    const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
     // A request that will not finish until the test says so.
@@ -568,17 +479,11 @@ describe('an abandoned establishment leaves in-flight work alone', () => {
     const requestHeld = new Promise<void>((r) => {
       releaseRequest = r;
     });
-    const realAxios = (
-      conn as unknown as { getAxiosInstance: () => (cfg: unknown) => unknown }
-    ).getAxiosInstance.bind(conn);
-    (conn as unknown as { getAxiosInstance: () => unknown }).getAxiosInstance =
-      () => {
-        const instance = realAxios();
-        return async (cfg: { url: string }) => {
-          if (cfg.url.includes('/slow')) await requestHeld;
-          return (instance as (c: unknown) => unknown)(cfg);
-        };
-      };
+    const realSend = (conn as any).transport.send.bind((conn as any).transport);
+    (conn as any).transport.send = async (cfg: { url: string }) => {
+      if (cfg.url.includes('/slow')) await requestHeld;
+      return realSend(cfg);
+    };
 
     const inFlight = conn.makeAdtRequest({
       url: '/sap/bc/adt/slow',
@@ -594,14 +499,12 @@ describe('an abandoned establishment leaves in-flight work alone', () => {
     const establishmentHeld = new Promise<void>((r) => {
       releaseEstablishment = r;
     });
-    const originalFetch = (
-      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
-    ).fetchCsrfToken.bind(conn);
-    (
-      conn as unknown as { fetchCsrfToken: (u: string) => Promise<string> }
-    ).fetchCsrfToken = async (url: string) => {
+    const originalEstablish = (conn as any).transport.establish.bind(
+      (conn as any).transport,
+    );
+    (conn as any).transport.establish = async (context: unknown) => {
       await establishmentHeld;
-      return originalFetch(url);
+      return originalEstablish(context);
     };
     const baseline = (conn as unknown as { teardownEpoch: number })
       .teardownEpoch;

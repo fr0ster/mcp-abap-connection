@@ -123,13 +123,29 @@ source .env
 Or configure `SapConfig` directly:
 
 ```ts
-import { createAbapConnection } from "@mcp-abap-adt/connection";
+import {
+  AdtCloudConnector,
+  CloudHttpTransport,
+  TokenAuthProvider,
+} from "@mcp-abap-adt/connection";
+import type { SapConfig } from "@mcp-abap-adt/connection";
 
-const connection = createAbapConnection({
+const config: SapConfig = {
   url: process.env.SAP_URL!,
   authType: "jwt",
   jwtToken: process.env.SAP_JWT_TOKEN!,
-});
+};
+const logger = console;
+
+const connection = new AdtCloudConnector(
+  config,
+  new TokenAuthProvider(config.jwtToken!),
+  new CloudHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger,
+);
 
 // Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
 // The refresh token credentials in .env are used by auth-broker, not connection

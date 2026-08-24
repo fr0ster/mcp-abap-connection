@@ -8,7 +8,10 @@ export type {
   IWebSocketTransport,
 } from '@mcp-abap-adt/interfaces';
 export { FileCertificateMaterialLoader } from './auth/FileCertificateMaterialLoader.js';
-export type { IAuthProvider } from './auth/IAuthProvider.js';
+// IAuthProvider is deliberately NOT re-exported. It lives in
+// @mcp-abap-adt/interfaces and a consumer imports it from there — the same rule
+// the session-lifecycle vocabulary follows below, and for the same reason: two
+// names for one contract let the two drift.
 export {
   BasicAuthProvider,
   CertificateAuthProvider,
@@ -29,19 +32,13 @@ export type {
 } from './connection/AbapConnection.js';
 export { AdtCloudConnector } from './connection/AdtCloudConnector.js';
 export { AdtOnPremConnector } from './connection/AdtOnPremConnector.js';
+export { CloudHttpTransport } from './connection/CloudHttpTransport.js';
 // The session lifecycle vocabulary — ISessionLifecycleAware, ADT_SESSION_ERROR —
 // is deliberately NOT exported here. It lives in @mcp-abap-adt/interfaces, and a
 // consumer imports it from there: re-exporting a contract type gives it two
 // names and lets the two drift.
 // Connection classes - only final implementations
 // Deprecated aliases for backward compatibility
-export {
-  BaseAbapConnection,
-  BaseAbapConnection as OnPremAbapConnection,
-} from './connection/BaseAbapConnection.js';
-export { CertificateAbapConnection } from './connection/CertificateAbapConnection.js';
-// Factory
-export { createAbapConnection } from './connection/connectionFactory.js';
 // CSRF configuration
 export { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './connection/csrfConfig.js';
 export {
@@ -49,13 +46,30 @@ export {
   type IWebSocketFactory,
   type IWebSocketLike,
 } from './connection/GenericWebSocketTransport.js';
+// The transport axis. Both ends are objects, so a caller can name either.
+export { HttpTransport } from './connection/HttpTransport.js';
+export type {
+  IAdtEstablishContext,
+  IAdtSessionContext,
+  IAdtTransport,
+  IAdtTransportRequest,
+  IAdtTransportResponse,
+  ICloudTransport,
+  IOnPremTransport,
+} from './connection/IAdtTransport.js';
+export { LegacyOnPremHttpTransport } from './connection/LegacyOnPremHttpTransport.js';
+export { OnPremHttpTransport } from './connection/OnPremHttpTransport.js';
 export {
-  JwtAbapConnection,
-  JwtAbapConnection as CloudAbapConnection,
-} from './connection/JwtAbapConnection.js';
-export { KerberosAbapConnection } from './connection/KerberosAbapConnection.js';
-export { RfcAbapConnection } from './connection/RfcAbapConnection.js';
-export { SamlAbapConnection } from './connection/SamlAbapConnection.js';
+  type IRfcConversation,
+  RfcTransport,
+} from './connection/RfcTransport.js';
+// The front door to the RFC wire: the derivation a consumer would otherwise
+// copy, and the SDK loaded only when a conversation is opened.
+export {
+  type RfcConnectionParams,
+  rfcConversationFrom,
+  rfcParamsFrom,
+} from './connection/rfcConversation.js';
 export type { ILogger } from './logger.js';
 // Timeouts
 export {

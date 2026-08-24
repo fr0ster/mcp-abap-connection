@@ -7,6 +7,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.0] - 2026-08-24
+
+The wire owns what is the wire's, and the factory and per-credential classes are
+gone. See [Migration to 6.0](./docs/MIGRATION-6.0.md).
+
+### Added
+
+- **The transport axis is complete and public.** `IAdtTransport` now covers
+  everything true of a wire — carrying a request, addressing it, establishing
+  itself, and whatever session state it keeps — and both ends are objects:
+  `HttpTransport` and `RfcTransport`. `IAdtEstablishContext`, `IRfcConversation`
+  and `RfcConnectionParams` are exported, so a caller handed a seam can name it.
+
+- **`rfcConversationFrom(config)`** — the front door to the RFC wire. Derives
+  `ashost` from the url and `sysnr` from the HTTP port (`80XX` → `XX`, with
+  `SAP_SYSNR` overriding), and loads the SAP NW RFC SDK only when a conversation
+  opens, so a machine without it fails at `connect()` rather than at
+  construction.
+
+- **`RfcTransport` supplies a default `Accept`.** axios adds one over HTTP and
+  nobody had noticed; ADT refuses a request without it with
+  `400 ExceptionResourceBadRequest: Accept header missing`.
+
+### Changed
+
+- **The on-prem connector works over RFC.** It did not, at all. Measured against
+  a real system, three blockers stood one behind the other, all of them HTTP
+  assumptions in the class every connector shares: the CSRF fetch handed
+  `SADT_REST_RFC_ENDPOINT` an absolute URL and dumped it with
+  `STRING_OFFSET_TOO_LARGE`; that endpoint returns no `x-csrf-token` however it
+  is asked, so the exchange could not succeed; and the session fingerprint was a
+  scan for a `SAP_SESSIONID` cookie, so a wire that issues none read as a
+  connection the server had opened no session for.
+
+  The base class did not merely check for cookies — it DEFINED a session as one.
+
+- **`AbstractAbapConnection` keeps the lifecycle and nothing else** (1989 → ~1620
+  lines): the transition queue, teardown epochs, session generations, critical
+  sections, stale-request fencing, 401 classification, the identity policy, and
+  the promise that `disconnect()` settles. Cookies, the cookie jar, the CSRF
+  exchange, affinity headers, axios and addressing all moved to the wire that
+  has them. There is no `if (transport is rfc)` anywhere.
+
+- **A credential refused surfaces** rather than being renewed behind the caller —
+  on `connect()` and on the request path alike. Renewal is the provider's, and it
+  happens on an expiry the provider can see, on every call that asks for a header.
+  See *Removed*, below: nothing here answers a 401 any more.
+
+### Changed — BREAKING
+
+- **The base classes ask nothing.** `AbstractAbapConnection` and
+  `CredentialAbapConnection` contain no config-driven conditional, no optional-member
+  call, and no dispatch on a type or a shape. What a collaborator can do is stated by
+  its type, not discovered at runtime:
+
+  - `IAdtTransport.open()` / `close()` are required — a wire with nothing to open
+    writes an empty method, which is true of it;
+  - `IAuthProvider.prepare()`, `cookies()` and `transportMaterial()` are required for
+    the same reason (needs `@mcp-abap-adt/interfaces` 20.0.0);
+  - `establish()` is the transport's, and the connection delegates to it without
+    asking anything first. The credential contributes a header, cookies and TLS
+    material; earning a CSRF token is the wire's work, because the wire is what
+    holds the session the token is bound to (needs `@mcp-abap-adt/interfaces`
+    21.0.0, where the two credential atoms leave the contract — nothing
+    implemented them);
+  - `skipSessionType` is gone: it described BASIS 7.40, and a deployment is a wire, so
+    it is `LegacyOnPremHttpTransport`;
+  - whether a session exists is `IAdtTransport.sessionEstablished()` — a verdict each
+    wire gives about itself, instead of the connection reading a fingerprint and a flag
+    and deciding for all of them at once.
+
+  A credential you wrote gains three usually-empty members; see
+  [the migration guide](./docs/MIGRATION-6.0.md#writing-your-own-credential).
+
+### Removed
+
+- **The connection no longer answers a `401` for you.** It called `renew()` on the
+  credential, compared the header against the previous one, and rebuilt the session
+  if it had changed — a credential lifetime managed from inside the connection.
+  Renewal on an expiry the provider can SEE still happens, inside
+  `authorizationHeader()`, which is asked per request; the other case — a token the
+  provider still believes in and the server refuses — is a judgement made with what
+  the caller knows, so the refusal surfaces. A refused credential is not a lost
+  session, so the connection stays usable. `TokenAuthProvider` declares
+  `IRenewableCredential` (interfaces 19.0.0), which is what a consumer narrows to
+  before calling `renew()` itself.
+
+- **`disconnect({ deadlineMs })`** takes no arguments, and `SAP_RELEASE_DEADLINE_MS`
+  is gone with it. The parameter bounded a wait for the goodbye to be *answered*,
+  and the method does not act on that answer: it tells the server the session is
+  finished, and whether and when the session is freed is the server's affair. The
+  default was already `0`. Waiting bought a caller nothing while being the one
+  thing that could make a teardown unbounded — the goodbye carries no request
+  timeout by design, so a server that never answered would have held the teardown
+  for the whole deadline. Needs `@mcp-abap-adt/interfaces` 18.0.0, where the
+  parameter leaves the contract. Verified against a live BTP trial before the
+  contract moved: `disconnect()` returned in 1 ms and the goodbye still went out.
+
+- **`SessionStrategy`** and its two implementations. A session mechanism only some
+  wires have, described from inside the class every wire shares and driven by the
+  connection — a second wire abstraction beside `IAdtTransport`. It is the
+  transport's `open()`/`close()` now, which is also what made `connect()` possible
+  over RFC at all.
+
+- **`createAbapConnection()`** and the connection classes it built:
+  `BaseAbapConnection` (`OnPremAbapConnection`), `JwtAbapConnection`
+  (`CloudAbapConnection`), `SamlAbapConnection`, `CertificateAbapConnection`,
+  `KerberosAbapConnection`, `RfcAbapConnection` — 1597 lines. Take a connector,
+  hand it a credential, and hand it a transport — which has no default, because
+  which wire you are on is not something to guess.
+
+- `adaptTransport()`, which dressed a transport in an axios shape so six call
+  sites did not have to be rewritten. They were rewritten.
+
+- `connectionType: 'rfc'` as a way to reach the RFC wire. The wire is an
+  argument now.
+
+  **Kerberos has no direct replacement.** It was single-leg only and untested
+  against a live KDC (#35); a `KerberosAuthProvider` belongs on the credential
+  axis and should be added with a system to test it against.
+
+### Fixed
+
+- Credential cookies are merged into the establishing request rather than
+  overwritten by the wire's own — a SAML session IS that cookie, and replacing
+  it sent the exchange out unauthenticated.
+- The CSRF fallback endpoint is tried only when the primary answers 404. A host
+  that is not answering will not answer a different path, and asking doubled the
+  wait before the real error surfaced.
+- A CSRF token arriving on a refused response (405, or any refusal carrying the
+  header) is kept instead of thrown away by the retry.
+
 ## [5.0.0] - 2026-08-21
 
 A connection now says which system it is, closes what it opens, and is handed its
@@ -1120,7 +1252,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.0...HEAD
+[6.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v5.0.0...v6.0.0
 [5.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v2.0.0...v3.0.0

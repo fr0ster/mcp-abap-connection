@@ -7,9 +7,11 @@
  * that merely presented the same cookies. That is invisible from the outside:
  * the client-side id stays stable while the server sees an unrelated request.
  */
+
 import type { SapConfig } from '../config/sapConfig.js';
-import { BaseAbapConnection } from '../connection/BaseAbapConnection.js';
+import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
+import { onPrem } from './helpers/onPrem.js';
 import { markConnectedForTest } from './helpers/session.js';
 
 const mockLogger: ILogger = {
@@ -28,15 +30,15 @@ const baseConfig: SapConfig = {
 };
 
 function attachMockAxios(
-  conn: BaseAbapConnection,
+  conn: AdtOnPremConnector,
   fn: (cfg: any) => Promise<any>,
 ): void {
-  (conn as any).axiosInstance = fn;
+  (conn as any).transport.send = fn;
 }
 
 describe('CSRF fetch stays in the ADT conversation', () => {
   it('sends sap-adt-connection-id on the token fetch', async () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     const seen: Array<{ url: string; headers: Record<string, string> }> = [];
     attachMockAxios(conn, async (cfg) => {
@@ -64,7 +66,7 @@ describe('CSRF fetch stays in the ADT conversation', () => {
   });
 
   it('uses the same connection id on the fetch and on the request that follows', async () => {
-    const conn = new BaseAbapConnection(baseConfig, mockLogger);
+    const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     conn.setSessionType('stateful');
     const seen: Array<Record<string, string>> = [];

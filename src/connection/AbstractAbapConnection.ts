@@ -13,17 +13,11 @@ import axios, {
 } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
-import { IcfSessionStrategy } from '../session/IcfSessionStrategy.js';
 import {
   type RequestLease,
   SessionLifecycle,
   sessionError,
 } from '../session/SessionLifecycle.js';
-import type {
-  ISessionTransport,
-  SessionStrategy,
-} from '../session/SessionStrategy.js';
-import { mergeCookieHeaders } from '../utils/cookies.js';
 import {
   getCriticalSectionTimeout,
   getReleaseDeadline,
@@ -31,27 +25,12 @@ import {
 } from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
-
-/**
- * The configured default release deadline, refused at construction if it is not
- * a number. `parseInt` alone would not do: it answers `NaN` for `"abc"` and `5`
- * for `"5s"`, and both used to travel all the way to a teardown — the first as
- * a throw from every `disconnect()` in the process, the second as a silently
- * wrong bound nobody asked for.
- */
-function readReleaseDeadline(): number {
-  const raw = process.env.SAP_RELEASE_DEADLINE_MS;
-  if (raw === undefined || raw.trim() === '') {
-    return getReleaseDeadline();
-  }
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value < 0) {
-    throw new TypeError(
-      `SAP_RELEASE_DEADLINE_MS must be a finite, non-negative number of milliseconds, got ${JSON.stringify(raw)}`,
-    );
-  }
-  return value;
-}
+import {
+  type IAdtSessionContext,
+  type IAdtTransport,
+  type IAdtTransportRequest,
+  refusalOf,
+} from './IAdtTransport.js';
 
 /**
  * Declares the capabilities explicitly rather than satisfying them by accident.
@@ -85,14 +64,9 @@ abstract class AbstractAbapConnection
    */
   protected readonly lifecycle = new SessionLifecycle();
 
-  private axiosInstance: AxiosInstance | null = null;
-  private csrfToken: string | null = null;
-  private cookies: string | null = null;
-  private cookieStore: Map<string, string> = new Map();
   private baseUrl: string;
   private sessionId: string | null = null;
   private sessionMode: 'stateless' | 'stateful' = 'stateless';
-  private skipSessionType: boolean;
   /**
    * When true, requests are treated as part of an uninterruptible critical
    * section (e.g. a lock → modify → unlock chain). In this state a short
@@ -106,7 +80,6 @@ abstract class AbstractAbapConnection
   /** Reference count for nested beginCriticalSection()/endCriticalSection() pairs. */
   private criticalSectionDepth = 0;
   /** The default release deadline, validated once at construction. */
-  private readonly releaseDeadlineMs: number;
   /**
    * The logoff for the session this connection last held, while it is on its
    * way. One, because a connection holds one session: `connect()` opens it and
@@ -140,7 +113,6 @@ abstract class AbstractAbapConnection
    * with the rest of the session state: it names a server for a session that no
    * longer exists.
    */
-  private appServer: string | null = null;
   /**
    * Whether the preflight opened a session of its own.
    *
@@ -149,25 +121,22 @@ abstract class AbstractAbapConnection
    * Only a preflight answered with a session address opened one, and only that
    * is worth saying goodbye to when establishment then fails.
    */
-  private preflightOpenedSession = false;
-  private sessionStrategy: SessionStrategy = new IcfSessionStrategy(null);
-  private pendingRelease: { id: string; inFlight: Promise<void> } | null = null;
 
   protected constructor(
     private readonly config: SapConfig,
+    /**
+     * Required, and constructed by the caller.
+     *
+     * There is no default to fall back to and nothing is worked out from the
+     * config: the wire is a fact about the deployment, and a library that
+     * picked one would be guessing at the thing this design exists to stop
+     * guessing at. It also carries what the caller alone can wire — the
+     * credential's TLS material, the client — which is why it arrives built.
+     */
+    readonly transport: IAdtTransport,
     protected readonly logger: ILogger | null,
     sessionId?: string,
-    options?: { skipSessionType?: boolean },
   ) {
-    // Read and checked HERE, once, because the only other place it could be
-    // checked is disconnect() — and disconnect() belongs in a `finally`, where
-    // throwing replaces the error that sent the caller there. A misconfigured
-    // environment is a startup fault: it is the same on every call, it is not
-    // the caller's argument, and it is worth refusing a connection over rather
-    // than discovering at teardown.
-    this.releaseDeadlineMs = readReleaseDeadline();
-
-    this.skipSessionType = options?.skipSessionType ?? false;
     // Generate sessionId (used for sap-adt-connection-id header)
     this.sessionId = sessionId || randomUUID();
 
@@ -192,16 +161,12 @@ abstract class AbstractAbapConnection
    * - stateful: SAP maintains session state between requests (locks, transactions)
    * - stateless: Each request is independent
    *
-   * When skipSessionType is enabled (via constructor options), this is a no-op:
-   * the x-sap-adt-sessiontype header will never be sent. This is needed for
-   * older BASIS versions (e.g. 7.40) where the stateful header causes locks
-   * to be stored in ABAP session memory instead of the global enqueue table,
-   * resulting in HTTP 423 on subsequent PUT requests.
+   * Whether the header actually goes out is the WIRE's: a system where the
+   * stateful header makes the server store locks in session memory instead of
+   * the enqueue table — BASIS 7.40 — is a different deployment, and a
+   * deployment is a transport, not a flag on the connection.
    */
   setSessionType(type: 'stateful' | 'stateless'): void {
-    if (this.skipSessionType) {
-      return;
-    }
     this.sessionMode = type;
     this.logger?.debug(`Session type set to: ${type}`, {
       sessionId: this.sessionId?.substring(0, 8),
@@ -327,6 +292,12 @@ abstract class AbstractAbapConnection
     await this.lifecycle.transition('connect', async () => {
       if (this.lifecycle.connected) return;
 
+      // The wire gets a session in whatever way it has one: an RFC
+      // conversation opened, a cloud session resource asked for, nothing at
+      // all on a wire whose session arrives with the establishing call. Which
+      // of those it is belongs to the transport the caller handed in.
+      await this.transport.open(this.sessionContext());
+
       await this.establishAndCommit(baselineEpoch);
     });
   }
@@ -360,42 +331,16 @@ abstract class AbstractAbapConnection
    * dropped the cookie. Generation fencing (see `SessionLifecycle.isCurrent`)
    * keeps their results from reaching this connection either way.
    *
-   * @param options.deadlineMs How long to spend telling the server, measured
-   *   from this call and including time spent queued behind another transition.
-   *   **Defaults to `SAP_RELEASE_DEADLINE_MS`, which is `0` — do not wait.**
-   *   Waiting is for steps whose successor needs the server to have caught up;
-   *   a teardown has none. The logoff is still sent at `0`, because saying so
-   *   is not conditional on caring when it lands; its outcome is logged when it
-   *   arrives rather than awaited. Pass a positive value to bound a wait you
-   *   have chosen to take. Anything that is not a finite, non-negative number
-   *   is reported and the default used instead — this method is called from a
-   *   `finally`, where throwing would replace the error that sent the caller
-   *   there. The configured default is checked once, at construction, so a
-   *   misconfigured `SAP_RELEASE_DEADLINE_MS` fails before a connection exists
-   *   rather than at every teardown.
+   * **Nothing to wait for.** This TELLS the server the session is finished and
+   * does not act on the answer — whether and when the session is freed is the
+   * server's affair. Waiting for a reply nobody reads was also the one thing
+   * that could make a teardown unbounded, since the goodbye carries no request
+   * timeout by design.
    */
-  async disconnect(options?: { deadlineMs?: number }): Promise<void> {
-    // Nothing here throws, including on a bad argument. This method's place is
-    // a `finally` — a connection that was connected must be disconnected — and
-    // an exception raised there replaces the error that sent the caller into it.
-    // A nonsense deadline is reported and the configured default used instead,
-    // because refusing to release the session is a worse answer to a bad number
-    // than releasing it on the default schedule.
-    const requested = options?.deadlineMs;
-    const valid =
-      requested === undefined || (Number.isFinite(requested) && requested >= 0);
-    if (!valid) {
-      this.logger?.warn(
-        `disconnect(): ignoring deadlineMs=${requested}, which is not a finite, non-negative number; using ${this.releaseDeadlineMs}`,
-      );
-    }
-    const deadlineMs =
-      valid && requested !== undefined ? requested : this.releaseDeadlineMs;
-    // Started HERE, because the contract measures the deadline from the call
-    // and the transition below may sit in a queue first. A budget that started
-    // when the callback ran would give a queued teardown its full allowance
-    // again, which is the one thing the caller was bounding.
-    const startedAt = Date.now();
+  async disconnect(): Promise<void> {
+    // Nothing here throws. This method's place is a `finally` — a connection
+    // that was connected must be disconnected — and an exception raised there
+    // replaces the error that sent the caller into it.
 
     // Synchronous, at the call: admission shuts and the generation moves before
     // anything is queued, so a caller who has asked to disconnect cannot have
@@ -409,150 +354,21 @@ abstract class AbstractAbapConnection
     const session = this.getSessionIdentity();
 
     await this.lifecycle.transition('disconnect', async () => {
-      await this.releaseServerSession();
+      // DISPATCHED, not awaited. The goodbye carries no request timeout by
+      // design — a server that never answers must not hold a teardown open —
+      // so what the caller's `deadlineMs` bounds is the WAIT below, not the
+      // request. Awaiting here would make every teardown unbounded and the
+      // deadline meaningless.
+      //
+      // The context is taken now, while the session is still true: the clear
+      // below runs while the close is suspended on its first await.
+      const context = this.sessionContext();
+      const inFlight = Promise.resolve(this.transport.close(context)).then(
+        () => undefined,
+      );
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
-
-    // Its own release, and only that. Never another session's: an earlier one
-    // may never answer — the logoff carries no request timeout by design — and
-    // waiting on it would spend this caller's whole budget on a request nobody
-    // can finish.
-    const mine =
-      session && this.pendingRelease?.id === session
-        ? this.pendingRelease.inFlight
-        : null;
-
-    await this.awaitReleaseWithin(
-      Math.max(0, deadlineMs - (Date.now() - startedAt)),
-      mine,
-    );
-  }
-
-  /**
-   * Tells the server this session is no longer needed. Best effort, and the
-   * answer is not depended on: whether and when the server frees it is its own
-   * affair, and this connection does not check afterwards.
-   *
-   * ICF rather than ADT because ADT publishes no such endpoint: its discovery
-   * document lists none on any reachable system — on-prem, cloud, or legacy —
-   * and the ADT logon is the discovery call itself. `/sap/public/bc/icf/logoff`
-   * is the platform's own, and answers `200` while expiring the session cookie.
-   *
-   * **One session, this connection's own.** A repeat `connect()` opens a NEW
-   * one, with a new `SAP_SESSIONID`, so an earlier session is not this
-   * connection's business any more: its logoff is already on the wire, or the
-   * system will time it out. Nothing here retries, counts, or keeps a list —
-   * how many connections to run and how carefully stays with the caller.
-   *
-   * **It ends the session, not this object's use of it.** The cookies are the
-   * only thing tying anyone to a session, so a second connection given the same
-   * cookies works in the same ABAP session and can use the locks taken in it —
-   * and this logoff closes that session for all of them at once. Whoever hands
-   * the cookies around owns that decision; this method cannot see the copies.
-   *
-   * Never throws. `disconnect()` must always settle, and a session we could not
-   * close is better than a teardown that does not finish; the local state is
-   * cleared either way.
-   */
-  private async releaseServerSession(): Promise<void> {
-    const id = this.getSessionIdentity();
-    const cookies = this.cookies;
-    if (!id || !cookies) {
-      // No session, or no cookie to prove it is ours. Holding the cookie is the
-      // whole permission to close it.
-      return;
-    }
-
-    // No critical-section guard here, deliberately. `beginTeardown()` above has
-    // already shut admission, so the unlock of a chain in flight is refused
-    // whether or not the server is told — skipping the goodbye does not rescue
-    // the chain, it only leaves the session open. And the depth is decremented
-    // by `endCriticalSection()` alone, so one caller forgetting its `finally`
-    // would silence every release on this connection for good: a caller's bug
-    // turned into the leak this whole change exists to stop. Not disconnecting
-    // mid-chain is the caller's to get right.
-
-    // Already on its way for THIS session: a second would tell the server the
-    // same thing twice.
-    if (this.pendingRelease?.id === id) {
-      return;
-    }
-
-    // Which mechanism this system publishes was settled at establishment: a
-    // session resource to DELETE on ABAP Cloud, the platform's ICF logoff on
-    // on-prem. Both say the same thing — we have finished with this session —
-    // and neither is asked what the server then did about it.
-    // Assembling it can throw before anything is sent — `sessionTransport()`
-    // builds the client, and a certificate connection whose material is not
-    // loaded throws there. `disconnect()` promises never to throw, and it is
-    // called from a `finally`, where an exception would replace the error that
-    // sent the caller into it.
-    let send: Promise<void>;
-    try {
-      send = this.sessionStrategy.closeSession(this.sessionTransport());
-    } catch (error) {
-      this.logger?.debug(
-        `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return;
-    }
-
-    // Reported when it lands, waited for or not: "nobody is waiting on it" is
-    // not "nobody wants to know". A rejection handler even though `closeSession`
-    // is meant never to throw: that is an invariant of another unit, and an
-    // unhandled rejection here would crash a process over a teardown the caller
-    // declined to wait for.
-    const settled = send.then(
-      () => {
-        if (this.pendingRelease?.id === id) {
-          this.pendingRelease = null;
-        }
-      },
-      (error: unknown) => {
-        if (this.pendingRelease?.id === id) {
-          this.pendingRelease = null;
-        }
-        this.logger?.debug(
-          `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      },
-    );
-
-    this.pendingRelease = { id, inFlight: settled };
-  }
-
-  /**
-   * Waits up to `budgetMs` for a release already on its way, then detaches.
-   *
-   * Detaching, not cancelling: when the budget runs out this stops waiting and
-   * the request carries on to the server. Each caller of `disconnect()` gets
-   * its own, so one caller's patience is never charged to another's.
-   */
-  private async awaitReleaseWithin(
-    budgetMs: number,
-    release: Promise<void> | null,
-  ): Promise<void> {
-    if (!release || budgetMs === 0) {
-      return;
-    }
-
-    // Detaching, not cancelling: when the budget runs out this stops waiting and
-    // the request carries on to the server. `unref` so a process that is
-    // otherwise done does not stay alive for the timer, and cleared when the
-    // release wins the race.
-    let expire: NodeJS.Timeout | undefined;
-    const deadline = new Promise<void>((resolve) => {
-      expire = setTimeout(resolve, budgetMs);
-      expire.unref?.();
-    });
-
-    // `release` never rejects — its handlers are attached at dispatch — so this
-    // needs no catch to keep "never throws" true.
-    await Promise.race([release, deadline]);
-    if (expire) {
-      clearTimeout(expire);
-    }
   }
 
   isConnected(): boolean {
@@ -610,68 +426,32 @@ abstract class AbstractAbapConnection
    * the session is ours, and nothing else. It cannot reach session state, so a
    * strategy can neither mark this connection connected nor tear it down.
    */
-  private sessionTransport(): ISessionTransport {
-    // A SNAPSHOT, not a view. The close is dispatched without being awaited —
-    // a teardown does not wait for it — so `clearSessionState()` runs while the
-    // strategy is still suspended on its first `await`. Reading the connection
-    // then would find the axios instance already dropped and the cookies gone,
-    // and the request would go out through a freshly built client with no
-    // session on it, or not at all. Taken here, while they are still true.
-    const instance = this.getAxiosInstance();
-    const cookies = this.cookies;
-    const csrfToken = this.csrfToken;
-    return {
-      baseUrl: this.baseUrl,
-      // The affinity headers ride along with auth: the open must be answered by
-      // the server that will hold the session, and the close must reach the one
-      // that holds it.
-      authHeaders: async () => ({
-        ...(await this.getAuthHeaders()),
-        ...this.affinityHeaders(),
-      }),
-      cookies: () => cookies,
-      csrfToken: () => csrfToken,
-      send: async (request) => {
-        const response = await instance({
-          method: request.method,
-          url: request.url,
-          headers: request.headers,
-          ...(request.timeoutMs !== undefined
-            ? { timeout: request.timeoutMs }
-            : {}),
-          // A 404 is an answer — "this system has no session resource" — and a
-          // 403 on a close is the server declining a message. Both belong to
-          // the strategy to read, not to axios to throw over.
-          validateStatus: () => true,
-        });
-        // Only the open: its cookies ARE the session — SAP_SESSIONID arrives
-        // there — and they go through the same path every other response uses.
-        // No generation, because like the establishing CSRF fetch this is what
-        // creates the session a generation would be compared against. A close
-        // is deliberately not observed: its cookies would read as the session
-        // having been replaced under a connection that is being torn down.
-        if (request.adoptCookies) {
-          // Cookies adopted, verdict NOT asked for. The identity policy answers
-          // "did the server move us to a different session while we were
-          // working" — and this request is us opening one, with the
-          // establishing call still to come. Two requests we make ourselves,
-          // back to back, are one establishment; policing between them would
-          // read our own second call as somebody replacing our first.
-          const headers = response.headers as
-            | Record<string, unknown>
-            | undefined;
-          // The open is the first answer that can name the application server,
-          // and every request after it should already be pinned there.
-          this.rememberAppServer(headers);
-          this.updateCookiesFromResponse(headers);
-        }
-        return {
-          status: response.status,
-          headers: response.headers,
-          data: response.data,
-        };
-      },
-    };
+  /**
+   * Whether a 401 belongs to the credential rather than to the session.
+   *
+   * The session-level retries below exist to ACQUIRE COOKIES: discard a stale
+   * CSRF token and ask again, or retry a GET now that the refusal has brought
+   * cookies with it. They help exactly one kind of credential — one that
+   * authenticates from scratch on every request with a header it can always
+   * rebuild, so the only thing that can differ between two attempts is the
+   * session.
+   *
+   * Two kinds they do not help, and actively harm:
+   *
+   *   - one that can RENEW. Retrying swallows the refusal, and the credential
+   *     never learns the token it handed out was rejected.
+   *   - one that CARRIES cookies of its own — a SAML session negotiated
+   *     elsewhere and handed over. A 401 there says that session is dead, and
+   *     no number of retries with the same cookies will change it.
+   *
+   * Asked of the credential rather than read off `config.authType`, which is
+   * what this used to do. A config string is a claim about what was configured;
+   * `renew` and `cookies` are the object saying what it actually is — and a
+   * consumer's own provider gets the right answer without this class knowing it
+   * exists.
+   */
+  protected credentialAnswersRefusals(): boolean {
+    return false;
   }
 
   /**
@@ -684,31 +464,22 @@ abstract class AbstractAbapConnection
    * the establishing request. Believing cloud simply "issues no SAP_SESSIONID"
    * is what happens when nobody asks.
    */
-  /**
-   * Which session management this system uses — decided by the connection, not
-   * discovered by asking.
-   *
-   * On-prem and cloud do not manage sessions the same way, and the two
-   * implementations exist for that reason. On-prem the session arrives with the
-   * establishing request and the platform's ICF logoff gives it back, exactly as
-   * it always has. Cloud opens a session resource and takes it back by DELETE on
-   * the address the server published.
-   *
-   * Probing was tried and is wrong: `/sap/bc/adt/core/http/sessions` answers on
-   * on-prem too — measured on S/4HANA, which publishes both the session resource
-   * and the ICF logoff in the same document — so a probe does not tell the two
-   * systems apart. It only tells whether an endpoint exists, and both have it.
-   */
-  protected createSessionStrategy(): SessionStrategy {
-    return new IcfSessionStrategy(this.logger);
-  }
 
-  private async openServerSession(): Promise<void> {
-    this.sessionStrategy = this.createSessionStrategy();
-    this.preflightOpenedSession = await this.sessionStrategy.openSession(
-      this.sessionTransport(),
-    );
-    this.logger?.debug(`Session strategy: ${this.sessionStrategy.kind}`);
+  /**
+   * What a wire needs from this connection to get a session, or give one back.
+   *
+   * A snapshot in the sense that matters: a close is dispatched without being
+   * awaited, so nothing here may read the connection again once the teardown
+   * has cleared it.
+   */
+  protected sessionContext(): IAdtSessionContext {
+    return {
+      baseUrl: this.baseUrl,
+      authHeaders: () => this.getAuthHeaders(),
+      extraHeaders: { 'sap-adt-connection-id': this.getSessionId() ?? '' },
+      observe: (headers) =>
+        this.observeResponse(headers as Record<string, unknown>),
+    };
   }
 
   private async establishAndCommit(baselineEpoch: number): Promise<void> {
@@ -733,7 +504,6 @@ abstract class AbstractAbapConnection
       // Before the establishing call, because on a system that has one this is
       // what creates the session the rest of the connection runs in — and the
       // cookies it sets are the ones the establishing call must carry.
-      await this.openServerSession();
       // Forgotten again, because the open was OURS. Establishment is now two
       // requests where it used to be one, and the identity policy answers "did
       // the server move us to a different session while we were working" — a
@@ -768,9 +538,11 @@ abstract class AbstractAbapConnection
       // finished with something we never had sends a request nobody asked for
       // — into the middle of an authentication exchange, in the case that found
       // this.
-      const goodbye = this.preflightOpenedSession
-        ? this.sessionStrategy.closeSession(this.sessionTransport())
-        : Promise.resolve();
+      // Whether there is anything to say is the wire's to know: a cloud
+      // session has an address or it does not, and an on-prem one was
+      // established or the cookie is debris from the refusal. The connection
+      // asks, and each wire answers by doing nothing when it has nothing.
+      const goodbye = this.transport.close(this.sessionContext());
       this.invalidateSession();
       // And the identity with it. The rejecting response was still observed, so
       // its cookie was recorded as a session that had just been established —
@@ -832,34 +604,31 @@ abstract class AbstractAbapConnection
     // bearer obtainable here, so the question stayed open. If a cloud system
     // turns out to hold sessions without issuing this cookie, this is the rule
     // to revisit — and it will say so loudly rather than fail quietly.
-    const fingerprint = this.sessionFingerprint();
-    if (fingerprint.size === 0 && !this.skipSessionType) {
+    if (!this.transport.sessionEstablished()) {
       // Goodbye first, for the same reason the catch above does it: the
       // preflight may have opened a session — on cloud it does — and this path
       // is about to drop the cookies that are the only permission to close it.
       // Refusing to connect must not leak the session the refusal is about.
-      if (this.preflightOpenedSession) {
-        try {
-          void this.sessionStrategy.closeSession(this.sessionTransport());
-        } catch (error) {
-          this.logger?.debug(
-            `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
+      try {
+        void this.transport.close(this.sessionContext());
+      } catch (error) {
+        this.logger?.debug(
+          `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
       this.invalidateSession();
       this.lifecycle.forgetIdentity();
       this.lifecycle.markDisconnected();
       throw sessionError(
         ADT_SESSION_ERROR.NOT_CONNECTED,
-        'The server authenticated the request but opened no ABAP session: no SAP_SESSIONID cookie came back, so there is no session for a lock to be bound to. The HTTP side is fine — the cookies are here — which is why this is not a transport failure and does not look like one. ' +
+        `The server authenticated the request but opened no ABAP session: the ${this.transport.kind} wire reports it is on none, so there is nothing for a lock to be bound to. The wire itself is fine — the request was carried and answered — which is why this is not a transport failure and does not look like one. ` +
           'Stateless reads would still work over it, but a lock, and any write under that lock, is dead the moment it is issued. ' +
           'The usual cause is the system declining to open another session for this user: they are limited per user, shared with every other tool logged on as them, and released either by disconnecting or by their own idle timeout. ' +
           'Whether to wait, retry, or release sessions this user still holds is yours to decide — this library does not retry on your behalf.',
       );
     }
 
-    this.lifecycle.markConnected(fingerprint);
+    this.lifecycle.markConnected(this.sessionFingerprint());
   }
 
   /** The teardown epoch, for a recovery to capture before it starts. */
@@ -920,7 +689,7 @@ abstract class AbstractAbapConnection
    * turns "your lock is dead" back into "your request 403'd", which is the very
    * information the caller needs and the only one it cannot recover itself.
    */
-  private isSessionVerdict(error: unknown): boolean {
+  protected isSessionVerdict(error: unknown): boolean {
     const code = (error as { code?: unknown } | null)?.code;
     return (
       code === ADT_SESSION_ERROR.SESSION_REPLACED ||
@@ -938,7 +707,7 @@ abstract class AbstractAbapConnection
    * later check reads `unchanged`. That is one call site forgetting, and it
    * happened — on the error path and on every retry response.
    */
-  private observeResponse(
+  protected observeResponse(
     headers?: Record<string, unknown>,
     generation?: number,
   ): void {
@@ -960,43 +729,12 @@ abstract class AbstractAbapConnection
       );
       return;
     }
-    this.rememberAppServer(headers);
-    this.applyIdentityPolicy(this.updateCookiesFromResponse(headers));
-  }
-
-  /**
-   * Take the application server's name from a response, if it named one.
-   *
-   * Only ever set from the server's own answer — never guessed, and never kept
-   * across a teardown.
-   */
-  private rememberAppServer(headers?: Record<string, unknown>): void {
-    if (!headers) return;
-    const key = Object.keys(headers).find(
-      (k) => k.toLowerCase() === 'sap-adt-saplb',
+    // The wire folds the response into its own state; what the change MEANS
+    // is decided here, because it is a question about the session's lifetime.
+    this.transport.ingest(headers);
+    this.applyIdentityPolicy(
+      this.lifecycle.observe(this.transport.sessionFingerprint()),
     );
-    const value = key ? headers[key] : undefined;
-    if (typeof value === 'string' && value && value !== this.appServer) {
-      this.appServer = value;
-      this.logger?.debug(`Session is on application server ${value}`);
-    }
-  }
-
-  /**
-   * Headers that keep this connection on the server its session lives on.
-   *
-   * `sap-adt-saplb: fetch` asks the server to name itself — it answers on every
-   * request, so the binding survives a restart that moves us. `saplb` is that
-   * name sent back. `REDISPATCH_ON_SHUTDOWN` is what Eclipse asks for: if the
-   * server is going down, send us elsewhere rather than fail.
-   */
-  private affinityHeaders(): Record<string, string> {
-    return {
-      'sap-adt-saplb': 'fetch',
-      ...(this.appServer
-        ? { saplb: this.appServer, 'saplb-options': 'REDISPATCH_ON_SHUTDOWN' }
-        : {}),
-    };
   }
 
   /**
@@ -1039,12 +777,13 @@ abstract class AbstractAbapConnection
    * still owes.
    */
   private isDeadSessionResponse(error: unknown): boolean {
-    if (!(error instanceof AxiosError) || !error.response) return false;
-    if (error.response.status !== 400) return false;
+    const refusal = refusalOf(error);
+    if (!refusal) return false;
+    if (refusal.status !== 400) return false;
 
     const text = [
-      error.response.statusText,
-      typeof error.response.data === 'string' ? error.response.data : '',
+      refusal.statusText,
+      typeof refusal.data === 'string' ? refusal.data : '',
     ]
       .join(' ')
       .toLowerCase();
@@ -1053,17 +792,11 @@ abstract class AbstractAbapConnection
 
   /** Drops everything that described the session. Not a lifecycle transition. */
   private clearSessionState(): void {
-    if (this.axiosInstance) {
-      this.axiosInstance.interceptors.request.clear();
-      this.axiosInstance.interceptors.response.clear();
-      this.axiosInstance = null;
-    }
-    this.csrfToken = null;
-    this.cookies = null;
-    // Names a server for a session that no longer exists.
-    this.appServer = null;
-    this.preflightOpenedSession = false;
-    this.cookieStore.clear();
+    this.setCsrfToken(null);
+    // Cookies, the fingerprint and the application server are the wire's, and
+    // it gives them back together — a server named for a session that no
+    // longer exists is as stale as the cookie that addressed it.
+    this.transport.forgetSession();
     // Note: baseUrl is not reset as it's derived from immutable config
   }
 
@@ -1076,13 +809,7 @@ abstract class AbstractAbapConnection
    * overwritten on every response.
    */
   protected sessionFingerprint(): Map<string, string> {
-    const fingerprint = new Map<string, string>();
-    for (const [name, value] of this.cookieStore) {
-      if (name.startsWith('SAP_SESSIONID')) {
-        fingerprint.set(name, value);
-      }
-    }
-    return fingerprint;
+    return this.transport.sessionFingerprint();
   }
 
   async getBaseUrl(): Promise<string> {
@@ -1134,8 +861,9 @@ abstract class AbstractAbapConnection
     } = options;
     const normalizedMethod = method.toUpperCase();
 
-    // Build full URL: baseUrl + endpoint
-    const requestUrl = `${this.baseUrl}${endpoint}`;
+    // The PATH, not an address. Which server it belongs in front of — or
+    // whether it belongs in front of one at all — is the wire's to say.
+    const requestUrl = endpoint;
 
     // Try to ensure CSRF token is available for POST/PUT/DELETE, but don't fail if it can't be fetched
     // The retry logic will handle CSRF token errors automatically
@@ -1144,9 +872,9 @@ abstract class AbstractAbapConnection
       normalizedMethod === 'PUT' ||
       normalizedMethod === 'DELETE'
     ) {
-      if (!this.csrfToken) {
+      if (!this.transport.csrfToken()) {
         try {
-          await this.ensureFreshCsrfToken(requestUrl);
+          await this.ensureWireReady();
         } catch (error) {
           // If CSRF token can't be fetched upfront, continue anyway
           // The retry logic will handle CSRF token errors automatically
@@ -1174,12 +902,6 @@ abstract class AbstractAbapConnection
       requestHeaders['sap-adt-connection-id'] = this.sessionId;
     }
 
-    // Keep this request on the server the session lives on. A session belongs
-    // to one application server, so a request that lands elsewhere gets a
-    // different session — and any lock held on the first one dies, with no
-    // inactivity and nobody at fault.
-    Object.assign(requestHeaders, this.affinityHeaders());
-
     // Add stateful session headers if stateful mode is enabled
     if (this.sessionMode === 'stateful') {
       requestHeaders['x-sap-adt-sessiontype'] = 'stateful';
@@ -1190,30 +912,22 @@ abstract class AbstractAbapConnection
     // Add auth headers (these MUST NOT be overridden)
     Object.assign(requestHeaders, await this.getAuthHeaders());
 
+    // Read once: the wire is asked what it holds, and the same value is what
+    // goes on the header.
+    const presented = this.transport.csrfToken();
     if (
       (normalizedMethod === 'POST' ||
         normalizedMethod === 'PUT' ||
         normalizedMethod === 'DELETE') &&
-      this.csrfToken
+      presented
     ) {
-      requestHeaders['x-csrf-token'] = this.csrfToken;
+      requestHeaders['x-csrf-token'] = presented;
     }
 
-    // Add cookies LAST (MUST NOT be overridden by custom headers), MERGED with
-    // whatever the auth headers already put there — see mergeCookieHeaders.
-    if (this.cookies) {
-      requestHeaders.Cookie = mergeCookieHeaders(
-        requestHeaders.Cookie,
-        this.cookies,
-      );
-      this.logger?.debug(
-        `[DEBUG] BaseAbapConnection - Adding cookies to request (first 100 chars): ${this.cookies.substring(0, 100)}...`,
-      );
-    } else {
-      this.logger?.debug(
-        `[DEBUG] BaseAbapConnection - NO COOKIES available for this request to ${requestUrl}`,
-      );
-    }
+    // No cookies and no affinity headers here. Both are the wire's own state,
+    // and the wire puts them on the requests it sends — a connection that
+    // threaded them would be threading them for every transport, including one
+    // that has neither.
 
     if ((normalizedMethod === 'POST' || normalizedMethod === 'PUT') && data) {
       if (typeof data === 'string' && !requestHeaders['Content-Type']) {
@@ -1240,12 +954,14 @@ abstract class AbstractAbapConnection
       ? Math.max(timeout ?? 0, getCriticalSectionTimeout())
       : timeout;
 
-    const requestConfig: AxiosRequestConfig = {
+    const requestConfig: IAdtTransportRequest = {
       method: normalizedMethod,
       url: requestUrl,
       headers: requestHeaders,
       timeout: effectiveTimeout,
-      params,
+      // `unknown` on the caller's options, a record on the seam: the two
+      // transports serialise a query differently and both need the pairs.
+      params: params as Record<string, unknown> | undefined,
     };
 
     if (data !== undefined) {
@@ -1262,8 +978,11 @@ abstract class AbstractAbapConnection
     );
 
     try {
-      const response = await this.getAxiosInstance()(requestConfig);
-      this.observeResponse(response.headers, lease.generation);
+      const response = await this.transport.send(requestConfig);
+      this.observeResponse(
+        response.headers as Record<string, unknown>,
+        lease.generation,
+      );
 
       this.logger?.debug(`Request succeeded with status ${response.status}`, {
         type: 'REQUEST_SUCCESS',
@@ -1303,18 +1022,23 @@ abstract class AbstractAbapConnection
         message: error instanceof Error ? error.message : String(error),
         url: requestUrl,
         method: normalizedMethod,
-        status:
-          error instanceof AxiosError ? error.response?.status : undefined,
+        status: refusalOf(error)?.status,
         data: undefined,
       };
 
-      if (error instanceof AxiosError && error.response) {
+      const refusal = refusalOf(error);
+      if (refusal) {
         errorDetails.data =
-          typeof error.response.data === 'string'
-            ? error.response.data.slice(0, 200)
-            : JSON.stringify(error.response.data).slice(0, 200);
+          typeof refusal.data === 'string'
+            ? refusal.data.slice(0, 200)
+            : JSON.stringify(refusal.data).slice(0, 200);
 
-        this.observeResponse(error.response.headers, lease.generation);
+        // Every wire's refusal, not only axios's. A response the connection
+        // never observed is a session replacement it never noticed.
+        this.observeResponse(
+          refusal.headers as Record<string, unknown> | undefined,
+          lease.generation,
+        );
       }
 
       // The server telling us the session is gone is invisible to the identity
@@ -1352,22 +1076,27 @@ abstract class AbstractAbapConnection
         this.logger?.error(errorDetails.message, errorDetails);
       }
 
-      // Detect the "login-form 401" pattern: SAP returned 401 for a mutation while
-      // we have a cached CSRF token. The token and its bound SAP session must be
-      // discarded before the retry. Basic auth only — JWT/SAML lifecycles are
-      // managed elsewhere.
+      // The "login-form 401": SAP refused a mutation while we hold a cached CSRF
+      // token, so the token and the session it is bound to are dead and must be
+      // discarded before the retry.
+      //
+      // Not keyed on the credential any more. It used to be "basic auth only —
+      // JWT/SAML lifecycles are managed elsewhere", and elsewhere was
+      // JwtAbapConnection, which is gone. Credential renewal now lives a layer
+      // ABOVE this, in CredentialAbapConnection, which wraps the whole request:
+      // these retries happen first and it only sees a 401 that survived them.
+      // Nothing collides, so nothing needs to be excluded.
       const isCachedTokenStale =
-        error instanceof AxiosError &&
-        this.config.authType === 'basic' &&
+        !this.credentialAnswersRefusals() &&
         (normalizedMethod === 'POST' ||
           normalizedMethod === 'PUT' ||
           normalizedMethod === 'DELETE') &&
-        error.response?.status === 401 &&
+        refusalOf(error)?.status === 401 &&
         this.getCsrfToken() !== null;
 
       // Retry logic for CSRF token errors (403 with CSRF message) and the
       // login-form 401 pattern.
-      if (this.shouldRetryCsrf(error) || isCachedTokenStale) {
+      if (this.shouldRetryCsrf(error, normalizedMethod) || isCachedTokenStale) {
         this.logger?.debug(
           isCachedTokenStale
             ? 'Stale CSRF token / SAP session — invalidating and retrying'
@@ -1397,8 +1126,11 @@ abstract class AbstractAbapConnection
             requestHeaders.Cookie = refreshedCookies;
           }
 
-          const retryResponse = await this.getAxiosInstance()(requestConfig);
-          this.observeResponse(retryResponse.headers, lease.generation);
+          const retryResponse = await this.transport.send(requestConfig);
+          this.observeResponse(
+            retryResponse.headers as Record<string, unknown>,
+            lease.generation,
+          );
 
           return retryResponse as unknown as IAdtResponse<T, D>;
         } catch (retryError) {
@@ -1419,23 +1151,28 @@ abstract class AbstractAbapConnection
         }
       }
 
-      // Retry logic for 401 errors on GET requests (authentication issue - need cookies)
-      // Only for basic auth - JWT auth will be handled by refresh logic below
+      // A 401 on a GET where cookies have since arrived: the first request had
+      // none, and the session they name is what the retry needs. Guarded below
+      // on actually holding some, so a wire that issues no cookies — RFC —
+      // never takes it.
       if (
-        error instanceof AxiosError &&
-        error.response?.status === 401 &&
+        refusalOf(error)?.status === 401 &&
         normalizedMethod === 'GET' &&
-        this.config.authType === 'basic' // Only for basic auth
+        !this.credentialAnswersRefusals()
       ) {
         // If we already have cookies from error response, retry immediately
-        if (this.cookies) {
+        const afterError = this.transport.cookies();
+        if (afterError) {
           this.logger?.debug(
             `[DEBUG] BaseAbapConnection - 401 on GET request, retrying with cookies from error response`,
           );
-          requestHeaders.Cookie = this.cookies;
+          requestHeaders.Cookie = afterError;
 
-          const retryResponse = await this.getAxiosInstance()(requestConfig);
-          this.observeResponse(retryResponse.headers, lease.generation);
+          const retryResponse = await this.transport.send(requestConfig);
+          this.observeResponse(
+            retryResponse.headers as Record<string, unknown>,
+            lease.generation,
+          );
 
           return retryResponse as unknown as IAdtResponse<T, D>;
         }
@@ -1446,20 +1183,21 @@ abstract class AbstractAbapConnection
         );
         try {
           // Try to get CSRF token (this will also get cookies)
-          this.csrfToken = await this.fetchCsrfToken(
-            requestUrl,
-            3,
-            1000,
-            lease.generation,
+          this.setCsrfToken(
+            await this.fetchCsrfToken(requestUrl, 3, 1000, lease.generation),
           );
-          if (this.cookies) {
-            requestHeaders.Cookie = this.cookies;
+          const afterCsrf = this.transport.cookies();
+          if (afterCsrf) {
+            requestHeaders.Cookie = afterCsrf;
             this.logger?.debug(
               `[DEBUG] BaseAbapConnection - Retrying GET request with cookies from CSRF fetch`,
             );
 
-            const retryResponse = await this.getAxiosInstance()(requestConfig);
-            this.observeResponse(retryResponse.headers, lease.generation);
+            const retryResponse = await this.transport.send(requestConfig);
+            this.observeResponse(
+              retryResponse.headers as Record<string, unknown>,
+              lease.generation,
+            );
 
             return retryResponse as unknown as IAdtResponse<T, D>;
           }
@@ -1481,420 +1219,101 @@ abstract class AbstractAbapConnection
   protected abstract buildAuthorizationHeader(): string;
 
   /**
-   * Fetch CSRF token from SAP system
-   * Protected method for use by concrete implementations in their connect() method
+   * Ask the wire to establish itself, and hand back what it earned.
+   *
+   * The exchange itself is the transport's — it is the HTTP wire that has a
+   * token to earn and an endpoint to earn it from, and the RFC wire that has
+   * neither. What stays here is the part that is about the SESSION rather than
+   * the wire: fencing the answer by generation, and letting the identity policy
+   * read what it means.
    */
   protected async fetchCsrfToken(
-    url: string,
+    _url: string,
     retryCount: number = CSRF_CONFIG.RETRY_COUNT,
     retryDelay: number = CSRF_CONFIG.RETRY_DELAY,
     /** Fences the response effects; omitted during connect(), which has no lease. */
     generation?: number,
   ): Promise<string> {
-    // Try primary endpoint first, then fallback for older systems
-    const baseUrl = url.includes('/sap/bc/adt/')
-      ? url.split('/sap/bc/adt')[0]
-      : url.endsWith('/')
-        ? url.slice(0, -1)
-        : url;
+    // Dropped first, because this is only ever reached to REPLACE one: the
+    // establishment is idempotent and would hand back the very token the
+    // caller has just been told is stale.
+    this.transport.adoptCsrfToken(null);
+    await this.transport.establish({
+      baseUrl: this.baseUrl,
+      authHeaders: () => this.getAuthHeaders(),
+      extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
+      observe: (headers) =>
+        this.observeResponse(headers as Record<string, unknown>, generation),
+      retries: retryCount,
+      retryDelayMs: retryDelay,
+      timeoutMs: getTimeout('csrf'),
+      isFatal: (error) => this.isSessionVerdict(error),
+    });
 
-    let endpoints: string[];
-
-    // If the URL already contains a specific endpoint, use only that
-    if (url.includes(CSRF_CONFIG.ENDPOINT)) {
-      endpoints = [url];
-    } else if (url.includes(CSRF_CONFIG.FALLBACK_ENDPOINT)) {
-      endpoints = [url];
-    } else {
-      endpoints = [
-        `${baseUrl}${CSRF_CONFIG.ENDPOINT}`,
-        `${baseUrl}${CSRF_CONFIG.FALLBACK_ENDPOINT}`,
-      ];
-    }
-
-    let lastError: Error | undefined;
-
-    for (const csrfUrl of endpoints) {
-      try {
-        return await this.fetchCsrfTokenFromEndpoint(
-          csrfUrl,
-          retryCount,
-          retryDelay,
-          generation,
-        );
-      } catch (error) {
-        // Third layer with a catch on this path, and the last one that could
-        // bury a verdict: falling through to the fallback endpoint would open
-        // ANOTHER session, and by then the teardown has cleared the fingerprint
-        // so the new one reads as `established` and the loss disappears.
-        if (this.isSessionVerdict(error)) {
-          throw error;
-        }
-        lastError = error instanceof Error ? error : new Error(String(error));
-        this.logger?.debug(
-          `CSRF token not available from ${csrfUrl}, trying next endpoint...`,
-        );
-      }
-    }
-
-    // All endpoints exhausted
-    throw lastError ?? new Error('CSRF token fetch failed unexpectedly');
+    const token = this.transport.csrfToken();
+    if (!token) throw new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
+    return token;
   }
-
-  /**
-   * Fetch CSRF token from a specific endpoint with retries
-   */
-  private async fetchCsrfTokenFromEndpoint(
-    csrfUrl: string,
-    retryCount: number,
-    retryDelay: number,
-    generation?: number,
-  ): Promise<string> {
-    this.logger?.debug(`Fetching CSRF token from: ${csrfUrl}`);
-
-    for (let attempt = 0; attempt <= retryCount; attempt++) {
-      try {
-        if (attempt > 0) {
-          this.logger?.debug(
-            `Retry attempt ${attempt}/${retryCount} for CSRF token`,
-          );
-        }
-
-        const authHeaders = await this.getAuthHeaders();
-        const headers: Record<string, string> = {
-          ...authHeaders,
-          ...CSRF_CONFIG.REQUIRED_HEADERS,
-        };
-
-        // The token fetch belongs to the same ADT conversation as every other
-        // request this connection makes. Without the connection id the server
-        // sees a caller that merely happens to present our cookies, so a fetch
-        // issued while a lock is held reads as a stranger reaching into the
-        // session. makeAdtRequest sends this header for all session types; this
-        // path must not be the exception.
-        if (this.sessionId) {
-          headers['sap-adt-connection-id'] = this.sessionId;
-        }
-
-        // Same reason as every other request: a token fetched from another
-        // application server belongs to another session.
-        Object.assign(headers, this.affinityHeaders());
-
-        // Always add cookies if available - they are needed for session continuity
-        // Even on first attempt, if we have cookies from previous session or error response, use them
-        if (this.cookies) {
-          headers.Cookie = mergeCookieHeaders(headers.Cookie, this.cookies);
-          this.logger?.debug(
-            `[DEBUG] BaseAbapConnection - Adding cookies to CSRF token request (attempt ${attempt + 1}, first 100 chars): ${this.cookies.substring(0, 100)}...`,
-          );
-        } else {
-          this.logger?.debug(
-            `[DEBUG] BaseAbapConnection - No cookies available for CSRF token request (will get fresh cookies from response)`,
-          );
-        }
-
-        // Log request details for debugging (only if debug logging is enabled)
-        this.logger?.debug(
-          `[DEBUG] CSRF Token Request: url=${csrfUrl}, method=GET, hasAuth=${!!authHeaders.Authorization}, hasClient=${!!authHeaders['X-SAP-Client']}, hasCookies=${!!headers.Cookie}, attempt=${attempt + 1}`,
-        );
-
-        const response = await this.getAxiosInstance()({
-          method: 'GET',
-          url: csrfUrl,
-          headers,
-          timeout: getTimeout('csrf'),
-        });
-
-        this.observeResponse(response.headers, generation);
-
-        const token = response.headers['x-csrf-token'] as string | undefined;
-        if (!token) {
-          this.logger?.error('No CSRF token in response headers', {
-            headers: response.headers,
-            status: response.status,
-          });
-
-          if (attempt < retryCount) {
-            await new Promise((resolve) => setTimeout(resolve, retryDelay));
-            continue;
-          }
-          throw new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
-        }
-
-        if (response.headers['set-cookie']) {
-          this.observeResponse(response.headers, generation);
-          if (this.cookies) {
-            this.logger?.debug(
-              `[DEBUG] BaseAbapConnection - Cookies received from CSRF response (first 100 chars): ${this.cookies.substring(0, 100)}...`,
-            );
-            this.logger?.debug('Cookies extracted from response', {
-              cookieLength: this.cookies.length,
-            });
-          }
-        }
-
-        this.logger?.debug('CSRF token successfully obtained');
-        return token;
-      } catch (error) {
-        // A session verdict is not a failed token fetch and must not be
-        // retried into silence: the retry would observe the SAME new session,
-        // read it as `unchanged`, and the replacement this raised would be gone
-        // for good. It leaves immediately, past the loop and past the caller's
-        // recovery.
-        if (this.isSessionVerdict(error)) {
-          throw error;
-        }
-
-        if (error instanceof AxiosError) {
-          // Always try to extract cookies from error response, even on 401
-          // This ensures cookies are available for subsequent requests
-          if (error.response?.headers) {
-            this.observeResponse(error.response.headers, generation);
-            if (this.cookies) {
-              this.logger?.debug('Cookies extracted from error response', {
-                status: error.response.status,
-                cookieLength: this.cookies.length,
-              });
-            }
-          }
-
-          this.logger?.error(`CSRF token error: ${error.message}`, {
-            url: csrfUrl,
-            status: error.response?.status,
-            attempt: attempt + 1,
-            maxAttempts: retryCount + 1,
-          });
-
-          if (
-            error.response?.status === 405 &&
-            error.response?.headers['x-csrf-token']
-          ) {
-            this.logger?.debug(
-              'CSRF: SAP returned 405 (Method Not Allowed) — not critical, token found in header',
-            );
-
-            const token = error.response.headers['x-csrf-token'] as string;
-            if (token) {
-              this.observeResponse(error.response.headers, generation);
-              return token;
-            }
-          }
-
-          if (error.response?.headers['x-csrf-token']) {
-            this.logger?.debug(
-              `Got CSRF token despite error (status: ${error.response?.status})`,
-            );
-
-            const token = error.response.headers['x-csrf-token'] as string;
-            this.observeResponse(error.response.headers, generation);
-            return token;
-          }
-
-          if (error.response) {
-            this.logger?.error('CSRF error details', {
-              status: error.response.status,
-              statusText: error.response.statusText,
-              headers: Object.keys(error.response.headers),
-              data:
-                typeof error.response.data === 'string'
-                  ? error.response.data.slice(0, 200)
-                  : JSON.stringify(error.response.data).slice(0, 200),
-            });
-          } else if (error.request) {
-            this.logger?.error('CSRF request error - no response received', {
-              request: error.request.path,
-            });
-          }
-        } else {
-          this.logger?.error('CSRF non-axios error', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-
-        if (attempt < retryCount) {
-          await new Promise((resolve) => setTimeout(resolve, retryDelay));
-          continue;
-        }
-
-        // Preserve original error information, especially AxiosError with response
-        if (error instanceof AxiosError && error.response) {
-          // Re-throw the original AxiosError to preserve response information
-          throw error;
-        }
-
-        throw new Error(
-          CSRF_ERROR_MESSAGES.FETCH_FAILED(
-            retryCount + 1,
-            error instanceof Error ? error.message : String(error),
-          ),
-        );
-      }
-    }
-
-    throw new Error('CSRF token fetch failed unexpectedly');
-  }
-
-  /**
-   * Get CSRF token (protected for use by subclasses)
-   */
   protected getCsrfToken(): string | null {
-    return this.csrfToken;
+    return this.transport.csrfToken();
   }
 
   /**
    * Set CSRF token (protected for use by subclasses)
    */
   protected setCsrfToken(token: string | null): void {
-    this.csrfToken = token;
+    // A credential that did the exchange itself hands the token to the wire
+    // that will present it.
+    this.transport.adoptCsrfToken(token);
   }
 
   /**
    * Get cookies (protected for use by subclasses)
    */
   protected getCookies(): string | null {
-    return this.cookies;
-  }
-
-  protected setInitialCookies(cookies: string): void {
-    this.cookies = cookies;
+    return this.transport.cookies();
   }
 
   /**
-   * Folds a response's cookies into the jar and classifies what that means for
-   * the session identity. Returns the classification rather than acting on it:
-   * cookie parsing stays free of policy, and no exception fires in the middle
-   * of a state update. The caller decides.
+   * Seed the wire with cookies the caller already holds — a SAML session, which
+   * IS the credential rather than something a logon call earns.
+   *
+   * Handed over as a response would deliver them, because the wire owns the jar
+   * and how it stores them is its business, not this class's.
    */
-  private updateCookiesFromResponse(
-    headers?: Record<string, unknown>,
-  ): 'unchanged' | 'established' | 'replaced' {
-    if (!headers) {
-      return 'unchanged';
-    }
-
-    const setCookie = headers['set-cookie'] as string[] | string | undefined;
-    if (!setCookie) {
-      return 'unchanged';
-    }
-
-    const cookiesArray = Array.isArray(setCookie) ? setCookie : [setCookie];
-
-    for (const entry of cookiesArray) {
-      if (typeof entry !== 'string') {
-        continue;
-      }
-
-      const [nameValue] = entry.split(';');
-      if (!nameValue) {
-        continue;
-      }
-
-      const [name, ...rest] = nameValue.split('=');
-      if (!name) {
-        continue;
-      }
-
-      const trimmedName = name.trim();
-      const trimmedValue = rest.join('=').trim();
-
-      if (!trimmedName) {
-        continue;
-      }
-
-      this.cookieStore.set(trimmedName, trimmedValue);
-    }
-
-    // Enforce configured SAP client in sap-usercontext cookie.
-    // SAP may return sap-usercontext=sap-client=<default_client> based on system
-    // default rather than the X-SAP-Client header value, causing requests to be
-    // routed to the wrong client (e.g. a read-only client → 403 on write operations).
-    if (this.config.client) {
-      this.cookieStore.set(
-        'sap-usercontext',
-        `sap-client=${this.config.client}`,
-      );
-    }
-
-    if (this.cookieStore.size === 0) {
-      return 'unchanged';
-    }
-
-    const combined = Array.from(this.cookieStore.entries())
-      .map(([name, value]) => (value ? `${name}=${value}` : name))
-      .join('; ');
-
-    if (!combined) {
-      return 'unchanged';
-    }
-
-    this.cookies = combined;
-    this.logger?.debug(
-      `[DEBUG] BaseAbapConnection - Updated cookies from response (first 100 chars): ${this.cookies.substring(0, 100)}...`,
-    );
-    return this.lifecycle.observe(this.sessionFingerprint());
+  protected setInitialCookies(cookies: string): void {
+    this.transport.ingest({
+      'set-cookie': cookies.split(';').map((entry) => entry.trim()),
+    });
   }
 
   /**
-   * Subclasses override to inject extra https.Agent options (e.g. mTLS cert/key/pfx).
-   * The returned options are merged with the base options (rejectUnauthorized).
+   * Subclasses override to inject extra https.Agent options (e.g. mTLS
+   * cert/key/pfx). The returned options are merged with the base options
+   * (rejectUnauthorized).
    */
   protected getHttpsAgentOptions(): import('node:https').AgentOptions {
     return {};
   }
 
-  private getAxiosInstance(): AxiosInstance {
-    if (!this.axiosInstance) {
-      const rejectUnauthorized =
-        process.env.NODE_TLS_REJECT_UNAUTHORIZED === '1' ||
-        (process.env.TLS_REJECT_UNAUTHORIZED === '1' &&
-          process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '0');
-
-      this.logger?.debug(
-        `TLS configuration: rejectUnauthorized=${rejectUnauthorized}`,
-      );
-
-      this.axiosInstance = axios.create({
-        httpsAgent: new Agent({
-          rejectUnauthorized,
-          ...this.getHttpsAgentOptions(),
-        }),
-      });
-    }
-
-    return this.axiosInstance;
-  }
-
-  private async ensureFreshCsrfToken(requestUrl: string): Promise<void> {
-    // If we already have a CSRF token, reuse it to keep the same SAP session
-    // SAP ties the lock handle to the HTTP session (SAP_SESSIONID cookie)
-    if (this.csrfToken) {
-      this.logger?.debug(
-        `[DEBUG] BaseAbapConnection - Reusing existing CSRF token to maintain session`,
-      );
-      return;
-    }
-
-    try {
-      this.logger?.debug(
-        `[DEBUG] BaseAbapConnection - Fetching NEW CSRF token (will create new SAP session)`,
-      );
-      this.csrfToken = await this.fetchCsrfToken(requestUrl);
-    } catch (error) {
-      // fetchCsrfToken handles auth errors
-      // Just re-throw the error with minimal logging to avoid duplicate error messages
-      const errorMsg =
-        error instanceof Error
-          ? error.message
-          : CSRF_ERROR_MESSAGES.REQUIRED_FOR_MUTATION;
-
-      // Only log at DEBUG level to avoid duplicate error messages
-      // (fetchCsrfToken already logged the error at ERROR level if auth failed)
-      this.logger?.debug(
-        `[DEBUG] BaseAbapConnection - ensureFreshCsrfToken failed: ${errorMsg}`,
-      );
-
-      throw error;
-    }
+  /**
+   * Make sure the wire is ready to carry a mutation.
+   *
+   * What ready MEANS is the wire's: HTTP holds a CSRF token and returns at once
+   * when it already has one; an RFC conversation has nothing to earn and does
+   * nothing. Demanding a token back was an HTTP assumption, and over RFC it
+   * raised `No CSRF token in response headers` before every write — swallowed
+   * by the caller, but logged as an error and repeated on the next one.
+   */
+  private async ensureWireReady(): Promise<void> {
+    await this.transport.establish({
+      baseUrl: this.baseUrl,
+      authHeaders: () => this.getAuthHeaders(),
+      extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
+      observe: (headers) =>
+        this.observeResponse(headers as Record<string, unknown>),
+      isFatal: (error) => this.isSessionVerdict(error),
+    });
   }
 
   /**
@@ -1908,15 +1327,12 @@ abstract class AbstractAbapConnection
    */
   private invalidateSession(): void {
     this.setCsrfToken(null);
-    this.cookies = null;
-    this.cookieStore.clear();
+    // The wire's state described THAT session: the cookies, the fingerprint
+    // taken from them, and the application server it lived on. Sending the
+    // server name again would pin the next connect — preflight included — to a
+    // server whose session is gone.
+    this.transport.forgetSession();
     // Everything else that described THAT session. The application server named
-    // a server for a session that is gone — sending it again would pin the next
-    // connect, preflight included, to a dead one — and the preflight flag would
-    // otherwise let a later failure send a goodbye to the previous session's
-    // address.
-    this.appServer = null;
-    this.preflightOpenedSession = false;
     // And the tracked identity, because WE discarded the session. Without this
     // the cookie that arrives next reads as a foreign replacement — and since a
     // replacement is now always fatal, our own deliberate re-authentication
@@ -1926,38 +1342,41 @@ abstract class AbstractAbapConnection
     this.lifecycle.forgetIdentity();
   }
 
-  private shouldRetryCsrf(error: unknown): boolean {
-    if (!(error instanceof AxiosError)) {
+  private shouldRetryCsrf(error: unknown, method?: string): boolean {
+    const refusal = refusalOf(error);
+    if (!refusal) {
       return false;
     }
 
-    const responseData = error.response?.data;
+    // The credential answers this one; retrying here would swallow the 401 it
+    // needs to see, or repeat cookies that are already dead.
+    if (this.credentialAnswersRefusals()) {
+      return false;
+    }
+
+    const responseData = refusal.data;
     const responseText =
       typeof responseData === 'string'
         ? responseData
         : JSON.stringify(responseData || '');
 
-    // Don't retry for JWT auth - refresh logic will handle it
-    if (this.config.authType === 'jwt') {
-      return false;
-    }
-
     // Retry on 403 with CSRF message, or if response mentions CSRF token
     // Also retry on 401 for POST/PUT/DELETE if we don't have CSRF token yet (might need to get cookies first)
-    const method = error.config?.method?.toUpperCase();
+    // Handed in rather than read off `error.config`, which is axios's own
+    // record of the request and does not exist on another wire's refusal. The
+    // caller already normalised the method; asking the error for it was asking
+    // the HTTP client.
+    const normalized = method?.toUpperCase();
     const isPostPutDelete =
-      method && ['POST', 'PUT', 'DELETE'].includes(method);
-    const needsCsrfToken = !!isPostPutDelete && !this.csrfToken;
+      normalized && ['POST', 'PUT', 'DELETE'].includes(normalized);
+    const needsCsrfToken = !!isPostPutDelete && !this.transport.csrfToken();
 
     return (
-      (!!error.response &&
-        error.response.status === 403 &&
-        responseText.includes('CSRF')) ||
+      (refusal.status === 403 && responseText.includes('CSRF')) ||
       responseText.includes('CSRF token') ||
-      (needsCsrfToken && error.response?.status === 401)
+      (needsCsrfToken && refusal.status === 401)
     );
   }
 }
 
-// Export only for internal use by BaseAbapConnection and JwtAbapConnection
 export { AbstractAbapConnection };

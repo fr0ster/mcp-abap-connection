@@ -83,7 +83,7 @@ In your code:
 
 ```typescript
 import 'dotenv/config'; // or require('dotenv').config();
-import { createAbapConnection } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection';
 
 const config = {
   url: process.env.SAP_URL!,
@@ -138,7 +138,7 @@ See [JWT_AUTH_TOOLS.md](./JWT_AUTH_TOOLS.md) for detailed CLI documentation.
 ### Test Installation
 
 ```bash
-node -e "const { createAbapConnection } = require('@mcp-abap-adt/connection'); console.log('✓ Package loaded successfully');"
+node -e "const { AdtOnPremConnector } = require('@mcp-abap-adt/connection'); console.log('✓ Package loaded successfully');"
 ```
 
 ### Test Connection (Basic Auth)
@@ -146,7 +146,7 @@ node -e "const { createAbapConnection } = require('@mcp-abap-adt/connection'); c
 Create `test-connection.js`:
 
 ```javascript
-const { createAbapConnection } = require('@mcp-abap-adt/connection');
+const { AdtOnPremConnector, BasicAuthProvider } = require('@mcp-abap-adt/connection');
 
 const config = {
   url: 'https://your-sap-server.com',
@@ -163,9 +163,15 @@ const logger = {
   debug: (msg) => console.log('[DEBUG]', msg),
 };
 
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: 'onprem', // or 'cloud' — said by you, never detected
-});
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger,
+);
 
 connection.connect()
   .then(() =>
@@ -216,7 +222,13 @@ npm install --save-dev typescript @types/node
 ### TypeScript Example
 
 ```typescript
-import { createAbapConnection, SapConfig, ILogger } from '@mcp-abap-adt/connection';
+import {
+  AdtOnPremConnector,
+  BasicAuthProvider,
+  ILogger,
+  OnPremHttpTransport,
+  SapConfig,
+} from '@mcp-abap-adt/connection';
 
 const config: SapConfig = {
   url: 'https://your-sap-server.com',
@@ -233,9 +245,15 @@ const logger: ILogger = {
   debug: (msg: string) => console.log(msg),
 };
 
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: 'onprem', // or 'cloud' — said by you, never detected
-});
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger,
+);
 ```
 
 ## Troubleshooting

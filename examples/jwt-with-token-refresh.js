@@ -1,7 +1,7 @@
 /**
  * Example: JWT Connection with Automatic Token Refresh
  *
- * This example demonstrates how to create a JwtAbapConnection with
+ * This example demonstrates how to create a cloud connection with
  * automatic token refresh using ITokenRefresher from auth-broker.
  *
  * When a **401** occurs, the connection automatically:
@@ -16,7 +16,11 @@
  * change nothing.
  */
 
-const { JwtAbapConnection } = require('@mcp-abap-adt/connection');
+const {
+  CloudHttpTransport,
+  AdtCloudConnector,
+  TokenAuthProvider,
+} = require('@mcp-abap-adt/connection');
 // const { AuthBroker } = require('@mcp-abap-adt/auth-broker');
 
 // Simple logger
@@ -62,13 +66,17 @@ async function main() {
     jwtToken: initialToken,
   };
 
-  // Create connection with token refresher
-  // 4th parameter is the ITokenRefresher
-  const connection = new JwtAbapConnection(
+  // The refresher IS the credential: `TokenAuthProvider` asks it for a token on
+  // every request, so a provider that renews on expiry renews without anyone
+  // here deciding to. A bare string would be a token with nothing behind it.
+  const connection = new AdtCloudConnector(
     config,
+    new TokenAuthProvider(tokenRefresher),
+    new CloudHttpTransport(() => ({}), console, {
+      client: config.client,
+      baseUrl: config.url,
+    }),
     logger,
-    undefined,
-    tokenRefresher,
   );
 
   try {

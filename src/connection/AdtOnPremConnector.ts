@@ -17,25 +17,39 @@
  * because anything worked out where it was pointing.
  */
 
-import type { IAuthProvider } from '../auth/IAuthProvider.js';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
-import { IcfSessionStrategy } from '../session/IcfSessionStrategy.js';
-import type { SessionStrategy } from '../session/SessionStrategy.js';
 import { CredentialAbapConnection } from './CredentialAbapConnection.js';
+import type { IOnPremTransport } from './IAdtTransport.js';
+import type { OnPremHttpTransport } from './OnPremHttpTransport.js';
 
-export class AdtOnPremConnector extends CredentialAbapConnection {
+export class AdtOnPremConnector<
+  TCredential extends IAuthProvider = IAuthProvider,
+  /**
+   * The two wires an on-prem system actually offers. Said by the caller: the
+   * same ADT call travels over HTTP, or over RFC on a system where stateful
+   * HTTP sessions are not usable.
+   */
+  TTransport extends IOnPremTransport = OnPremHttpTransport,
+> extends CredentialAbapConnection<TCredential> {
+  /**
+   * The transport this was built with, in the type.
+   *
+   * `declare` because the base already assigns it — this only narrows what the
+   * caller gets back, which is the whole point of the parameter: a signature
+   * can ask for `AdtOnPremConnector<IAuthProvider, RfcTransport>` instead of
+   * taking any connection and casting.
+   */
+  declare readonly transport: TTransport;
+
   constructor(
     config: SapConfig,
-    credential: IAuthProvider,
+    credential: TCredential,
+    transport: TTransport,
     logger: ILogger | null = null,
     sessionId?: string,
-    options?: { skipSessionType?: boolean },
   ) {
-    super(config, credential, logger, sessionId, options);
-  }
-
-  protected override createSessionStrategy(): SessionStrategy {
-    return new IcfSessionStrategy(this.logger);
+    super(config, credential, transport, logger, sessionId);
   }
 }

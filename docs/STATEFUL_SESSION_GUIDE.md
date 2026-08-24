@@ -26,19 +26,47 @@ The connection layer **does not** decide when to lock/unlock objects—that logi
 
 ## Enabling Stateful Sessions
 
-```ts
-import { createAbapConnection } from '@mcp-abap-adt/connection';
+Every example below builds on this much, so it is stated once:
 
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: 'onprem', // or 'cloud' — said by you, never detected
-});
+```ts
+import type { SapConfig } from '@mcp-abap-adt/connection';
+
+const config: SapConfig = {
+  url: 'https://your-sap-server.com',
+  authType: 'basic',
+  username: 'your-username',
+  password: 'your-password',
+  client: '100',
+};
+const user = config.username!;
+const pass = config.password!;
+const logger = console;
+```
+
+```ts
+import {
+  AdtOnPremConnector,
+  BasicAuthProvider,
+  OnPremHttpTransport,
+  getTimeout,
+} from '@mcp-abap-adt/connection';
+
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger,
+);
 await connection.connect();   // required before any request
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
 connection.setSessionType('stateful');
 
 // Now all requests share the same session (cookies, CSRF token)
-await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' });
+await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
 
 // Switch back to stateless
 connection.setSessionType('stateless');
@@ -49,11 +77,11 @@ connection.setSessionType('stateless');
 ## Knowing Which Session You Are In
 
 ```ts
-import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 
 // getSessionIdentity() is on the HTTP connection classes, NOT on the
-// IAbapConnection type that createAbapConnection() returns.
-const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), logger);
+// bare IAbapConnection type a caller may hand you.
+const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
 await connection.connect();
 
 // Which SAP session this connection is talking to. Changes only when the
@@ -84,11 +112,13 @@ Every ADT request issued through `makeAdtRequest` automatically:
 
 This logic is transparent to callers (Builders, handlers, CLI scripts).
 
-On a JWT connection one case is **not** transparent, and cannot be: a 401 that leads to a token
-refresh also replaces the SAP session, because the renewed credential cannot keep the old one.
-Inside a lock window that surfaces as `ADT_SESSION_REPLACED` rather than a request quietly
-continuing on a session your lock is not in. A 403 never does this — it is an authorization
-answer, not a credential one, and nothing is torn down for it.
+On a JWT connection a 401 is **not** handled here at all, and that is the point: since 6.0.0 the
+refusal surfaces and the session is left alone. Nothing replaces the credential behind you, so
+nothing replaces the SAP session behind you either — a lock window is not torn down by an
+authentication answer. A 403 never did this: it is an authorization answer, not a credential one.
+
+If you decide the refusal meant a stale token, `renew()` and reconnect are yours to call — and a
+reconnect is a NEW session, so do it outside a lock window rather than inside one.
 
 ---
 
@@ -173,17 +203,18 @@ you get by asking — `getSessionIdentity()` for which session you are in, and
   `disconnect()` followed by `connect()` — there is no local-only discard, because
   dropping the cookie leaves the ABAP session open on the server. Both live on
   the HTTP connection classes and are **not** on the `IAbapConnection` type
-  `createAbapConnection()` returns — reach them through a concrete type:
+  a bare `IAbapConnection` carries — reach them through a connector type, or
+  through the `ISessionLifecycleAware` atom:
 
   ```ts
-  import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 
-  const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), logger);
+  const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
   await connection.disconnect(); // ends the session on the server, then clears
   await connection.connect(); // a new session, explicitly
   ```
 - **Session expired**: reauthenticate to obtain a new session.
-- **Multiple connections**: each `createAbapConnection` instance maintains its own cookie jar; share the instance if you need continuity.
+- **Multiple connections**: each connector holds its own wire, and the wire holds the cookie jar; share the instance if you need continuity.
 
 ---
 

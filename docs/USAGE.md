@@ -13,10 +13,15 @@
 
 ## Quick Start
 
-### Basic Usage with Factory
+### Basic Usage
 
 ```typescript
-import { createAbapConnection } from '@mcp-abap-adt/connection';
+import {
+  AdtOnPremConnector,
+  BasicAuthProvider,
+  OnPremHttpTransport,
+  getTimeout,
+} from '@mcp-abap-adt/connection';
 import { SapConfig } from '@mcp-abap-adt/connection';
 
 const config: SapConfig = {
@@ -35,12 +40,18 @@ const logger = {
   debug: (msg: string, meta?: any) => console.debug(msg, meta),
 };
 
-// Create connection (logger is optional)
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: 'onprem', // or 'cloud' — said by you, never detected
-});
-// Or without logger:
-// const connection = createAbapConnection(config);
+// Three things, all stated by you and none of them detected: which system
+// (the class), which credential (the object), which wire (the transport, which
+// has no default — you build it and hand it over).
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger, // optional; omit or pass null for no logging
+);
 
 // Establish the session. This is REQUIRED: a request on a connection that was
 // never connected is refused with ADT_NOT_CONNECTED, and connect() rejects if
@@ -50,13 +61,14 @@ await connection.connect();
 const response = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
+  timeout: getTimeout('default'),
 });
 
 console.log(response.data);
 ```
 
 Tearing the session down is `disconnect()`, but it is not on the
-`IAbapConnection` type this factory returns — see
+`IAbapConnection` type a connector satisfies — see
 [Session Lifecycle](#session-lifecycle) for where it lives and how to reach it.
 
 ## Which system, and how you authenticate
@@ -79,6 +91,7 @@ For on-premise SAP systems using basic authentication:
 import {
   AdtOnPremConnector,
   BasicAuthProvider,
+  OnPremHttpTransport,
 } from '@mcp-abap-adt/connection';
 
 const config = {
@@ -92,6 +105,10 @@ const config = {
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username, config.password),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();   // required: nothing is established implicitly
@@ -105,7 +122,9 @@ For SAP BTP ABAP Environment. Token refresh belongs to
 ```typescript
 import {
   AdtCloudConnector,
+  CloudHttpTransport,
   TokenAuthProvider,
+  getTimeout,
 } from '@mcp-abap-adt/connection';
 
 const config = {
@@ -120,6 +139,10 @@ const config = {
 const connection = new AdtCloudConnector(
   config,
   new TokenAuthProvider('eyJhbGciOiJSUzI1NiIs...'),
+  new CloudHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();   // required: nothing is established implicitly
@@ -129,6 +152,7 @@ await connection.connect();   // required: nothing is established implicitly
 const response = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
+  timeout: getTimeout('default'),
 });
 ```
 
@@ -142,6 +166,7 @@ them is refused with `ADT_NOT_CONNECTED`.
 ### GET Request
 
 ```typescript
+import { getTimeout } from '@mcp-abap-adt/connection';
 const packages = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
@@ -150,12 +175,14 @@ const packages = await connection.makeAdtRequest({
     parent_type: 'DEVC/K',
     withShortDescriptions: 'true',
   },
+  timeout: getTimeout('default'),
 });
 ```
 
 ### POST Request (Create Object)
 
 ```typescript
+import { getTimeout } from '@mcp-abap-adt/connection';
 const classXml = `<?xml version="1.0" encoding="UTF-8"?>
 <class:abapClass xmlns:class="http://www.sap.com/adt/oo/classes" 
                  class:name="ZCL_MY_CLASS">
@@ -168,28 +195,35 @@ const response = await connection.makeAdtRequest({
   headers: { 'Content-Type': 'application/xml' },
   data: classXml,
   params: { package: 'ZTEST' },
+  timeout: getTimeout('default'),
 });
 ```
 
 ### PUT Request (Update Object)
 
 ```typescript
+const classSourceCode = 'CLASS zcl_my_class DEFINITION ...';
+const lockToken = 'the handle the lock call returned';
+import { getTimeout } from '@mcp-abap-adt/connection';
 await connection.makeAdtRequest({
   method: 'PUT',
   url: '/sap/bc/adt/oo/classes/zcl_my_class/source/main',
   headers: { 'Content-Type': 'text/plain' },
-  data: classSourceCode,
-  params: { lockHandle: lockToken },
+  data: classSourceCode,      // the new source, as a string
+  params: { lockHandle: lockToken },  // from the lock you took first
+  timeout: getTimeout('default'),
 });
 ```
 
 ### DELETE Request
 
 ```typescript
+import { getTimeout } from '@mcp-abap-adt/connection';
 await connection.makeAdtRequest({
   method: 'DELETE',
   url: '/sap/bc/adt/oo/classes/zcl_my_class',
   params: { deleteOption: 'deleteAndLocalVersions' },
+  timeout: getTimeout('default'),
 });
 ```
 
@@ -200,13 +234,20 @@ await connection.makeAdtRequest({
 By default, connections are stateless - each request gets fresh cookies and CSRF tokens:
 
 ```typescript
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: 'onprem', // or 'cloud' — said by you, never detected
-});
+import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger,
+);
 await connection.connect();
 
 // Each request is independent
-await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' });
+await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
 ```
 
 ### Stateful Mode (Session Headers)
@@ -214,16 +255,23 @@ await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' })
 Enable stateful session mode for operations requiring consistent session state:
 
 ```typescript
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: 'onprem', // or 'cloud' — said by you, never detected
-});
+import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger,
+);
 await connection.connect();
 
 // Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
 connection.setSessionType('stateful');
 
 // Now all requests share the same session (cookies, CSRF token)
-await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' });
+await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
 
 // Check session mode
 console.log(connection.getSessionMode()); // 'stateful'
@@ -255,10 +303,12 @@ implied. Four things follow from it.
 > `IAbapConnection`: `ISessionLifecycleAware` — `disconnect()`, `isConnected()`,
 > `getSessionIdentity()`.
 >
-> The split is the point. `IAbapConnection` is the minimum every transport can
-> honour, and `RfcAbapConnection` has none of these — on RFC the session *is* the
-> open client, so it needs none. Requiring them of every connection would force a
-> transport with no HTTP session to implement a lie.
+> The split is the point. `IAbapConnection` is the minimum any consumer of ADT
+> can honour — a caller that only issues requests should not have to implement a
+> teardown it never performs. Both connectors implement the atom, over either
+> wire: an RFC conversation has the whole lifecycle, and what it has none of is a
+> session RESOURCE to open and close by address, which is an empty mechanism
+> rather than an absent lifecycle.
 >
 > So ask for the atom you need, not for a concrete class:
 >
@@ -269,24 +319,30 @@ implied. Four things follow from it.
 > **How you satisfy that parameter decides whether you get a compile-time
 > guarantee, and there is only one way that does.**
 >
-> Construct the connection through a concrete HTTP class and the compiler knows
-> it implements the atom, so passing an RFC connection is an error at the call
-> site:
+> Construct a connector and the compiler knows it implements the atom, whichever
+> wire you gave it:
 >
 > ```typescript
-> const conn = new AdtOnPremConnector(config, provider, logger);
-> tearDownAfter(conn);                       // ✅ checked
-> tearDownAfter(new RfcAbapConnection(cfg)); // ✅ compile error, as it should be
+> const conn = new AdtOnPremConnector(config, provider, new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
+> tearDownAfter(conn);   // ✅ checked
+>
+> const overRfc = new AdtOnPremConnector(
+>   config,
+>   provider,
+>   new RfcTransport(rfcConversationFrom(config), logger),
+>   logger,
+> );
+> tearDownAfter(overRfc); // ✅ also checked — same class, different wire
 > ```
 >
-> `createAbapConnection()` cannot give you that. It returns `IAbapConnection` for
-> **every** config, RFC included, so the type carries no evidence either way and
-> the compiler rejects its result whatever the transport. Asserting past that —
-> `conn as IAbapConnection & ISessionLifecycleAware` — silences the error for the
-> HTTP case *and* for RFC, which then fails at runtime. An assertion is not a
-> check; it is a promise you make to the compiler on your own authority.
+> What does NOT give you that is a bare `IAbapConnection` handed to you by
+> somebody else: the type carries no evidence either way, and the compiler
+> rejects it. Asserting past that — `conn as IAbapConnection &
+> ISessionLifecycleAware` — silences the error whether or not the object has the
+> methods. An assertion is not a check; it is a promise you make to the compiler
+> on your own authority.
 >
-> When you only have an `IAbapConnection` — from the factory, or from a caller —
+> When you only have an `IAbapConnection` — from a caller, or from a registry —
 > narrow it at runtime with a predicate:
 >
 > ```typescript
@@ -322,11 +378,15 @@ implied. Four things follow from it.
 ### connect() is required, and it tells the truth
 
 ```typescript
-import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 
 const connection = new AdtOnPremConnector(
   config,
-  new BasicAuthProvider(user, pass),
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 
@@ -348,6 +408,13 @@ side instead of a condition that silently stops matching. The codes live in
 
 ```typescript
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces';
+import { getTimeout } from '@mcp-abap-adt/connection';
+
+const options = {
+  method: 'GET',
+  url: '/sap/bc/adt/repository/nodestructure',
+  timeout: getTimeout('default'),
+};
 
 try {
   await connection.makeAdtRequest(options);
@@ -360,9 +427,9 @@ try {
 ```
 
 `AdtSessionErrorCode` comes from the same place, as does the capability interface
-this connection implements — `ISessionLifecycleAware`. Depend on that rather than
-on a concrete connection class where you can: an `RfcAbapConnection` is a valid
-`IAbapConnection` that does not implement it, so the atom you require is also the
+this connection implements — `ISessionLifecycleAware`. Depend on the atom rather
+than on a concrete class where you can: an `IAbapConnection` may come from
+somewhere that implements only the minimum, so the atom you require is also the
 documentation of what your code actually needs.
 
 ### disconnect() waits for nothing
@@ -456,14 +523,29 @@ yours.
 Session IDs are auto-generated (UUID) when connection is created:
 
 ```typescript
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: 'onprem', // or 'cloud' — said by you, never detected
-});
+import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger,
+);
 console.log(connection.getSessionId()); // e.g., '7f3a8b2c-...'
 
 // Or provide your own when creating connection
-const connection = createAbapConnection(config, logger, 'custom-session-123');
-console.log(connection.getSessionId()); // 'custom-session-123'
+const connectionWithOwnId = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger,
+  'custom-session-123');
+console.log(connectionWithOwnId.getSessionId()); // 'custom-session-123'
 ```
 
 ### Switching Session Types
@@ -471,17 +553,24 @@ console.log(connection.getSessionId()); // 'custom-session-123'
 Dynamically switch between stateful and stateless modes:
 
 ```typescript
+import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
 // Start in stateless mode (default)
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: 'onprem', // or 'cloud' — said by you, never detected
-});
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger,
+);
 await connection.connect();
 
 // Enable stateful for a series of operations
 connection.setSessionType('stateful');
 
 // Do stateful operations...
-await connection.makeAdtRequest({ method: 'POST', url: '...' });
+await connection.makeAdtRequest({ method: 'POST', url: '...' , timeout: getTimeout('default') });
 
 // Switch back to stateless
 connection.setSessionType('stateless');
@@ -506,7 +595,7 @@ in a `finally`. `disconnect()` never throws, so it is safe there.
 ### Using Custom Logger
 
 ```typescript
-import { ILogger } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, BasicAuthProvider, ILogger, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 
 class CustomLogger implements ILogger {
   info(message: string, meta?: any) {
@@ -539,9 +628,15 @@ class CustomLogger implements ILogger {
 }
 
 const logger = new CustomLogger();
-const connection = createAbapConnection(config, logger, undefined, undefined, {
-  system: 'onprem', // or 'cloud' — said by you, never detected
-});
+const connection = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger,
+);
 ```
 
 ## Error Handling
@@ -549,16 +644,23 @@ const connection = createAbapConnection(config, logger, undefined, undefined, {
 ### Basic Error Handling
 
 ```typescript
+import { getTimeout } from '@mcp-abap-adt/connection';
 try {
   await connection.makeAdtRequest({
     method: 'GET',
     url: '/sap/bc/adt/invalid/endpoint',
+    timeout: getTimeout('default'),
   });
 } catch (error) {
-  if (error.response) {
-    console.error(`HTTP ${error.response.status}:`, error.response.data);
+  const failure = error as {
+    code?: string;
+    response?: { status: number; data: unknown };
+    message?: string;
+  };
+  if (failure.response) {
+    console.error(`HTTP ${failure.response.status}:`, failure.response.data);
   } else {
-    console.error('Network error:', error.message);
+    console.error('Network error:', failure.message);
   }
 }
 ```
@@ -580,23 +682,30 @@ When these errors occur, the connection:
 3. **Logs the error** with full context for troubleshooting
 
 ```typescript
+import { getTimeout } from '@mcp-abap-adt/connection';
 try {
   await connection.makeAdtRequest({
     method: 'GET',
     url: '/sap/bc/adt/repository/nodestructure',
+    timeout: getTimeout('default'),
   });
 } catch (error) {
+  const failure = error as {
+    code?: string;
+    response?: { status: number; data: unknown };
+    message?: string;
+  };
   // Check for specific network error codes
-  if (error.code === 'ECONNREFUSED') {
+  if (failure.code === 'ECONNREFUSED') {
     console.error('Cannot connect to SAP server - check VPN connection');
-  } else if (error.code === 'ETIMEDOUT') {
+  } else if (failure.code === 'ETIMEDOUT') {
     console.error('Connection timeout - server not responding');
-  } else if (error.code === 'ENOTFOUND') {
+  } else if (failure.code === 'ENOTFOUND') {
     console.error('Cannot resolve hostname - check SAP URL');
-  } else if (error.response) {
-    console.error(`HTTP ${error.response.status}:`, error.response.data);
+  } else if (failure.response) {
+    console.error(`HTTP ${failure.response.status}:`, failure.response.data);
   } else {
-    console.error('Request failed:', error.message);
+    console.error('Request failed:', failure.message);
   }
 }
 ```
@@ -616,6 +725,8 @@ try {
 connection satisfies, including RFC:
 
 ```typescript
+import { AbapRequestOptions } from '@mcp-abap-adt/connection';
+import type { AxiosResponse } from 'axios';
 interface AbapConnection {
   connect(): Promise<void>; // REQUIRED before any request
   makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
@@ -625,27 +736,42 @@ interface AbapConnection {
 }
 ```
 
-Anything beyond that is **not** on the contract. `getSessionMode()`
-and the session lifecycle (`disconnect()`, `isConnected()`,
-`getSessionIdentity()`) live on the HTTP
-connection classes; `RfcAbapConnection` has some of them and not others, so
-reach for them through a concrete type rather than through what
-`createAbapConnection()` returns.
+Anything beyond that is **not** on the contract. `getSessionMode()` and the
+session lifecycle (`disconnect()`, `isConnected()`, `getSessionIdentity()`) live
+on the connectors — both of them, over either wire — so reach for them through a
+connector type or through the `ISessionLifecycleAware` atom, not through a bare
+`IAbapConnection` somebody handed you.
 
 ### `AdtOnPremConnector` / `AdtCloudConnector`
 
 One per system, each handed an auth provider:
 
-```typescript
-class AdtOnPremConnector extends CredentialAbapConnection {
+```text
+class AdtOnPremConnector<
+  TCredential extends IAuthProvider = IAuthProvider,
+  TTransport extends IOnPremTransport = OnPremHttpTransport,
+> {
   constructor(
     config: SapConfig,
-    provider: IAuthProvider,
+    credential: TCredential,
+    transport: TTransport,
     logger?: ILogger | null,
     sessionId?: string,
   );
 }
-// AdtCloudConnector has the same shape.
+
+class AdtCloudConnector<
+  TCredential extends IAuthProvider = IAuthProvider,
+  TTransport extends ICloudTransport = CloudHttpTransport,
+> {
+  constructor(
+    config: SapConfig,
+    credential: TCredential,
+    transport: TTransport,
+    logger?: ILogger | null,
+    sessionId?: string,
+  );
+}
 ```
 
 The difference is what each does with the session: on-prem takes it from the
@@ -653,23 +779,47 @@ establishing call and gives it back with the platform's ICF logoff; cloud opens
 one at `/sap/bc/adt/core/http/sessions` and gives it back by `DELETE` on the
 address the server publishes.
 
-### `BaseAbapConnection` (Basic Auth) — deprecated
+**Both take a transport, and neither defaults one.** What differs is the CHOICE,
+and the type parameter is where that is said: `TTransport` is bound to
+`IOnPremTransport` on one and to `ICloudTransport` on the other, so on-prem
+admits HTTP or RFC while "cloud over RFC" does not compile — there is no such
+deployment. The parameter also records what a connection was built with, so a
+signature can ask for `AdtOnPremConnector<IAuthProvider, RfcTransport>` and be
+given one, instead of taking any connection and casting.
 
-The previous shape, where the class stated the credential. Still works; see
-[Migration to 5.0](./MIGRATION-5.0.md).
+### `HttpTransport` / `RfcTransport`
 
-```typescript
-class BaseAbapConnection extends AbstractAbapConnection {
-  constructor(config: SapConfig, logger?: ILogger | null, sessionId?: string);
-}
+What a request travels over, and everything true of that wire: addressing,
+establishing, and whatever session state it keeps.
+
+```text
+new HttpTransport(agentOptions?, logger?, { client?, baseUrl? })
+new RfcTransport(connect: () => IRfcConversation, logger?)
 ```
+
+`HttpTransport` is the ordinary wire, and you name it because the connector
+takes no default. In practice you name one of its two subclasses — the session
+mechanism is what differs, and `OnPremHttpTransport` / `CloudHttpTransport` are
+what the connectors' type parameters admit. `RfcTransport`
+you build with `rfcConversationFrom(config)`, which derives `ashost` and `sysnr`
+and loads the SAP NW RFC SDK only when a conversation opens.
+
+The two differ in what they have, not in what they are asked:
+
+| | HTTP | RFC |
+|---|---|---|
+| session is | an ICF session, addressed by `SAP_SESSIONID` | the conversation itself |
+| `establish()` | earns a CSRF token, and the cookies with it | nothing to earn |
+| cookies | a jar, replayed on every request | none, ever |
+| affinity | `sap-adt-saplb`, to stay on one app server | none |
+| visible in | SM05 | SMGW → Logged on Clients |
 
 ### `CSRF_CONFIG` and `CSRF_ERROR_MESSAGES` (New in 0.1.13+)
 
 Exported constants for consistent CSRF token handling across different connection implementations:
 
-```typescript
-import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from '@mcp-abap-adt/connection';
+```text
+// Imported from '@mcp-abap-adt/connection'; shapes, not runnable code.
 
 // CSRF_CONFIG structure:
 const config = {
@@ -726,7 +876,7 @@ export class CloudSdkAbapConnection {
           throw new Error(
             CSRF_ERROR_MESSAGES.FETCH_FAILED(
               CSRF_CONFIG.RETRY_COUNT + 1,
-              error instanceof Error ? error.message : String(error)
+              error instanceof Error ? failure.message : String(error)
             )
           );
         }
@@ -740,52 +890,43 @@ export class CloudSdkAbapConnection {
 ```
 
 
-### `JwtAbapConnection` (JWT/OAuth2) — deprecated
+### The credential, and how a refusal is classified
 
-For SAP BTP cloud systems. Token refresh is handled by `@mcp-abap-adt/auth-broker`:
+For SAP BTP cloud systems, hand `AdtCloudConnector` a `TokenAuthProvider`. A bare
+string is a token with nothing behind it; an `ITokenRefresher` is a provider that
+checks expiry and renews on its own, which is what you want in anything
+long-lived. Obtaining tokens in the first place is `@mcp-abap-adt/auth-broker`'s
+job, not this package's.
 
-```typescript
-class JwtAbapConnection extends AbstractAbapConnection {
-  constructor(
-    config: SapConfig,
-    logger?: ILogger | null,
-    sessionId?: string,
-    tokenRefresher?: ITokenRefresher,
-  );
-  // Note: refreshToken() and canRefreshToken() methods removed in 0.2.0
-  // Token acquisition itself belongs to @mcp-abap-adt/auth-broker
-}
+```text
+new AdtCloudConnector(
+  config,
+  new TokenAuthProvider(refresher),   // or a bare token string
+  new CloudHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }),
+  logger,
+);
 ```
 
-**How failures are classified** (4.0.0 — see
-[MIGRATION-4.0.md](./MIGRATION-4.0.md)):
+**How failures are classified** (6.0.0 — see
+[MIGRATION-6.0.md](./MIGRATION-6.0.md)):
 
 | answer | what happens |
 |---|---|
-| **401** | with an injected `ITokenRefresher`, the token is refreshed, the SAP session re-established, and the request retried once. Without one, or when the retry is refused too, the server's error is rethrown |
+| **401** | **surfaces.** Nothing here decides to get a new credential. An EXPIRED token is already replaced without anyone deciding — the provider is asked per request and checks expiry before answering — so a 401 is the other case: a credential the source still believes in and the server refuses. Whether that means "stale" is a judgement made with what you know, and `renew()` on an `IRenewableCredential` is the seam you make it with. The session is untouched: a refused credential is not a lost session |
 | **403** | propagates untouched. The server authenticated the caller and refused the action anyway, so a new token is the same caller — usually the body names the authorization object |
 | anything else | untouched |
 
-The connection never replaces the server's error with one of its own: `error.response.status` and
-`error.response.data` are always what SAP sent. Before 4.0.0 both 401 and 403 were reported as
-`JWT token has expired. Please re-authenticate.` with the original error discarded.
+The connection never replaces the server's error with one of its own:
+`failure.response.status` and `failure.response.data` are always what SAP sent.
 
-Concurrent requests that meet the same expired token share **one** renewal — a single token fetch
-and a single session re-establishment between them, not one each.
+Concurrent requests that meet the same expired token share **one** renewal — a
+single token fetch and a single session re-establishment between them, not one
+each.
 
-### `createAbapConnection()` Factory
-
-Recommended way to create connections:
-
-```typescript
-function createAbapConnection(
-  config: SapConfig,
-  logger?: ILogger | null,
-  sessionId?: string
-): AbapConnection;
-```
-
-Auto-detects auth type and returns appropriate connection instance.
+**A refusal during `connect()` surfaces.** Nothing is renewed behind you there:
+the provider already renews on expiry it can see, every time it is asked for a
+header, so a refusal at establishment means the credential needs attention that
+this library cannot give it.
 
 ### Configuration Types
 
@@ -817,11 +958,11 @@ See [examples/](../examples/) for complete working examples:
 
 ## Best Practices
 
-1. **Use Factory Function**: Prefer `createAbapConnection()` over direct instantiation - it auto-detects auth type
+1. **State the three axes**: the connector says which system, the provider says which credential, the transport says which wire. Nothing is detected, and a connection that had to guess would guess wrong on the case that matters
 2. **Enable Stateful Mode**: Use `setSessionType('stateful')` for multi-request operations (locks, transactions)
 3. **Token Refresh**: For cloud systems, use `@mcp-abap-adt/auth-broker` for token refresh functionality
 4. **Session State Persistence**: Use `@mcp-abap-adt/auth-broker` for session state persistence
-5. **Handle Errors Gracefully**: Wrap requests in try-catch blocks and check `error.response` for HTTP errors
+5. **Handle Errors Gracefully**: Wrap requests in try-catch blocks and check `failure.response` for HTTP errors
 6. **Use Proper Logging**: Implement custom logger for production systems with appropriate log levels (logger is optional)
 7. **Session ID Management**: Session IDs are auto-generated (UUID) or can be provided when creating connection
 8. **Switch Session Types**: Use `setSessionType()` to dynamically change between stateful/stateless modes

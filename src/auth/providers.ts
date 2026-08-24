@@ -8,25 +8,38 @@
  * returned. Nothing about how a credential works changed; only who owns it.
  */
 
-import type { AgentOptions } from 'node:https';
 import type {
+  IAuthProvider,
   ICertificateMaterial,
   ICertificateMaterialLoader,
+  IRenewableCredential,
   ISapConfig,
   ITokenRefresher,
 } from '@mcp-abap-adt/interfaces';
-import type { IAuthProvider } from './IAuthProvider.js';
 
 /** Username and password, as `Basic base64(user:pass)`. */
 export class BasicAuthProvider implements IAuthProvider {
   readonly kind = 'basic';
+
+  /** Nothing to get ready: this credential is complete as constructed. */
+  async prepare(): Promise<void> {}
+
+  /** Not cookies. This one authenticates with a header. */
+  cookies(): string | null {
+    return null;
+  }
+
+  /** No TLS material: this credential lives in a header, not in the transport. */
+  transportMaterial(): ICertificateMaterial {
+    return {};
+  }
 
   constructor(
     private readonly username: string,
     private readonly password: string,
   ) {}
 
-  async authorizationHeader(): Promise<string> {
+  async authorizationHeader(): Promise<string | null> {
     return `Basic ${Buffer.from(`${this.username ?? ''}:${this.password ?? ''}`).toString('base64')}`;
   }
 }
@@ -43,8 +56,21 @@ export class BasicAuthProvider implements IAuthProvider {
  * credential behind it is renewed mid-flight is the connection's business and
  * stays there; see `JwtAbapConnection`, which still owns that machinery.
  */
-export class TokenAuthProvider implements IAuthProvider {
+export class TokenAuthProvider implements IRenewableCredential {
   readonly kind = 'token';
+
+  /** Nothing to get ready: this credential is complete as constructed. */
+  async prepare(): Promise<void> {}
+
+  /** Not cookies. This one authenticates with a header. */
+  cookies(): string | null {
+    return null;
+  }
+
+  /** No TLS material: this credential lives in a header, not in the transport. */
+  transportMaterial(): ICertificateMaterial {
+    return {};
+  }
 
   /**
    * A token, or something that can produce one.
@@ -66,7 +92,7 @@ export class TokenAuthProvider implements IAuthProvider {
    * stale one and hide exactly the renewal the provider exists to do — which
    * is what the first version of this class did.
    */
-  async authorizationHeader(): Promise<string> {
+  async authorizationHeader(): Promise<string | null> {
     const token =
       typeof this.source === 'string'
         ? this.source
@@ -78,6 +104,17 @@ export class TokenAuthProvider implements IAuthProvider {
 
   /**
    * The token was refused, so force a new one.
+   *
+   * Declared through `IRenewableCredential` rather than as an optional member
+   * of every credential, so a consumer narrows to it: a password has nothing
+   * behind it to ask again, and a SAML session was negotiated elsewhere.
+   *
+   * **Nothing in this package calls it.** A token that EXPIRED is replaced
+   * inside `authorizationHeader()` above, which is asked per request — nobody
+   * decides anything. This is the other case, a token the source still believes
+   * in and the server refuses, and whether a refusal meant that is a judgement
+   * made with what the caller knows. So the refusal surfaces, and this is the
+   * seam the caller decides with.
    *
    * `getToken()` is documented to return the cached token while it believes it
    * is still valid — which is exactly the situation after a 401 on a token the
@@ -103,10 +140,19 @@ export class TokenAuthProvider implements IAuthProvider {
 export class SamlAuthProvider implements IAuthProvider {
   readonly kind = 'saml';
 
+  /** Nothing to get ready: this credential is complete as constructed. */
+  async prepare(): Promise<void> {}
+
+  /** No TLS material: this credential lives in a header, not in the transport. */
+  transportMaterial(): ICertificateMaterial {
+    return {};
+  }
+
   constructor(private readonly sessionCookies: string) {}
 
-  async authorizationHeader(): Promise<string> {
-    return '';
+  /** Not a header: this credential authenticates with the cookies below. */
+  async authorizationHeader(): Promise<string | null> {
+    return null;
   }
 
   /** The cookies to present. */
@@ -124,6 +170,12 @@ export class SamlAuthProvider implements IAuthProvider {
  */
 export class CertificateAuthProvider implements IAuthProvider {
   readonly kind = 'certificate';
+
+  /** Not cookies. This one authenticates with a header. */
+  cookies(): string | null {
+    return null;
+  }
+
   private material: ICertificateMaterial | null = null;
 
   constructor(
@@ -137,11 +189,12 @@ export class CertificateAuthProvider implements IAuthProvider {
     }
   }
 
-  async authorizationHeader(): Promise<string> {
-    return '';
+  /** Not a header: this credential authenticates through TLS. */
+  async authorizationHeader(): Promise<string | null> {
+    return null;
   }
 
-  httpsAgentOptions(): AgentOptions {
+  transportMaterial(): ICertificateMaterial {
     if (!this.material) {
       throw new Error(
         'CertificateAuthProvider: certificate material not loaded. connect() prepares it; a request before that has nothing to present.',

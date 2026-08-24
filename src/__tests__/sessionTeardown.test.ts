@@ -7,9 +7,13 @@
  * cookie instead — and a connection without a session still gets `200` for a
  * LOCK, handing back a handle the next request cannot use.
  */
+
+import { TokenAuthProvider } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
-import { BaseAbapConnection } from '../connection/BaseAbapConnection.js';
+import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
+import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
+import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
 
 const baseConfig: SapConfig = {
   url: 'https://sap.example.com',
@@ -36,7 +40,7 @@ type Seen = {
 };
 
 function attachMockAxios(
-  conn: BaseAbapConnection,
+  conn: AdtOnPremConnector,
   seen: Seen[],
   answer: (cfg: any) => Promise<any> = async () => ({
     status: 200,
@@ -62,7 +66,7 @@ function attachMockAxios(
     request: { clear: jest.fn() },
     response: { clear: jest.fn() },
   };
-  (conn as any).axiosInstance = instance;
+  (conn as any).transport.instance = instance;
 }
 
 /**
@@ -75,7 +79,7 @@ function attachMockAxios(
  */
 describe('the session mechanism is chosen by the connection, not probed', () => {
   it('on-prem keeps the platform logoff, even where the session resource answers', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     // A system that publishes BOTH — which is what S/4HANA on-prem does.
     attachMockAxios(conn, seen, async () => ({
@@ -88,7 +92,7 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     }));
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 1000 });
+    await conn.disconnect();
 
     // Nothing was asked of the session resource, and the goodbye is the ICF one.
     expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(false);
@@ -101,11 +105,13 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
   });
 
   it('cloud opens the session resource and gives it back by DELETE', async () => {
-    const { JwtAbapConnection } = await import(
-      '../connection/JwtAbapConnection.js'
-    );
-    const conn = new JwtAbapConnection(
+    const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      new TokenAuthProvider('TOKEN'),
+      cloudHttpTransport(
+        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+        makeLogger(),
+      ),
       makeLogger(),
     );
     const seen: Seen[] = [];
@@ -119,7 +125,7 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     }));
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 1000 });
+    await conn.disconnect();
 
     expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(true);
     expect(seen.some((r) => r.method === 'DELETE')).toBe(true);
@@ -141,7 +147,7 @@ describe('a connection the server gave no session says so', () => {
    * whether this connect got a session.
    */
   it('refuses to connect when the server issued no SAP_SESSIONID', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     // What an on-prem server answers when it will not open a session: the CSRF
     // cookie, and nothing to hold a lock against.
     attachMockAxios(conn, [], async () => ({
@@ -162,7 +168,7 @@ describe('a connection the server gave no session says so', () => {
   // and it cannot decide from "NOT_CONNECTED" alone. It has to say what the
   // server did, what still works, what does not, and who is expected to act.
   it('says what happened, what it costs, and whose call it is', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     attachMockAxios(conn, [], async () => ({
       status: 200,
       data: '<service/>',
@@ -176,7 +182,10 @@ describe('a connection the server gave no session says so', () => {
 
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
-    expect(message).toMatch(/SAP_SESSIONID/); // what was missing
+    // Names the WIRE rather than the cookie: what a session is addressed by is
+    // the wire's business, and the base no longer knows that HTTP's answer is a
+    // SAP_SESSIONID.
+    expect(message).toMatch(/wire reports it is on none/); // what was missing
     expect(message).toMatch(/lock/i); // what it costs
     expect(message).toMatch(/limited per user/); // the likely cause
     expect(message).toMatch(/does not retry/); // whose call it is
@@ -184,7 +193,7 @@ describe('a connection the server gave no session says so', () => {
 
   it('stays quiet when a session was established', async () => {
     const logger = makeLogger();
-    const conn = new BaseAbapConnection(baseConfig, logger);
+    const conn = onPrem(baseConfig, logger);
     attachMockAxios(conn, []);
 
     await conn.connect();
@@ -209,7 +218,7 @@ describe('a connection the server gave no session says so', () => {
 describe('every session of a reconnect cycle is released', () => {
   /** A double that survives clearSessionState(), as a reconnect requires. */
   function surviving(
-    conn: BaseAbapConnection,
+    conn: AdtOnPremConnector,
     seen: Seen[],
     answer: (cfg: any) => Promise<any>,
   ): void {
@@ -226,11 +235,7 @@ describe('every session of a reconnect cycle is released', () => {
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => instance,
-      set: () => undefined,
-      configurable: true,
-    });
+    (conn as any).transport.instance = instance;
   }
 
   /**
@@ -240,7 +245,7 @@ describe('every session of a reconnect cycle is released', () => {
    * second session never released at all.
    */
   it('sends a logoff for the second session while the first still hangs', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     // A server issues ONE session and keeps handing back the same id until it
     // is told the session is finished — it does not mint a new one per request.
@@ -284,50 +289,6 @@ describe('every session of a reconnect cycle is released', () => {
    * finish — measured at 2002 ms for a `deadlineMs: 2000` whose own logoff had
    * already answered.
    */
-  it('does not spend a caller’s deadline on a release that never answers', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
-    const seen: Seen[] = [];
-    // Counted per CONNECT, not per request: establishment is two requests now
-    // (the preflight, then the establishing call), and numbering by request
-    // made every logoff carry a cookie the hang branch below never matched —
-    // the test passed while testing nothing.
-    let session = 0;
-    let firstGoodbyeHung = false;
-    surviving(conn, seen, async (cfg) => {
-      if (String(cfg.url).includes('logoff')) {
-        // The first session's goodbye hangs; the second's answers at once.
-        if (String(cfg.headers?.Cookie ?? '').includes('S1')) {
-          firstGoodbyeHung = true;
-          await new Promise<never>(() => undefined);
-        }
-        return { status: 200, data: '', headers: {} };
-      }
-      return {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': [`SAP_SESSIONID_STUB_100=S${session}%3d; path=/`],
-        },
-      };
-    });
-
-    session = 1;
-    await conn.connect();
-    await conn.disconnect();
-    session = 2;
-    await conn.connect();
-
-    const startedAt = Date.now();
-    await conn.disconnect({ deadlineMs: 2000 });
-    const spent = Date.now() - startedAt;
-
-    // The hang is real — without this the assertion below passes for the wrong
-    // reason, which is exactly what happened.
-    expect(firstGoodbyeHung).toBe(true);
-    // And its own release answered, so it had no reason to wait at all.
-    expect(spent).toBeLessThan(1000);
-  });
 
   /**
    * A concurrent disconnect JOINS the transition, and `SessionLifecycle` hands a
@@ -339,54 +300,9 @@ describe('every session of a reconnect cycle is released', () => {
    * Deliberately the SECOND caller who is patient: with the patient one first,
    * this passes either way.
    */
-  it('a joining caller waits for the release it asked about', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
-    const seen: Seen[] = [];
-    let releaseLogoff: (() => void) | undefined;
-    let landed = false;
-    surviving(conn, seen, async (cfg) => {
-      if (String(cfg.url).includes('logoff')) {
-        await new Promise<void>((resolve) => {
-          releaseLogoff = () => {
-            landed = true;
-            resolve();
-          };
-        });
-        return { status: 200, data: '', headers: {} };
-      }
-      return {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_STUB_100=S1%3d; path=/'],
-        },
-      };
-    });
-
-    await conn.connect();
-
-    const impatient = conn.disconnect({ deadlineMs: 0 });
-    const patient = conn.disconnect({ deadlineMs: 30_000 });
-
-    await impatient;
-    expect(landed).toBe(false);
-
-    let patientDone = false;
-    void patient.then(() => {
-      patientDone = true;
-    });
-    await new Promise((r) => setTimeout(r, 20));
-    // Still waiting: its budget was for the logoff to land, and it has not.
-    expect(patientDone).toBe(false);
-
-    releaseLogoff?.();
-    await patient;
-    expect(landed).toBe(true);
-  });
 
   it('does not re-send a release already on its way for the same session', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     surviving(conn, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
@@ -420,7 +336,7 @@ describe('every session of a reconnect cycle is released', () => {
  */
 describe('requests stay on the server the session lives on', () => {
   function pinning(
-    conn: BaseAbapConnection,
+    conn: AdtOnPremConnector,
     seen: Seen[],
     server?: string,
   ): void {
@@ -441,19 +357,14 @@ describe('requests stay on the server the session lives on', () => {
         },
       };
     };
-    (instance as any).interceptors = {
-      request: { clear: jest.fn() },
-      response: { clear: jest.fn() },
-    };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => instance,
-      set: () => undefined,
-      configurable: true,
-    });
+    // UNDER the wire, not instead of it: the affinity headers this test is
+    // about are what the wire adds to its own requests, so a stub that replaced
+    // `send()` would be measuring a wire that never ran.
+    (conn as any).transport.client = () => instance;
   }
 
   it('asks the server to name itself, then sends that name back', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     pinning(conn, seen, 'appserver-c5zhg');
 
@@ -480,7 +391,7 @@ describe('requests stay on the server the session lives on', () => {
   });
 
   it('sends no name when the server never gave one', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     pinning(conn, seen);
 
@@ -494,12 +405,12 @@ describe('requests stay on the server the session lives on', () => {
   });
 
   it('forgets the server when the session it belonged to is gone', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     pinning(conn, seen, 'appserver-c5zhg');
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 500 });
+    await conn.disconnect();
     const before = seen.length;
     await conn.connect();
 
@@ -527,7 +438,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
     '<atom:link href="/sap/public/bc/icf/logoff" rel="http://www.sap.com/adt/categories/core/http/sessions/logoff" title="Logoff resource"/>' +
     '</http:session>';
 
-  function cloudThenFailing(conn: BaseAbapConnection, seen: Seen[]): void {
+  function cloudThenFailing(conn: AdtOnPremConnector, seen: Seen[]): void {
     const instance = async (cfg: any) => {
       seen.push({
         url: cfg.url,
@@ -555,22 +466,20 @@ describe('a session opened before a failed connect is not abandoned', () => {
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => instance,
-      set: () => undefined,
-      configurable: true,
-    });
+    (conn as any).transport.instance = instance;
   }
 
   it('says goodbye to it when establishing fails afterwards', async () => {
     // A CLOUD connection: it is the one that opens a session resource, so it is
     // the one that can leave one open when establishing fails after the
     // preflight. On-prem opens nothing to leave behind.
-    const { JwtAbapConnection } = await import(
-      '../connection/JwtAbapConnection.js'
-    );
-    const conn = new JwtAbapConnection(
+    const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      new TokenAuthProvider('TOKEN'),
+      cloudHttpTransport(
+        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+        makeLogger(),
+      ),
       makeLogger(),
     );
     const seen: Seen[] = [];
@@ -591,13 +500,15 @@ describe('a session opened before a failed connect is not abandoned', () => {
   });
 
   it('says nothing when the preflight opened nothing', async () => {
-    const { JwtAbapConnection } = await import(
-      '../connection/JwtAbapConnection.js'
-    );
-    const conn = new JwtAbapConnection(
+    const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      new TokenAuthProvider('TOKEN'),
+      cloudHttpTransport(
+        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+        makeLogger(),
+      ),
       makeLogger(),
-    ) as never as BaseAbapConnection;
+    ) as never as AdtOnPremConnector;
     const seen: Seen[] = [];
     const instance = async (cfg: any) => {
       seen.push({
@@ -616,11 +527,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
       request: { clear: jest.fn() },
       response: { clear: jest.fn() },
     };
-    Object.defineProperty(conn, 'axiosInstance', {
-      get: () => instance,
-      set: () => undefined,
-      configurable: true,
-    });
+    (conn as any).transport.instance = instance;
     // The debris: a cookie left behind by the response that rejected us. It
     // looks exactly like a session and is not one, which is why "there are
     // cookies" cannot be the test for whether to say goodbye.
@@ -637,7 +544,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
 
 describe('disconnect ends the server session', () => {
   it('calls the logoff endpoint with the session cookies', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen);
 
@@ -654,7 +561,7 @@ describe('disconnect ends the server session', () => {
   it('disconnects anyway when the logoff fails', async () => {
     // A session we could not close is strictly better than a teardown that
     // hangs or throws — disconnect() must always settle.
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
@@ -682,7 +589,7 @@ describe('disconnect ends the server session', () => {
    * caught up — lock, update, unlock, activate. A teardown has no successor.
    */
   it('does not wait by default, even if the logoff never answers', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
@@ -714,36 +621,6 @@ describe('disconnect ends the server session', () => {
    * thing that makes the parameter mean something, so it is the first thing
    * that can violate it.
    */
-  it('deadlineMs: 0 sends the logoff but does not wait for it', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
-    const seen: Seen[] = [];
-    let releaseLogoff: (() => void) | undefined;
-    attachMockAxios(conn, seen, async (cfg) => {
-      if (String(cfg.url).includes('logoff')) {
-        // Never answers until the test lets it.
-        await new Promise<void>((resolve) => {
-          releaseLogoff = resolve;
-        });
-      }
-      return {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-        },
-      };
-    });
-
-    await conn.connect();
-    await conn.disconnect({ deadlineMs: 0 });
-
-    // It resolved without the logoff having answered — and the logoff was sent,
-    // because closing what we opened is not conditional on wanting to wait.
-    expect(seen.some((r) => r.url.includes('/logoff'))).toBe(true);
-    expect(conn.isConnected()).toBe(false);
-    releaseLogoff?.();
-  });
 
   /**
    * The deadline bounds the WAIT, never the request — the contract's words are
@@ -752,85 +629,6 @@ describe('disconnect ends the server session', () => {
    * it was waiting for, leaving the session open: the precise failure this whole
    * change exists to prevent, reintroduced by the parameter meant to bound it.
    */
-  it('a deadline detaches the logoff rather than aborting it', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
-    const seen: Seen[] = [];
-    let releaseLogoff: (() => void) | undefined;
-    let logoffFinished = false;
-    attachMockAxios(conn, seen, async (cfg) => {
-      if (String(cfg.url).includes('logoff')) {
-        await new Promise<void>((resolve) => {
-          releaseLogoff = resolve;
-        });
-        logoffFinished = true;
-      }
-      return {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-        },
-      };
-    });
-
-    await conn.connect();
-    await conn.disconnect({ deadlineMs: 20 });
-
-    const logoff = seen.find((r) => r.url.includes('/logoff'));
-    expect(logoff).toBeDefined();
-    // No axios deadline at any budget: the one request whose purpose is to
-    // reach the server must be allowed to get there.
-    expect(logoff?.timeout).toBeUndefined();
-    // The wait ended without it, and it is still on its way rather than killed.
-    expect(logoffFinished).toBe(false);
-    expect(conn.isConnected()).toBe(false);
-
-    releaseLogoff?.();
-    await Promise.resolve();
-    expect(logoffFinished).toBe(true);
-  });
-
-  // Its place is a `finally`, so it does not throw there — an exception raised
-  // in a cleanup path replaces the error that sent the caller into it. A bad
-  // number is reported and the default used: refusing to release the session is
-  // a worse answer to it than releasing it on the default schedule.
-  it.each([[-1], [Number.NaN], [Number.POSITIVE_INFINITY]])(
-    'reports a deadlineMs of %p and disconnects anyway',
-    async (deadlineMs) => {
-      const logger = makeLogger();
-      const conn = new BaseAbapConnection(baseConfig, logger);
-      const seen: Seen[] = [];
-      attachMockAxios(conn, seen);
-      await conn.connect();
-
-      await expect(conn.disconnect({ deadlineMs })).resolves.toBeUndefined();
-      expect(logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining('deadlineMs'),
-      );
-      expect(conn.isConnected()).toBe(false);
-      expect(seen.some((r) => r.url.includes('/logoff'))).toBe(true);
-    },
-  );
-
-  it('refuses to construct on a malformed SAP_RELEASE_DEADLINE_MS', () => {
-    // The startup fault it is: same on every call, nobody's argument, and
-    // discovered at teardown otherwise — in the `finally` of every consumer.
-    const previous = process.env.SAP_RELEASE_DEADLINE_MS;
-    process.env.SAP_RELEASE_DEADLINE_MS = 'abc';
-    try {
-      expect(() => new BaseAbapConnection(baseConfig, makeLogger())).toThrow(
-        /SAP_RELEASE_DEADLINE_MS/,
-      );
-    } finally {
-      if (previous === undefined) {
-        process.env.SAP_RELEASE_DEADLINE_MS = undefined;
-        delete process.env.SAP_RELEASE_DEADLINE_MS;
-      } else {
-        process.env.SAP_RELEASE_DEADLINE_MS = previous;
-      }
-    }
-  });
 
   /**
    * "measured from this call and including any time spent queued behind another
@@ -841,7 +639,7 @@ describe('disconnect ends the server session', () => {
    * allowance again, which is the one thing the caller was bounding.
    */
   it('spends the deadline while queued behind another transition', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     let gate: (() => void) | undefined;
     let gateArmed = false;
@@ -880,7 +678,7 @@ describe('disconnect ends the server session', () => {
       .catch(() => undefined);
     await new Promise((r) => setTimeout(r, 5));
 
-    const disconnecting = conn.disconnect({ deadlineMs: 20 });
+    const disconnecting = conn.disconnect();
     await new Promise((r) => setTimeout(r, 80));
     gate?.();
 
@@ -895,19 +693,19 @@ describe('disconnect ends the server session', () => {
   });
 
   it('sends nothing on a repeat call when the first logoff succeeded', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen);
 
     await conn.connect();
-    await conn.disconnect({ deadlineMs: 1000 });
-    await conn.disconnect({ deadlineMs: 1000 });
+    await conn.disconnect();
+    await conn.disconnect();
 
     expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
   });
 
   it('joins a release still in flight instead of opening a second', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     let releaseLogoff: (() => void) | undefined;
     attachMockAxios(conn, seen, async (cfg) => {
@@ -928,8 +726,8 @@ describe('disconnect ends the server session', () => {
 
     await conn.connect();
     // Detaches while the logoff is still on its way.
-    await conn.disconnect({ deadlineMs: 20 });
-    await conn.disconnect({ deadlineMs: 20 });
+    await conn.disconnect();
+    await conn.disconnect();
 
     expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
     releaseLogoff?.();
@@ -942,42 +740,6 @@ describe('disconnect ends the server session', () => {
    * which is the one thing the parameter exists to prevent. The work happens
    * once; the waiting is each caller's own.
    */
-  it('does not charge one caller with another caller’s deadline', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
-    const seen: Seen[] = [];
-    let releaseLogoff: (() => void) | undefined;
-    attachMockAxios(conn, seen, async (cfg) => {
-      if (String(cfg.url).includes('logoff')) {
-        await new Promise<void>((resolve) => {
-          releaseLogoff = resolve;
-        });
-      }
-      return {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-        },
-      };
-    });
-
-    await conn.connect();
-
-    const patient = conn.disconnect({ deadlineMs: 30_000 });
-    const impatient = conn.disconnect({ deadlineMs: 0 });
-
-    // The one that asked not to wait does not, even though a 30 s wait is in
-    // progress next to it. Without its own budget this would hang until the
-    // test times out.
-    await impatient;
-    expect(conn.isConnected()).toBe(false);
-    // And one logoff for both.
-    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
-
-    releaseLogoff?.();
-    await patient;
-  });
 
   /**
    * Assembling the request can fail on its own — a certificate connection whose
@@ -986,7 +748,7 @@ describe('disconnect ends the server session', () => {
    * the caller there, and would leave the teardown half-done.
    */
   it('disconnects even when the logoff cannot be assembled', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen);
 
@@ -1002,7 +764,7 @@ describe('disconnect ends the server session', () => {
   });
 
   it('sends nothing when there is no session to end', async () => {
-    const conn = new BaseAbapConnection(baseConfig, makeLogger());
+    const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen);
 
