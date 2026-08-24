@@ -426,33 +426,6 @@ abstract class AbstractAbapConnection
    * the session is ours, and nothing else. It cannot reach session state, so a
    * strategy can neither mark this connection connected nor tear it down.
    */
-  /**
-   * Whether a 401 belongs to the credential rather than to the session.
-   *
-   * The session-level retries below exist to ACQUIRE COOKIES: discard a stale
-   * CSRF token and ask again, or retry a GET now that the refusal has brought
-   * cookies with it. They help exactly one kind of credential — one that
-   * authenticates from scratch on every request with a header it can always
-   * rebuild, so the only thing that can differ between two attempts is the
-   * session.
-   *
-   * Two kinds they do not help, and actively harm:
-   *
-   *   - one that can RENEW. Retrying swallows the refusal, and the credential
-   *     never learns the token it handed out was rejected.
-   *   - one that CARRIES cookies of its own — a SAML session negotiated
-   *     elsewhere and handed over. A 401 there says that session is dead, and
-   *     no number of retries with the same cookies will change it.
-   *
-   * Asked of the credential rather than read off `config.authType`, which is
-   * what this used to do. A config string is a claim about what was configured;
-   * `renew` and `cookies` are the object saying what it actually is — and a
-   * consumer's own provider gets the right answer without this class knowing it
-   * exists.
-   */
-  protected credentialAnswersRefusals(): boolean {
-    return false;
-  }
 
   /**
    * Ask the server to open a session before the establishing call needs one.
@@ -879,7 +852,7 @@ abstract class AbstractAbapConnection
           // If CSRF token can't be fetched upfront, continue anyway
           // The retry logic will handle CSRF token errors automatically
           this.logger?.debug(
-            `[DEBUG] BaseAbapConnection - Could not fetch CSRF token upfront, will retry on error: ${error instanceof Error ? error.message : String(error)}`,
+            `Could not fetch CSRF token upfront, will retry on error: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       }
@@ -1089,7 +1062,6 @@ abstract class AbstractAbapConnection
       // these retries happen first and it only sees a 401 that survived them.
       // Nothing collides, so nothing needs to be excluded.
       const isCachedTokenStale =
-        !this.credentialAnswersRefusals() &&
         (normalizedMethod === 'POST' ||
           normalizedMethod === 'PUT' ||
           normalizedMethod === 'DELETE') &&
@@ -1157,16 +1129,12 @@ abstract class AbstractAbapConnection
       // none, and the session they name is what the retry needs. Guarded below
       // on actually holding some, so a wire that issues no cookies — RFC —
       // never takes it.
-      if (
-        refusalOf(error)?.status === 401 &&
-        normalizedMethod === 'GET' &&
-        !this.credentialAnswersRefusals()
-      ) {
+      if (refusalOf(error)?.status === 401 && normalizedMethod === 'GET') {
         // If we already have cookies from error response, retry immediately
         const afterError = this.transport.cookies();
         if (afterError) {
           this.logger?.debug(
-            `[DEBUG] BaseAbapConnection - 401 on GET request, retrying with cookies from error response`,
+            `401 on GET request, retrying with cookies from error response`,
           );
           requestHeaders.Cookie = afterError;
 
@@ -1181,7 +1149,7 @@ abstract class AbstractAbapConnection
 
         // If no cookies, try to get them via CSRF token fetch
         this.logger?.debug(
-          `[DEBUG] BaseAbapConnection - 401 on GET request, attempting to get cookies via CSRF token fetch`,
+          `401 on GET request, attempting to get cookies via CSRF token fetch`,
         );
         try {
           // Try to get CSRF token (this will also get cookies)
@@ -1192,7 +1160,7 @@ abstract class AbstractAbapConnection
           if (afterCsrf) {
             requestHeaders.Cookie = afterCsrf;
             this.logger?.debug(
-              `[DEBUG] BaseAbapConnection - Retrying GET request with cookies from CSRF fetch`,
+              `Retrying GET request with cookies from CSRF fetch`,
             );
 
             const retryResponse = await this.transport.send(requestConfig);
@@ -1208,7 +1176,7 @@ abstract class AbstractAbapConnection
             throw csrfError;
           }
           this.logger?.debug(
-            `[DEBUG] BaseAbapConnection - Failed to get CSRF token for 401 retry: ${csrfError instanceof Error ? csrfError.message : String(csrfError)}`,
+            `Failed to get CSRF token for 401 retry: ${csrfError instanceof Error ? csrfError.message : String(csrfError)}`,
           );
           // Fall through to throw original error
         }
@@ -1347,12 +1315,6 @@ abstract class AbstractAbapConnection
   private shouldRetryCsrf(error: unknown, method?: string): boolean {
     const refusal = refusalOf(error);
     if (!refusal) {
-      return false;
-    }
-
-    // The credential answers this one; retrying here would swallow the 401 it
-    // needs to see, or repeat cookies that are already dead.
-    if (this.credentialAnswersRefusals()) {
       return false;
     }
 
