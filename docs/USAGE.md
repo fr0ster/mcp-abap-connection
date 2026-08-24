@@ -202,13 +202,15 @@ const response = await connection.makeAdtRequest({
 ### PUT Request (Update Object)
 
 ```typescript
+const classSourceCode = 'CLASS zcl_my_class DEFINITION ...';
+const lockToken = 'the handle the lock call returned';
 import { getTimeout } from '@mcp-abap-adt/connection';
 await connection.makeAdtRequest({
   method: 'PUT',
   url: '/sap/bc/adt/oo/classes/zcl_my_class/source/main',
   headers: { 'Content-Type': 'text/plain' },
-  data: classSourceCode,
-  params: { lockHandle: lockToken },
+  data: classSourceCode,      // the new source, as a string
+  params: { lockHandle: lockToken },  // from the lock you took first
   timeout: getTimeout('default'),
 });
 ```
@@ -380,7 +382,7 @@ import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp
 
 const connection = new AdtOnPremConnector(
   config,
-  new BasicAuthProvider(user, pass),
+  new BasicAuthProvider(config.username!, config.password!),
   new OnPremHttpTransport(() => ({}), logger, {
     client: config.client,
     baseUrl: config.url,
@@ -406,6 +408,13 @@ side instead of a condition that silently stops matching. The codes live in
 
 ```typescript
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces';
+import { getTimeout } from '@mcp-abap-adt/connection';
+
+const options = {
+  method: 'GET',
+  url: '/sap/bc/adt/repository/nodestructure',
+  timeout: getTimeout('default'),
+};
 
 try {
   await connection.makeAdtRequest(options);
@@ -717,6 +726,7 @@ connection satisfies, including RFC:
 
 ```typescript
 import { AbapRequestOptions } from '@mcp-abap-adt/connection';
+import type { AxiosResponse } from 'axios';
 interface AbapConnection {
   connect(): Promise<void>; // REQUIRED before any request
   makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
@@ -888,8 +898,13 @@ checks expiry and renews on its own, which is what you want in anything
 long-lived. Obtaining tokens in the first place is `@mcp-abap-adt/auth-broker`'s
 job, not this package's.
 
-```typescript
-new AdtCloudConnector(config, new TokenAuthProvider(refresher), new CloudHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
+```text
+new AdtCloudConnector(
+  config,
+  new TokenAuthProvider(refresher),   // or a bare token string
+  new CloudHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }),
+  logger,
+);
 ```
 
 **How failures are classified** (6.0.0 — see

@@ -26,6 +26,23 @@ The connection layer **does not** decide when to lock/unlock objects—that logi
 
 ## Enabling Stateful Sessions
 
+Every example below builds on this much, so it is stated once:
+
+```ts
+import type { SapConfig } from '@mcp-abap-adt/connection';
+
+const config: SapConfig = {
+  url: 'https://your-sap-server.com',
+  authType: 'basic',
+  username: 'your-username',
+  password: 'your-password',
+  client: '100',
+};
+const user = config.username!;
+const pass = config.password!;
+const logger = console;
+```
+
 ```ts
 import {
   AdtOnPremConnector,

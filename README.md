@@ -565,6 +565,7 @@ Main interface for ABAP connections.
 
 ```typescript
 import { AbapRequestOptions } from '@mcp-abap-adt/connection';
+import type { AxiosResponse } from 'axios';
 // The shared contract (IAbapConnection), what every connection provides:
 interface AbapConnection {
   connect(): Promise<void>; // REQUIRED before any request; rejects on failure
@@ -676,6 +677,12 @@ import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from '@mcp-abap-adt/connection';
 
 ```typescript
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from '@mcp-abap-adt/connection';
+
+// Whatever HTTP client your own connection class is built on.
+const yourHttpClient = {
+  get: async (url: string, config: { headers: Record<string, string> }) =>
+    ({ headers: {} as Record<string, string> }),
+};
 
 async function fetchCsrfToken(baseUrl: string): Promise<string> {
   const csrfUrl = `${baseUrl}${CSRF_CONFIG.ENDPOINT}`;

@@ -358,7 +358,7 @@ declare const pass: string;
  */
 function declaredNames() {
   const names = new Set();
-  for (const file of walk('dist', (n) => n.endsWith('.d.ts'))) {
+  for (const file of walk('src', (n) => n.endsWith('.ts'))) {
     const text = readFileSync(file, 'utf8');
     for (const m of text.matchAll(
       /^export\s+(?:declare\s+)?(?:abstract\s+)?(?:class|const|function|interface|type|enum)\s+(\w+)/gm,
@@ -411,9 +411,7 @@ function hoistImports(snippets) {
   return { head: [...bare, ...merged].join('\n'), bodies };
 }
 
-const ours = existsSync(join('dist', 'index.d.ts'))
-  ? declaredNames()
-  : new Set();
+const ours = declaredNames();
 
 /**
  * Whether a snippet is this package's to check.
@@ -440,6 +438,7 @@ function unresolvable(body) {
   return null;
 }
 
+let unparseable = 0;
 let elided = 0;
 let unresolved = 0;
 let compiled = 0;
@@ -462,14 +461,7 @@ for (const file of documented.filter((f) => f.endsWith('.md'))) {
   if (snippets.length) compilable.set(file, snippets);
 }
 
-if (!existsSync(join('dist', 'index.d.ts'))) {
-  // Reported rather than skipped: a check that quietly passes when it could not
-  // run is the failure mode this whole file exists to answer.
-  report(
-    'types',
-    'dist/index.d.ts is missing — run the build before this check',
-  );
-} else if (compilable.size) {
+if (compilable.size) {
   const dir = mkdtempSync(join(tmpdir(), 'doc-types-'));
   try {
     const sources = new Map();
@@ -477,6 +469,19 @@ if (!existsSync(join('dist', 'index.d.ts'))) {
       // The page's imports, for the snippets that show none: those are
       // continuations, and the page established the names above them.
       const page = hoistImports(snippets).head;
+      // Every name the page binds anywhere in its TypeScript — the vocabulary a
+      // later fence is allowed to lean on.
+      const pageDeclares = new Set();
+      for (const snippet of snippets) {
+        for (const m of snippet.body.matchAll(
+          /\b(?:const|let|var|function|class)\s+(\w+)|import\s+(?:type\s+)?\{([^}]*)\}/g,
+        )) {
+          if (m[1]) pageDeclares.add(m[1]);
+          for (const symbol of (m[2] ?? '').split(','))
+            if (symbol.trim())
+              pageDeclares.add(symbol.trim().replace(/^type\s+/, ''));
+        }
+      }
       snippets.forEach((snippet, i) => {
         // A snippet that shows its OWN import block is claiming to be
         // self-contained, so it is compiled with exactly that block and
@@ -485,13 +490,14 @@ if (!existsSync(join('dist', 'index.d.ts'))) {
         // connector but not the transport leaves them with a broken paste.
         const declares = /^\s*import\b/m.test(snippet.body);
         const { head, bodies } = hoistImports([snippet]);
-        const source = `${PLACEHOLDERS}${declares ? head : page}\n\nasync function _snippet() {\n${bodies[0].body}\n}\n`;
+        const source = `${declares ? head : PLACEHOLDERS + page}\n\nasync function _snippet() {\n${bodies[0].body}\n}\n`;
         const name = `${file.replace(/[^\w]/g, '_')}_${i}.ts`;
         writeFileSync(join(dir, name), source);
         // Where the body starts in the generated file, so an error is reported
         // at the line of the document rather than of the scratch file.
         sources.set(name, {
           file,
+          pageDeclares,
           start: source.split('\n').indexOf('async function _snippet() {') + 2,
           line: snippet.line,
         });
@@ -509,10 +515,14 @@ if (!existsSync(join('dist', 'index.d.ts'))) {
           skipLibCheck: true,
           baseUrl: '.',
           paths: {
-            '@mcp-abap-adt/connection': [join(root, 'dist', 'index.d.ts')],
+            '@mcp-abap-adt/connection': [join(root, 'src', 'index.ts')],
             '@mcp-abap-adt/interfaces': [
               join(root, 'node_modules', '@mcp-abap-adt', 'interfaces'),
             ],
+            // Anything else resolves from the project's own node_modules: axios
+            // is a dependency of this package, and a doc naming `AxiosResponse`
+            // should be able to say where the type comes from.
+            '*': [join(root, 'node_modules', '*')],
           },
           typeRoots: [join(root, 'node_modules', '@types')],
           types: ['node'],
@@ -546,6 +556,7 @@ if (!existsSync(join('dist', 'index.d.ts'))) {
     };
     const syntactic = /error TS1\d{3}:/;
     const excluded = new Set();
+
     let output = compile();
     while (output.split('\n').some((l) => syntactic.test(l))) {
       const before = excluded.size;
@@ -558,6 +569,7 @@ if (!existsSync(join('dist', 'index.d.ts'))) {
         if (name) excluded.add(name);
       }
       if (excluded.size === before) break; // nothing new to remove; stop rather than spin
+      unparseable = excluded.size;
       const config = JSON.parse(
         readFileSync(join(dir, 'tsconfig.json'), 'utf8'),
       );
@@ -573,11 +585,14 @@ if (!existsSync(join('dist', 'index.d.ts'))) {
       if (!match) continue;
       const source = sources.get(match[1].split(/[\\/]/).pop());
       if (!source) continue;
-      // A name the page never imported is ours to report only if it IS ours.
-      // Otherwise it is something the prose introduced, and the compiler is
-      // the wrong thing to ask about it.
+      // A page is read top to bottom, so a later fence may lean on a name an
+      // earlier one established — `config` and `logger` are usually built once
+      // in the quick start and used throughout. What is NOT allowed is leaning
+      // on a name the page never establishes at all: the reader has nothing to
+      // copy, which is exactly how a JWT example came to pass `config.client`
+      // beside a config it built inline and never named.
       const unknown = match[5].match(/^Cannot find name '(\w+)'/);
-      if (unknown && !ours.has(unknown[1])) continue;
+      if (unknown && source.pageDeclares.has(unknown[1])) continue;
       const at = Number(match[2]);
       report(
         'types',
@@ -609,7 +624,7 @@ for (const name of checks) {
     // Said out loud on every run, pass or fail: a coverage figure that only
     // appears on failure is one nobody reads until it is too late.
     console.log(
-      `    compiled ${compiled} snippet${compiled === 1 ? '' : 's'} in ${compilable.size} document${compilable.size === 1 ? '' : 's'}; skipped ${elided} written as fragments and ${unresolved} standing on a package this repo does not install`,
+      `    compiled ${compiled - unparseable} snippet${compiled - unparseable === 1 ? '' : 's'} in ${compilable.size} document${compilable.size === 1 ? '' : 's'}; skipped ${elided} written as fragments, ${unresolved} standing on a package this repo does not install, and ${unparseable} that would not parse (reported above, and taken out so the rest could be checked at all)`,
     );
   }
 }
