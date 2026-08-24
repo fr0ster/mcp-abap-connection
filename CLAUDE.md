@@ -81,7 +81,13 @@ fact belongs on the transport instead.
   the enqueue table, so the next `PUT` comes back 423) and reports a session as
   established, because that system names none. The old `skipSessionType` option
   is gone — taking the class is how you say which deployment this is
-- Timeouts configurable via env vars: `SAP_TIMEOUT_DEFAULT`, `SAP_TIMEOUT_CSRF`, `SAP_TIMEOUT_LONG`
+- Timeouts: the library applies exactly two of its own — `SAP_TIMEOUT_CSRF` for
+  establishing a session, and `SAP_TIMEOUT_CRITICAL` as the ceiling it raises a
+  request to inside a critical section. `SAP_TIMEOUT_DEFAULT` and
+  `SAP_TIMEOUT_LONG` configure `getTimeout()`, which is exported for callers to
+  pass back in `makeAdtRequest`; nothing in `src/` reads either. A per-request
+  deadline is the caller's choice and is honoured only by the HTTP wire — RFC
+  is a synchronous call with nothing to cancel
 
 **Taking the RFC wire** needs the SAP NW RFC SDK on the machine and
 `@mcp-abap-adt/sap-rfc-lite` installed; `rfcConversationFrom(config)` derives

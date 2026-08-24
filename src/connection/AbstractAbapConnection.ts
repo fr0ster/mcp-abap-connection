@@ -18,11 +18,7 @@ import {
   SessionLifecycle,
   sessionError,
 } from '../session/SessionLifecycle.js';
-import {
-  getCriticalSectionTimeout,
-  getReleaseDeadline,
-  getTimeout,
-} from '../utils/timeouts.js';
+import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 import {
@@ -321,12 +317,12 @@ abstract class AbstractAbapConnection
    * request cannot use, so the leak surfaces as a half-written object rather
    * than as anything about sessions.
    *
-   * **The logoff is the only thing waited for**, under `deadlineMs`, and
-   * deciding that bound is the caller's — see the parameter. Nothing else is
-   * waited for: finishing chains and releasing locks stay the caller's to do
-   * before calling, and waiting here on a request whose caller chose no timeout
-   * is what made a teardown unbounded, which blocks every later transition on
-   * the serialized tail.
+   * **Nothing is waited for.** The logoff is dispatched, not awaited: this
+   * method notifies, and whether the server has acted on the notice is not
+   * something it reports. Finishing chains and releasing locks stay the
+   * caller's to do BEFORE calling — waiting here on a request that carries no
+   * timeout by design is what made a teardown unbounded, which blocks every
+   * later transition on the serialized tail.
    *
    * **Requests already in flight are not waited for, and the logoff ends the
    * session they are running on** — so they will start failing against a
@@ -360,9 +356,9 @@ abstract class AbstractAbapConnection
     await this.lifecycle.transition('disconnect', async () => {
       // DISPATCHED, not awaited. The goodbye carries no request timeout by
       // design — a server that never answers must not hold a teardown open —
-      // so what the caller's `deadlineMs` bounds is the WAIT below, not the
-      // request. Awaiting here would make every teardown unbounded and the
-      // deadline meaningless.
+      // and nothing bounds it here either, because there is nothing to bound:
+      // awaiting an unbounded request is precisely what would make every
+      // teardown unbounded.
       //
       // The context is taken now, while the session is still true: the clear
       // below runs while the close is suspended on its first await.
