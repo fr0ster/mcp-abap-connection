@@ -6,6 +6,7 @@
  */
 
 const {
+  OnPremHttpTransport,
   AdtOnPremConnector,
   SamlAuthProvider,
 } = require('@mcp-abap-adt/connection');
@@ -29,6 +30,10 @@ async function main() {
   const connection = new AdtOnPremConnector(
     config,
     new SamlAuthProvider(config.sessionCookies),
+    new OnPremHttpTransport(() => ({}), console, {
+      client: config.client,
+      baseUrl: config.url,
+    }),
     console,
   );
 

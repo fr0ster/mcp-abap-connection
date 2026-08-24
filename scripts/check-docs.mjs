@@ -209,8 +209,106 @@ for (const file of [...markdown, 'CHANGELOG.md']) {
   }
 }
 
+// ---------------------------------------------------------------- check 8 ---
+// A connector takes its wire as the THIRD argument, and it is required. Every
+// example and every snippet passed a logger there until an outside reader tried
+// one: in TypeScript that is a compile error, but `examples/*.js` runs, gets as
+// far as connect(), and dies asking a logger for `open()`. Twenty-eight call
+// sites across six documents were wrong at once, and every other check here
+// passed.
+//
+// So the shape is checked rather than trusted. Nothing here parses TypeScript —
+// it reads the third top-level argument and asks whether it names a wire, which
+// is the one thing that went wrong.
+function connectorCalls(text) {
+  const calls = [];
+  for (const m of text.matchAll(/new Adt(?:OnPrem|Cloud)Connector\s*\(/g)) {
+    let depth = 0;
+    let i = m.index + m[0].length - 1;
+    const open = i;
+    for (; i < text.length; i++) {
+      if (text[i] === '(') depth++;
+      else if (text[i] === ')') depth--;
+      if (depth === 0) break;
+    }
+    calls.push({ at: m.index, args: splitTopLevel(text.slice(open + 1, i)) });
+  }
+  return calls;
+}
+
+/** Commas at depth zero, ignoring the ones inside strings and comments. */
+function splitTopLevel(text) {
+  const args = [];
+  let depth = 0;
+  let cur = '';
+  for (let i = 0; i < text.length; i++) {
+    if (text.startsWith('//', i)) {
+      const end = text.indexOf('\n', i);
+      i = end === -1 ? text.length : end;
+      continue;
+    }
+    const ch = text[i];
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const quote = ch;
+      let j = i + 1;
+      while (j < text.length && text[j] !== quote)
+        j += text[j] === '\\' ? 2 : 1;
+      cur += text.slice(i, j + 1);
+      i = j;
+      continue;
+    }
+    if ('([{'.includes(ch)) depth++;
+    else if (')]}'.includes(ch)) depth--;
+    if (ch === ',' && depth === 0) {
+      args.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim()) args.push(cur);
+  return args;
+}
+
+const documented = [
+  ...markdown.filter((f) => !f.includes('MIGRATION-2.0')),
+  ...examples,
+].filter(
+  // The older migration guides describe the signatures of their own releases,
+  // which is what a migration guide is for.
+  (f) => !/MIGRATION-[245]\.0\.md$/.test(f),
+);
+
+for (const file of documented) {
+  const text = readFileSync(file, 'utf8');
+  for (const call of connectorCalls(text)) {
+    const line = text.slice(0, call.at).split('\n').length;
+    const wire = call.args[2]?.trim() ?? '';
+    // `new AdtOnPremConnector(...)` naming the class rather than showing a call
+    // — a table cell, a sentence — is not a call site and has nothing to check.
+    if (call.args.length === 1 && call.args[0].trim() === '...') continue;
+    if (!/Transport\b/.test(wire)) {
+      report(
+        'wire',
+        `${file}:${line} builds a connector whose third argument is not a transport: ${
+          wire.replace(/\s+/g, ' ').slice(0, 60) || '(missing)'
+        }`,
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
-const checks = ['connect', 'api', 'link', 'version', 'fences', 'ships', 'refs'];
+const checks = [
+  'connect',
+  'api',
+  'link',
+  'version',
+  'fences',
+  'ships',
+  'refs',
+  'wire',
+];
 for (const name of checks) {
   const hits = problems.filter((p) => p.startsWith(`${name}:`));
   console.log(`${hits.length ? '✗' : '✓'} ${name}`);

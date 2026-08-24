@@ -36,11 +36,14 @@ AbstractAbapConnection ──┬── AdtOnPremConnector   IAuthProvider ──
                                                   CertificateAuthProvider
 ```
 
-  new AdtCloudConnector(config, credential)                                  // one axis
-  new AdtOnPremConnector(config, credential, logger, id, { transport })      // two
+  new AdtCloudConnector(config, credential, new CloudHttpTransport(…), logger)
+  new AdtOnPremConnector(config, credential, new OnPremHttpTransport(…), logger)
+  new AdtOnPremConnector(config, credential, new RfcTransport(…), logger)
 
-Cloud has one transport and its connector takes none — offering the choice
-would be offering something that does not exist.
+The wire is required and the caller builds it: there is no default and nothing
+is derived from the config. Cloud has one wire, so its type parameter admits
+only `ICloudTransport` — "cloud over RFC" does not compile. On-prem has two, and
+which one is the caller's to say.
 
 **Who owns what.** This is the line to keep; it was crossed for a long time and
 the RFC wire could not connect at all as a result.

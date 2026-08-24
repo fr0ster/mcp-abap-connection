@@ -35,6 +35,10 @@ import {
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();   // required before any request
@@ -58,7 +62,7 @@ import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection'
 
 // getSessionIdentity() is on the HTTP connection classes, NOT on the
 // bare IAbapConnection type a caller may hand you.
-const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), logger);
+const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
 await connection.connect();
 
 // Which SAP session this connection is talking to. Changes only when the
@@ -184,7 +188,7 @@ you get by asking — `getSessionIdentity()` for which session you are in, and
   ```ts
   import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection';
 
-  const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), logger);
+  const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
   await connection.disconnect(); // ends the session on the server, then clears
   await connection.connect(); // a new session, explicitly
   ```

@@ -132,7 +132,7 @@ const connection = new AdtCloudConnector(
     jwtToken: process.env.SAP_JWT_TOKEN!,
   },
   new TokenAuthProvider(process.env.SAP_JWT_TOKEN!),
-);
+  new CloudHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }));
 
 // Note: Token refresh is handled by @mcp-abap-adt/auth-broker package
 // The refresh token credentials in .env are used by auth-broker, not connection

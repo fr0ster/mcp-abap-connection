@@ -17,6 +17,7 @@
  */
 
 const {
+  CloudHttpTransport,
   AdtCloudConnector,
   TokenAuthProvider,
 } = require('@mcp-abap-adt/connection');
@@ -71,6 +72,10 @@ async function main() {
   const connection = new AdtCloudConnector(
     config,
     new TokenAuthProvider(tokenRefresher),
+    new CloudHttpTransport(() => ({}), console, {
+      client: config.client,
+      baseUrl: config.url,
+    }),
     logger,
   );
 

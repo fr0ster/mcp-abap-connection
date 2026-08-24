@@ -166,6 +166,10 @@ const logger = {
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username, config.password),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 
@@ -243,6 +247,10 @@ const logger: ILogger = {
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username, config.password),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 ```

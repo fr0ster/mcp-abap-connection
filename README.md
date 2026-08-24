@@ -187,6 +187,10 @@ const logger = {
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();   // required before any request
@@ -229,6 +233,10 @@ const logger = {
 const connection = new AdtCloudConnector(
   config,
   new TokenAuthProvider(config.jwtToken!),
+  new CloudHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();
@@ -297,6 +305,10 @@ const config: SapConfig = {
 const connection = new AdtOnPremConnector(
   config,
   new SamlAuthProvider(config.sessionCookies!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();
@@ -336,6 +348,10 @@ const config: SapConfig = {
 const connection = new AdtCloudConnector(
   config,
   new TokenAuthProvider(tokenRefresher),
+  new CloudHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();
@@ -377,6 +393,10 @@ import {
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();
@@ -429,6 +449,10 @@ const logger = new MyLogger();
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 ```

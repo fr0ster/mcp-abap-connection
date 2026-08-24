@@ -44,6 +44,10 @@ const logger = {
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger, // optional; omit or pass null for no logging
 );
 
@@ -97,6 +101,10 @@ const config = {
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username, config.password),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();   // required: nothing is established implicitly
@@ -125,6 +133,10 @@ const config = {
 const connection = new AdtCloudConnector(
   config,
   new TokenAuthProvider('eyJhbGciOiJSUzI1NiIs...'),
+  new CloudHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();   // required: nothing is established implicitly
@@ -208,6 +220,10 @@ By default, connections are stateless - each request gets fresh cookies and CSRF
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();
@@ -224,6 +240,10 @@ Enable stateful session mode for operations requiring consistent session state:
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();
@@ -284,12 +304,15 @@ implied. Four things follow from it.
 > wire you gave it:
 >
 > ```typescript
-> const conn = new AdtOnPremConnector(config, provider, logger);
+> const conn = new AdtOnPremConnector(config, provider, new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
 > tearDownAfter(conn);   // ✅ checked
 >
-> const overRfc = new AdtOnPremConnector(config, provider, logger, undefined, {
->   transport: new RfcTransport(rfcConversationFrom(config), logger),
-> });
+> const overRfc = new AdtOnPremConnector(
+>   config,
+>   provider,
+>   new RfcTransport(rfcConversationFrom(config), logger),
+>   logger,
+> );
 > tearDownAfter(overRfc); // ✅ also checked — same class, different wire
 > ```
 >
@@ -341,6 +364,10 @@ import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection'
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(user, pass),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 
@@ -473,6 +500,10 @@ Session IDs are auto-generated (UUID) when connection is created:
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 console.log(connection.getSessionId()); // e.g., '7f3a8b2c-...'
@@ -481,9 +512,12 @@ console.log(connection.getSessionId()); // e.g., '7f3a8b2c-...'
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
-  'custom-session-123',
-);
+  'custom-session-123');
 console.log(connection.getSessionId()); // 'custom-session-123'
 ```
 
@@ -496,6 +530,10 @@ Dynamically switch between stateful and stateless modes:
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 await connection.connect();
@@ -565,6 +603,10 @@ const logger = new CustomLogger();
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
   logger,
 );
 ```
@@ -668,9 +710,9 @@ class AdtOnPremConnector<
   constructor(
     config: SapConfig,
     credential: TCredential,
+    transport: TTransport,
     logger?: ILogger | null,
     sessionId?: string,
-    options?: { skipSessionType?: boolean; transport?: TTransport },
   );
 }
 
@@ -805,7 +847,7 @@ long-lived. Obtaining tokens in the first place is `@mcp-abap-adt/auth-broker`'s
 job, not this package's.
 
 ```typescript
-new AdtCloudConnector(config, new TokenAuthProvider(refresher), logger);
+new AdtCloudConnector(config, new TokenAuthProvider(refresher), new CloudHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
 ```
 
 **How failures are classified** (4.0.0 — see
