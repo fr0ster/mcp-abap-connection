@@ -153,6 +153,44 @@ made with the cookies and the answers in hand.
 
 ## A Lock Lives In The ABAP Session
 
+### Three lifetimes, and a dropped connection ends none of them
+
+Before anything else, because conflating these is the mistake that produces
+wrong fixes:
+
+| | what it is | what ends it |
+|---|---|---|
+| **the connection** | one TCP socket | you, the network, a timeout firing. **Ends nothing on the server** |
+| **the HTTP session** | the ICF conversation, held by the cookie jar on this side | dropping the cookies, or a logoff. Nothing about it is in doubt |
+| **the ABAP session** | the server-side context named by `SAP_SESSIONID_<SID>_<CLIENT>` — the roll area a stateful request runs in | **only the server.** Its own idle timeout, which this side can neither read nor influence, or an explicit logoff |
+| **the lock** | an enqueue entry, **owned by the ABAP session** | that ABAP session ending. **When it goes, its locks go with it** |
+
+The two middle rows are the ones worth keeping apart, because everything that
+goes wrong here goes wrong between them. The lock does not belong to the socket
+and does not belong to the cookies — it belongs to the **ABAP session**, and
+that session is the server's. This side never ends one: it can ask (a logoff),
+and otherwise waits for a timeout it cannot see.
+
+A closed socket is just a client that stopped listening. The ABAP session
+neither knows nor cares — which is why `SM04` shows sessions left behind by
+connections that never said they were finished, and why this package sends an
+explicit goodbye at all.
+
+And **a lock is never stranded by something dying** — the opposite. If the ABAP
+session ended, the enqueue entry went with it and there is nothing left to
+strand. A lock is stranded when that session **survives** while the caller no
+longer holds the handle needed to unlock it: both sit there, held, until the
+server's own timeout releases them together.
+
+This is what makes an aborted request expensive, and it is not what it looks
+like. Aborting costs you **knowledge**, not a session: whether the modification
+was applied becomes unknowable, and the handle `unlock` needs is gone, while the
+lock is still very much held. That — not any teardown — is why
+`beginCriticalSection()` raises the effective timeout to a large ceiling for the
+duration of a `lock → modify → unlock` chain.
+
+### Two sessions, and they are not the same thing
+
 There are two sessions here, and they are not the same thing:
 
 - the **HTTP session** — the conversation this client is having. It exists as

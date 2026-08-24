@@ -70,9 +70,11 @@ abstract class AbstractAbapConnection
   /**
    * When true, requests are treated as part of an uninterruptible critical
    * section (e.g. a lock → modify → unlock chain). In this state a short
-   * per-request timeout must NOT abort the request mid-flight, because
-   * aborting the socket drops the stateful ADT session and orphans the lock
-   * handle (leaving the object locked and inactive). While set, makeAdtRequest
+   * per-request timeout must NOT abort the request mid-flight: the abort ends
+   * nothing server-side — only the server ends an ABAP session, on an idle
+   * timeout this side cannot see — it ends what this side KNOWS. Whether the
+   * change was applied becomes unknowable, and the handle `unlock` needs is
+   * lost while the lock lives on in that session. While set, makeAdtRequest
    * raises the effective timeout to CRITICAL_SECTION_TIMEOUT (a large ceiling)
    * so the request runs to completion instead of being interrupted.
    */
@@ -187,9 +189,11 @@ abstract class AbstractAbapConnection
    * in a finally, AFTER unlocking). While in a critical section, a short
    * per-request timeout is not applied — makeAdtRequest uses a large ceiling
    * (CRITICAL_SECTION_TIMEOUT, env SAP_TIMEOUT_CRITICAL) instead — so a slow
-   * PUT/activate/unlock is not aborted mid-flight. Aborting mid-flight tears
-   * down the socket, which drops the stateful ADT session and orphans the
-   * lock handle, leaving the object locked and inactive.
+   * PUT/activate/unlock is not aborted mid-flight. An abort does not end the
+   * ABAP session — that session is the server's, and only the server ends it,
+   * on an idle timeout this side cannot influence — it strands the caller:
+   * the outcome is unknown and the handle `unlock` needs is gone, while the
+   * lock survives inside the ABAP session that owns it.
    *
    * Nesting is reference-counted so nested begin/end pairs are safe.
    */
@@ -946,8 +950,10 @@ abstract class AbstractAbapConnection
     }
 
     // Inside an uninterruptible critical section (lock → modify → unlock), a
-    // short per-request timeout must not abort the request mid-flight — that
-    // would drop the stateful session and orphan the lock. Raise the effective
+    // short per-request timeout must not abort the request mid-flight — not
+    // because the abort ends the ABAP session (only the server does that), but
+    // because it leaves the outcome unknown and the unlock handle lost while
+    // the lock stays held in that session. Raise the effective
     // timeout to the large critical-section ceiling for the whole request
     // (also honoured on the retry paths below, which reuse requestConfig).
     const effectiveTimeout = this.inCriticalSection

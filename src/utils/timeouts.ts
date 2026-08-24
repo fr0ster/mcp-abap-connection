@@ -32,9 +32,12 @@ export function getTimeout(
 /**
  * Large ceiling timeout applied while a connection is inside an uninterruptible
  * critical section (lock → modify → unlock). A short per-request timeout must
- * not abort such a request mid-flight: aborting tears down the socket, which
- * drops the stateful ADT session and orphans the lock handle (object left
- * locked and inactive). Configurable via SAP_TIMEOUT_CRITICAL (ms).
+ * not abort such a request mid-flight — not because aborting ends anything on
+ * the server, but because it ends what the CLIENT knows: the modification may
+ * or may not have been applied, and the handle `unlock` needs is gone, while
+ * the lock and the ABAP session holding it sit there until that server-side
+ * idle timeout, which this side can neither read nor influence.
+ * Configurable via SAP_TIMEOUT_CRITICAL (ms).
  * Default 600000 (10 minutes) — a generous ceiling that still guards against a
  * permanently dead socket hanging forever.
  */

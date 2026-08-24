@@ -2,8 +2,17 @@
  * Critical section (uninterruptible lock → modify → unlock).
  *
  * A short per-request timeout must NOT abort a request while the connection is
- * inside a critical section: aborting the socket drops the stateful ADT session
- * and orphans the lock handle (object left locked and inactive). While in a
+ * inside a critical section. Not because the abort ends anything on the server:
+ * it does not. A session is the server's, addressed by `SAP_SESSIONID`, and only
+ * the server ends it — on an idle timeout this side cannot influence, or when
+ * told. It outlives the socket, which is why SM04 shows sessions left behind by
+ * connections that never said they were finished, and why a lock goes when its
+ * session goes rather than when a connection drops.
+ *
+ * What the abort ends is what THIS side knows: whether the modification was
+ * applied becomes unknowable, and the handle `unlock` needs is gone — while the
+ * lock and the session holding it sit there until that server timeout. So the
+ * lock is stranded by the session SURVIVING, not by anything dying. While in a
  * critical section, makeAdtRequest raises the effective timeout to the large
  * SAP_TIMEOUT_CRITICAL ceiling.
  */
