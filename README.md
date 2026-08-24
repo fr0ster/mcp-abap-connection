@@ -163,7 +163,9 @@ For detailed installation instructions, see [Installation Guide](./docs/INSTALLA
 import {
   AdtOnPremConnector,
   BasicAuthProvider,
+  OnPremHttpTransport,
   SapConfig,
+  getTimeout,
 } from "@mcp-abap-adt/connection";
 
 const config: SapConfig = {
@@ -199,6 +201,7 @@ await connection.connect();   // required before any request
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
+  timeout: getTimeout("default"),
 });
 ```
 
@@ -207,8 +210,10 @@ const response = await connection.makeAdtRequest({
 ```typescript
 import {
   AdtCloudConnector,
+  CloudHttpTransport,
   SapConfig,
   TokenAuthProvider,
+  getTimeout,
 } from "@mcp-abap-adt/connection";
 
 // JWT configuration
@@ -245,6 +250,7 @@ await connection.connect();
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
+  timeout: getTimeout("default"),
 });
 ```
 
@@ -291,8 +297,10 @@ takes no transport parameter at all.
 ```typescript
 import {
   AdtOnPremConnector,
+  OnPremHttpTransport,
   SamlAuthProvider,
   SapConfig,
+  getTimeout,
 } from "@mcp-abap-adt/connection";
 
 const config: SapConfig = {
@@ -316,26 +324,34 @@ await connection.connect();
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
+  timeout: getTimeout("default"),
 });
 ```
 
 ### Cloud Usage with Automatic Token Refresh
 
-For automatic token refresh on **401** errors, inject `ITokenRefresher`:
+Give `TokenAuthProvider` an `ITokenRefresher` and the provider replaces an
+**expired** token on its own — it is asked per request and checks expiry before
+answering, so nobody decides to renew. A token the source still believes in and
+the server refuses is the other half, and that one **surfaces**:
 
 ```typescript
 import {
   AdtCloudConnector,
-  TokenAuthProvider,
+  CloudHttpTransport,
   SapConfig,
+  TokenAuthProvider,
+  getTimeout,
 } from "@mcp-abap-adt/connection";
 import type { ITokenRefresher } from "@mcp-abap-adt/interfaces";
 
 // Token refresher provides token acquisition and refresh
 // (created by @mcp-abap-adt/auth-broker or custom implementation)
+const currentAccessToken = 'the access token you already hold';
+const exchangeRefreshToken = async () => 'a freshly exchanged access token';
 const tokenRefresher: ITokenRefresher = {
-  getToken: async () => { /* return current token */ },
-  refreshToken: async () => { /* refresh and return new token */ },
+  getToken: async () => currentAccessToken,      // the one you hold
+  refreshToken: async () => exchangeRefreshToken(), // a new one, and cache it
 };
 
 const config: SapConfig = {
@@ -356,15 +372,16 @@ const connection = new AdtCloudConnector(
 );
 await connection.connect();
 
-// On a 401 the connector tells the provider its token was refused, asks again,
-// and only if the answer changed rebuilds the session and retries once. An
-// unchanged answer means the server refused these credentials, and the 401
+// On a 401 nothing here decides to get a new credential: the refusal reaches
+// you. Whether it meant "stale" is a judgement made with what you know, and
+// `renew()` is the seam you make it with. The session is untouched — a refused
 // reaches you. A refresh replaces the SAP session, so if a lock window is open
 // the request fails with ADT_SESSION_REPLACED rather than continuing on a
 // session your lock is not in.
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
+  timeout: getTimeout("default"),
 });
 ```
 
@@ -388,6 +405,8 @@ For operations that require session state (e.g., object modifications), you can 
 import {
   AdtOnPremConnector,
   BasicAuthProvider,
+  OnPremHttpTransport,
+  getTimeout,
 } from "@mcp-abap-adt/connection";
 
 const connection = new AdtOnPremConnector(
@@ -409,6 +428,7 @@ await connection.makeAdtRequest({
   method: "POST",
   url: "/sap/bc/adt/objects/domains",
   data: { /* domain data */ },
+  timeout: getTimeout("default"),
 });
 
 // Note: Session state persistence is handled by @mcp-abap-adt/auth-broker package
@@ -417,7 +437,7 @@ await connection.makeAdtRequest({
 ### Custom Logger
 
 ```typescript
-import { ILogger } from "@mcp-abap-adt/connection";
+import { AdtOnPremConnector, BasicAuthProvider, ILogger, OnPremHttpTransport } from "@mcp-abap-adt/connection";
 
 class MyLogger implements ILogger {
   info(message: string, meta?: any): void {
@@ -544,6 +564,7 @@ type SapConfig = {
 Main interface for ABAP connections.
 
 ```typescript
+import { AbapRequestOptions } from '@mcp-abap-adt/connection';
 // The shared contract (IAbapConnection), what every connection provides:
 interface AbapConnection {
   connect(): Promise<void>; // REQUIRED before any request; rejects on failure
@@ -611,7 +632,7 @@ The SAP NW RFC SDK is loaded when a conversation opens, not when this is called,
 so a machine without it fails at `connect()` with a message saying what to
 install rather than at construction.
 
-```typescript
+```text
 function rfcConversationFrom(config: SapConfig): () => IRfcConversation;
 function rfcParamsFrom(config: SapConfig): RfcConnectionParams;
 ```
@@ -687,6 +708,10 @@ async function fetchCsrfToken(baseUrl: string): Promise<string> {
       await new Promise(resolve => setTimeout(resolve, CSRF_CONFIG.RETRY_DELAY));
     }
   }
+
+  // Unreachable: the last attempt either returns or throws above. Stated so the
+  // function has a return type the compiler can agree with.
+  throw new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
 }
 ```
 

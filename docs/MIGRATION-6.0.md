@@ -101,8 +101,8 @@ provider still believes in and the server refuses is a credential that needs
 attention, and `connect()` is one call you make — so the refusal is yours to
 answer.
 
-On the request path nothing changed: a 401 asks the provider again, and retries
-once **if it answers something different**.
+The request path changed the same way, and in the same direction: a 401 is no
+longer answered here either. See [A refused credential](#a-refused-credential).
 
 ## SAML
 
@@ -314,6 +314,7 @@ The seam is public, so a signature can say what it needs instead of taking any
 connection and casting:
 
 ```typescript
+import { AdtOnPremConnector, RfcTransport } from '@mcp-abap-adt/connection';
 import type {
   IAdtTransport,
   IAdtTransportRequest,

@@ -19,6 +19,8 @@
 import {
   AdtOnPremConnector,
   BasicAuthProvider,
+  OnPremHttpTransport,
+  getTimeout,
 } from '@mcp-abap-adt/connection';
 import { SapConfig } from '@mcp-abap-adt/connection';
 
@@ -39,8 +41,8 @@ const logger = {
 };
 
 // Three things, all stated by you and none of them detected: which system
-// (the class), which credential (the object), which wire (omitted here, so
-// HTTP — the documented default).
+// (the class), which credential (the object), which wire (the transport, which
+// has no default — you build it and hand it over).
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
@@ -59,13 +61,14 @@ await connection.connect();
 const response = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
+  timeout: getTimeout('default'),
 });
 
 console.log(response.data);
 ```
 
 Tearing the session down is `disconnect()`, but it is not on the
-`IAbapConnection` type this factory returns — see
+`IAbapConnection` type a connector satisfies — see
 [Session Lifecycle](#session-lifecycle) for where it lives and how to reach it.
 
 ## Which system, and how you authenticate
@@ -88,6 +91,7 @@ For on-premise SAP systems using basic authentication:
 import {
   AdtOnPremConnector,
   BasicAuthProvider,
+  OnPremHttpTransport,
 } from '@mcp-abap-adt/connection';
 
 const config = {
@@ -118,7 +122,9 @@ For SAP BTP ABAP Environment. Token refresh belongs to
 ```typescript
 import {
   AdtCloudConnector,
+  CloudHttpTransport,
   TokenAuthProvider,
+  getTimeout,
 } from '@mcp-abap-adt/connection';
 
 const config = {
@@ -146,6 +152,7 @@ await connection.connect();   // required: nothing is established implicitly
 const response = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
+  timeout: getTimeout('default'),
 });
 ```
 
@@ -159,6 +166,7 @@ them is refused with `ADT_NOT_CONNECTED`.
 ### GET Request
 
 ```typescript
+import { getTimeout } from '@mcp-abap-adt/connection';
 const packages = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
@@ -167,12 +175,14 @@ const packages = await connection.makeAdtRequest({
     parent_type: 'DEVC/K',
     withShortDescriptions: 'true',
   },
+  timeout: getTimeout('default'),
 });
 ```
 
 ### POST Request (Create Object)
 
 ```typescript
+import { getTimeout } from '@mcp-abap-adt/connection';
 const classXml = `<?xml version="1.0" encoding="UTF-8"?>
 <class:abapClass xmlns:class="http://www.sap.com/adt/oo/classes" 
                  class:name="ZCL_MY_CLASS">
@@ -185,28 +195,33 @@ const response = await connection.makeAdtRequest({
   headers: { 'Content-Type': 'application/xml' },
   data: classXml,
   params: { package: 'ZTEST' },
+  timeout: getTimeout('default'),
 });
 ```
 
 ### PUT Request (Update Object)
 
 ```typescript
+import { getTimeout } from '@mcp-abap-adt/connection';
 await connection.makeAdtRequest({
   method: 'PUT',
   url: '/sap/bc/adt/oo/classes/zcl_my_class/source/main',
   headers: { 'Content-Type': 'text/plain' },
   data: classSourceCode,
   params: { lockHandle: lockToken },
+  timeout: getTimeout('default'),
 });
 ```
 
 ### DELETE Request
 
 ```typescript
+import { getTimeout } from '@mcp-abap-adt/connection';
 await connection.makeAdtRequest({
   method: 'DELETE',
   url: '/sap/bc/adt/oo/classes/zcl_my_class',
   params: { deleteOption: 'deleteAndLocalVersions' },
+  timeout: getTimeout('default'),
 });
 ```
 
@@ -217,6 +232,7 @@ await connection.makeAdtRequest({
 By default, connections are stateless - each request gets fresh cookies and CSRF tokens:
 
 ```typescript
+import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
@@ -229,7 +245,7 @@ const connection = new AdtOnPremConnector(
 await connection.connect();
 
 // Each request is independent
-await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' });
+await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
 ```
 
 ### Stateful Mode (Session Headers)
@@ -237,6 +253,7 @@ await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' })
 Enable stateful session mode for operations requiring consistent session state:
 
 ```typescript
+import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
@@ -252,7 +269,7 @@ await connection.connect();
 connection.setSessionType('stateful');
 
 // Now all requests share the same session (cookies, CSRF token)
-await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' });
+await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
 
 // Check session mode
 console.log(connection.getSessionMode()); // 'stateful'
@@ -359,7 +376,7 @@ implied. Four things follow from it.
 ### connect() is required, and it tells the truth
 
 ```typescript
-import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 
 const connection = new AdtOnPremConnector(
   config,
@@ -497,6 +514,7 @@ yours.
 Session IDs are auto-generated (UUID) when connection is created:
 
 ```typescript
+import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
@@ -509,7 +527,7 @@ const connection = new AdtOnPremConnector(
 console.log(connection.getSessionId()); // e.g., '7f3a8b2c-...'
 
 // Or provide your own when creating connection
-const connection = new AdtOnPremConnector(
+const connectionWithOwnId = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
   new OnPremHttpTransport(() => ({}), logger, {
@@ -518,7 +536,7 @@ const connection = new AdtOnPremConnector(
   }),
   logger,
   'custom-session-123');
-console.log(connection.getSessionId()); // 'custom-session-123'
+console.log(connectionWithOwnId.getSessionId()); // 'custom-session-123'
 ```
 
 ### Switching Session Types
@@ -526,6 +544,7 @@ console.log(connection.getSessionId()); // 'custom-session-123'
 Dynamically switch between stateful and stateless modes:
 
 ```typescript
+import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
 // Start in stateless mode (default)
 const connection = new AdtOnPremConnector(
   config,
@@ -542,7 +561,7 @@ await connection.connect();
 connection.setSessionType('stateful');
 
 // Do stateful operations...
-await connection.makeAdtRequest({ method: 'POST', url: '...' });
+await connection.makeAdtRequest({ method: 'POST', url: '...' , timeout: getTimeout('default') });
 
 // Switch back to stateless
 connection.setSessionType('stateless');
@@ -567,7 +586,7 @@ in a `finally`. `disconnect()` never throws, so it is safe there.
 ### Using Custom Logger
 
 ```typescript
-import { ILogger } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, BasicAuthProvider, ILogger, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 
 class CustomLogger implements ILogger {
   info(message: string, meta?: any) {
@@ -616,16 +635,23 @@ const connection = new AdtOnPremConnector(
 ### Basic Error Handling
 
 ```typescript
+import { getTimeout } from '@mcp-abap-adt/connection';
 try {
   await connection.makeAdtRequest({
     method: 'GET',
     url: '/sap/bc/adt/invalid/endpoint',
+    timeout: getTimeout('default'),
   });
 } catch (error) {
-  if (error.response) {
-    console.error(`HTTP ${error.response.status}:`, error.response.data);
+  const failure = error as {
+    code?: string;
+    response?: { status: number; data: unknown };
+    message?: string;
+  };
+  if (failure.response) {
+    console.error(`HTTP ${failure.response.status}:`, failure.response.data);
   } else {
-    console.error('Network error:', error.message);
+    console.error('Network error:', failure.message);
   }
 }
 ```
@@ -647,23 +673,30 @@ When these errors occur, the connection:
 3. **Logs the error** with full context for troubleshooting
 
 ```typescript
+import { getTimeout } from '@mcp-abap-adt/connection';
 try {
   await connection.makeAdtRequest({
     method: 'GET',
     url: '/sap/bc/adt/repository/nodestructure',
+    timeout: getTimeout('default'),
   });
 } catch (error) {
+  const failure = error as {
+    code?: string;
+    response?: { status: number; data: unknown };
+    message?: string;
+  };
   // Check for specific network error codes
-  if (error.code === 'ECONNREFUSED') {
+  if (failure.code === 'ECONNREFUSED') {
     console.error('Cannot connect to SAP server - check VPN connection');
-  } else if (error.code === 'ETIMEDOUT') {
+  } else if (failure.code === 'ETIMEDOUT') {
     console.error('Connection timeout - server not responding');
-  } else if (error.code === 'ENOTFOUND') {
+  } else if (failure.code === 'ENOTFOUND') {
     console.error('Cannot resolve hostname - check SAP URL');
-  } else if (error.response) {
-    console.error(`HTTP ${error.response.status}:`, error.response.data);
+  } else if (failure.response) {
+    console.error(`HTTP ${failure.response.status}:`, failure.response.data);
   } else {
-    console.error('Request failed:', error.message);
+    console.error('Request failed:', failure.message);
   }
 }
 ```
@@ -683,6 +716,7 @@ try {
 connection satisfies, including RFC:
 
 ```typescript
+import { AbapRequestOptions } from '@mcp-abap-adt/connection';
 interface AbapConnection {
   connect(): Promise<void>; // REQUIRED before any request
   makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
@@ -702,11 +736,11 @@ connector type or through the `ISessionLifecycleAware` atom, not through a bare
 
 One per system, each handed an auth provider:
 
-```typescript
+```text
 class AdtOnPremConnector<
   TCredential extends IAuthProvider = IAuthProvider,
-  TTransport extends IAdtTransport = HttpTransport,
-> extends CredentialAbapConnection<TCredential> {
+  TTransport extends IOnPremTransport = OnPremHttpTransport,
+> {
   constructor(
     config: SapConfig,
     credential: TCredential,
@@ -716,14 +750,16 @@ class AdtOnPremConnector<
   );
 }
 
-class AdtCloudConnector<TCredential extends IAuthProvider = IAuthProvider>
-  extends CredentialAbapConnection<TCredential> {
+class AdtCloudConnector<
+  TCredential extends IAuthProvider = IAuthProvider,
+  TTransport extends ICloudTransport = CloudHttpTransport,
+> {
   constructor(
     config: SapConfig,
     credential: TCredential,
+    transport: TTransport,
     logger?: ILogger | null,
     sessionId?: string,
-    options?: { skipSessionType?: boolean },
   );
 }
 ```
@@ -733,22 +769,28 @@ establishing call and gives it back with the platform's ICF logoff; cloud opens
 one at `/sap/bc/adt/core/http/sessions` and gives it back by `DELETE` on the
 address the server publishes.
 
-**Only on-prem takes a transport**, because only on-prem has two. The parameters
-record what a connection was built with, so a signature can ask for
-`AdtOnPremConnector<IAuthProvider, RfcTransport>` and be given one, instead of
-taking any connection and casting.
+**Both take a transport, and neither defaults one.** What differs is the CHOICE,
+and the type parameter is where that is said: `TTransport` is bound to
+`IOnPremTransport` on one and to `ICloudTransport` on the other, so on-prem
+admits HTTP or RFC while "cloud over RFC" does not compile — there is no such
+deployment. The parameter also records what a connection was built with, so a
+signature can ask for `AdtOnPremConnector<IAuthProvider, RfcTransport>` and be
+given one, instead of taking any connection and casting.
 
 ### `HttpTransport` / `RfcTransport`
 
 What a request travels over, and everything true of that wire: addressing,
 establishing, and whatever session state it keeps.
 
-```typescript
+```text
 new HttpTransport(agentOptions?, logger?, { client?, baseUrl? })
 new RfcTransport(connect: () => IRfcConversation, logger?)
 ```
 
-`HttpTransport` is the documented default and you rarely name it. `RfcTransport`
+`HttpTransport` is the ordinary wire, and you name it because the connector
+takes no default. In practice you name one of its two subclasses — the session
+mechanism is what differs, and `OnPremHttpTransport` / `CloudHttpTransport` are
+what the connectors' type parameters admit. `RfcTransport`
 you build with `rfcConversationFrom(config)`, which derives `ashost` and `sysnr`
 and loads the SAP NW RFC SDK only when a conversation opens.
 
@@ -766,8 +808,8 @@ The two differ in what they have, not in what they are asked:
 
 Exported constants for consistent CSRF token handling across different connection implementations:
 
-```typescript
-import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from '@mcp-abap-adt/connection';
+```text
+// Imported from '@mcp-abap-adt/connection'; shapes, not runnable code.
 
 // CSRF_CONFIG structure:
 const config = {
@@ -824,7 +866,7 @@ export class CloudSdkAbapConnection {
           throw new Error(
             CSRF_ERROR_MESSAGES.FETCH_FAILED(
               CSRF_CONFIG.RETRY_COUNT + 1,
-              error instanceof Error ? error.message : String(error)
+              error instanceof Error ? failure.message : String(error)
             )
           );
         }
@@ -850,17 +892,17 @@ job, not this package's.
 new AdtCloudConnector(config, new TokenAuthProvider(refresher), new CloudHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
 ```
 
-**How failures are classified** (4.0.0 — see
-[MIGRATION-4.0.md](./MIGRATION-4.0.md)):
+**How failures are classified** (6.0.0 — see
+[MIGRATION-6.0.md](./MIGRATION-6.0.md)):
 
 | answer | what happens |
 |---|---|
-| **401** | the provider is told the credential was refused and asked again. If it answers something DIFFERENT, the session is rebuilt and the request retried once. If it answers the same thing, it was not holding a stale token — the server is refusing these credentials, and asking twice would only ask twice |
+| **401** | **surfaces.** Nothing here decides to get a new credential. An EXPIRED token is already replaced without anyone deciding — the provider is asked per request and checks expiry before answering — so a 401 is the other case: a credential the source still believes in and the server refuses. Whether that means "stale" is a judgement made with what you know, and `renew()` on an `IRenewableCredential` is the seam you make it with. The session is untouched: a refused credential is not a lost session |
 | **403** | propagates untouched. The server authenticated the caller and refused the action anyway, so a new token is the same caller — usually the body names the authorization object |
 | anything else | untouched |
 
 The connection never replaces the server's error with one of its own:
-`error.response.status` and `error.response.data` are always what SAP sent.
+`failure.response.status` and `failure.response.data` are always what SAP sent.
 
 Concurrent requests that meet the same expired token share **one** renewal — a
 single token fetch and a single session re-establishment between them, not one
@@ -905,7 +947,7 @@ See [examples/](../examples/) for complete working examples:
 2. **Enable Stateful Mode**: Use `setSessionType('stateful')` for multi-request operations (locks, transactions)
 3. **Token Refresh**: For cloud systems, use `@mcp-abap-adt/auth-broker` for token refresh functionality
 4. **Session State Persistence**: Use `@mcp-abap-adt/auth-broker` for session state persistence
-5. **Handle Errors Gracefully**: Wrap requests in try-catch blocks and check `error.response` for HTTP errors
+5. **Handle Errors Gracefully**: Wrap requests in try-catch blocks and check `failure.response` for HTTP errors
 6. **Use Proper Logging**: Implement custom logger for production systems with appropriate log levels (logger is optional)
 7. **Session ID Management**: Session IDs are auto-generated (UUID) or can be provided when creating connection
 8. **Switch Session Types**: Use `setSessionType()` to dynamically change between stateful/stateless modes

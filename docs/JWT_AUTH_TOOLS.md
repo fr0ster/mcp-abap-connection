@@ -123,7 +123,7 @@ source .env
 Or configure `SapConfig` directly:
 
 ```ts
-import { AdtCloudConnector, TokenAuthProvider } from "@mcp-abap-adt/connection";
+import { AdtCloudConnector, CloudHttpTransport, TokenAuthProvider } from "@mcp-abap-adt/connection";
 
 const connection = new AdtCloudConnector(
   {

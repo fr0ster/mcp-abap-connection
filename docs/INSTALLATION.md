@@ -165,7 +165,7 @@ const logger = {
 
 const connection = new AdtOnPremConnector(
   config,
-  new BasicAuthProvider(config.username, config.password),
+  new BasicAuthProvider(config.username!, config.password!),
   new OnPremHttpTransport(() => ({}), logger, {
     client: config.client,
     baseUrl: config.url,
@@ -225,8 +225,9 @@ npm install --save-dev typescript @types/node
 import {
   AdtOnPremConnector,
   BasicAuthProvider,
-  SapConfig,
   ILogger,
+  OnPremHttpTransport,
+  SapConfig,
 } from '@mcp-abap-adt/connection';
 
 const config: SapConfig = {
@@ -246,7 +247,7 @@ const logger: ILogger = {
 
 const connection = new AdtOnPremConnector(
   config,
-  new BasicAuthProvider(config.username, config.password),
+  new BasicAuthProvider(config.username!, config.password!),
   new OnPremHttpTransport(() => ({}), logger, {
     client: config.client,
     baseUrl: config.url,
