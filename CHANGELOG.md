@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [6.0.0] - 2026-08-22
+## [6.0.0] - 2026-08-24
 
 The wire owns what is the wire's, and the factory and per-credential classes are
 gone. See [Migration to 6.0](./docs/MIGRATION-6.0.md).
@@ -50,10 +50,10 @@ gone. See [Migration to 6.0](./docs/MIGRATION-6.0.md).
   exchange, affinity headers, axios and addressing all moved to the wire that
   has them. There is no `if (transport is rfc)` anywhere.
 
-- **A credential refused during `connect()` surfaces** rather than being renewed
-  behind the caller. Renewal is the provider's, and it happens on an expiry the
-  provider can see, on every call that asks for a header. The request path is
-  unchanged: a 401 asks again, and retries once if the answer differs.
+- **A credential refused surfaces** rather than being renewed behind the caller —
+  on `connect()` and on the request path alike. Renewal is the provider's, and it
+  happens on an expiry the provider can see, on every call that asks for a header.
+  See *Removed*, below: nothing here answers a 401 any more.
 
 ### Changed — BREAKING
 
@@ -66,9 +66,12 @@ gone. See [Migration to 6.0](./docs/MIGRATION-6.0.md).
     writes an empty method, which is true of it;
   - `IAuthProvider.prepare()`, `cookies()` and `transportMaterial()` are required for
     the same reason (needs `@mcp-abap-adt/interfaces` 20.0.0);
-  - `fetchCsrfToken()` is the atom `ICredentialOwningItsFetch`, narrowed to — the one
-    question left, and the only one whose answer changes what the connection DOES
-    rather than what it sends;
+  - `establish()` is the transport's, and the connection delegates to it without
+    asking anything first. The credential contributes a header, cookies and TLS
+    material; earning a CSRF token is the wire's work, because the wire is what
+    holds the session the token is bound to (needs `@mcp-abap-adt/interfaces`
+    21.0.0, where the two credential atoms leave the contract — nothing
+    implemented them);
   - `skipSessionType` is gone: it described BASIS 7.40, and a deployment is a wire, so
     it is `LegacyOnPremHttpTransport`;
   - whether a session exists is `IAdtTransport.sessionEstablished()` — a verdict each
@@ -112,7 +115,8 @@ gone. See [Migration to 6.0](./docs/MIGRATION-6.0.md).
   `BaseAbapConnection` (`OnPremAbapConnection`), `JwtAbapConnection`
   (`CloudAbapConnection`), `SamlAbapConnection`, `CertificateAbapConnection`,
   `KerberosAbapConnection`, `RfcAbapConnection` — 1597 lines. Take a connector,
-  hand it a credential, and name a transport if it is not the default.
+  hand it a credential, and hand it a transport — which has no default, because
+  which wire you are on is not something to guess.
 
 - `adaptTransport()`, which dressed a transport in an axios shape so six call
   sites did not have to be rewritten. They were rewritten.

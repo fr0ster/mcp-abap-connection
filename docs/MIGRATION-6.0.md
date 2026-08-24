@@ -239,17 +239,23 @@ left for a connection to discover by checking whether a method exists. What it
 buys is that no base class asks anything — every question about a collaborator
 is answered by the type.
 
-The exception is a credential whose way in IS a round trip — SPNEGO, whose token
-is consumed by one request, so the exchange and the fetch are the same act. That
-one is an atom, because an empty implementation would be a *lie*: it would report
-a token that was never earned.
+**One credential still has no home, and this is the honest statement of it.**
+SPNEGO's token is consumed by the first request that carries it, so the exchange
+and the establishing call are the same act — and `establish()` may retry, asking
+`authorizationHeader()` again per attempt, which for that credential means
+presenting something already spent.
 
-```diff
-- class SpnegoCredential implements IAuthProvider {
-+ class SpnegoCredential implements ICredentialOwningItsFetch {
-```
+An earlier cut of this release answered it with an atom the connection narrowed
+to. That is gone: a contract earns its place by something implementing it, and
+nothing here implements that one. What such a credential needs is either an
+exchange it owns end to end, or a signal that the establishing request
+succeeded — neither exists yet, and inventing the seam before there is a
+credential to test it against is how the last one came to be removed.
 
-Needs `@mcp-abap-adt/interfaces` 20.0.0.
+Everything shipping today authenticates by header, cookie or TLS material, and
+those three are what `IAuthProvider` states.
+
+Needs `@mcp-abap-adt/interfaces` 21.0.0.
 
 ## A refused credential
 
