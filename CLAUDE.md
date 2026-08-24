@@ -105,17 +105,19 @@ fact belongs on the transport instead.
 ## Verifying against a real system
 
 Unit tests cannot tell you that SAP accepts what is being built for it, and the
-on-prem half of this library is where that gap has bitten. `scripts/` holds the
-tools that close it, each taking an env file from the repo root:
+on-prem half of this library is where that gap has bitten. The live suites are
+the durable part of that: they read an env file from the repo root and skip
+themselves when it is absent.
 
-```bash
-node scripts/pr41-onprem-verify.js e19.env        # both wires, the whole checklist
-node scripts/pr41-rfc-lock.js e19.env             # a lock handle surviving other calls
-node scripts/onprem-session-hold.js <stop> rfc    # hold a session open and go look at it
-```
+`scripts/` also collects ad-hoc probes written for whatever release was being
+verified at the time. They are not part of the contract — they come and go, and
+they are not compiled by `tsconfig.json` — so read the file before running one
+rather than trusting a command written down here.
 
-An HTTP session appears in **SM05**; an RFC conversation appears in **SMGW ->
-Logged on Clients** and never in SM05, because there is no ICM in that path.
+What to look at on the system itself: an HTTP session appears in **SM05**; an
+RFC conversation appears in **SMGW -> Logged on Clients** and never in SM05,
+because there is no ICM in that path. Sessions are per user and shared with
+every other tool logged on as them, which is **SM04**.
 
 ## Release
 
