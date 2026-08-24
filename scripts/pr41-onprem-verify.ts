@@ -95,7 +95,10 @@ function httpWire(kind: 'plain' | 'legacy'): OnPremHttpTransport {
   const cred = credential();
   const Wire =
     kind === 'legacy' ? LegacyOnPremHttpTransport : OnPremHttpTransport;
-  return new Wire(() => cred.transportMaterial?.() ?? {}, logger, {
+  // Called, not asked about: `transportMaterial()` is required on
+  // IAuthProvider, so `?.()` here would be a dead branch — and the exact
+  // "does this member exist" question this release removed from the base.
+  return new Wire(() => cred.transportMaterial(), logger, {
     client: config.client,
     baseUrl: config.url,
   });

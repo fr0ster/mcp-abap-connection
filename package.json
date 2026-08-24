@@ -40,11 +40,12 @@
     "lint": "npx biome check --write src scripts",
     "lint:check": "npx biome check src scripts",
     "format": "npx biome format --write src scripts",
-    "build": "npm run --silent clean && npx biome check src scripts --diagnostic-level=error && npx tsc -p tsconfig.json",
+    "build": "npm run --silent clean && npx biome check src scripts --diagnostic-level=error && npx tsc -p tsconfig.json && npm run --silent typecheck:scripts",
     "build:fast": "npx tsc -p tsconfig.json",
     "test": "npm run --silent check:docs && jest",
     "prepublishOnly": "npm run build && npm run check:docs",
-    "check:docs": "node scripts/check-docs.mjs"
+    "check:docs": "node scripts/check-docs.mjs",
+    "typecheck:scripts": "npx tsc -p tsconfig.scripts.json"
   },
   "engines": {
     "node": ">=18.0.0"

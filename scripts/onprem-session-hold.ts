@@ -86,7 +86,7 @@ async function main(): Promise<void> {
           config as never,
           credential,
           new OnPremHttpTransport(
-            () => credential.transportMaterial?.() ?? {},
+            () => credential.transportMaterial(),
             logger,
             { client: config.client, baseUrl: config.url },
           ),
