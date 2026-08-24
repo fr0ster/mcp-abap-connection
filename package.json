@@ -43,9 +43,10 @@
     "build": "npm run --silent clean && npx biome check src scripts --diagnostic-level=error && npx tsc -p tsconfig.json && npm run --silent typecheck:scripts",
     "build:fast": "npx tsc -p tsconfig.json",
     "test": "npm run --silent check:docs && jest",
-    "prepublishOnly": "npm run build && npm run check:docs",
+    "prepublishOnly": "npm run build && npm run check:docs && npm run --silent check:pack",
     "check:docs": "node scripts/check-docs.mjs",
-    "typecheck:scripts": "npx tsc -p tsconfig.scripts.json"
+    "typecheck:scripts": "npx tsc -p tsconfig.scripts.json",
+    "check:pack": "node scripts/check-pack.mjs"
   },
   "engines": {
     "node": ">=18.0.0"
