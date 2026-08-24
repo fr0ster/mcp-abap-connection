@@ -26,6 +26,7 @@ import * as path from 'node:path';
 import * as dotenv from 'dotenv';
 import { BasicAuthProvider } from '../dist/auth/providers';
 import { AdtOnPremConnector } from '../dist/connection/AdtOnPremConnector';
+import { OnPremHttpTransport } from '../dist/connection/OnPremHttpTransport';
 import { RfcTransport } from '../dist/connection/RfcTransport';
 import { rfcConversationFrom } from '../dist/connection/rfcConversation';
 import type { ILogger } from '../dist/logger';
@@ -75,13 +76,22 @@ async function main(): Promise<void> {
   const credential = new BasicAuthProvider(config.username, config.password);
   const connection =
     wire === 'rfc'
-      ? new AdtOnPremConnector(config as never, credential, logger, undefined, {
-          transport: new RfcTransport(
-            rfcConversationFrom(config as never),
+      ? new AdtOnPremConnector(
+          config as never,
+          credential,
+          new RfcTransport(rfcConversationFrom(config as never), logger),
+          logger,
+        )
+      : new AdtOnPremConnector(
+          config as never,
+          credential,
+          new OnPremHttpTransport(
+            () => credential.transportMaterial?.() ?? {},
             logger,
+            { client: config.client, baseUrl: config.url },
           ),
-        })
-      : new AdtOnPremConnector(config as never, credential, logger);
+          logger,
+        );
 
   console.log(
     `${config.url}, client ${config.client}, user ${config.username}`,
@@ -115,7 +125,7 @@ async function main(): Promise<void> {
   }
 
   say('releasing');
-  await connection.disconnect({ deadlineMs: 15000 });
+  await connection.disconnect();
   say('RELEASED — look again');
 }
 

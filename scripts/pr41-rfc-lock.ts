@@ -94,9 +94,8 @@ async function main(): Promise<void> {
   const connection = new AdtOnPremConnector(
     config as never,
     new BasicAuthProvider(config.username, config.password),
+    new RfcTransport(rfcConversation(), logger),
     logger,
-    undefined,
-    { transport: new RfcTransport(rfcConversation(), logger) },
   );
 
   console.log(`class: ${connection.constructor.name}`);
@@ -203,7 +202,7 @@ async function main(): Promise<void> {
   say(`activate: HTTP ${activated.status}`);
 
   connection.setSessionType('stateless');
-  await connection.disconnect({ deadlineMs: 15000 });
+  await connection.disconnect();
   say('disconnect(): returned');
 }
 

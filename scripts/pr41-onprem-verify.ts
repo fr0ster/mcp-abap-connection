@@ -1,5 +1,5 @@
 /**
- * PR #41 on-prem verification: the same connector over both transports.
+ * PR #41 on-prem verification: the same connector over every wire on-prem has.
  *
  * The PR's own checklist says the on-prem half is unit-tested only. This runs
  * it against a real system, and reports rather than asserts — a difference
@@ -16,6 +16,10 @@
  * Plus, over RFC only, the question issue #39 raised about the old class:
  * does anything supply a default `Accept`, or does ADT answer 400.
  *
+ * The wire is a constructor argument now rather than an option object, and
+ * on-prem has three of them: the ordinary HTTP wire, the BASIS 7.40 one that
+ * sends no `x-sap-adt-sessiontype`, and RFC.
+ *
  * Usage:
  *   node scripts/pr41-onprem-verify.js [env-file]
  */
@@ -25,7 +29,10 @@ import * as path from 'node:path';
 import * as dotenv from 'dotenv';
 import { BasicAuthProvider } from '../dist/auth/providers';
 import { AdtOnPremConnector } from '../dist/connection/AdtOnPremConnector';
+import { LegacyOnPremHttpTransport } from '../dist/connection/LegacyOnPremHttpTransport';
+import { OnPremHttpTransport } from '../dist/connection/OnPremHttpTransport';
 import { RfcTransport } from '../dist/connection/RfcTransport';
+import { rfcConversationFrom } from '../dist/connection/rfcConversation';
 import type { ILogger } from '../dist/logger';
 
 const envPath = path.resolve(__dirname, '..', process.argv[2] ?? 'e19.env');
@@ -42,7 +49,7 @@ const head = (title: string) =>
 
 const logger: ILogger = {
   debug: (message: string) => {
-    if (/session|strategy|logoff|conversation|STATUS_LINE/i.test(message)) {
+    if (/session|logoff|conversation|STATUS_LINE/i.test(message)) {
       console.log(`  ${message}`);
     }
   },
@@ -81,30 +88,22 @@ function describe(e: unknown): string {
 }
 
 /**
- * The RFC conversation the transport is handed. Nothing in the library builds
- * one from a config — the consumer supplies it, and `IRfcConversation` is not
- * exported, so this matches the shape structurally.
+ * What the caller wires now: the credential's TLS material configures the wire
+ * and the client is named on it, because nothing does either for them.
  */
-function rfcConversationFactory() {
-  // biome-ignore lint/correctness/noNodejsModules: the SDK is optional by design
-  const noderfc = require('@mcp-abap-adt/sap-rfc-lite');
-  const parsed = new URL(config.url);
-  const port = Number.parseInt(parsed.port || '8000', 10);
-  const sysnr =
-    process.env.SAP_SYSNR?.trim() || String(port - 8000).padStart(2, '0');
-  return () =>
-    new noderfc.Client({
-      ashost: parsed.hostname,
-      sysnr,
-      client: config.client,
-      user: config.username,
-      passwd: config.password,
-      lang: 'EN',
-    });
+function httpWire(kind: 'plain' | 'legacy'): OnPremHttpTransport {
+  const cred = credential();
+  const Wire =
+    kind === 'legacy' ? LegacyOnPremHttpTransport : OnPremHttpTransport;
+  return new Wire(() => cred.transportMaterial?.() ?? {}, logger, {
+    client: config.client,
+    baseUrl: config.url,
+  });
 }
 
 async function exercise(
   label: string,
+  // biome-ignore lint/suspicious/noExplicitAny: any of the three on-prem wires
   connection: AdtOnPremConnector<BasicAuthProvider, any>,
   opts: { sendAccept: boolean },
 ): Promise<void> {
@@ -155,7 +154,7 @@ async function exercise(
   }
 
   // ---- disconnect, and what a call after it does ------------------------
-  await connection.disconnect({ deadlineMs: 15000 });
+  await connection.disconnect();
   record(label, 'disconnect()', 'returned');
 
   try {
@@ -184,44 +183,54 @@ async function main(): Promise<void> {
   );
 
   // ---- HTTP -------------------------------------------------------------
-  head('AdtOnPremConnector over HTTP (default transport)');
-  const http = new AdtOnPremConnector(config as any, credential(), logger);
-  console.log(
-    `transport: ${(http as any).transport?.kind ?? 'default/unnamed'}`,
+  head('AdtOnPremConnector over OnPremHttpTransport');
+  const http = new AdtOnPremConnector(
+    config as never,
+    credential(),
+    httpWire('plain'),
+    logger,
   );
+  console.log(`transport: ${http.transport.kind}`);
   await exercise('HTTP', http, { sendAccept: false });
+
+  // ---- HTTP, the BASIS 7.40 wire ----------------------------------------
+  head('AdtOnPremConnector over LegacyOnPremHttpTransport');
+  const legacy = new AdtOnPremConnector(
+    config as never,
+    credential(),
+    httpWire('legacy'),
+    logger,
+  );
+  console.log(`transport: ${legacy.transport.kind}`);
+  await exercise('HTTP (legacy)', legacy, { sendAccept: false });
 
   // ---- RFC, first without an Accept header (issue #39) ------------------
   head('AdtOnPremConnector over RfcTransport');
-  const connectRfc = rfcConversationFactory();
   const rfc = new AdtOnPremConnector(
-    config as any,
+    config as never,
     credential(),
+    new RfcTransport(rfcConversationFrom(config as never), logger),
     logger,
-    undefined,
-    { transport: new RfcTransport(connectRfc, logger) },
   );
-  console.log(
-    `transport: ${(rfc as any).transport?.kind ?? 'default/unnamed'}`,
-  );
+  console.log(`transport: ${rfc.transport.kind}`);
   await exercise('RFC (no Accept)', rfc, { sendAccept: false });
 
   // ---- RFC again, this time naming Accept -------------------------------
   head('AdtOnPremConnector over RfcTransport, with an explicit Accept');
   const rfc2 = new AdtOnPremConnector(
-    config as any,
+    config as never,
     credential(),
+    new RfcTransport(rfcConversationFrom(config as never), logger),
     logger,
-    undefined,
-    { transport: new RfcTransport(rfcConversationFactory(), logger) },
   );
   await exercise('RFC (Accept: */*)', rfc2, { sendAccept: true });
 
   // ---- a failed connect must throw, not resolve -------------------------
   head('A failed connect() throws rather than resolving');
   const bad = new AdtOnPremConnector(
-    { ...config, password: 'definitely-not-the-password' } as any,
+    { ...config, password: 'definitely-not-the-password' } as never,
     new BasicAuthProvider(config.username, 'definitely-not-the-password'),
+    httpWire('plain'),
     logger,
   );
   try {
