@@ -41,11 +41,42 @@ const FORBIDDEN = [
   },
 ];
 
-const raw = execFileSync('npm', ['pack', '--dry-run', '--json'], {
-  encoding: 'utf8',
-  stdio: ['ignore', 'pipe', 'ignore'],
-});
-const [pack] = JSON.parse(raw);
+/**
+ * `npm pack` failing is a finding, not a crash.
+ *
+ * stderr was discarded here, so a read-only npm cache — or anything else that
+ * stops npm before it can answer — surfaced as `Command failed: npm pack
+ * --dry-run --json` and nothing else. That is the failure this whole file
+ * exists to prevent, in the file itself: a check that could not run, saying
+ * nothing about why.
+ */
+let raw;
+try {
+  raw = execFileSync('npm', ['pack', '--dry-run', '--json'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+} catch (error) {
+  const detail = `${error.stderr ?? ''}${error.stdout ?? ''}`.trim();
+  console.log('✗ pack — npm could not answer, so nothing was checked');
+  for (const line of (detail || String(error.message)).split('\n')) {
+    console.log(`    ${line}`);
+  }
+  process.exit(1);
+}
+
+let pack;
+try {
+  [pack] = JSON.parse(raw);
+} catch {
+  // npm answered with something that is not the JSON this asked for. Print it:
+  // whatever it is, it is the reason, and guessing at it here would hide it.
+  console.log('✗ pack — npm answered, but not with the JSON this asked for');
+  for (const line of raw.trim().split('\n').slice(0, 10)) {
+    console.log(`    ${line}`);
+  }
+  process.exit(1);
+}
 const files = pack.files.map((f) => f.path);
 
 const problems = [];
