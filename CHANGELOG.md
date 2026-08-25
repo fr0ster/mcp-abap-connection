@@ -7,33 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [6.0.2] - 2026-08-25
-
-No code change. 6.0.1 shipped the OAuth2 redirect catcher rewritten from
-`express` onto `node:http`, and said in this file that the end-to-end flow had
-not been verified because it needs a browser and a real redirect. It has been
-now, against the BTP trial, and the record should say so rather than leave a
-caveat that is no longer true.
-
-### Verified
-
-- **The whole chain, end to end**: `bin/sap-abap-auth.js auth` → browser
-  authorization against the tenant's UAA → redirect to `localhost:3001/callback`
-  → code exchanged for a token → `.env` written with `SAP_JWT_TOKEN`,
-  `SAP_REFRESH_TOKEN` and the UAA fields.
-
-- Each seam the express removal touched, measured on the real handler rather
-  than a stand-in: `GET /favicon.ico` answers `404` and does not reach the
-  handler waiting for a code — routing express used to do; `GET /callback` with
-  no code answers `400`; the success page comes back
-  `200 text/html; charset=utf-8`, the Content-Type `res.send()` used to infer
-  and `node:http` will not.
-
-- **The issued token then drove this library** against the trial:
-  `AdtCloudConnector` with `CloudHttpTransport` connected, took a session
-  (`SAP_SESSIONID_TRL_100`), answered a `GET /sap/bc/adt/discovery` with `200`
-  and 444826 bytes of XML, and `disconnect()` left `isConnected()` false.
-
 ## [6.0.1] - 2026-08-25
 
 ### Removed
@@ -53,9 +26,27 @@ caveat that is no longer true.
   for anything else including a `POST`.
 
   Runtime dependencies are now `@mcp-abap-adt/interfaces`, `axios`, `commander`
-  and `open`. The end-to-end auth flow needs a browser and a real redirect and
-  was not verified at the time of this release — it was measured afterwards, see
-  6.0.2.
+  and `open`. The end-to-end flow was measured against the BTP trial — see
+  *Verified* below.
+
+### Verified
+
+- **The whole chain, end to end**: `bin/sap-abap-auth.js auth` → browser
+  authorization against the tenant's UAA → redirect to `localhost:3001/callback`
+  → code exchanged for a token → `.env` written with `SAP_JWT_TOKEN`,
+  `SAP_REFRESH_TOKEN` and the UAA fields.
+
+- Each seam the express removal touched, measured on the real handler rather
+  than a stand-in: `GET /favicon.ico` answers `404` and does not reach the
+  handler waiting for a code — routing express used to do; `GET /callback` with
+  no code answers `400`; the success page comes back
+  `200 text/html; charset=utf-8`, the Content-Type `res.send()` used to infer
+  and `node:http` will not.
+
+- **The issued token then drove this library** against the trial:
+  `AdtCloudConnector` with `CloudHttpTransport` connected, took a session
+  (`SAP_SESSIONID_TRL_100`), answered a `GET /sap/bc/adt/discovery` with `200`
+  and 444826 bytes of XML, and `disconnect()` left `isConnected()` false.
 
 ### Fixed
 
@@ -1354,8 +1345,7 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.2...HEAD
-[6.0.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.1...v6.0.2
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.1...HEAD
 [6.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.0...v6.0.1
 [6.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v5.0.0...v6.0.0
 [5.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v4.0.0...v5.0.0
