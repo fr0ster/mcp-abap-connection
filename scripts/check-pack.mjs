@@ -15,7 +15,7 @@
  * nothing here was looking. This asks npm the one question that matters — what
  * goes in the tarball — and reads the answer.
  */
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 
 /** What has no business reaching a consumer, and why it got in before. */
 const FORBIDDEN = [
@@ -41,41 +41,68 @@ const FORBIDDEN = [
   },
 ];
 
-/**
- * `npm pack` failing is a finding, not a crash.
- *
- * stderr was discarded here, so a read-only npm cache — or anything else that
- * stops npm before it can answer — surfaced as `Command failed: npm pack
- * --dry-run --json` and nothing else. That is the failure this whole file
- * exists to prevent, in the file itself: a check that could not run, saying
- * nothing about why.
- */
-let raw;
-try {
-  raw = execFileSync('npm', ['pack', '--dry-run', '--json'], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-} catch (error) {
-  const detail = `${error.stderr ?? ''}${error.stdout ?? ''}`.trim();
-  console.log('✗ pack — npm could not answer, so nothing was checked');
-  for (const line of (detail || String(error.message)).split('\n')) {
+/** Report and stop. A check that could not run must never look like one that passed. */
+function unanswered(headline, lines) {
+  console.log(`✗ pack — ${headline}`);
+  for (const line of lines.filter(Boolean).slice(0, 12)) {
     console.log(`    ${line}`);
   }
   process.exit(1);
 }
 
+/**
+ * `npm pack` failing is a finding, not a crash — and there are three ways to
+ * fail, which is why this is `spawnSync` and not `execFileSync`.
+ *
+ * The first version discarded stderr, so a read-only npm cache came back as
+ * `Command failed: npm pack --dry-run --json`. Piping stderr fixed that one and
+ * missed the other: when the process never STARTS — EPERM under a sandbox,
+ * ENOENT with no npm on PATH — there is no stderr to pipe, the useful part is
+ * in `error.code` and `error.syscall`, and `execFileSync` collapses all of it
+ * into the same opaque message.
+ *
+ * `spawnSync` throws nothing and hands back all four channels, so each failure
+ * is asked about separately rather than inferred from an exception.
+ */
+const result = spawnSync('npm', ['pack', '--dry-run', '--json'], {
+  encoding: 'utf8',
+});
+
+if (result.error) {
+  // The process never ran. `error.message` alone would say "spawnSync npm
+  // EPERM" and stop there.
+  const { code, errno, syscall, path } = result.error;
+  unanswered('npm could not be started, so nothing was checked', [
+    result.error.message,
+    code && `code: ${code}`,
+    errno !== undefined && `errno: ${errno}`,
+    syscall && `syscall: ${syscall}`,
+    path && `path: ${path}`,
+  ]);
+}
+
+if (result.status !== 0) {
+  // It ran and refused. npm's own words are the reason; the exit status alone
+  // is not.
+  unanswered(
+    `npm exited ${result.signal ? `on ${result.signal}` : `with ${result.status}`}, so nothing was checked`,
+    `${result.stderr ?? ''}\n${result.stdout ?? ''}`.trim().split('\n'),
+  );
+}
+
 let pack;
 try {
-  [pack] = JSON.parse(raw);
+  [pack] = JSON.parse(result.stdout);
 } catch {
-  // npm answered with something that is not the JSON this asked for. Print it:
-  // whatever it is, it is the reason, and guessing at it here would hide it.
-  console.log('✗ pack — npm answered, but not with the JSON this asked for');
-  for (const line of raw.trim().split('\n').slice(0, 10)) {
-    console.log(`    ${line}`);
-  }
-  process.exit(1);
+  // npm exited 0 with something that is not the JSON this asked for. Print what
+  // it actually said: whatever that is, it is the reason, and guessing would
+  // hide it.
+  unanswered(
+    'npm answered, but not with the JSON this asked for',
+    String(result.stdout ?? '')
+      .trim()
+      .split('\n'),
+  );
 }
 const files = pack.files.map((f) => f.path);
 
