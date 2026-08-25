@@ -55,35 +55,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worse than none, because the error reads as "safe to retry" when it is not.
   The server bounds the call at `rdisp/max_wprun_time`.
 
-### Added
+## [6.0.0] - 2026-08-24
 
-- **CI.** Until now the only workflow ran on a tag, and `Release` went from
-  build straight to `npm pack` — so nothing ran the gate before a merge, and the
-  artifact a tag published had never been tested anywhere but on a laptop.
+The wire owns what is the wire's, and the factory and per-credential classes are
+gone. See [Migration to 6.0](./docs/MIGRATION-6.0.md).
+
+### Added — tooling
+
+- **CI.** Until this release the only workflow ran on a tag, and `Release` went
+  from build straight to `npm pack` — so nothing ran the gate before a merge,
+  and the artifact a tag published had been tested nowhere but on a laptop.
   `ci.yml` runs `lint:check`, `build`, `jest --no-cache`, `check:docs` and
   `check:pack` on push and pull request, across ubuntu and windows on Node 18
-  and 20. `release.yml` runs the same three checks between build and pack, so a
-  tag is not a route around them.
+  and 20. Windows is in the matrix because npm is `npm.cmd` there and Node will
+  not execute a `.cmd` without a shell. `release.yml` runs the same three checks
+  between build and pack, so a tag is not a route around them.
 
 - **`check:pack`** — inspects `npm pack --dry-run --json` and refuses a tarball
   carrying a test file, a `.tsbuildinfo`, a `.ts` source, an env file or an
-  npmrc. Both of the defects it was written for had shipped: `dist/__tests__/`
-  and 120KB of compiler bookkeeping, neither visible from `files`, because it is
-  the compiler that decides what `dist` holds.
+  npmrc. Both defects it was written for had already shipped once:
+  `dist/__tests__/` and 120KB of compiler bookkeeping, neither visible from
+  `files`, because it is the compiler that decides what `dist` holds.
 
 - **`typecheck:scripts`** — `scripts/*.ts` were checked by nothing, which is how
   three live verification scripts came to sit on a constructor signature two
   releases old.
 
-### Changed
+### Changed — packaging
 
-- Package contents: 111 files / 182KB → 95 / 147KB. Test helpers and the
-  compiler's incremental state no longer ship.
-
-## [6.0.0] - 2026-08-24
-
-The wire owns what is the wire's, and the factory and per-credential classes are
-gone. See [Migration to 6.0](./docs/MIGRATION-6.0.md).
+- 111 files / 182KB → 95 / 147KB. Test helpers and the compiler's incremental
+  state no longer ship.
 
 ### Added
 
