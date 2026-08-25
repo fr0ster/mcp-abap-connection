@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.1] - 2026-08-25
+
+### Removed
+
+- **`express` is no longer a dependency.** It was a runtime dependency for one
+  thing: the localhost server in `bin/sap-abap-auth.js` that catches the OAuth2
+  redirect. The library never touched it, and that file already imported
+  `node:http`. Rewritten on `node:http`, which sheds 5.6MB of `node_modules` and
+  the transitive tree the Dependabot bumps kept arriving for — `qs`,
+  `body-parser` and `follow-redirects` were all express's.
+
+  Two things express was doing implicitly are now stated: a request is the
+  redirect only when it is a `GET` for `/callback`, so a browser fetching
+  `/favicon.ico` no longer reaches the handler waiting for an authorization
+  code; and the success page declares `text/html`, which `res.send()` used to
+  infer. Exercised as a server: `200` with the page, `400` without a code, `404`
+  for anything else including a `POST`.
+
+  Runtime dependencies are now `@mcp-abap-adt/interfaces`, `axios`, `commander`
+  and `open`. **The end-to-end auth flow needs a browser and a real redirect and
+  was not verified here.**
+
+### Fixed
+
+- **The live RFC suite skips a wire the machine did not install.** It asked for
+  four environment variables and nothing else, so a checkout with an env file
+  and no SAP NW RFC SDK ran the suite anyway and went eleven tests red, all on
+  `@mcp-abap-adt/sap-rfc-lite is not available`. The dependency is `optional` —
+  `npm ci` leaves it out WITHOUT failing, which is what optional means — so
+  nothing warns and the next run is red for a reason unrelated to the change
+  under test.
+
+  Nothing here is configured at build time the way a C package is: the installed
+  optional dependency IS the choice of wire, made at install and readable only
+  at runtime. `canRun()` now reads it with `require.resolve`, asking whether the
+  wire could be taken rather than loading a native addon to find out. Measured
+  in both states: SDK hidden — 11 skipped, 2 passed, green; SDK present — 13
+  passed.
+
+- `RfcTransport` says why it ignores `request.timeout`. No behaviour change: the
+  file contained no occurrence of the word, and that silence read as an
+  oversight. It is deliberate — the SDK exposes no cancel, its per-call
+  `timeout` is parsed into a commented-out branch, and an abandoned call still
+  holds the conversation, so the next one would queue behind a call nobody is
+  waiting for. A deadline that reports failure while the wire stays busy is
+  worse than none, because the error reads as "safe to retry" when it is not.
+  The server bounds the call at `rdisp/max_wprun_time`.
+
+### Added
+
+- **CI.** Until now the only workflow ran on a tag, and `Release` went from
+  build straight to `npm pack` — so nothing ran the gate before a merge, and the
+  artifact a tag published had never been tested anywhere but on a laptop.
+  `ci.yml` runs `lint:check`, `build`, `jest --no-cache`, `check:docs` and
+  `check:pack` on push and pull request, across ubuntu and windows on Node 18
+  and 20. `release.yml` runs the same three checks between build and pack, so a
+  tag is not a route around them.
+
+- **`check:pack`** — inspects `npm pack --dry-run --json` and refuses a tarball
+  carrying a test file, a `.tsbuildinfo`, a `.ts` source, an env file or an
+  npmrc. Both of the defects it was written for had shipped: `dist/__tests__/`
+  and 120KB of compiler bookkeeping, neither visible from `files`, because it is
+  the compiler that decides what `dist` holds.
+
+- **`typecheck:scripts`** — `scripts/*.ts` were checked by nothing, which is how
+  three live verification scripts came to sit on a constructor signature two
+  releases old.
+
+### Changed
+
+- Package contents: 111 files / 182KB → 95 / 147KB. Test helpers and the
+  compiler's incremental state no longer ship.
+
 ## [6.0.0] - 2026-08-24
 
 The wire owns what is the wire's, and the factory and per-credential classes are
@@ -1252,7 +1325,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.1...HEAD
+[6.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.0...v6.0.1
 [6.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v5.0.0...v6.0.0
 [5.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v3.0.0...v4.0.0
