@@ -28,6 +28,21 @@ jobs:
       - name: Build project
         run: npm run build
 
+      # The gate, before anything is packed. This workflow used to go straight
+      # from build to `npm pack`, so a tag could publish an artifact that no
+      # test, no docs check and no package check had ever seen — and twice it
+      # did: test helpers and 120KB of compiler bookkeeping both reached a
+      # published .tgz. Nothing here is new; it is the same gate CI runs, which
+      # is the point — a tag must not be a way around it.
+      - name: Test
+        run: npx jest --no-cache
+
+      - name: Check docs
+        run: npm run check:docs
+
+      - name: Check what will be published
+        run: npm run check:pack
+
       - name: Create package
         run: npm pack
 
