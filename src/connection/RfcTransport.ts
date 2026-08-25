@@ -233,6 +233,20 @@ export class RfcTransport implements IOnPremTransport {
 
     this.logger?.debug(`RFC → ${method} ${uri}`);
 
+    // `request.timeout` is deliberately not read, and the absence of the word
+    // here is what made that look like an oversight (#42).
+    //
+    // There is nothing to enforce it with: the SDK exposes no cancel, and an
+    // abandoned call still holds the conversation — the next one would queue
+    // behind a call nobody is waiting for. A deadline that reports failure
+    // while the wire stays busy is worse than none, because the error reads as
+    // "safe to retry" when it is not.
+    //
+    // Nor is one needed. What bounds this call is the server: a dialog step
+    // ends at `rdisp/max_wprun_time`. And a call that cannot be torn down
+    // mid-flight is precisely what the connection emulates over HTTP, where
+    // a critical section raises the caller's timeout to a ten-minute ceiling so
+    // an abort cannot orphan a lock handle. Here that comes free.
     let raw: Record<string, any>;
     try {
       raw = await this.conversation.call('SADT_REST_RFC_ENDPOINT', {
