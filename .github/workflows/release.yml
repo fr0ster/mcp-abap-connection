@@ -57,22 +57,18 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
+      # The notes ARE the changelog section for this tag. They used to be a
+      # static block plus generate_release_notes, which lists merged pull
+      # requests — and most work here lands as commits, so a release could
+      # publish notes naming one PR while everything else in it stayed invisible.
+      - name: Build release notes from the changelog
+        run: node scripts/release-notes.mjs "${{ steps.version.outputs.version }}" > RELEASE_NOTES.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: ${{ steps.package.outputs.filename }}
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
           draft: false
           prerelease: false
-          body: |
-            ## Installation
-
-            Download the `.tgz` package and install:
-
-            ```bash
-            npm install -g ./${{ steps.package.outputs.filename }}
-            ```
-
-            ## What's Changed
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
