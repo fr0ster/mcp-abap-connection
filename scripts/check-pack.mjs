@@ -64,9 +64,31 @@ function unanswered(headline, lines) {
  * `spawnSync` throws nothing and hands back all four channels, so each failure
  * is asked about separately rather than inferred from an exception.
  */
-const result = spawnSync('npm', ['pack', '--dry-run', '--json'], {
-  encoding: 'utf8',
-});
+const ASK = ['pack', '--dry-run', '--json'];
+
+/**
+ * How to reach npm on a machine that is not this one.
+ *
+ * `spawnSync('npm', ...)` works here and fails on Windows, where npm is
+ * `npm.cmd` and Node will not execute a `.cmd` without a shell — so
+ * `prepublishOnly` would die before this check ever looked at the tarball. The
+ * same class of defect this repo fixed once already, when the scripts npm ran
+ * were scripts Windows could not run.
+ *
+ * When npm itself started us — which is how `prepublishOnly` and `check:pack`
+ * run — `npm_execpath` names npm's own CLI script, and handing that to the Node
+ * already executing is exact and needs no shell anywhere. Only a direct
+ * `node scripts/check-pack.mjs` on Windows falls back to a shell, and the
+ * arguments above are literals, so there is nothing to quote wrong.
+ */
+const cli = process.env.npm_execpath;
+const viaNode = cli && /npm-cli\.js$/.test(cli);
+const result = viaNode
+  ? spawnSync(process.execPath, [cli, ...ASK], { encoding: 'utf8' })
+  : spawnSync('npm', ASK, {
+      encoding: 'utf8',
+      shell: process.platform === 'win32',
+    });
 
 if (result.error) {
   // The process never ran. `error.message` alone would say "spawnSync npm
