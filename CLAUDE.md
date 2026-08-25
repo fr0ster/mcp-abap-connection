@@ -16,7 +16,10 @@ SAP_ENV_FILE=e19.env npx jest --testPathPatterns=rfc-connection  # live, needs a
 
 Live suites read an env file from the repo root and skip themselves when it is
 absent — which is why the same command is green on a machine that cannot reach
-a system, and proves nothing there.
+a system, and proves nothing there. The RFC suite also skips when
+`@mcp-abap-adt/sap-rfc-lite` does not resolve: nothing here is configured at
+build time the way a C package is, so the installed optional dependency IS the
+choice of wire, and a machine that did not install it is not one taking RFC.
 
 ## Architecture
 
@@ -113,7 +116,8 @@ fact belongs on the transport instead.
 Unit tests cannot tell you that SAP accepts what is being built for it, and the
 on-prem half of this library is where that gap has bitten. The live suites are
 the durable part of that: they read an env file from the repo root and skip
-themselves when it is absent.
+themselves when it is absent — and the RFC one also when the SDK it needs is
+not installed.
 
 `scripts/` also collects ad-hoc probes written for whatever release was being
 verified at the time. They are not part of the contract — they come and go, and

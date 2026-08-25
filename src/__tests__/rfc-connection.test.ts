@@ -61,13 +61,37 @@ function overRfc(config: SapConfig) {
   );
 }
 
+/**
+ * The env file AND the SDK: either one missing means this machine is not the
+ * one these tests are for.
+ *
+ * Installing `@mcp-abap-adt/sap-rfc-lite` is a deliberate act — it needs the SAP
+ * NW RFC SDK on the machine — so a checkout without it is not a broken checkout,
+ * it is one that does not take the RFC wire. Asking only about the env file made
+ * that eleven red tests: the dependency is `optional`, so `npm ci` leaves it out
+ * WITHOUT failing, and the suite then went looking for it anyway. A gate that
+ * goes red for a wire the machine has chosen not to build reports nothing about
+ * the change under test.
+ */
 function canRun(): boolean {
-  return !!(
-    process.env.SAP_URL &&
-    process.env.SAP_USERNAME &&
-    process.env.SAP_PASSWORD &&
-    process.env.SAP_CLIENT
-  );
+  if (
+    !(
+      process.env.SAP_URL &&
+      process.env.SAP_USERNAME &&
+      process.env.SAP_PASSWORD &&
+      process.env.SAP_CLIENT
+    )
+  ) {
+    return false;
+  }
+  try {
+    // Resolve rather than require: this asks whether the wire could be taken,
+    // and loading a native addon to answer that would be doing the work twice.
+    require.resolve('@mcp-abap-adt/sap-rfc-lite');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const describeIfRfc = canRun() ? describe : describe.skip;
