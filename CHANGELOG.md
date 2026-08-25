@@ -29,6 +29,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `open`. The end-to-end flow was measured against the BTP trial — see
   *Verified* below.
 
+### Changed
+
+- **The browser wait is the caller's to set.** `bin/sap-abap-auth.js` waited a
+  fixed five minutes for the redirect, and a real BTP login does not fit in it —
+  the identity provider, a password manager and whatever second factor the
+  tenant asks for all happen before the redirect is issued. Measured twice, and
+  both times the window closed first; the browser then had nowhere to redirect
+  to, which reads as the authentication having failed rather than as a timeout.
+
+  `--timeout <minutes>`, or `SAP_AUTH_TIMEOUT_MS` for a script that would rather
+  not pass an argument, with the flag winning when both are given. Anything that
+  is not a positive number is refused by name rather than silently becoming a
+  default. **The default is now fifteen minutes**, which covered the login this
+  was measured against with room to spare and still bounds an abandoned run.
+
 ### Verified
 
 - **The whole chain, end to end**: `bin/sap-abap-auth.js auth` → browser

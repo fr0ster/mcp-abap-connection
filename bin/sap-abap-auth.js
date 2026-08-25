@@ -262,6 +262,45 @@ function getJwtAuthorizationUrl(serviceKey, port = 3001) {
 }
 
 /**
+ * How long to wait for the browser to come back.
+ *
+ * Five minutes was the fixed value, and a real BTP login does not fit in it:
+ * the identity provider, a password manager and whatever second factor the
+ * tenant asks for all happen before the redirect is issued. Measured twice —
+ * both times the window closed first, and the browser then had nowhere to
+ * redirect to, which reads to the user as the authentication having failed.
+ *
+ * So it is a decision the caller makes: `--timeout` in minutes, or
+ * `SAP_AUTH_TIMEOUT_MS` for a script that would rather not pass an argument.
+ * The default is fifteen, which covered the login this was measured against
+ * with room to spare and still bounds a run that has been abandoned.
+ */
+const DEFAULT_AUTH_TIMEOUT_MS = 15 * 60 * 1000;
+
+function resolveAuthTimeout(minutes) {
+  if (minutes !== undefined) {
+    const value = Number(minutes);
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error(
+        `--timeout must be a positive number of minutes, got: ${minutes}`
+      );
+    }
+    return value * 60 * 1000;
+  }
+  const fromEnv = process.env.SAP_AUTH_TIMEOUT_MS;
+  if (fromEnv !== undefined && fromEnv !== "") {
+    const value = Number(fromEnv);
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error(
+        `SAP_AUTH_TIMEOUT_MS must be a positive number of milliseconds, got: ${fromEnv}`
+      );
+    }
+    return value;
+  }
+  return DEFAULT_AUTH_TIMEOUT_MS;
+}
+
+/**
  * One reply, with the header express used to set on our behalf.
  *
  * `res.send()` chose a Content-Type from what it was handed; `node:http` sends
@@ -280,7 +319,12 @@ function send(res, status, contentType, body) {
  * @param {string} flow Flow type: jwt (OAuth2)
  * @returns {Promise<{accessToken: string, refreshToken?: string}>} Promise that resolves to tokens
  */
-async function startAuthServer(serviceKey, browser = undefined, flow = "jwt") {
+async function startAuthServer(
+  serviceKey,
+  browser = undefined,
+  flow = "jwt",
+  timeoutMs = DEFAULT_AUTH_TIMEOUT_MS
+) {
   return new Promise((resolve, reject) => {
     const PORT = 3001;
     let serverInstance = null;
@@ -422,9 +466,17 @@ async function startAuthServer(serviceKey, browser = undefined, flow = "jwt") {
     setTimeout(() => {
       if (serverInstance) {
         serverInstance.close();
-        reject(new Error("Authentication timeout. Process aborted."));
+        reject(
+          new Error(
+            `Authentication timeout after ${
+              timeoutMs >= 60000
+                ? `${Math.round(timeoutMs / 60000)} min`
+                : `${Math.round(timeoutMs / 1000)}s`
+            }. Process aborted. Raise it with --timeout <minutes> or SAP_AUTH_TIMEOUT_MS if the login needs longer.`
+          )
+        );
       }
-    }, 5 * 60 * 1000);
+    }, timeoutMs);
   });
 }
 
@@ -567,6 +619,10 @@ async function main() {
       "-f, --force",
       "Force browser authentication even if valid tokens exist in .env"
     )
+    .option(
+      "-t, --timeout <minutes>",
+      "How long to wait for the browser redirect, in minutes (default: 15, or SAP_AUTH_TIMEOUT_MS in ms)"
+    )
     .helpOption("-h, --help", "Show help for the auth command")
     .action(async (options) => {
       try {
@@ -621,7 +677,12 @@ async function main() {
         // Fallback to browser authentication if refresh failed or was skipped
         if (!tokens) {
           console.log("🌐 Starting browser authentication...");
-          tokens = await startAuthServer(serviceKey, options.browser, "jwt");
+          tokens = await startAuthServer(
+            serviceKey,
+            options.browser,
+            "jwt",
+            resolveAuthTimeout(options.timeout)
+          );
           if (!tokens || !tokens.accessToken) {
             console.error("JWT token was not obtained. Authentication failed.");
             process.exit(1);
