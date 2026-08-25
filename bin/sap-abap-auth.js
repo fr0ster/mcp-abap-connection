@@ -3,7 +3,6 @@ const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 const { program } = require("commander");
-const express = require("express");
 const open = require("open").default;
 const http = require("http");
 
@@ -263,6 +262,18 @@ function getJwtAuthorizationUrl(serviceKey, port = 3001) {
 }
 
 /**
+ * One reply, with the header express used to set on our behalf.
+ *
+ * `res.send()` chose a Content-Type from what it was handed; `node:http` sends
+ * exactly what it is told, so the type is stated here. Without it a browser is
+ * free to render the success page as plain text.
+ */
+function send(res, status, contentType, body) {
+  res.writeHead(status, { "Content-Type": contentType });
+  res.end(body);
+}
+
+/**
  * Starts a local server to intercept the authentication response
  * @param {Object} serviceKey SAP BTP service key object
  * @param {string} browser Browser to open
@@ -271,24 +282,35 @@ function getJwtAuthorizationUrl(serviceKey, port = 3001) {
  */
 async function startAuthServer(serviceKey, browser = undefined, flow = "jwt") {
   return new Promise((resolve, reject) => {
-    const app = express();
-    const server = http.createServer(app);
     const PORT = 3001;
     let serverInstance = null;
 
     // Choose the authorization URL
     const authorizationUrl = getJwtAuthorizationUrl(serviceKey, PORT);
 
-    // JWT OAuth2 flow (get code, exchange for token)
-    app.get("/callback", async (req, res) => {
+    // JWT OAuth2 flow (get code, exchange for token). One route, and the
+    // routing express did is two comparisons: a browser fetching /favicon.ico
+    // must not be mistaken for the redirect we are waiting for.
+    const server = http.createServer(async (req, res) => {
+      const url = new URL(req.url, `http://localhost:${PORT}`);
+      if (req.method !== "GET" || url.pathname !== "/callback") {
+        send(res, 404, "text/plain; charset=utf-8", "Not Found");
+        return;
+      }
+
       try {
-        const { code } = req.query;
+        const code = url.searchParams.get("code");
         if (!code) {
-          res.status(400).send("Error: Authorization code missing");
+          send(
+            res,
+            400,
+            "text/plain; charset=utf-8",
+            "Error: Authorization code missing"
+          );
           return reject(new Error("Authorization code missing"));
         }
         console.log("Authorization code received");
-        res.send(`<!DOCTYPE html>
+        send(res, 200, "text/html; charset=utf-8", `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -363,7 +385,12 @@ async function startAuthServer(serviceKey, browser = undefined, flow = "jwt") {
         }
       } catch (error) {
         console.error("Error handling callback:", error);
-        res.status(500).send("Error processing authentication");
+        send(
+          res,
+          500,
+          "text/plain; charset=utf-8",
+          "Error processing authentication"
+        );
         reject(error);
       }
     });
