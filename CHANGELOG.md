@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.1.0] - 2026-09-03
+
 ### Licence
 
 - **This package is now `LGPL-3.0-only`.** It was MIT up to and including 6.0.1, and
