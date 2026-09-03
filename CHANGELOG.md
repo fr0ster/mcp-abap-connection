@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Licence
+
+- **This package is now `LGPL-3.0-only`.** It was MIT up to and including 6.0.1, and
+  those versions stay MIT — a licence change is not retroactive, and anyone
+  already using 6.0.1 under MIT keeps that grant for 6.0.1.
+
+  The library licence of the GNU family, chosen for what it does *not* ask:
+  linking it into your own program — importing it, as every consumer of an npm
+  package does — does not put your program under the LGPL. What it asks is that
+  changes to this library stay free and that your users can substitute their own
+  build of it.
+
+  Both texts ship in the package: `LICENSE` is the LGPL, `COPYING` is the GPL it
+  is written on top of. The LGPL is a set of additional permissions over the GPL,
+  so it cannot be read without both.
+
+  Copyright © 2025 Oleksii Kyslytsia.
+
+
 ## [6.0.1] - 2026-08-25
 
 ### Removed

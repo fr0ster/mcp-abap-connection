@@ -11,7 +11,8 @@
     "examples",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "COPYING"
   ],
   "bin": {
     "sap-abap-auth": "./bin/sap-abap-auth.js"
@@ -25,7 +26,7 @@
     "abap-adt"
   ],
   "author": "Oleksii Kyslytsia <oleksij.kyslytsja@gmail.com>",
-  "license": "MIT",
+  "license": "LGPL-3.0-only",
   "homepage": "https://github.com/fr0ster/mcp-abap-connection#readme",
   "bugs": {
     "url": "https://github.com/fr0ster/mcp-abap-connection/issues"
