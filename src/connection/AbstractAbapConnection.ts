@@ -74,6 +74,22 @@ abstract class AbstractAbapConnection
    * raises the effective timeout to CRITICAL_SECTION_TIMEOUT (a large ceiling)
    * so the request runs to completion instead of being interrupted.
    */
+  /**
+   * The last goodbye this connection dispatched, so a caller can wait for it.
+   *
+   * `disconnect()` sends the logoff without awaiting it, for the reason stated
+   * there. That is right for a teardown and wrong for a caller who is about to
+   * `connect()` again: the next session opens while the previous one's goodbye
+   * is still being assembled, and a caller who recycles in a loop leaves one
+   * abandoned session per iteration. Measured against E19 from
+   * `@mcp-abap-adt/adt-clients`: a session every 1-2 seconds for a whole test
+   * run, none of them released, each surviving to its 30-minute idle timeout.
+   *
+   * Keeping it costs nothing and is the only thing a caller can hold on to —
+   * before this, the promise was created and dropped on the floor.
+   */
+  private goodbye: Promise<void> = Promise.resolve();
+
   private inCriticalSection = false;
   /** Reference count for nested beginCriticalSection()/endCriticalSection() pairs. */
   private criticalSectionDepth = 0;
@@ -363,12 +379,48 @@ abstract class AbstractAbapConnection
       // The context is taken now, while the session is still true: the clear
       // below runs while the close is suspended on its first await.
       const context = this.sessionContext();
-      const inFlight = Promise.resolve(this.transport.close(context)).then(
+      // Kept, not dropped: `flushGoodbye()` is how a caller who is about to
+      // reconnect waits for it. Rejections are absorbed here so that holding
+      // the promise never turns a failed goodbye into an unhandled rejection —
+      // the transport already logs what went wrong.
+      this.goodbye = Promise.resolve(this.transport.close(context)).then(
+        () => undefined,
         () => undefined,
       );
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
+  }
+
+  /**
+   * Wait for the last dispatched goodbye, bounded.
+   *
+   * For the caller who ends a session and immediately opens another. Without
+   * it the two overlap and the server keeps both; with it the previous session
+   * is gone — or known not to be going — before the next one is asked for.
+   *
+   * Bounded because the goodbye deliberately carries no request timeout: a
+   * server that never answers must not hold a teardown open, and it must not
+   * hold this open either. On expiry this returns rather than throwing, since
+   * "the goodbye has not arrived yet" is not a failure of the caller's next
+   * step — and the session it addressed will fall to the idle timeout anyway.
+   *
+   * Safe to call at any time: with nothing dispatched it returns immediately.
+   */
+  async flushGoodbye(timeoutMs = 5000): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        this.goodbye,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, timeoutMs);
+          // Never hold the process open for a goodbye nobody is waiting on.
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   isConnected(): boolean {
