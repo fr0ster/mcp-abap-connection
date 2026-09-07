@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { Agent } from 'node:https';
 import {
   ADT_SESSION_ERROR,
-  type IAdtResponse,
+  type IAdtWireResponse,
+  type ICriticalSection,
+  type IRequestProfiling,
   type ISessionLifecycleAware,
-  isNetworkError,
 } from '@mcp-abap-adt/interfaces';
 import axios, {
   AxiosError,
@@ -18,6 +19,7 @@ import {
   SessionLifecycle,
   sessionError,
 } from '../session/SessionLifecycle.js';
+import { isNetworkError } from '../utils/networkErrors.js';
 import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
@@ -64,7 +66,11 @@ function hasHeader(headers: Record<string, string>, name: string): boolean {
 }
 
 abstract class AbstractAbapConnection
-  implements AbapConnection, ISessionLifecycleAware
+  implements
+    AbapConnection,
+    ISessionLifecycleAware,
+    ICriticalSection,
+    IRequestProfiling
 {
   /**
    * Owns session state, admission and teardown ordering. Composed rather than
@@ -902,7 +908,7 @@ abstract class AbstractAbapConnection
 
   async makeAdtRequest<T = any, D = any>(
     options: AbapRequestOptions,
-  ): Promise<IAdtResponse<T, D>> {
+  ): Promise<IAdtWireResponse<T, D>> {
     // Admission first, synchronously, before any await: the check and the
     // count must happen in one step, or a request could be admitted and still
     // be invisible to a teardown draining at that instant. Throws
@@ -919,7 +925,7 @@ abstract class AbstractAbapConnection
   private async performRequest<T = any, D = any>(
     options: AbapRequestOptions,
     lease: Pick<RequestLease, 'generation'>,
-  ): Promise<IAdtResponse<T, D>> {
+  ): Promise<IAdtWireResponse<T, D>> {
     const {
       url: endpoint,
       method,
@@ -1087,7 +1093,7 @@ abstract class AbstractAbapConnection
         method: normalizedMethod,
       });
 
-      return response as unknown as IAdtResponse<T, D>;
+      return response as unknown as IAdtWireResponse<T, D>;
     } catch (error) {
       // FENCE FIRST, before anything reads or writes shared state.
       //
@@ -1227,7 +1233,7 @@ abstract class AbstractAbapConnection
             lease.generation,
           );
 
-          return retryResponse as unknown as IAdtResponse<T, D>;
+          return retryResponse as unknown as IAdtWireResponse<T, D>;
         } catch (retryError) {
           // A session verdict outranks the error that started the retry: the
           // caller can retry a 403 itself, but it cannot discover that its lock
@@ -1265,7 +1271,7 @@ abstract class AbstractAbapConnection
             lease.generation,
           );
 
-          return retryResponse as unknown as IAdtResponse<T, D>;
+          return retryResponse as unknown as IAdtWireResponse<T, D>;
         }
 
         // If no cookies, try to get them via CSRF token fetch
@@ -1290,7 +1296,7 @@ abstract class AbstractAbapConnection
               lease.generation,
             );
 
-            return retryResponse as unknown as IAdtResponse<T, D>;
+            return retryResponse as unknown as IAdtWireResponse<T, D>;
           }
         } catch (csrfError) {
           if (this.isSessionVerdict(csrfError)) {
