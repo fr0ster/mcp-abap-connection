@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-09-08
+
+**Headers that belong to the request stop belonging to the session.**
+
+Nothing in the type surface changed: no signature narrowed, `IAbapConnection` is
+untouched, and code built against 6.x compiles unchanged. The major is for the
+wire — every request now looks different in an SAP trace, and on cloud it says
+something about the session it did not say before. A system that reacts badly to
+either should be findable by version rather than by reading a trace.
+
 ### Changed
 
 - **BREAKING: `sap-adt-request-id` goes out on every request**, not only inside
@@ -1447,7 +1457,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.1.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v7.0.0...HEAD
+[7.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.1.0...v7.0.0
 [6.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.0...v6.0.1
 [6.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.1...v6.1.0
 [6.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v5.0.0...v6.0.0
