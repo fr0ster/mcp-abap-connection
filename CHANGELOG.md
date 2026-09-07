@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-09-08
+
+**A consumer holding the contract can now do what the connection could always do.**
+
 ### Changed
 
 - **BREAKING: onto `@mcp-abap-adt/interfaces@^39.0.0`**, from `^21.0.0`.
@@ -24,6 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     there — the codes are a constant, the judgement is not.
 
 ### Added
+
+- **`flushGoodbye(timeoutMs?)`** — waits for the goodbye `disconnect()`
+  dispatched, within a budget.
+
+  `disconnect()` sends the logoff and does not await it, deliberately: a goodbye
+  carries no request timeout, and a server that never answers must not hold a
+  teardown open. That is right for a teardown and wrong for a reconnect —
+  `disconnect()` then `connect()` opens the next session while the previous
+  one's goodbye is still being assembled, and the server keeps both.
+
+  Measured on E19 through `@mcp-abap-adt/adt-clients`, whose harness recycled
+  the session after each test: a new ABAP session every one to two seconds for a
+  whole run, none released, each living to its own thirty-minute idle timeout.
+
+  The budget bounds the waiting, not the overlap: finishes in time and there is
+  none, does not and the caller proceeds while the goodbye stays outstanding.
 
 - **The connection declares the atoms it honours**: `ICriticalSection`,
   `IRequestProfiling` and — through 39.0.0's addition to
@@ -1493,7 +1513,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v7.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.0...HEAD
+[8.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v7.0.0...v8.0.0
 [7.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.1.0...v7.0.0
 [6.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.0...v6.0.1
 [6.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.1...v6.1.0
