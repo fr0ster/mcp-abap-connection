@@ -365,6 +365,7 @@ describe('AbstractAbapConnection — headers that belong to the request', () => 
   /** A stateless request, and what it carried. */
   async function sent(
     prepare?: (conn: ReturnType<typeof onPrem>) => void,
+    headers?: Record<string, string>,
   ): Promise<Record<string, string>> {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
@@ -381,6 +382,7 @@ describe('AbstractAbapConnection — headers that belong to the request', () => 
       method: 'PUT',
       timeout: 30000,
       data: 'CLASS zfoo DEFINITION.',
+      ...(headers ? { headers } : {}),
     });
     return (mock.mock.calls[0][0].headers ?? {}) as Record<string, string>;
   }
@@ -413,6 +415,31 @@ describe('AbstractAbapConnection — headers that belong to the request', () => 
       conn.setProfilingRequest('server-time,response-size');
     });
     expect(headers['X-sap-adt-profiling']).toBe('server-time,response-size');
+  });
+
+  it('keeps a request id the caller supplied', async () => {
+    // `adt-clients` does exactly this in `getDiscovery({ requestId })`: it logs
+    // an id and needs that id to be the one on the wire. A generated
+    // replacement is not a smaller version of that guarantee, it is none.
+    const headers = await sent(undefined, {
+      'sap-adt-request-id': 'caller-owns-this-one',
+    });
+    expect(headers['sap-adt-request-id']).toBe('caller-owns-this-one');
+  });
+
+  it('keeps a profiling value the caller supplied, in either case', async () => {
+    const upper = await sent(undefined, {
+      'X-sap-adt-profiling': 'response-size',
+    });
+    expect(upper['X-sap-adt-profiling']).toBe('response-size');
+
+    // Header names are case-insensitive; a lookup that is not would write the
+    // default alongside the caller's and send both.
+    const lower = await sent(undefined, {
+      'x-sap-adt-profiling': 'response-size',
+    });
+    expect(lower['x-sap-adt-profiling']).toBe('response-size');
+    expect(lower['X-sap-adt-profiling']).toBeUndefined();
   });
 
   it('the session type is the only header that varies with the mode', async () => {

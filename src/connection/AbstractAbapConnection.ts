@@ -50,6 +50,19 @@ import {
  * missing session cookie is a warning rather than a rule, and no code here
  * counts sessions or predicts the next answer from the last one.
  */
+/**
+ * Whether a header is already set, whatever case the caller spelled it in.
+ *
+ * HTTP header names are case-insensitive and these arrive from two directions —
+ * this file writes `X-sap-adt-profiling`, a caller may write
+ * `x-sap-adt-profiling` — so a plain key lookup would answer "absent" for a
+ * header that is present and write it twice.
+ */
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  const wanted = name.toLowerCase();
+  return Object.keys(headers).some((key) => key.toLowerCase() === wanted);
+}
+
 abstract class AbstractAbapConnection
   implements AbapConnection, ISessionLifecycleAware
 {
@@ -914,8 +927,21 @@ abstract class AbstractAbapConnection
     // silently lost the header as a side effect. Eclipse sends it on
     // everything: measured on ADT 3.60.0, a stateless source `PUT` carries
     // `sap-adt-request-id` and `X-sap-adt-profiling` and no session type at all.
-    requestHeaders['sap-adt-request-id'] = randomUUID().replace(/-/g, '');
-    if (this.profilingRequest !== null) {
+    //
+    // **A default, not an override.** The caller's headers were copied in
+    // above, and a caller who names either of these means it: `adt-clients`
+    // passes its own id to `getDiscovery({ requestId })` so the id it logs is
+    // the id on the wire, and a profiler run asks for something other than
+    // `server-time`. Replacing those would break the correlation the caller
+    // asked for, silently. The name is matched without case because HTTP does
+    // not distinguish it and callers spell it both ways.
+    if (!hasHeader(requestHeaders, 'sap-adt-request-id')) {
+      requestHeaders['sap-adt-request-id'] = randomUUID().replace(/-/g, '');
+    }
+    if (
+      this.profilingRequest !== null &&
+      !hasHeader(requestHeaders, 'x-sap-adt-profiling')
+    ) {
       requestHeaders['X-sap-adt-profiling'] = this.profilingRequest;
     }
 
