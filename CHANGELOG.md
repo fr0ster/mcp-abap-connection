@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: `sap-adt-request-id` goes out on every request**, not only inside
+  the stateful branch, and `X-sap-adt-profiling` comes from a settable default
+  rather than a literal.
+
+  Only `x-sap-adt-sessiontype` ever belonged in that branch. A request id
+  identifies the **request**, and asking the server to report its own processing
+  time is not a property of the session either. It stayed invisible while every
+  write happened inside a lock window — the window was stateful, so the writes
+  carried all three — and `@mcp-abap-adt/adt-clients` has since narrowed
+  stateful to the `LOCK` and the `UNLOCK`, at which point the writes silently
+  lost two headers.
+
+  Eclipse sends both on everything. From an ADT 3.60.0 trace on E19, a stateless
+  source `PUT` carries `sap-adt-request-id` and `X-sap-adt-profiling` and no
+  session type at all. Measured on a BTP trial after the narrowing: of 792
+  requests in a full run, 99 carried a request id and **693 — 87.5% — carried
+  neither**.
+
+  Both are **defaults, not overrides**: a caller who names either in
+  `options.headers` keeps it, matched without case. `adt-clients` passes its own
+  id to `getDiscovery({ requestId })` so the id it logs is the id on the wire,
+  and a profiler run asks for something other than `server-time`.
+
+- **BREAKING (cloud): `x-sap-security-session: use` on every request**, once a
+  session exists.
+
+  ABAP Cloud issues its session as a resource asked for at
+  `/sap/bc/adt/core/http/sessions`, and this wire said the header exactly twice
+  in a session's life — `create` to open one, `use` on the `DELETE` that ends
+  it. Eclipse names it on everything in between. Measured from ADT 3.60.3
+  against a BTP trial: a plain `GET …/businessservices/odatav4/ZAC_SRVB01` and a
+  `POST …/unpublishjobs`, a read and a write, both stateless, both saying `use`
+  beside `saplb: appserver-dgm9s` and `saplb-options: REDISPATCH_ON_SHUTDOWN`.
+
+  That pair works together on a load-balanced landscape: here is the server, and
+  use the session that lives on it. In one full run against the same trial the
+  responses named two different application servers — `appserver-dgm9s` 501
+  times and `appserver-8q4vl` 290 — so which one answers is not a constant, and
+  the session is not on both.
+
+  **On-prem is deliberately unchanged**: its session arrives with the logon,
+  there is no trace of Eclipse sending this there, and adding it would be a
+  guess wearing a measurement's clothes.
+
+### Added
+
+- `setProfilingRequest(what: string | null)` / `getProfilingRequest()` — the
+  connection-wide `X-sap-adt-profiling` default, `null` to ask nothing.
+  `'server-time'` is what Eclipse asks for and stays the default. Nothing in
+  this package reads the answer back, which is an argument for being able to
+  turn it off rather than for switching it off: an investigation does read it,
+  and one settled this week that the unit is microseconds — a trial's unpublish
+  job answered `server-time=132512547` on a request that takes ~133 s.
+
+  **On the concrete class, not yet on the contract.** `AbapConnection` is
+  `IAbapConnection`, so a consumer holding the contract reaches these only by
+  casting. `@mcp-abap-adt/interfaces@38.1.0` publishes `IRequestProfiling`
+  (and `ICriticalSection`, for the section this package already has) as
+  capability atoms for exactly this — but this package is on `^21.0.0`, and
+  declaring them means moving seventeen majors, which is its own piece of work
+  and not this one. Until then the per-request route is the contract-level one:
+  `X-sap-adt-profiling` in `options.headers` is honoured and never overwritten.
+
+
 ## [6.1.0] - 2026-09-03
 
 ### Licence
@@ -1381,8 +1447,9 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.1.0...HEAD
 [6.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.0...v6.0.1
+[6.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.1...v6.1.0
 [6.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v5.0.0...v6.0.0
 [5.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v3.0.0...v4.0.0

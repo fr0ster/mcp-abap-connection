@@ -43,6 +43,28 @@ export class CloudHttpTransport
   /** Which system this wire is for. Read by the compiler, never at runtime. */
   readonly system = 'cloud' as const;
 
+  /**
+   * `x-sap-security-session: use` — on every request, once there is a session.
+   *
+   * ABAP Cloud issues its session as a resource asked for at
+   * `/sap/bc/adt/core/http/sessions`, and Eclipse then names it on everything
+   * that follows rather than relying on the cookie alone. Measured from ADT
+   * 3.60.3 against a BTP trial: a plain
+   * `GET …/businessservices/odatav4/ZAC_SRVB01` carries it, and so does
+   * `POST …/unpublishjobs` — a read and a write, both stateless, both saying
+   * `use`.
+   *
+   * Only when a session exists: saying `use` with nothing to use is a claim
+   * about state this wire is not in, and `create` is the request that makes one.
+   *
+   * On-prem is left alone deliberately. Its session arrives with the logon and
+   * there is no trace of Eclipse sending this there, so adding it would be a
+   * guess wearing a measurement's clothes.
+   */
+  protected override sessionHeaders(): Record<string, string> {
+    return this.sessionEstablished() ? { 'x-sap-security-session': 'use' } : {};
+  }
+
   /** The address this server published for our session — the only close target. */
   private resource: string | null = null;
 

@@ -356,3 +356,98 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     expect((conn as any).transport.csrfToken()).toBe('whatever');
   });
 });
+
+describe('AbstractAbapConnection — headers that belong to the request', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  /** A stateless request, and what it carried. */
+  async function sent(
+    prepare?: (conn: ReturnType<typeof onPrem>) => void,
+    headers?: Record<string, string>,
+  ): Promise<Record<string, string>> {
+    const conn = onPrem(baseConfig, mockLogger);
+    markConnectedForTest(conn);
+    (conn as any).transport.adoptCsrfToken('t');
+    prepare?.(conn);
+
+    const mock = jest
+      .fn()
+      .mockResolvedValue({ status: 200, data: 'ok', headers: {} });
+    attachMockAxios(conn, mock);
+
+    await conn.makeAdtRequest({
+      url: '/sap/bc/adt/oo/classes/zfoo/source/main',
+      method: 'PUT',
+      timeout: 30000,
+      data: 'CLASS zfoo DEFINITION.',
+      ...(headers ? { headers } : {}),
+    });
+    return (mock.mock.calls[0][0].headers ?? {}) as Record<string, string>;
+  }
+
+  it('sends sap-adt-request-id on a stateless request', async () => {
+    const headers = await sent();
+    expect(headers['sap-adt-request-id']).toMatch(/^[0-9a-f]{32}$/);
+    // The one header that really is the session's stays out of it.
+    expect(headers['x-sap-adt-sessiontype']).toBeUndefined();
+  });
+
+  it('gives each request its own id', async () => {
+    const first = await sent();
+    const second = await sent();
+    expect(first['sap-adt-request-id']).not.toBe(second['sap-adt-request-id']);
+  });
+
+  it('asks for server-time by default, and stops when told to', async () => {
+    expect((await sent())['X-sap-adt-profiling']).toBe('server-time');
+
+    const quiet = await sent((conn) => {
+      conn.setProfilingRequest(null);
+    });
+    expect(quiet['X-sap-adt-profiling']).toBeUndefined();
+    expect(quiet['sap-adt-request-id']).toBeDefined();
+  });
+
+  it('asks for whatever the caller set', async () => {
+    const headers = await sent((conn) => {
+      conn.setProfilingRequest('server-time,response-size');
+    });
+    expect(headers['X-sap-adt-profiling']).toBe('server-time,response-size');
+  });
+
+  it('keeps a request id the caller supplied', async () => {
+    // `adt-clients` does exactly this in `getDiscovery({ requestId })`: it logs
+    // an id and needs that id to be the one on the wire. A generated
+    // replacement is not a smaller version of that guarantee, it is none.
+    const headers = await sent(undefined, {
+      'sap-adt-request-id': 'caller-owns-this-one',
+    });
+    expect(headers['sap-adt-request-id']).toBe('caller-owns-this-one');
+  });
+
+  it('keeps a profiling value the caller supplied, in either case', async () => {
+    const upper = await sent(undefined, {
+      'X-sap-adt-profiling': 'response-size',
+    });
+    expect(upper['X-sap-adt-profiling']).toBe('response-size');
+
+    // Header names are case-insensitive; a lookup that is not would write the
+    // default alongside the caller's and send both.
+    const lower = await sent(undefined, {
+      'x-sap-adt-profiling': 'response-size',
+    });
+    expect(lower['x-sap-adt-profiling']).toBe('response-size');
+    expect(lower['X-sap-adt-profiling']).toBeUndefined();
+  });
+
+  it('the session type is the only header that varies with the mode', async () => {
+    const stateful = await sent((conn) => {
+      conn.setSessionType('stateful');
+    });
+    expect(stateful['x-sap-adt-sessiontype']).toBe('stateful');
+    expect(stateful['sap-adt-request-id']).toBeDefined();
+    expect(stateful['X-sap-adt-profiling']).toBe('server-time');
+  });
+});
