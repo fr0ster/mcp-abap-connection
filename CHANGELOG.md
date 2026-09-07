@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: onto `@mcp-abap-adt/interfaces@^39.0.0`**, from `^21.0.0`.
+  Seventeen majors, and the whole of it was eight compiler errors in one file.
+
+  - `makeAdtRequest` returns `IAdtWireResponse<T, D>`, not `IAdtResponse<T, D>`.
+    The two parted company when `IAdtResponse` became the result-or-failure
+    union a *member* answers, with `E extends IAdtError`; a connection answers
+    the raw HTTP shape, which is what `IAdtWireResponse` is. Six occurrences,
+    all of them the same rename — no behaviour moved.
+  - `isNetworkError` is this package's own again, in `src/utils/networkErrors.ts`.
+    `@mcp-abap-adt/interfaces` published it until 29.0.0, when that package
+    stopped emitting code: it holds types, interfaces and constants, and a
+    predicate is none of those. `NETWORK_ERROR_CODES` is still imported from
+    there — the codes are a constant, the judgement is not.
+
+### Added
+
+- **The connection declares the atoms it honours**: `ICriticalSection`,
+  `IRequestProfiling` and — through 39.0.0's addition to
+  `ISessionLifecycleAware` — `flushGoodbye`.
+
+  All four methods already existed here. What changed is that a consumer can
+  reach them: `AbapConnection` is `IAbapConnection`, so until now
+  `beginCriticalSection()`, `setProfilingRequest()` and `flushGoodbye()` were
+  reachable only by casting to the concrete class, which is the thing the
+  contracts package exists to make unnecessary.
+
+  A test narrows a connection to each atom from the base contract and calls
+  through it. Worth saying what that does and does not check: TypeScript is
+  structural, so removing an atom from the `implements` list changes nothing —
+  the class still has the methods. What the clause buys is the compiler
+  checking the class against the contract: removing `beginCriticalSection`
+  itself is `TS2420`, which is the failure worth having.
+
+
 ## [7.0.0] - 2026-09-08
 
 **Headers that belong to the request stop belonging to the session.**
