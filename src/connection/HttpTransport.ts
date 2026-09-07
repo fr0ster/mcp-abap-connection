@@ -166,6 +166,18 @@ export class HttpTransport implements IAdtTransport {
   }
 
   /**
+   * What this wire says about the session it is already in, on every request.
+   *
+   * Empty here, because it is not the same on every wire: a cloud session is a
+   * resource that has to be named, an on-prem one arrives with the logon, and
+   * an RFC conversation has no such notion at all. A wire that has something to
+   * say overrides this.
+   */
+  protected sessionHeaders(): Record<string, string> {
+    return {};
+  }
+
+  /**
    * Earn a CSRF token, and with it the cookies that name the session.
    *
    * The token and the session are one thing on this wire: SAP binds a lock
@@ -321,6 +333,7 @@ export class HttpTransport implements IAdtTransport {
   private dress(headers?: Record<string, string>): Record<string, string> {
     const dressed: Record<string, string> = {
       ...this.affinityHeaders(),
+      ...this.sessionHeaders(),
       ...headers,
     };
     const merged = mergeCookieHeaders(
