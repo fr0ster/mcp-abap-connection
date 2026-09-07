@@ -63,6 +63,23 @@ abstract class AbstractAbapConnection
   private baseUrl: string;
   private sessionId: string | null = null;
   private sessionMode: 'stateless' | 'stateful' = 'stateless';
+
+  /**
+   * What this connection asks the server to report about its own processing.
+   *
+   * Sent on every request as `X-sap-adt-profiling`, which is what Eclipse does
+   * — measured from an ADT 3.60.0 trace, where it rides on a stateless source
+   * `PUT` as readily as on a lock. `null` stops asking.
+   *
+   * Settable because it is a request's business, not a session's, and because
+   * a caller can already need something other than the default: a profiler run
+   * in `@mcp-abap-adt/adt-clients` writes its own value today, by putting the
+   * header in the request by hand. Nothing in this package reads the
+   * `server-time=…` that comes back — but an investigation does, and this
+   * session used it to establish that the unit is microseconds, so the default
+   * stays on and the way to turn it off is this property rather than a fork.
+   */
+  private profilingRequest: string | null = 'server-time';
   /**
    * When true, requests are treated as part of an uninterruptible critical
    * section (e.g. a lock → modify → unlock chain). In this state a short
@@ -176,6 +193,20 @@ abstract class AbstractAbapConnection
    */
   getSessionMode(): 'stateless' | 'stateful' {
     return this.sessionMode;
+  }
+
+  /**
+   * What to ask the server to report, or `null` to ask nothing.
+   *
+   * @param what the `X-sap-adt-profiling` value; `'server-time'` is Eclipse's.
+   */
+  setProfilingRequest(what: string | null): void {
+    this.profilingRequest = what;
+  }
+
+  /** What this connection is currently asking for. */
+  getProfilingRequest(): string | null {
+    return this.profilingRequest;
   }
 
   /**
@@ -875,11 +906,23 @@ abstract class AbstractAbapConnection
       requestHeaders['sap-adt-connection-id'] = this.sessionId;
     }
 
-    // Add stateful session headers if stateful mode is enabled
+    // A request id identifies the **request**, so every request gets a fresh
+    // one. It used to be written only in the stateful branch, which was
+    // invisible while every write happened inside a lock window — the window
+    // was stateful, so the writes carried it. `@mcp-abap-adt/adt-clients` has
+    // since narrowed stateful to the `LOCK` and the `UNLOCK`, and the writes
+    // silently lost the header as a side effect. Eclipse sends it on
+    // everything: measured on ADT 3.60.0, a stateless source `PUT` carries
+    // `sap-adt-request-id` and `X-sap-adt-profiling` and no session type at all.
+    requestHeaders['sap-adt-request-id'] = randomUUID().replace(/-/g, '');
+    if (this.profilingRequest !== null) {
+      requestHeaders['X-sap-adt-profiling'] = this.profilingRequest;
+    }
+
+    // And this one really is the session's: it says how the server should treat
+    // the request, which is the only one of the three that varies with the mode.
     if (this.sessionMode === 'stateful') {
       requestHeaders['x-sap-adt-sessiontype'] = 'stateful';
-      requestHeaders['sap-adt-request-id'] = randomUUID().replace(/-/g, '');
-      requestHeaders['X-sap-adt-profiling'] = 'server-time';
     }
 
     // Add auth headers (these MUST NOT be overridden)

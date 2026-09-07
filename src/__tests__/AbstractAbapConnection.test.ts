@@ -356,3 +356,71 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     expect((conn as any).transport.csrfToken()).toBe('whatever');
   });
 });
+
+describe('AbstractAbapConnection — headers that belong to the request', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  /** A stateless request, and what it carried. */
+  async function sent(
+    prepare?: (conn: ReturnType<typeof onPrem>) => void,
+  ): Promise<Record<string, string>> {
+    const conn = onPrem(baseConfig, mockLogger);
+    markConnectedForTest(conn);
+    (conn as any).transport.adoptCsrfToken('t');
+    prepare?.(conn);
+
+    const mock = jest
+      .fn()
+      .mockResolvedValue({ status: 200, data: 'ok', headers: {} });
+    attachMockAxios(conn, mock);
+
+    await conn.makeAdtRequest({
+      url: '/sap/bc/adt/oo/classes/zfoo/source/main',
+      method: 'PUT',
+      timeout: 30000,
+      data: 'CLASS zfoo DEFINITION.',
+    });
+    return (mock.mock.calls[0][0].headers ?? {}) as Record<string, string>;
+  }
+
+  it('sends sap-adt-request-id on a stateless request', async () => {
+    const headers = await sent();
+    expect(headers['sap-adt-request-id']).toMatch(/^[0-9a-f]{32}$/);
+    // The one header that really is the session's stays out of it.
+    expect(headers['x-sap-adt-sessiontype']).toBeUndefined();
+  });
+
+  it('gives each request its own id', async () => {
+    const first = await sent();
+    const second = await sent();
+    expect(first['sap-adt-request-id']).not.toBe(second['sap-adt-request-id']);
+  });
+
+  it('asks for server-time by default, and stops when told to', async () => {
+    expect((await sent())['X-sap-adt-profiling']).toBe('server-time');
+
+    const quiet = await sent((conn) => {
+      conn.setProfilingRequest(null);
+    });
+    expect(quiet['X-sap-adt-profiling']).toBeUndefined();
+    expect(quiet['sap-adt-request-id']).toBeDefined();
+  });
+
+  it('asks for whatever the caller set', async () => {
+    const headers = await sent((conn) => {
+      conn.setProfilingRequest('server-time,response-size');
+    });
+    expect(headers['X-sap-adt-profiling']).toBe('server-time,response-size');
+  });
+
+  it('the session type is the only header that varies with the mode', async () => {
+    const stateful = await sent((conn) => {
+      conn.setSessionType('stateful');
+    });
+    expect(stateful['x-sap-adt-sessiontype']).toBe('stateful');
+    expect(stateful['sap-adt-request-id']).toBeDefined();
+    expect(stateful['X-sap-adt-profiling']).toBe('server-time');
+  });
+});
