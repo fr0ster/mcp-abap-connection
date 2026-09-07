@@ -63,6 +63,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and one settled this week that the unit is microseconds — a trial's unpublish
   job answered `server-time=132512547` on a request that takes ~133 s.
 
+  **On the concrete class, not yet on the contract.** `AbapConnection` is
+  `IAbapConnection`, so a consumer holding the contract reaches these only by
+  casting. `@mcp-abap-adt/interfaces@38.1.0` publishes `IRequestProfiling`
+  (and `ICriticalSection`, for the section this package already has) as
+  capability atoms for exactly this — but this package is on `^21.0.0`, and
+  declaring them means moving seventeen majors, which is its own piece of work
+  and not this one. Until then the per-request route is the contract-level one:
+  `X-sap-adt-profiling` in `options.headers` is honoured and never overwritten.
+
 
 ## [6.1.0] - 2026-09-03
 
@@ -1440,7 +1449,7 @@ const connection = createAbapConnection(config, logger);
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
 [Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.1.0...HEAD
 [6.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.0...v6.0.1
-[6.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.0...v6.1.0
+[6.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.1...v6.1.0
 [6.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v5.0.0...v6.0.0
 [5.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v3.0.0...v4.0.0

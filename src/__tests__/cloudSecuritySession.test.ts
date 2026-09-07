@@ -23,9 +23,11 @@ const config: SapConfig = {
 function dressed(
   transport: { sendForTest?: unknown } & Record<string, unknown>,
 ): Record<string, string> {
-  const dress = (transport as unknown as {
-    dress: (h?: Record<string, string>) => Record<string, string>;
-  }).dress;
+  const dress = (
+    transport as unknown as {
+      dress: (h?: Record<string, string>) => Record<string, string>;
+    }
+  ).dress;
   return dress.call(transport, {});
 }
 
