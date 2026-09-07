@@ -28,7 +28,12 @@ import {
 } from '../auth/providers.js';
 
 /** The narrowing a consumer writes, from the contract's own recipe. */
-function isRenewable(c: IAuthProvider): c is IRenewableCredential {
+// Narrows to both halves. `IRenewableCredential` is an atom since interfaces
+// 39.0.0 and no longer includes `IAuthProvider`, so a guard answering it alone
+// would hand the caller something that renews and cannot authenticate.
+function isRenewable(
+  c: IAuthProvider,
+): c is IAuthProvider & IRenewableCredential {
   return typeof (c as Partial<IRenewableCredential>).renew === 'function';
 }
 

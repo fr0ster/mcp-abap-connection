@@ -294,7 +294,7 @@ session was negotiated elsewhere:
 ```typescript
 import type { IAuthProvider, IRenewableCredential } from '@mcp-abap-adt/interfaces';
 
-function isRenewable(c: IAuthProvider): c is IRenewableCredential {
+function isRenewable(c: IAuthProvider): c is IAuthProvider & IRenewableCredential {
   return typeof (c as Partial<IRenewableCredential>).renew === 'function';
 }
 ```

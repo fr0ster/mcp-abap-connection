@@ -39,7 +39,12 @@ function refusedCredential() {
   // atom rather than an optional member of every credential. Typing it
   // `IAuthProvider` would not compile, and that is the contract working: the
   // point of the test is that nothing CALLS it.
-  const credential: IRenewableCredential = {
+  // `IAuthProvider &`, not `IRenewableCredential` alone: renewing is an atom
+  // added to a credential, not a kind of credential. Interfaces 39.0.0 split
+  // them, and this object is a provider that also renews — `kind`, `prepare`,
+  // `authorizationHeader`, `cookies` and `transportMaterial` come from the
+  // provider half, `renew` from the atom.
+  const credential: IAuthProvider & IRenewableCredential = {
     kind: 'token',
     // Empty where there is nothing to say: since interfaces 20.0.0 a credential
     // states all of itself, so nothing has to ask whether it does.
