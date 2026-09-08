@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.1] - 2026-09-08
+
+**Documentation only — 7.0.0 and 8.0.0 shipped without their migration note.**
+
+Both majors are already on npm, and `docs/` travels in the tarball, so the
+installed package described the pre-7.0.0 connection: no request id, no
+profiling, no `flushGoodbye`, and no word on what a consumer on 6.x must
+change. This release carries the documentation those two releases owed and
+changes no code.
+
+### Documentation
+
+- `docs/MIGRATION-8.0.md` (new): what a consumer on 6.x does about the
+  `IAdtWireResponse` return of `makeAdtRequest`, the capability atoms the
+  class now declares, and the two headers every request now carries.
+- `docs/STATEFUL_SESSION_GUIDE.md`: the session type is the connection's —
+  `x-sap-adt-sessiontype: stateful` is added by the transport, not by a
+  caller's headers — and `flushGoodbye` is how a caller waits for the
+  goodbye.
+- `README.md` and `docs/INDEX.md` point at both.
+
 ## [8.0.0] - 2026-09-08
 
 **A consumer holding the contract can now do what the connection could always do.**
@@ -1513,7 +1534,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.1...HEAD
+[8.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.0...v8.0.1
 [8.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v7.0.0...v8.0.0
 [7.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.1.0...v7.0.0
 [6.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.0.0...v6.0.1

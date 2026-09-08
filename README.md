@@ -34,7 +34,9 @@ The package uses a clean separation of concerns:
 
 - **`AbstractAbapConnection`** (abstract, internal only):
   - Common HTTP request logic
-  - Session lifecycle: `connect()` / `disconnect()`, admission, lock windows, teardown draining
+  - Session lifecycle: `connect()` / `disconnect()` / `flushGoodbye()`, admission, lock windows, teardown draining
+  - Capability atoms a consumer narrows to, rather than casting to a connector class:
+    `ISessionLifecycleAware`, `ICriticalSection`, `IRequestProfiling`
   - Session management (cookies, CSRF tokens)
   - CSRF token fetching with retry
   - Auth-agnostic - knows nothing about Basic or JWT

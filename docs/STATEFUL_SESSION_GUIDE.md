@@ -120,6 +120,22 @@ authentication answer. A 403 never did this: it is an authorization answer, not 
 If you decide the refusal meant a stale token, `renew()` and reconnect are yours to call — and a
 reconnect is a NEW session, so do it outside a lock window rather than inside one.
 
+**Wait for the goodbye before opening the next one.** `disconnect()` dispatches the logoff and does
+not await it, so a reconnect otherwise opens the next session while the previous one's goodbye is
+still being assembled, and the server keeps both:
+
+```typescript
+await conn.disconnect();
+await conn.flushGoodbye();   // give the goodbye its budget to finish first
+await conn.connect();
+```
+
+Measured on E19 through a harness that recycled the session after each test: a new ABAP session
+every one to two seconds for a whole run, none released, each living to its own thirty-minute idle
+timeout. The budget bounds the waiting, not the overlap — if the goodbye finishes in time there is
+none, and if it does not you proceed while it stays outstanding. Calling `disconnect()` again is not
+a substitute: a repeat call does not wait either.
+
 ---
 
 ## Interaction With ADT Clients
@@ -188,6 +204,13 @@ was applied becomes unknowable, and the handle `unlock` needs is gone, while the
 lock is still very much held. That — not any teardown — is why
 `beginCriticalSection()` raises the effective timeout to a large ceiling for the
 duration of a `lock → modify → unlock` chain.
+
+Since 8.0.0 you reach it through the contract rather than the class: it is
+`ICriticalSection` in `@mcp-abap-adt/interfaces`, which this connection declares.
+What it promises is narrow and worth stating exactly — inside a section the
+*ordinary* per-request deadline does not apply. Not that no request can be cut
+short: the ceiling is `SAP_TIMEOUT_CRITICAL`, ten minutes by default, and a
+socket ends a request whatever a contract says.
 
 ### Two sessions, and they are not the same thing
 
