@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.1.0] - 2026-09-21
+
+**The RFC wire can be asked for its payload, and what it logs is safe to
+paste.** `RFC → METHOD URI` did not show a body that goes missing or gets
+mis-serialised before it reaches `SADT_REST_RFC_ENDPOINT`. Nothing existing
+changes: the channel is off until asked for.
+
 ### Added
 
 - `RfcTransport` can be asked to log the wire: a third constructor argument
@@ -1555,6 +1562,7 @@ const connection = createAbapConnection(config, logger);
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
 [Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.1...HEAD
+[8.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.1...v8.1.0
 [8.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.0...v8.0.1
 [8.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v7.0.0...v8.0.0
 [7.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v6.1.0...v7.0.0
