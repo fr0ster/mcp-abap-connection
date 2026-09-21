@@ -69,6 +69,22 @@ function message(e: unknown): string {
   return String(e);
 }
 
+/**
+ * `Authorization` carries the Basic-auth credential in plain (base64, but
+ * that is not encryption) form. The debug log this feeds is meant to be
+ * pasted into an issue, so the one header that would leak a password is
+ * replaced rather than trusted to whoever reads the log next.
+ */
+function redactHeaders(
+  fields: { NAME: string; VALUE: string }[],
+): { NAME: string; VALUE: string }[] {
+  return fields.map((field) =>
+    field.NAME.toLowerCase() === 'authorization'
+      ? { ...field, VALUE: '[redacted]' }
+      : field,
+  );
+}
+
 /** Axios's own default, which the classification above this seam is written against. */
 const admits2xx = (status: number) => status >= 200 && status < 300;
 
@@ -232,6 +248,15 @@ export class RfcTransport implements IOnPremTransport {
     }
 
     this.logger?.debug(`RFC → ${method} ${uri}`);
+    // `RFC → METHOD URI` alone was not enough to debug a body that goes
+    // missing or gets mis-serialised on the way to `SADT_REST_RFC_ENDPOINT`
+    // (found chasing a `superPackage` that disappeared before it reached
+    // SAP) — the actual bytes matter, so the debug channel carries them too,
+    // one call redacted so a captured log is safe to paste into an issue.
+    this.logger?.debug(`RFC BODY (${body.length} chars): ${body}`);
+    this.logger?.debug(
+      `RFC HEADERS: ${JSON.stringify(redactHeaders(headerFields))}`,
+    );
 
     // `request.timeout` is deliberately not read, and the absence of the word
     // here is what made that look like an oversight (#42).
@@ -307,6 +332,7 @@ export class RfcTransport implements IOnPremTransport {
     }
 
     this.logger?.debug(`RFC ← ${status} ${statusText} (${data.length} bytes)`);
+    this.logger?.debug(`RFC RESPONSE BODY: ${data}`);
 
     const response: IAdtTransportResponse = {
       status,
