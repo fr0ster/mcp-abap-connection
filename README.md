@@ -656,6 +656,20 @@ const connection = new AdtOnPremConnector(
 );
 ```
 
+A third argument turns on the wire log, which is off by default:
+
+```typescript
+new RfcTransport(rfcConversationFrom(config), logger, { logWire: true });
+```
+
+It adds three debug lines per request — header fields, request body, response
+body — which is how you see that a payload was mis-serialised before it reached
+`SADT_REST_RFC_ENDPOINT`. Credential header values are replaced with
+`[redacted]` and bodies are clipped at `maxLoggedBodyChars` (2000). The bodies
+themselves are not redacted, so read a captured log before pasting it into an
+issue. `HttpTransport` never logs bodies, so this is the one wire whose debug
+channel can be asked for the payload.
+
 #### `CSRF_CONFIG` and `CSRF_ERROR_MESSAGES`
 
 **New in 0.1.13+:** Exported constants for consistent CSRF token handling across different connection implementations.
