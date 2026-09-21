@@ -811,7 +811,9 @@ body — which is what tells you a payload was mis-serialised before it reached
 `Cookie`, anything matching `token`, `secret`, `password`, `credential` or an
 API key) are replaced with `[redacted]`, the names are kept, and a body is cut
 at `maxLoggedBodyChars` (2000 by default) so a class source does not arrive as
-one multi-megabyte line. Read what you captured before pasting it anywhere: a
+one multi-megabyte line — `0` logs the size alone, `Infinity` asks for the
+whole body, and a negative or `NaN` ceiling falls back to the default instead
+of throwing. Read what you captured before pasting it anywhere: a
 body is not redacted, only clipped.
 
 It is a flag and not something inferred from the logger, because `ILogger` has

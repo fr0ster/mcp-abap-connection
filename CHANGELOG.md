@@ -16,8 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SADT_REST_RFC_ENDPOINT`. Credential header values (`Authorization`, any
   `Cookie`, anything matching `token`, `secret`, `password`, `credential` or an
   API key) are replaced with `[redacted]` — the names are kept — and a body is
-  clipped at `maxLoggedBodyChars`, 2000 by default. Bodies are not redacted,
-  only clipped.
+  clipped at `maxLoggedBodyChars`, 2000 by default — `0` logs the size alone,
+  `Infinity` asks for the whole body, and a negative or `NaN` ceiling falls
+  back to the default rather than throwing. Bodies are not redacted, only
+  clipped.
 
   It is a flag rather than something inferred from the presence of a logger
   because `ILogger` carries no level predicate: `logger?.debug()` cannot tell

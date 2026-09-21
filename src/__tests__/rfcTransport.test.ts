@@ -361,6 +361,47 @@ describe('the RFC wire log', () => {
     );
   });
 
+  it('falls back to the default ceiling rather than honouring a nonsense one', async () => {
+    // `slice(0, -5)` drops the END of the body while the line still reports
+    // what was cut as a remainder — a log that lies about what it cut is
+    // worse than one that cut too much, so a negative ceiling is refused.
+    const big = 'x'.repeat(2500);
+    const { transport, lines } = loggingTransport({
+      logWire: true,
+      maxLoggedBodyChars: -5,
+    });
+    await transport.open();
+
+    await transport.send({
+      method: 'PUT',
+      url: '/sap/bc/adt/oo/classes/ZCL_X/source/main',
+      data: big,
+    });
+
+    expect(lineStartingWith(lines, 'RFC BODY')).toBe(
+      `RFC BODY (2500 chars): ${'x'.repeat(2000)}… (+500 more chars)`,
+    );
+  });
+
+  it('asks for the whole body when the ceiling is Infinity', async () => {
+    const big = 'x'.repeat(2500);
+    const { transport, lines } = loggingTransport({
+      logWire: true,
+      maxLoggedBodyChars: Number.POSITIVE_INFINITY,
+    });
+    await transport.open();
+
+    await transport.send({
+      method: 'PUT',
+      url: '/sap/bc/adt/oo/classes/ZCL_X/source/main',
+      data: big,
+    });
+
+    expect(lineStartingWith(lines, 'RFC BODY')).toBe(
+      `RFC BODY (2500 chars): ${big}`,
+    );
+  });
+
   it('leaves out a body line for a request that has no body', async () => {
     const { transport, lines } = loggingTransport({ logWire: true });
     await transport.open();

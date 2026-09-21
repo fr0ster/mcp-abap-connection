@@ -129,7 +129,12 @@ export interface IRfcTransportOptions {
    */
   logWire?: boolean;
 
-  /** Ceiling on a logged body, in characters. Defaults to 2000. */
+  /**
+   * Ceiling on a logged body, in characters. Defaults to 2000. `0` logs the
+   * size and none of the bytes, `Infinity` asks for the whole body, and a
+   * negative or `NaN` value falls back to the default rather than throwing —
+   * a debug option is not worth failing a connection over.
+   */
   maxLoggedBodyChars?: number;
 }
 
@@ -222,10 +227,17 @@ export class RfcTransport implements IOnPremTransport {
 
   /** Cut a body down to what a log line may carry. */
   private clipped(text: string): string {
-    return clip(
-      text,
-      this.options.maxLoggedBodyChars ?? DEFAULT_MAX_LOGGED_BODY_CHARS,
-    );
+    const asked =
+      this.options.maxLoggedBodyChars ?? DEFAULT_MAX_LOGGED_BODY_CHARS;
+    // A nonsense ceiling is a typo in a debug option, and a debug option is
+    // not worth failing a connection over — but it is worth not honouring. A
+    // negative one reaches `slice(0, -n)`, which drops the END of the body
+    // while the line still says the rest was merely clipped: a log that lies
+    // about what it cut is worse than one that cut too much. `NaN` compares
+    // false against every bound, so the test is for the good case.
+    const ceiling =
+      asked >= 0 ? Math.floor(asked) : DEFAULT_MAX_LOGGED_BODY_CHARS;
+    return clip(text, ceiling);
   }
 
   async open(): Promise<void> {
