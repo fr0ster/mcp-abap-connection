@@ -794,7 +794,7 @@ establishing, and whatever session state it keeps.
 
 ```text
 new HttpTransport(agentOptions?, logger?, { client?, baseUrl? })
-new RfcTransport(connect: () => IRfcConversation, logger?)
+new RfcTransport(connect: () => IRfcConversation, logger?, { logWire?, maxLoggedBodyChars? })
 ```
 
 `HttpTransport` is the ordinary wire, and you name it because the connector
@@ -803,6 +803,24 @@ mechanism is what differs, and `OnPremHttpTransport` / `CloudHttpTransport` are
 what the connectors' type parameters admit. `RfcTransport`
 you build with `rfcConversationFrom(config)`, which derives `ashost` and `sysnr`
 and loads the SAP NW RFC SDK only when a conversation opens.
+
+**`logWire` dumps the wire, and is off.** With it on, `RfcTransport` adds three
+debug lines per request — the header fields, the request body and the response
+body — which is what tells you a payload was mis-serialised before it reached
+`SADT_REST_RFC_ENDPOINT`. Credential header values (`Authorization`, any
+`Cookie`, anything matching `token`, `secret`, `password`, `credential` or an
+API key) are replaced with `[redacted]`, the names are kept, and a body is cut
+at `maxLoggedBodyChars` (2000 by default) so a class source does not arrive as
+one multi-megabyte line. Read what you captured before pasting it anywhere: a
+body is not redacted, only clipped.
+
+It is a flag and not something inferred from the logger, because `ILogger` has
+no level predicate — `logger?.debug()` cannot tell an enabled debug channel
+from one that discards. Without the flag, every caller who passes a logger at
+all would pay to build a copy of every body on the wire and throw it away.
+`HttpTransport` logs no bodies at any setting, so "turn debug on" means
+different things on the two wires; this is the only one that can be asked for
+the payload.
 
 The two differ in what they have, not in what they are asked:
 

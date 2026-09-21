@@ -12,8 +12,11 @@
  * A transport that also captured cookies would be doing that work twice, and
  * the two copies would disagree.
  */
+
 import type { IAdtTransport } from '../connection/IAdtTransport.js';
+import type { IRfcTransportOptions } from '../connection/RfcTransport.js';
 import { RfcTransport } from '../connection/RfcTransport.js';
+import type { ILogger } from '../logger.js';
 
 type Call = { fm: string; params: Record<string, any> };
 
@@ -239,5 +242,132 @@ describe('query parameters', () => {
     expect(calls[0].params.REQUEST.REQUEST_LINE.URI).toBe(
       '/sap/bc/adt/discovery',
     );
+  });
+});
+
+/**
+ * What the debug channel carries, and what it must never carry.
+ *
+ * `request.headers` reaches this wire verbatim from the caller, so what ends
+ * up in HEADER_FIELDS is not a list this transport can enumerate — a consumer
+ * is free to send a `Cookie` or an API key of its own. The log line is
+ * advertised as safe to paste into an issue, and nothing but these tests holds
+ * the redaction in place: drop it and every other test here still passes.
+ */
+describe('the RFC wire log', () => {
+  function recordingLogger() {
+    const lines: string[] = [];
+    const logger: ILogger = {
+      info: jest.fn(),
+      error: jest.fn(),
+      warn: jest.fn(),
+      debug: jest.fn((message: string) => {
+        lines.push(message);
+      }),
+    };
+    return { lines, logger };
+  }
+
+  function loggingTransport(
+    options?: IRfcTransportOptions,
+    response: Record<string, unknown> = okResponse,
+  ) {
+    const { client } = fakeClient(response);
+    const { lines, logger } = recordingLogger();
+    const transport = new RfcTransport(() => client as never, logger, options);
+    return { transport: transport as IAdtTransport & RfcTransport, lines };
+  }
+
+  const lineStartingWith = (lines: string[], prefix: string) =>
+    lines.find((line) => line.startsWith(prefix));
+
+  it('replaces a credential value whatever the header is called', async () => {
+    const { transport, lines } = loggingTransport({ logWire: true });
+    await transport.open();
+
+    await transport.send({
+      method: 'POST',
+      url: '/sap/bc/adt/oo/classes/ZCL_X',
+      headers: {
+        Authorization: 'Basic ZGV2ZWxvcGVyOnNlY3JldA==',
+        Cookie: 'SAP_SESSIONID_E19_100=abc; MYSAPSSO2=def',
+        'x-csrf-token': 'TOKEN-VALUE',
+        'X-Api-Key': 'KEY-VALUE',
+        Accept: 'application/xml',
+      },
+      data: 'source',
+    });
+
+    const headers = lineStartingWith(lines, 'RFC HEADERS:');
+    expect(headers).toBeDefined();
+    expect(headers).not.toContain('ZGV2ZWxvcGVyOnNlY3JldA==');
+    expect(headers).not.toContain('SAP_SESSIONID_E19_100');
+    expect(headers).not.toContain('TOKEN-VALUE');
+    expect(headers).not.toContain('KEY-VALUE');
+    // The name survives: that the header was sent at all is half of what the
+    // line is read for.
+    expect(headers).toContain('Authorization');
+    expect(headers).toContain('x-csrf-token');
+    // And a header that is not a credential is left alone, or the line says
+    // nothing.
+    expect(headers).toContain('application/xml');
+  });
+
+  it('says nothing about the wire unless the caller asked for it', async () => {
+    const { transport, lines } = loggingTransport();
+    await transport.open();
+
+    await transport.send({
+      method: 'POST',
+      url: '/sap/bc/adt/oo/classes/ZCL_X',
+      headers: { Authorization: 'Basic x' },
+      data: 'source',
+    });
+
+    // `ILogger` has no level predicate, so this is the only opt-in there is.
+    expect(lineStartingWith(lines, 'RFC HEADERS:')).toBeUndefined();
+    expect(lineStartingWith(lines, 'RFC BODY')).toBeUndefined();
+    expect(lineStartingWith(lines, 'RFC RESPONSE BODY:')).toBeUndefined();
+    // What was already there stays there.
+    expect(lines).toContain('RFC → POST /sap/bc/adt/oo/classes/ZCL_X');
+  });
+
+  it('clips a body to the ceiling rather than emitting megabytes', async () => {
+    const big = 'x'.repeat(5000);
+    const { transport, lines } = loggingTransport(
+      { logWire: true, maxLoggedBodyChars: 10 },
+      {
+        RESPONSE: {
+          STATUS_LINE: { STATUS_CODE: 200, REASON_PHRASE: 'OK' },
+          HEADER_FIELDS: [],
+          MESSAGE_BODY: Buffer.from(big, 'utf-8'),
+        },
+      },
+    );
+    await transport.open();
+
+    await transport.send({
+      method: 'PUT',
+      url: '/sap/bc/adt/oo/classes/ZCL_X/source/main',
+      data: big,
+    });
+
+    // The full size is still stated; only the bytes are cut.
+    expect(lineStartingWith(lines, 'RFC BODY')).toBe(
+      `RFC BODY (5000 chars): ${'x'.repeat(10)}… (+4990 more chars)`,
+    );
+    expect(lineStartingWith(lines, 'RFC RESPONSE BODY:')).toBe(
+      `RFC RESPONSE BODY: ${'x'.repeat(10)}… (+4990 more chars)`,
+    );
+  });
+
+  it('leaves out a body line for a request that has no body', async () => {
+    const { transport, lines } = loggingTransport({ logWire: true });
+    await transport.open();
+
+    await transport.send({ method: 'GET', url: '/sap/bc/adt/discovery' });
+
+    expect(lineStartingWith(lines, 'RFC BODY')).toBeUndefined();
+    expect(lineStartingWith(lines, 'RFC HEADERS:')).toBeDefined();
   });
 });

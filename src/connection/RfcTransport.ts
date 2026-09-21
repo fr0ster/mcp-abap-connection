@@ -70,19 +70,67 @@ function message(e: unknown): string {
 }
 
 /**
- * `Authorization` carries the Basic-auth credential in plain (base64, but
- * that is not encryption) form. The debug log this feeds is meant to be
- * pasted into an issue, so the one header that would leak a password is
- * replaced rather than trusted to whoever reads the log next.
+ * Header names whose VALUE must never reach a log.
+ *
+ * `Authorization` carries the Basic-auth credential in plain (base64, but that
+ * is not encryption) form — and it is not the only one. `request.headers`
+ * reaches this wire verbatim from the caller, so a consumer's `Cookie`
+ * (`SAP_SESSIONID_*`, `MYSAPSSO2`), an `x-csrf-token` or its own `X-Api-Key`
+ * arrives here too. A log line advertised as safe to paste into an issue has
+ * to be safe for the headers nobody here anticipated, so this matches by
+ * pattern rather than by the list we happened to think of.
+ */
+const SECRET_HEADER_PATTERNS = [
+  /authorization/i,
+  /cookie/i,
+  /token/i,
+  /secret/i,
+  /password/i,
+  /credential/i,
+  /api[-_]?key/i,
+];
+
+/**
+ * The NAME is kept and only the VALUE goes — a redacted header still says it
+ * was sent, which is half of what the log is read for.
  */
 function redactHeaders(
   fields: { NAME: string; VALUE: string }[],
 ): { NAME: string; VALUE: string }[] {
   return fields.map((field) =>
-    field.NAME.toLowerCase() === 'authorization'
+    SECRET_HEADER_PATTERNS.some((pattern) => pattern.test(field.NAME))
       ? { ...field, VALUE: '[redacted]' }
       : field,
   );
+}
+
+/**
+ * How much of a body a log line carries before it is cut. An ADT payload is
+ * an ABAP source or a repository listing: whole ones are megabytes, and a log
+ * sink handed a single line that size is a problem of its own.
+ */
+const DEFAULT_MAX_LOGGED_BODY_CHARS = 2000;
+
+function clip(text: string, max: number): string {
+  return text.length <= max
+    ? text
+    : `${text.slice(0, max)}… (+${text.length - max} more chars)`;
+}
+
+/** What this wire does beyond carrying the request. */
+export interface IRfcTransportOptions {
+  /**
+   * Whether the debug channel also carries the request headers and both
+   * bodies. Off by default, and deliberately not inferred from the presence
+   * of a logger: `ILogger` has no level predicate, so `logger?.debug()` cannot
+   * tell an enabled debug channel from a discarded one — without this flag
+   * every caller who passes a logger at all would pay to build and throw away
+   * a copy of every body on the wire.
+   */
+  logWire?: boolean;
+
+  /** Ceiling on a logged body, in characters. Defaults to 2000. */
+  maxLoggedBodyChars?: number;
 }
 
 /** Axios's own default, which the classification above this seam is written against. */
@@ -169,7 +217,16 @@ export class RfcTransport implements IOnPremTransport {
   constructor(
     private readonly connect: () => IRfcConversation,
     private readonly logger: ILogger | null = null,
+    private readonly options: IRfcTransportOptions = {},
   ) {}
+
+  /** Cut a body down to what a log line may carry. */
+  private clipped(text: string): string {
+    return clip(
+      text,
+      this.options.maxLoggedBodyChars ?? DEFAULT_MAX_LOGGED_BODY_CHARS,
+    );
+  }
 
   async open(): Promise<void> {
     if (this.conversation?.alive) return;
@@ -251,12 +308,20 @@ export class RfcTransport implements IOnPremTransport {
     // `RFC → METHOD URI` alone was not enough to debug a body that goes
     // missing or gets mis-serialised on the way to `SADT_REST_RFC_ENDPOINT`
     // (found chasing a `superPackage` that disappeared before it reached
-    // SAP) — the actual bytes matter, so the debug channel carries them too,
-    // one call redacted so a captured log is safe to paste into an issue.
-    this.logger?.debug(`RFC BODY (${body.length} chars): ${body}`);
-    this.logger?.debug(
-      `RFC HEADERS: ${JSON.stringify(redactHeaders(headerFields))}`,
-    );
+    // SAP) — the actual bytes matter, so the debug channel carries them too
+    // when the caller asks for it, redacted and clipped so a captured log is
+    // safe to paste into an issue and small enough to want to.
+    if (this.logger && this.options.logWire) {
+      this.logger.debug(
+        `RFC HEADERS: ${JSON.stringify(redactHeaders(headerFields))}`,
+      );
+      // A GET has no body, and `RFC BODY (0 chars):` says nothing.
+      if (body) {
+        this.logger.debug(
+          `RFC BODY (${body.length} chars): ${this.clipped(body)}`,
+        );
+      }
+    }
 
     // `request.timeout` is deliberately not read, and the absence of the word
     // here is what made that look like an oversight (#42).
@@ -332,7 +397,11 @@ export class RfcTransport implements IOnPremTransport {
     }
 
     this.logger?.debug(`RFC ← ${status} ${statusText} (${data.length} bytes)`);
-    this.logger?.debug(`RFC RESPONSE BODY: ${data}`);
+    // The line above already carries the size, so an empty body needs no line
+    // of its own.
+    if (this.logger && this.options.logWire && data) {
+      this.logger.debug(`RFC RESPONSE BODY: ${this.clipped(data)}`);
+    }
 
     const response: IAdtTransportResponse = {
       status,

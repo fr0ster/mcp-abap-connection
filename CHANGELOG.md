@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `RfcTransport` can be asked to log the wire: a third constructor argument
+  `{ logWire?, maxLoggedBodyChars? }`, off by default, adds the request header
+  fields, the request body and the response body to the debug channel. This is
+  what shows a payload that was mis-serialised before it reached
+  `SADT_REST_RFC_ENDPOINT`. Credential header values (`Authorization`, any
+  `Cookie`, anything matching `token`, `secret`, `password`, `credential` or an
+  API key) are replaced with `[redacted]` — the names are kept — and a body is
+  clipped at `maxLoggedBodyChars`, 2000 by default. Bodies are not redacted,
+  only clipped.
+
+  It is a flag rather than something inferred from the presence of a logger
+  because `ILogger` carries no level predicate: `logger?.debug()` cannot tell
+  an enabled debug channel from one that discards, so without the flag every
+  caller passing a logger would build a copy of every body on the wire and
+  throw it away. `HttpTransport` logs no bodies at any setting.
+
 ## [8.0.1] - 2026-09-08
 
 **Documentation only — 7.0.0 and 8.0.0 shipped without their migration note.**

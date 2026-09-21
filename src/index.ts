@@ -61,6 +61,7 @@ export { LegacyOnPremHttpTransport } from './connection/LegacyOnPremHttpTranspor
 export { OnPremHttpTransport } from './connection/OnPremHttpTransport.js';
 export {
   type IRfcConversation,
+  type IRfcTransportOptions,
   RfcTransport,
 } from './connection/RfcTransport.js';
 // The front door to the RFC wire: the derivation a consumer would otherwise
