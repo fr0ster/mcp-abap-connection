@@ -69,9 +69,16 @@ package you get. It carries its own ranges — `interfaces-adt: ^6.0.0`,
 `interfaces-auth: ^1.0.0`, and so on. A consumer who also names a contract
 package directly, at a version outside those ranges, ends up with two physical
 copies in the tree: the direct one at the root, the umbrella's nested beneath
-it. That is observable today — `interfaces-adt` has published majors 1 through
-6, so a project on `interfaces-adt@4` plus the umbrella gets 4 at the root and 6
-underneath.
+it. That was observable when this was written — `interfaces-adt` had published
+majors 1 through 6, so a project on `interfaces-adt@4` plus the umbrella got 4
+at the root and 6 underneath.
+
+> **The umbrella is gone.** `@mcp-abap-adt/interfaces` was deleted in its 52.0.0
+> — decision 34 in `mcp-abap-adt-interfaces` — for exactly the cost this
+> paragraph describes, measured across the family rather than argued. npm still
+> serves 51.0.0 to anyone pinned to it, so the reasoning below still applies to
+> them; there is simply nothing left to migrate *to* except naming the packages,
+> which is what this document already asks for.
 
 Two copies are harmless everywhere their shapes agree, because TypeScript is
 structural. They stop being harmless exactly where the shapes differ — and then
