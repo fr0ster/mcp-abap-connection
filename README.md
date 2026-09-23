@@ -135,6 +135,8 @@ This package interacts with external packages **ONLY through interfaces**:
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 9.0.0](./docs/MIGRATION-9.0.md)** - the contracts split out of `@mcp-abap-adt/interfaces`; which package each one moved to
+- 🚚 **[Migration to 7.0.0 and 8.0.0](./docs/MIGRATION-8.0.md)** - request headers leave the stateful branch, the contracts floor moves, and `flushGoodbye()`
 - 🚚 **[Migration to 6.0.0](./docs/MIGRATION-6.0.md)** - the factory and the per-credential classes are removed; RFC is a transport, not a class
 - 🚚 **[Migration to 4.0.0](./docs/MIGRATION-4.0.md)** - a 401 refreshes the token, a 403 reaches you with the server's message; the synthesised "JWT token has expired" is gone
 - 🚚 **[Migration: the explicit session lifecycle](./docs/MIGRATION-2.0.md)** - `connect()` is now required; start here if you are coming from 1.x
@@ -345,7 +347,7 @@ import {
   TokenAuthProvider,
   getTimeout,
 } from "@mcp-abap-adt/connection";
-import type { ITokenRefresher } from "@mcp-abap-adt/interfaces";
+import type { ITokenRefresher } from "@mcp-abap-adt/interfaces-adt";
 
 // Token refresher provides token acquisition and refresh
 // (created by @mcp-abap-adt/auth-broker or custom implementation)
@@ -579,7 +581,7 @@ interface AbapConnection {
 ```
 
 The connectors carry the rest of the session lifecycle. It is on the shared
-contract as a **capability atom** in `@mcp-abap-adt/interfaces` rather than as
+contract as a **capability atom** in `@mcp-abap-adt/interfaces-adt` rather than as
 methods on `IAbapConnection`, so a consumer that only carries requests is
 unaffected by its existence. Note that a connection over RFC has the whole of it
 — what an RFC conversation has none of is a session RESOURCE to open and close
@@ -592,7 +594,7 @@ isConnected(): boolean;
 getSessionIdentity(): string | null; // WHICH SAP session; null is not "disconnected"
 ```
 
-Import those names from `@mcp-abap-adt/interfaces`, not from this package: a
+Import those names from `@mcp-abap-adt/interfaces-adt`, not from this package: a
 contract type re-exported under a second name is a contract type that can drift.
 
 **The connection does not track locks.** Deciding when to disconnect, and

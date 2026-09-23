@@ -4,7 +4,7 @@ import type {
   IWebSocketMessageEnvelope,
   IWebSocketMessageHandler,
   IWebSocketTransport,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-network';
 
 /**
  * Minimal WS-like instance contract to avoid hard dependency on a specific WS library.

@@ -12,7 +12,7 @@
  * infrastructure, and retrying it re-runs the same failure against the same
  * unreachable host.
  */
-import { NETWORK_ERROR_CODES } from '@mcp-abap-adt/interfaces';
+import { NETWORK_ERROR_CODES } from '@mcp-abap-adt/interfaces-network';
 
 const CODES: ReadonlySet<string> = new Set(Object.values(NETWORK_ERROR_CODES));
 

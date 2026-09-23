@@ -1,4 +1,5 @@
-// Types - re-exported from interfaces package with backward compatibility aliases
+// Types - re-exported from the contract packages, under the names this
+// package has always published them by.
 
 export type {
   IWebSocketCloseInfo,
@@ -6,10 +7,10 @@ export type {
   IWebSocketMessageEnvelope,
   IWebSocketMessageHandler,
   IWebSocketTransport,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-network';
 export { FileCertificateMaterialLoader } from './auth/FileCertificateMaterialLoader.js';
 // IAuthProvider is deliberately NOT re-exported. It lives in
-// @mcp-abap-adt/interfaces and a consumer imports it from there — the same rule
+// @mcp-abap-adt/interfaces-auth and a consumer imports it from there — the same rule
 // the session-lifecycle vocabulary follows below, and for the same reason: two
 // names for one contract let the two drift.
 export {
@@ -34,7 +35,7 @@ export { AdtCloudConnector } from './connection/AdtCloudConnector.js';
 export { AdtOnPremConnector } from './connection/AdtOnPremConnector.js';
 export { CloudHttpTransport } from './connection/CloudHttpTransport.js';
 // The session lifecycle vocabulary — ISessionLifecycleAware, ADT_SESSION_ERROR —
-// is deliberately NOT exported here. It lives in @mcp-abap-adt/interfaces, and a
+// is deliberately NOT exported here. It lives in @mcp-abap-adt/interfaces-adt, and a
 // consumer imports it from there: re-exporting a contract type gives it two
 // names and lets the two drift.
 // Connection classes - only final implementations

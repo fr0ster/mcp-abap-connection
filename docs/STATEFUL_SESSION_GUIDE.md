@@ -206,7 +206,7 @@ lock is still very much held. That — not any teardown — is why
 duration of a `lock → modify → unlock` chain.
 
 Since 8.0.0 you reach it through the contract rather than the class: it is
-`ICriticalSection` in `@mcp-abap-adt/interfaces`, which this connection declares.
+`ICriticalSection` in `@mcp-abap-adt/interfaces-adt`, which this connection declares.
 What it promises is narrow and worth stating exactly — inside a section the
 *ordinary* per-request deadline does not apply. Not that no request can be cut
 short: the ceiling is `SAP_TIMEOUT_CRITICAL`, ten minutes by default, and a

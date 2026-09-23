@@ -16,7 +16,7 @@ import type {
   ICriticalSection,
   IRequestProfiling,
   ISessionLifecycleAware,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-adt';
 import type { SapConfig } from '../config/sapConfig.js';
 import { onPrem } from './helpers/onPrem.js';
 

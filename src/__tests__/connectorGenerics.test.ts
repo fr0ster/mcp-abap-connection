@@ -10,7 +10,7 @@
  * there is no cloud RFC.
  */
 
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import {
   BasicAuthProvider,
   CertificateAuthProvider,

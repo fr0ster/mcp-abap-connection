@@ -12,7 +12,7 @@
  * itself, with nobody deciding anything.
  */
 
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { onPremHttpTransport } from './helpers/onPrem.js';

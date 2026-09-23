@@ -29,7 +29,7 @@
 import {
   ADT_SESSION_ERROR,
   type AdtSessionErrorCode,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-adt';
 
 export type TransitionKind = 'connect' | 'disconnect' | 'recover' | 'cleanup';
 

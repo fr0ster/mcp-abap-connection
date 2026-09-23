@@ -9,13 +9,15 @@
  */
 
 import type {
-  IAuthProvider,
-  ICertificateMaterial,
   ICertificateMaterialLoader,
-  IRenewableCredential,
   ISapConfig,
   ITokenRefresher,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-adt';
+import type {
+  IAuthProvider,
+  ICertificateMaterial,
+  IRenewableCredential,
+} from '@mcp-abap-adt/interfaces-auth';
 
 /** Username and password, as `Basic base64(user:pass)`. */
 export class BasicAuthProvider implements IAuthProvider {

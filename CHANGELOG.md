@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+**The contracts split, and this package follows them rather than the shim left
+behind.** `@mcp-abap-adt/interfaces` became an umbrella whose every export is
+marked `@deprecated`, re-exporting four packages that now hold the contracts.
+Building against the umbrella still works and says so in every editor; it is a
+bridge, and this package has crossed it. No API here changed.
+
+### Changed
+
+- **BREAKING** — the dependency on `@mcp-abap-adt/interfaces` is gone, replaced
+  by `@mcp-abap-adt/interfaces-adt`, `-auth`, `-network` and `-utils`. Every
+  contract import in `src/` names the package the contract lives in. Nothing was
+  renamed and no signature moved, so a consumer using only this package's own
+  exports changes nothing; a consumer that imported contract types through the
+  umbrella now installs the packages it names. See
+  [`docs/MIGRATION-9.0.md`](docs/MIGRATION-9.0.md).
+
+  Not because a re-export loses anything — it does not: through the umbrella
+  and directly, `IAuthProvider` is the same type. The umbrella decides which
+  VERSION of each contract package a tree gets, since it carries its own ranges
+  (`interfaces-adt: ^6.0.0`, and so on). A consumer naming a contract package
+  directly outside those ranges gets two physical copies — `interfaces-adt` has
+  published majors 1 through 6, so `@4` plus the umbrella puts 4 at the root and
+  6 beneath it. Harmless wherever the shapes agree, because TypeScript is
+  structural; a type error at the package boundary, far from the skew that
+  caused it, wherever they do not. Depending directly makes the version this
+  package's decision and lets `npm ls` answer for it. And every export on the
+  umbrella is `@deprecated`, so building on it hands the timing of a breaking
+  change to someone else.
+
+- `IWebSocketCloseInfo`, `IWebSocketConnectOptions`, `IWebSocketMessageEnvelope`,
+  `IWebSocketMessageHandler` and `IWebSocketTransport` are re-exported from
+  `@mcp-abap-adt/interfaces-network` instead of the umbrella. Same names, same
+  shapes, so an importer of this package's own exports sees no difference.
+
+### Fixed
+
+- `scripts/check-docs.mjs` exempted the whole `@mcp-abap-adt/` scope from the
+  "stands on a package this repo does not install" question, which was true
+  while the scope meant one umbrella this package depended on. After the split
+  it made a historical migration note — correct about the import a 6.x consumer
+  wrote — fail the build. The exemption is now this package alone.
+
+- `scripts/check-docs.mjs` built a page's vocabulary from every fence on the
+  page regardless of position, so a fence at the BOTTOM could answer for a
+  genuinely undefined name at the top and the check would pass. The comment at
+  the point of use states the model — "a page is read top to bottom, so a later
+  fence may lean on a name an earlier one established" — and the code now
+  follows it: a fence sees only what the fences above it bound. Measured: a
+  fence using `zzzProbeName` above the fence that binds it passed silently
+  before and is reported now.
+
+  Skipped fences count toward that vocabulary. One skipped because it stands on
+  a package this repo does not install still taught the reader a name, and this
+  is what lets `docs/MIGRATION-6.0.md` keep showing the import a 6.x consumer
+  wrote.
+
+  The same violation sat one rung lower, where it reached the compiler rather
+  than the filter over its output: the imports lent to a fence that shows none
+  were hoisted from the WHOLE page, so a later fence's import typed an earlier
+  fence. A continuation now borrows only from the fences above it. Measured on
+  a name the page does not otherwise bind: a fence calling
+  `new SamlAuthProvider(...)` placed above the only fence importing it compiled
+  clean before and is reported now.
+
+### Documentation
+
+- `docs/MIGRATION-9.0.md` (new): which package each contract moved to, what a
+  consumer does, and why staying on the deprecated umbrella is a bridge rather
+  than a destination.
+- `README.md`, `docs/USAGE.md`, `docs/SCOPE.md` and
+  `docs/STATEFUL_SESSION_GUIDE.md` name the package each contract is now in.
+  Historical migration notes are left alone: they describe the import that was
+  correct for the release they document.
+- `README.md` links the 7.0/8.0 migration note, which 8.0.1 added to
+  `docs/INDEX.md` and said it had added to both.
+
 ## [8.1.0] - 2026-09-21
 
 **The RFC wire can be asked for its payload, and what it logs is safe to

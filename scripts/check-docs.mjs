@@ -432,7 +432,16 @@ function usesThisPackage(body) {
 function unresolvable(body) {
   for (const m of body.matchAll(/from\s*['"]([^'"]+)['"]/g)) {
     const from = m[1];
-    if (from.startsWith('@mcp-abap-adt/') || from.startsWith('node:')) continue;
+    // This package resolves to its own source, and `node:` builtins need no
+    // install. Every OTHER scope package is an ordinary dependency and gets the
+    // ordinary question. The exemption used to cover the whole scope, which was
+    // true while `@mcp-abap-adt/interfaces` was a single umbrella this package
+    // depended on. Since the contracts split into -adt/-auth/-network/-utils,
+    // a migration note can legitimately show an import this repo no longer
+    // installs — the one a 6.x consumer actually wrote — and a blanket
+    // exemption turned that into a hard error on a page that is correct.
+    if (from === '@mcp-abap-adt/connection' || from.startsWith('node:'))
+      continue;
     if (!existsSync(join('node_modules', from))) return from;
   }
   return null;
@@ -443,9 +452,19 @@ let elided = 0;
 let unresolved = 0;
 let compiled = 0;
 const compilable = new Map();
+const pageVocabulary = new Map();
 for (const file of documented.filter((f) => f.endsWith('.md'))) {
-  const snippets = codeBlocks(file)
-    .filter((b) => b.lang === 'typescript' || b.lang === 'ts')
+  const typescript = codeBlocks(file).filter(
+    (b) => b.lang === 'typescript' || b.lang === 'ts',
+  );
+  // Every name the page binds, gathered BEFORE the filters below. A fence that
+  // is skipped still taught the reader a name, and a later fence leaning on it
+  // is not making anything up. Gathering this from the surviving fences instead
+  // made a skip contagious: drop the fence that imports `IAuthProvider` because
+  // it stands on a package this repo no longer installs, and the continuation
+  // that names the type is reported as an undefined name on a correct page.
+  pageVocabulary.set(file, typescript);
+  const snippets = typescript
     .filter((b) => usesThisPackage(b.body))
     .filter((b) => {
       const fragment = /^\s*(\/\/\s*)?\.\.\./m.test(b.body);
@@ -466,23 +485,41 @@ if (compilable.size) {
   try {
     const sources = new Map();
     for (const [file, snippets] of compilable) {
-      // The page's imports, for the snippets that show none: those are
-      // continuations, and the page established the names above them.
-      const page = hoistImports(snippets).head;
-      // Every name the page binds anywhere in its TypeScript — the vocabulary a
-      // later fence is allowed to lean on.
-      const pageDeclares = new Set();
-      for (const snippet of snippets) {
-        for (const m of snippet.body.matchAll(
+      // The vocabulary a fence may lean on: the names bound by the fences
+      // ABOVE it, and only those. The page is read top to bottom, so what a
+      // later fence establishes has not been read yet when an earlier one runs
+      // — counting it lets a fence at the BOTTOM of the page answer for a
+      // genuinely undefined name at the top, which is the error this check
+      // exists to report. Measured: a fence using `zzzProbeName` above the
+      // fence that binds it passed silently, and now does not.
+      //
+      // Every TypeScript fence counts toward it, including the ones skipped
+      // for compilation. A fence skipped because it stands on a package this
+      // repo does not install still taught the reader a name, and a later
+      // fence using it is not making anything up.
+      const bindings = (body) => {
+        const names = [];
+        for (const m of body.matchAll(
           /\b(?:const|let|var|function|class)\s+(\w+)|import\s+(?:type\s+)?\{([^}]*)\}/g,
         )) {
-          if (m[1]) pageDeclares.add(m[1]);
+          if (m[1]) names.push(m[1]);
           for (const symbol of (m[2] ?? '').split(','))
             if (symbol.trim())
-              pageDeclares.add(symbol.trim().replace(/^type\s+/, ''));
+              names.push(symbol.trim().replace(/^type\s+/, ''));
         }
-      }
+        return names;
+      };
+      const pageTypescript = pageVocabulary.get(file) ?? snippets;
+      const declaredAbove = (line) => {
+        const names = new Set();
+        for (const block of pageTypescript) {
+          if (block.line >= line) break; // document order
+          for (const name of bindings(block.body)) names.add(name);
+        }
+        return names;
+      };
       snippets.forEach((snippet, i) => {
+        const pageDeclares = declaredAbove(snippet.line);
         // A snippet that shows its OWN import block is claiming to be
         // self-contained, so it is compiled with exactly that block and
         // nothing borrowed. This is the difference that matters: the reader
@@ -490,6 +527,21 @@ if (compilable.size) {
         // connector but not the transport leaves them with a broken paste.
         const declares = /^\s*import\b/m.test(snippet.body);
         const { head, bodies } = hoistImports([snippet]);
+        // A continuation borrows the imports of the fences ABOVE it, and only
+        // those. `snippets` is in document order, so that is the prefix.
+        //
+        // Hoisting the whole page put a LATER fence's import into an EARLIER
+        // fence's generated source, which is the same top-to-bottom violation
+        // as counting a later binding — but a rung lower, where it reaches the
+        // compiler itself rather than the filter over its output. Measured on
+        // a name the page does not otherwise bind: a fence calling
+        // `new SamlAuthProvider(...)` placed above the only fence that imports
+        // it compiled clean, and is reported now.
+        //
+        // Compilable fences only. An import taken from a fence skipped for
+        // standing on a package this repo does not install would not resolve,
+        // and would fail the borrower for the lender's reason.
+        const page = hoistImports(snippets.slice(0, i)).head;
         const source = `${declares ? head : PLACEHOLDERS + page}\n\nasync function _snippet() {\n${bodies[0].body}\n}\n`;
         const name = `${file.replace(/[^\w]/g, '_')}_${i}.ts`;
         writeFileSync(join(dir, name), source);
@@ -516,9 +568,6 @@ if (compilable.size) {
           baseUrl: '.',
           paths: {
             '@mcp-abap-adt/connection': [join(root, 'src', 'index.ts')],
-            '@mcp-abap-adt/interfaces': [
-              join(root, 'node_modules', '@mcp-abap-adt', 'interfaces'),
-            ],
             // Anything else resolves from the project's own node_modules: axios
             // is a dependency of this package, and a doc naming `AxiosResponse`
             // should be able to say where the type comes from.
