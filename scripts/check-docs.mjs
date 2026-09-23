@@ -485,9 +485,6 @@ if (compilable.size) {
   try {
     const sources = new Map();
     for (const [file, snippets] of compilable) {
-      // The page's imports, for the snippets that show none: those are
-      // continuations, and the page established the names above them.
-      const page = hoistImports(snippets).head;
       // The vocabulary a fence may lean on: the names bound by the fences
       // ABOVE it, and only those. The page is read top to bottom, so what a
       // later fence establishes has not been read yet when an earlier one runs
@@ -530,6 +527,21 @@ if (compilable.size) {
         // connector but not the transport leaves them with a broken paste.
         const declares = /^\s*import\b/m.test(snippet.body);
         const { head, bodies } = hoistImports([snippet]);
+        // A continuation borrows the imports of the fences ABOVE it, and only
+        // those. `snippets` is in document order, so that is the prefix.
+        //
+        // Hoisting the whole page put a LATER fence's import into an EARLIER
+        // fence's generated source, which is the same top-to-bottom violation
+        // as counting a later binding — but a rung lower, where it reaches the
+        // compiler itself rather than the filter over its output. Measured on
+        // a name the page does not otherwise bind: a fence calling
+        // `new SamlAuthProvider(...)` placed above the only fence that imports
+        // it compiled clean, and is reported now.
+        //
+        // Compilable fences only. An import taken from a fence skipped for
+        // standing on a package this repo does not install would not resolve,
+        // and would fail the borrower for the lender's reason.
+        const page = hoistImports(snippets.slice(0, i)).head;
         const source = `${declares ? head : PLACEHOLDERS + page}\n\nasync function _snippet() {\n${bodies[0].body}\n}\n`;
         const name = `${file.replace(/[^\w]/g, '_')}_${i}.ts`;
         writeFileSync(join(dir, name), source);

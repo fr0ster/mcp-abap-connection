@@ -63,6 +63,14 @@ bridge, and this package has crossed it. No API here changed.
   is what lets `docs/MIGRATION-6.0.md` keep showing the import a 6.x consumer
   wrote.
 
+  The same violation sat one rung lower, where it reached the compiler rather
+  than the filter over its output: the imports lent to a fence that shows none
+  were hoisted from the WHOLE page, so a later fence's import typed an earlier
+  fence. A continuation now borrows only from the fences above it. Measured on
+  a name the page does not otherwise bind: a fence calling
+  `new SamlAuthProvider(...)` placed above the only fence importing it compiled
+  clean before and is reported now.
+
 ### Documentation
 
 - `docs/MIGRATION-9.0.md` (new): which package each contract moved to, what a
