@@ -131,6 +131,20 @@ This package interacts with external packages **ONLY through interfaces**:
 - **Logger interface**: Uses `ILogger` interface for logging - does not know about concrete logger implementation
 - **No direct dependencies on auth packages**: All token-related operations are handled through configuration (`SapConfig`) passed by consumers
 
+The contracts themselves come from four packages, and are the only runtime
+dependencies of this one besides `axios`, `commander` and `open`:
+
+| Package | What this package takes from it |
+|---|---|
+| `@mcp-abap-adt/interfaces-adt` | `IAbapConnection`, `ISapConfig`, `ITokenRefresher`, the capability atoms, `ADT_SESSION_ERROR` |
+| `@mcp-abap-adt/interfaces-auth` | `IAuthProvider`, `IRenewableCredential`, `ICertificateMaterial` |
+| `@mcp-abap-adt/interfaces-network` | `ITimeoutConfig`, `NETWORK_ERROR_CODES`, the WebSocket contracts |
+| `@mcp-abap-adt/interfaces-utils` | `ILogger` |
+
+Not `@mcp-abap-adt/interfaces`. That name is now an umbrella of deprecated
+re-exports, and this package no longer depends on it — see
+[Migration to 9.0.0](./docs/MIGRATION-9.0.md).
+
 ## Documentation
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
@@ -155,6 +169,15 @@ This package interacts with external packages **ONLY through interfaces**:
 
 ```bash
 npm install @mcp-abap-adt/connection
+```
+
+That is everything you need to **use** the connectors. If your own code names a
+contract type — `IAuthProvider` for a credential you write, `ISapConfig` for a
+config you build — install the package it lives in as well, because this one no
+longer brings them along:
+
+```bash
+npm install @mcp-abap-adt/interfaces-adt @mcp-abap-adt/interfaces-auth
 ```
 
 For detailed installation instructions, see [Installation Guide](./docs/INSTALLATION.md).

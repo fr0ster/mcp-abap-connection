@@ -82,6 +82,16 @@ bridge, and this package has crossed it. No API here changed.
   correct for the release they document.
 - `README.md` links the 7.0/8.0 migration note, which 8.0.1 added to
   `docs/INDEX.md` and said it had added to both.
+- `README.md` and `docs/INSTALLATION.md` say what to install. Until now the
+  contract packages arrived transitively through the umbrella, so no page had
+  to mention them; a consumer following the installation guide and naming
+  `IAuthProvider` in their own signature would have found nothing there.
+- `README.md` names the four contract packages under External Dependencies, and
+  what this package takes from each.
+- `CLAUDE.md` said `IAuthProvider` comes from `@mcp-abap-adt/interfaces` and
+  that external dependencies are reached "through interfaces from
+  `@mcp-abap-adt/interfaces`". Both were true before the split and are the
+  instructions an agent working in this repository reads first.
 
 ## [8.1.0] - 2026-09-21
 

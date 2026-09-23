@@ -59,7 +59,7 @@ the RFC wire could not connect at all as a result.
   addressing it, establishing itself, and whatever session state it keeps.
   `HttpTransport` has a cookie jar, a CSRF token, affinity headers and axios;
   `RfcTransport` has a conversation that IS the session and none of the rest.
-- `IAuthProvider` (from `@mcp-abap-adt/interfaces`) — the credential, including
+- `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth`) — the credential, including
   its own renewal. A provider checks expiry and refreshes when asked for a
   header; the connection does not renew on its behalf.
 - The connector — which session mechanism this system uses, and nothing else.
@@ -69,7 +69,10 @@ smell.** There is no `if (transport is rfc)` anywhere, and adding one means the
 fact belongs on the transport instead.
 
 **Key design decisions:**
-- All external deps accessed through interfaces from `@mcp-abap-adt/interfaces` — no direct coupling
+- All external deps accessed through the contract packages —
+  `@mcp-abap-adt/interfaces-adt`, `-auth`, `-network`, `-utils` — no direct coupling.
+  NOT `@mcp-abap-adt/interfaces`: that name is now an umbrella of deprecated
+  re-exports, and this package does not depend on it
 - Logger is optional everywhere, all calls use `logger?.method()` pattern
 - The connection hands the wire a PATH; putting a server in front of it is the
   wire's business. An absolute URL in `SADT_REST_RFC_ENDPOINT`'s request line

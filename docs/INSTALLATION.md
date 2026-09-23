@@ -198,6 +198,25 @@ node test-connection.js
 npm install --save-dev typescript @types/node
 ```
 
+### Install the contracts you name
+
+`@mcp-abap-adt/connection` no longer brings the contract packages along, so
+anything your own signatures name has to be installed. Install the ones you
+actually use:
+
+```bash
+npm install @mcp-abap-adt/interfaces-adt    # IAbapConnection, ISapConfig, ITokenRefresher, ADT_SESSION_ERROR
+npm install @mcp-abap-adt/interfaces-auth   # IAuthProvider, IRenewableCredential
+npm install @mcp-abap-adt/interfaces-network # ITimeoutConfig, the WebSocket contracts
+npm install @mcp-abap-adt/interfaces-utils  # ILogger
+```
+
+Nothing is needed here if you only call what this package exports — the types
+travel with it. Do **not** reach for `@mcp-abap-adt/interfaces`: that name is an
+umbrella of deprecated re-exports, and installing it alongside a contract
+package at a different major puts two copies of the same contract in your tree.
+[Migration to 9.0.0](./MIGRATION-9.0.md) has the details.
+
 ### Create `tsconfig.json`
 
 ```json

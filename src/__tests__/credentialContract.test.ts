@@ -2,7 +2,7 @@
  * The shipped credentials against the contract as published, not as it was
  * kept here.
  *
- * `IAuthProvider` moved to @mcp-abap-adt/interfaces, where a consumer writing
+ * `IAuthProvider` moved to @mcp-abap-adt/interfaces-auth, where a consumer writing
  * its own credential can reach it. Two members changed shape on the way:
  *
  *   - `authorizationHeader()` answers `string | null`. `''` was a sentinel for
@@ -88,7 +88,7 @@ describe('the credentials that are headers', () => {
 describe('the contract itself', () => {
   it('is the published one, so a consumer implements the same thing', () => {
     // The assignment IS the assertion: it stops compiling if these classes
-    // drift from what @mcp-abap-adt/interfaces publishes, which is exactly the
+    // drift from what @mcp-abap-adt/interfaces-auth publishes, which is exactly the
     // drift that having two copies of the interface used to allow.
     const shipped: IAuthProvider[] = [
       new BasicAuthProvider('u', 'p'),
