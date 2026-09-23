@@ -23,11 +23,18 @@ bridge, and this package has crossed it. No API here changed.
   umbrella now installs the packages it names. See
   [`docs/MIGRATION-9.0.md`](docs/MIGRATION-9.0.md).
 
-  A shim re-exports a name but not the identity of the type behind it. With the
-  consumer on the umbrella and this package on the split, the same contract can
-  be two distinct types that structural typing quietly reconciles — until a
-  nominal position stops reconciling them. Depending on where the contract
-  actually lives is what makes "the same contract" checkable.
+  Not because a re-export loses anything — it does not: through the umbrella
+  and directly, `IAuthProvider` is the same type. The umbrella decides which
+  VERSION of each contract package a tree gets, since it carries its own ranges
+  (`interfaces-adt: ^6.0.0`, and so on). A consumer naming a contract package
+  directly outside those ranges gets two physical copies — `interfaces-adt` has
+  published majors 1 through 6, so `@4` plus the umbrella puts 4 at the root and
+  6 beneath it. Harmless wherever the shapes agree, because TypeScript is
+  structural; a type error at the package boundary, far from the skew that
+  caused it, wherever they do not. Depending directly makes the version this
+  package's decision and lets `npm ls` answer for it. And every export on the
+  umbrella is `@deprecated`, so building on it hands the timing of a breaking
+  change to someone else.
 
 - `IWebSocketCloseInfo`, `IWebSocketConnectOptions`, `IWebSocketMessageEnvelope`,
   `IWebSocketMessageHandler` and `IWebSocketTransport` are re-exported from
@@ -42,10 +49,19 @@ bridge, and this package has crossed it. No API here changed.
   it made a historical migration note — correct about the import a 6.x consumer
   wrote — fail the build. The exemption is now this package alone.
 
-- `scripts/check-docs.mjs` gathered a page's vocabulary only from the fences it
-  went on to compile, so skipping one fence orphaned every later fence that
-  leaned on a name it bound. The comment above it already said "every name the
-  page binds anywhere in its TypeScript"; now it does.
+- `scripts/check-docs.mjs` built a page's vocabulary from every fence on the
+  page regardless of position, so a fence at the BOTTOM could answer for a
+  genuinely undefined name at the top and the check would pass. The comment at
+  the point of use states the model — "a page is read top to bottom, so a later
+  fence may lean on a name an earlier one established" — and the code now
+  follows it: a fence sees only what the fences above it bound. Measured: a
+  fence using `zzzProbeName` above the fence that binds it passed silently
+  before and is reported now.
+
+  Skipped fences count toward that vocabulary. One skipped because it stands on
+  a package this repo does not install still taught the reader a name, and this
+  is what lets `docs/MIGRATION-6.0.md` keep showing the import a 6.x consumer
+  wrote.
 
 ### Documentation
 

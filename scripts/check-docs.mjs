@@ -488,20 +488,41 @@ if (compilable.size) {
       // The page's imports, for the snippets that show none: those are
       // continuations, and the page established the names above them.
       const page = hoistImports(snippets).head;
-      // Every name the page binds anywhere in its TypeScript — the vocabulary a
-      // later fence is allowed to lean on.
-      const pageDeclares = new Set();
-      for (const snippet of pageVocabulary.get(file) ?? snippets) {
-        for (const m of snippet.body.matchAll(
+      // The vocabulary a fence may lean on: the names bound by the fences
+      // ABOVE it, and only those. The page is read top to bottom, so what a
+      // later fence establishes has not been read yet when an earlier one runs
+      // — counting it lets a fence at the BOTTOM of the page answer for a
+      // genuinely undefined name at the top, which is the error this check
+      // exists to report. Measured: a fence using `zzzProbeName` above the
+      // fence that binds it passed silently, and now does not.
+      //
+      // Every TypeScript fence counts toward it, including the ones skipped
+      // for compilation. A fence skipped because it stands on a package this
+      // repo does not install still taught the reader a name, and a later
+      // fence using it is not making anything up.
+      const bindings = (body) => {
+        const names = [];
+        for (const m of body.matchAll(
           /\b(?:const|let|var|function|class)\s+(\w+)|import\s+(?:type\s+)?\{([^}]*)\}/g,
         )) {
-          if (m[1]) pageDeclares.add(m[1]);
+          if (m[1]) names.push(m[1]);
           for (const symbol of (m[2] ?? '').split(','))
             if (symbol.trim())
-              pageDeclares.add(symbol.trim().replace(/^type\s+/, ''));
+              names.push(symbol.trim().replace(/^type\s+/, ''));
         }
-      }
+        return names;
+      };
+      const pageTypescript = pageVocabulary.get(file) ?? snippets;
+      const declaredAbove = (line) => {
+        const names = new Set();
+        for (const block of pageTypescript) {
+          if (block.line >= line) break; // document order
+          for (const name of bindings(block.body)) names.add(name);
+        }
+        return names;
+      };
       snippets.forEach((snippet, i) => {
+        const pageDeclares = declaredAbove(snippet.line);
         // A snippet that shows its OWN import block is claiming to be
         // self-contained, so it is compiled with exactly that block and
         // nothing borrowed. This is the difference that matters: the reader

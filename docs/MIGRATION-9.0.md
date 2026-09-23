@@ -60,12 +60,30 @@ mechanical change and it is better done while it is only an import line.
 
 ## Why this package stopped using the umbrella
 
-A shim re-exports a name; it does not re-export the **identity** of the type
-behind it. Once a consumer holds one contract package and this one holds
-another, the two can be the same shape and still be two types — and structural
-typing hides that right up until it does not. Depending on the packages the
-contracts actually live in is the only way the consumer and the connection are
-demonstrably holding the same one.
+Not because a re-export loses anything. It does not: imported through the
+umbrella and imported directly, `IAuthProvider` is the *same type* — a
+re-export names the same declaration, and TypeScript agrees.
+
+The reason is that the umbrella decides **which version** of each contract
+package you get. It carries its own ranges — `interfaces-adt: ^6.0.0`,
+`interfaces-auth: ^1.0.0`, and so on. A consumer who also names a contract
+package directly, at a version outside those ranges, ends up with two physical
+copies in the tree: the direct one at the root, the umbrella's nested beneath
+it. That is observable today — `interfaces-adt` has published majors 1 through
+6, so a project on `interfaces-adt@4` plus the umbrella gets 4 at the root and 6
+underneath.
+
+Two copies are harmless everywhere their shapes agree, because TypeScript is
+structural. They stop being harmless exactly where the shapes differ — and then
+the error lands at the boundary between two packages rather than at the version
+skew that caused it.
+
+Depending on the packages directly makes the version this package's own
+decision, and makes `npm ls` able to answer the question.
+
+The second reason is simpler: every export on the umbrella is marked
+`@deprecated`. Building on it means its eventual removal becomes a breaking
+change for this package at a moment chosen by someone else.
 
 ## Checking what you ended up with
 
