@@ -142,9 +142,11 @@ dependencies of this one besides `axios`, `commander` and `open`:
 | `@mcp-abap-adt/interfaces-network` | `NETWORK_ERROR_CODES`, the WebSocket contracts |
 | `@mcp-abap-adt/interfaces-utils` | `ILogger` |
 
-Not `@mcp-abap-adt/interfaces`. That name is now an umbrella of deprecated
-re-exports, and this package no longer depends on it — see
-[Migration to 9.0.0](./docs/MIGRATION-9.0.md).
+Not `@mcp-abap-adt/interfaces`. That package is **deleted** as of its 52.0.0,
+which was never published: npm still serves 51.0.0 — every symbol re-exported and
+deprecated — to whoever is pinned to it, and nothing further ships there. This
+package stopped depending on it in 9.0.0; there is nothing left to move to but
+the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 ## Documentation
 

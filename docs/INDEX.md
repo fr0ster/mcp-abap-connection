@@ -46,7 +46,7 @@ mcp-abap-connection/
 - 🔑 [JWT Auth Tools](./JWT_AUTH_TOOLS.md) - CLI tool for browser-based authentication
 
 ### Upgrading
-- 🚚 [Migrating to 9.0.0](./MIGRATION-9.0.md) - the contracts split into `interfaces-adt`, `-auth`, `-auth-sap`, `-network` and `-utils`; this package no longer depends on the umbrella
+- 🚚 [Migrating to 9.0.0](./MIGRATION-9.0.md) - the contracts split into `interfaces-adt`, `-auth`, `-network` and `-utils`, and this package stopped depending on the umbrella; `interfaces-auth-sap` joined them in the release after, when authentication split into what is SAP's and what is not
 - 🚚 [Migrating to 7.0.0 and 8.0.0](./MIGRATION-8.0.md) - `sap-adt-request-id` and `X-sap-adt-profiling` on every request, `x-sap-security-session: use` on cloud, the contracts floor at 39, and `flushGoodbye()`
 - 🚚 [Migrating to 6.0.0](./MIGRATION-6.0.md) - the factory and the per-credential classes are removed; the RFC wire is a transport you hand to the on-prem connector
 - 🧱 [Migrating to 4.0.0](./MIGRATION-4.0.md) - JWT error classification: a 401 refreshes, a 403 propagates with the server's message

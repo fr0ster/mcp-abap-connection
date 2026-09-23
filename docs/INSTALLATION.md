@@ -213,9 +213,10 @@ npm install @mcp-abap-adt/interfaces-utils    # ILogger
 ```
 
 Nothing is needed here if you only call what this package exports — the types
-travel with it. Do **not** reach for `@mcp-abap-adt/interfaces`: that name is an
-umbrella of deprecated re-exports, and installing it alongside a contract
-package at a different major puts two copies of the same contract in your tree.
+travel with it. Do **not** reach for `@mcp-abap-adt/interfaces`: it is **deleted**
+as of its 52.0.0, npm still serves 51.0.0 with every symbol re-exported and
+deprecated, and installing that alongside a contract package at a different major
+puts two copies of the same contract in your tree.
 [Migration to 9.0.0](./MIGRATION-9.0.md) has the details.
 
 ### Create `tsconfig.json`
