@@ -5,6 +5,40 @@ All notable changes to the `@mcp-abap-adt/connection` package will be documented
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [9.1.0] - 2026-09-23
+
+### Changed
+
+- **`@mcp-abap-adt/interfaces-adt@^8.0.0`** (was `^6.0.0`) and
+  **`interfaces-network@^1.1.0`** (was `^1.0.0`).
+
+  **Nothing this package imports moved or changed.** Of the 15 names it takes
+  from the ADT contract, none is a header name and none is Cloud ALM — the two
+  groups that left in 8.0.0 — and `IAdtWireResponse` keeps its name and shape,
+  now extending `IHttpWireResponse` from `interfaces-network`, which this package
+  already declared. 7.0.0's change was `source` leaving six object configs, and
+  this package imports no config.
+
+  **`interfaces-network` had to move with it**, and the reason is worth keeping:
+  with `^1.0.0` declared here and `interfaces-adt@8` requiring `^1.1.0`, npm kept
+  1.0.0 at the root and nested 1.1.0 beneath the ADT contract. Two physical
+  copies of the same package, silently — which is the cost
+  `docs/MIGRATION-9.0.md` describes and the reason this bump is explicit rather
+  than left to a caret range.
+
+  Checked rather than assumed, after installing:
+
+  ```
+  find node_modules -path "*@mcp-abap-adt/interfaces*/package.json"
+  ```
+
+  One copy of each of the four.
+
+- `docs/MIGRATION-9.0.md` said in the present tense that the umbrella decides
+  which contract version a consumer gets, and that `interfaces-adt` has majors 1
+  through 6. The umbrella — `@mcp-abap-adt/interfaces` — was deleted in its
+  52.0.0, for exactly the cost that paragraph describes. It says so now.
+
 ## [Unreleased]
 
 ## [9.0.0] - 2026-09-23
@@ -1649,7 +1683,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.1.0...HEAD
+[9.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.0.0...v9.1.0
 [9.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.1.0...v9.0.0
 [8.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.1...v8.1.0
 [8.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.0...v8.0.1
