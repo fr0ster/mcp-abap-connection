@@ -136,9 +136,10 @@ dependencies of this one besides `axios`, `commander` and `open`:
 
 | Package | What this package takes from it |
 |---|---|
-| `@mcp-abap-adt/interfaces-adt` | `IAbapConnection`, `ISapConfig`, `ITokenRefresher`, the capability atoms, `ADT_SESSION_ERROR` |
-| `@mcp-abap-adt/interfaces-auth` | `IAuthProvider`, `IRenewableCredential`, `ICertificateMaterial` |
-| `@mcp-abap-adt/interfaces-network` | `ITimeoutConfig`, `NETWORK_ERROR_CODES`, the WebSocket contracts |
+| `@mcp-abap-adt/interfaces-adt` | `IAbapConnection`, `IAbapRequestOptions`, `IAdtResponse`, `IAdtWireResponse`, `ITimeoutConfig`, the capability atoms, `ADT_SESSION_ERROR` |
+| `@mcp-abap-adt/interfaces-auth` | `IAuthProvider`, `IRenewableCredential`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
+| `@mcp-abap-adt/interfaces-auth-sap` | `ISapConfig`, `SapAuthType`, `SapConnectionType`, `ICertificateMaterialLoader` |
+| `@mcp-abap-adt/interfaces-network` | `NETWORK_ERROR_CODES`, the WebSocket contracts |
 | `@mcp-abap-adt/interfaces-utils` | `ILogger` |
 
 Not `@mcp-abap-adt/interfaces`. That name is now an umbrella of deprecated
@@ -177,7 +178,7 @@ config you build — install the package it lives in as well, because this one n
 longer brings them along:
 
 ```bash
-npm install @mcp-abap-adt/interfaces-adt @mcp-abap-adt/interfaces-auth
+npm install @mcp-abap-adt/interfaces-adt @mcp-abap-adt/interfaces-auth @mcp-abap-adt/interfaces-auth-sap
 ```
 
 For detailed installation instructions, see [Installation Guide](./docs/INSTALLATION.md).
@@ -370,7 +371,7 @@ import {
   TokenAuthProvider,
   getTimeout,
 } from "@mcp-abap-adt/connection";
-import type { ITokenRefresher } from "@mcp-abap-adt/interfaces-adt";
+import type { ITokenRefresher } from "@mcp-abap-adt/interfaces-auth";
 
 // Token refresher provides token acquisition and refresh
 // (created by @mcp-abap-adt/auth-broker or custom implementation)

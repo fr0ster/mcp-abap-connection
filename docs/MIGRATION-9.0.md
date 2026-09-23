@@ -8,9 +8,10 @@ changed is where the *contracts* come from.
 
 | Package | What is in it |
 |---|---|
-| `@mcp-abap-adt/interfaces-adt` | The ADT vocabulary: `IAbapConnection`, `IAbapRequestOptions`, `IAdtWireResponse`, `IAdtResponse`, `ISapConfig`, `SapAuthType`, `SapConnectionType`, `ITokenRefresher`, `ITokenRefreshResult`, `ITokenProvider`, `ICertificateMaterialLoader`, and the capability atoms — `ISessionLifecycleAware`, `ICriticalSection`, `IRequestProfiling` — with `ADT_SESSION_ERROR` and `AdtSessionErrorCode` |
-| `@mcp-abap-adt/interfaces-auth` | The credential axis: `IAuthProvider`, `IRenewableCredential`, `ICertificateMaterial` |
-| `@mcp-abap-adt/interfaces-network` | The wire: `ITimeoutConfig`, `NETWORK_ERROR_CODES`, and the WebSocket contracts — `IWebSocketTransport`, `IWebSocketConnectOptions`, `IWebSocketCloseInfo`, `IWebSocketMessageEnvelope`, `IWebSocketMessageHandler` |
+| `@mcp-abap-adt/interfaces-adt` | The ADT vocabulary: `IAbapConnection`, `IAbapRequestOptions`, `IAdtWireResponse`, `IAdtResponse`, `ITimeoutConfig`, and the capability atoms — `ISessionLifecycleAware`, `ICriticalSection`, `IRequestProfiling` — with `ADT_SESSION_ERROR` and `AdtSessionErrorCode` |
+| `@mcp-abap-adt/interfaces-auth` | The credential axis: `IAuthProvider`, `IRenewableCredential`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
+| `@mcp-abap-adt/interfaces-auth-sap` | The SAP side of it: `ISapConfig`, `SapAuthType`, `SapConnectionType`, `ICertificateMaterialLoader` |
+| `@mcp-abap-adt/interfaces-network` | The wire: `NETWORK_ERROR_CODES` and the WebSocket contracts — `IWebSocketTransport`, `IWebSocketConnectOptions`, `IWebSocketCloseInfo`, `IWebSocketMessageEnvelope`, `IWebSocketMessageHandler` |
 | `@mcp-abap-adt/interfaces-utils` | `ILogger` |
 
 This package now depends on those four and **no longer depends on
@@ -27,7 +28,7 @@ If you do import them, move each import to the package it now lives in. Install
 the ones you name:
 
 ```bash
-npm install @mcp-abap-adt/interfaces-adt @mcp-abap-adt/interfaces-auth
+npm install @mcp-abap-adt/interfaces-adt @mcp-abap-adt/interfaces-auth @mcp-abap-adt/interfaces-auth-sap
 ```
 
 Before:
@@ -40,7 +41,7 @@ After:
 
 ```ts
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
-import type { ITokenRefresher } from '@mcp-abap-adt/interfaces-adt';
+import type { ITokenRefresher } from '@mcp-abap-adt/interfaces-auth';
 ```
 
 The table above says which package each name went to. Nothing was renamed, so
@@ -97,6 +98,7 @@ change for this package at a moment chosen by someone else.
 ```bash
 npm ls @mcp-abap-adt/interfaces-adt    # should print one version, deduped
 npm ls @mcp-abap-adt/interfaces-auth
+npm ls @mcp-abap-adt/interfaces-auth-sap
 ```
 
 Two versions of a contract package in one tree is the failure this release is

@@ -3,7 +3,7 @@ import type {
   ISapConfig,
   SapAuthType,
   SapConnectionType,
-} from '@mcp-abap-adt/interfaces-adt';
+} from '@mcp-abap-adt/interfaces-auth-sap';
 
 // Re-export for backward compatibility
 export type { SapAuthType, SapConnectionType };

@@ -16,10 +16,10 @@
  * judgement made with what the caller knows, so the refusal surfaces and the
  * caller decides. This is the seam they decide with.
  */
-import type { ITokenRefresher } from '@mcp-abap-adt/interfaces-adt';
 import type {
   IAuthProvider,
   IRenewableCredential,
+  ITokenRefresher,
 } from '@mcp-abap-adt/interfaces-auth';
 import {
   BasicAuthProvider,

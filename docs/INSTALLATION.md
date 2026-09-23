@@ -205,10 +205,11 @@ anything your own signatures name has to be installed. Install the ones you
 actually use:
 
 ```bash
-npm install @mcp-abap-adt/interfaces-adt    # IAbapConnection, ISapConfig, ITokenRefresher, ADT_SESSION_ERROR
-npm install @mcp-abap-adt/interfaces-auth   # IAuthProvider, IRenewableCredential
-npm install @mcp-abap-adt/interfaces-network # ITimeoutConfig, the WebSocket contracts
-npm install @mcp-abap-adt/interfaces-utils  # ILogger
+npm install @mcp-abap-adt/interfaces-adt      # IAbapConnection, ITimeoutConfig, ADT_SESSION_ERROR
+npm install @mcp-abap-adt/interfaces-auth     # IAuthProvider, IRenewableCredential, ITokenRefresher
+npm install @mcp-abap-adt/interfaces-auth-sap # ISapConfig, SapAuthType, ICertificateMaterialLoader
+npm install @mcp-abap-adt/interfaces-network  # NETWORK_ERROR_CODES, the WebSocket contracts
+npm install @mcp-abap-adt/interfaces-utils    # ILogger
 ```
 
 Nothing is needed here if you only call what this package exports — the types

@@ -1,4 +1,4 @@
-import type { ITimeoutConfig } from '@mcp-abap-adt/interfaces-network';
+import type { ITimeoutConfig } from '@mcp-abap-adt/interfaces-adt';
 
 // Re-export for backward compatibility
 export type TimeoutConfig = ITimeoutConfig;

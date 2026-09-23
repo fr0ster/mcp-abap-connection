@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { Agent } from 'node:https';
-import {
-  ADT_SESSION_ERROR,
-  type IAdtWireResponse,
-  type ICriticalSection,
-  type IRequestProfiling,
-  type ISessionLifecycleAware,
+import type {
+  IAdtWireResponse,
+  ICriticalSection,
+  IRequestProfiling,
+  ISessionLifecycleAware,
 } from '@mcp-abap-adt/interfaces-adt';
+import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt';
 import axios, {
   AxiosError,
   type AxiosInstance,

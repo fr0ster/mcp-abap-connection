@@ -2,7 +2,7 @@
  * Unit tests for sapConfigSignature
  */
 
-import type { ISapConfig } from '@mcp-abap-adt/interfaces-adt';
+import type { ISapConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { sapConfigSignature } from '../config/sapConfig.js';
 
 describe('sapConfigSignature', () => {
