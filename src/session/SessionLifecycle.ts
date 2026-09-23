@@ -26,10 +26,8 @@
  *     an unchanged one says nothing about whether the server still has it.
  */
 
-import {
-  ADT_SESSION_ERROR,
-  type AdtSessionErrorCode,
-} from '@mcp-abap-adt/interfaces-adt';
+import type { AdtSessionErrorCode } from '@mcp-abap-adt/interfaces-adt';
+import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt';
 
 export type TransitionKind = 'connect' | 'disconnect' | 'recover' | 'cleanup';
 

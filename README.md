@@ -131,19 +131,22 @@ This package interacts with external packages **ONLY through interfaces**:
 - **Logger interface**: Uses `ILogger` interface for logging - does not know about concrete logger implementation
 - **No direct dependencies on auth packages**: All token-related operations are handled through configuration (`SapConfig`) passed by consumers
 
-The contracts themselves come from four packages, and are the only runtime
+The contracts themselves come from five packages, and are the only runtime
 dependencies of this one besides `axios`, `commander` and `open`:
 
 | Package | What this package takes from it |
 |---|---|
-| `@mcp-abap-adt/interfaces-adt` | `IAbapConnection`, `ISapConfig`, `ITokenRefresher`, the capability atoms, `ADT_SESSION_ERROR` |
-| `@mcp-abap-adt/interfaces-auth` | `IAuthProvider`, `IRenewableCredential`, `ICertificateMaterial` |
-| `@mcp-abap-adt/interfaces-network` | `ITimeoutConfig`, `NETWORK_ERROR_CODES`, the WebSocket contracts |
+| `@mcp-abap-adt/interfaces-adt` | `IAbapConnection`, `IAbapRequestOptions`, `IAdtResponse`, `IAdtWireResponse`, `ITimeoutConfig`, the capability atoms, `ADT_SESSION_ERROR` |
+| `@mcp-abap-adt/interfaces-auth` | `IAuthProvider`, `IRenewableCredential`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
+| `@mcp-abap-adt/interfaces-auth-sap` | `ISapConfig`, `SapAuthType`, `SapConnectionType`, `ICertificateMaterialLoader` |
+| `@mcp-abap-adt/interfaces-network` | `NETWORK_ERROR_CODES`, the WebSocket contracts |
 | `@mcp-abap-adt/interfaces-utils` | `ILogger` |
 
-Not `@mcp-abap-adt/interfaces`. That name is now an umbrella of deprecated
-re-exports, and this package no longer depends on it — see
-[Migration to 9.0.0](./docs/MIGRATION-9.0.md).
+Not `@mcp-abap-adt/interfaces`. That package is **deleted** as of its 52.0.0,
+which was never published: npm still serves 51.0.0 — every symbol re-exported and
+deprecated — to whoever is pinned to it, and nothing further ships there. This
+package stopped depending on it in 9.0.0; there is nothing left to move to but
+the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 ## Documentation
 
@@ -177,7 +180,7 @@ config you build — install the package it lives in as well, because this one n
 longer brings them along:
 
 ```bash
-npm install @mcp-abap-adt/interfaces-adt @mcp-abap-adt/interfaces-auth
+npm install @mcp-abap-adt/interfaces-adt @mcp-abap-adt/interfaces-auth @mcp-abap-adt/interfaces-auth-sap
 ```
 
 For detailed installation instructions, see [Installation Guide](./docs/INSTALLATION.md).
@@ -370,7 +373,7 @@ import {
   TokenAuthProvider,
   getTimeout,
 } from "@mcp-abap-adt/connection";
-import type { ITokenRefresher } from "@mcp-abap-adt/interfaces-adt";
+import type { ITokenRefresher } from "@mcp-abap-adt/interfaces-auth";
 
 // Token refresher provides token acquisition and refresh
 // (created by @mcp-abap-adt/auth-broker or custom implementation)

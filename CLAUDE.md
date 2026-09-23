@@ -70,9 +70,10 @@ fact belongs on the transport instead.
 
 **Key design decisions:**
 - All external deps accessed through the contract packages —
-  `@mcp-abap-adt/interfaces-adt`, `-auth`, `-network`, `-utils` — no direct coupling.
-  NOT `@mcp-abap-adt/interfaces`: that name is now an umbrella of deprecated
-  re-exports, and this package does not depend on it
+  `@mcp-abap-adt/interfaces-adt`, `-auth`, `-auth-sap`, `-network`, `-utils` — no
+  direct coupling. NOT `@mcp-abap-adt/interfaces`: that umbrella is **deleted**
+  as of its 52.0.0, npm serves 51.0.0 to whoever is pinned to it, and this
+  package does not depend on it
 - Logger is optional everywhere, all calls use `logger?.method()` pattern
 - The connection hands the wire a PATH; putting a server in front of it is the
   wire's business. An absolute URL in `SADT_REST_RFC_ENDPOINT`'s request line

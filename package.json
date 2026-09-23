@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/connection",
-  "version": "9.1.0",
+  "version": "9.2.0",
   "description": "ABAP connection layer for MCP ABAP ADT server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -53,10 +53,11 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@mcp-abap-adt/interfaces-adt": "^8.0.0",
-    "@mcp-abap-adt/interfaces-auth": "^1.1.0",
-    "@mcp-abap-adt/interfaces-network": "^1.1.0",
-    "@mcp-abap-adt/interfaces-utils": "^1.0.0",
+    "@mcp-abap-adt/interfaces-adt": "^9.0.0",
+    "@mcp-abap-adt/interfaces-auth": "^1.2.0",
+    "@mcp-abap-adt/interfaces-auth-sap": "^1.0.0",
+    "@mcp-abap-adt/interfaces-network": "^2.0.0",
+    "@mcp-abap-adt/interfaces-utils": "^1.1.0",
     "axios": "^1.16.0",
     "commander": "^14.0.3",
     "open": "^11.0.0"

@@ -4,17 +4,19 @@
 Nothing was renamed here, no signature moved, no behaviour is different. What
 changed is where the *contracts* come from.
 
-`@mcp-abap-adt/interfaces` split. The contracts now live in four packages:
+`@mcp-abap-adt/interfaces` split. The contracts now live in five packages — four in 9.0.0, and `interfaces-auth-sap` from the release that follows it, when authentication split into what is SAP's and what is not:
 
 | Package | What is in it |
 |---|---|
-| `@mcp-abap-adt/interfaces-adt` | The ADT vocabulary: `IAbapConnection`, `IAbapRequestOptions`, `IAdtWireResponse`, `IAdtResponse`, `ISapConfig`, `SapAuthType`, `SapConnectionType`, `ITokenRefresher`, `ITokenRefreshResult`, `ITokenProvider`, `ICertificateMaterialLoader`, and the capability atoms — `ISessionLifecycleAware`, `ICriticalSection`, `IRequestProfiling` — with `ADT_SESSION_ERROR` and `AdtSessionErrorCode` |
-| `@mcp-abap-adt/interfaces-auth` | The credential axis: `IAuthProvider`, `IRenewableCredential`, `ICertificateMaterial` |
-| `@mcp-abap-adt/interfaces-network` | The wire: `ITimeoutConfig`, `NETWORK_ERROR_CODES`, and the WebSocket contracts — `IWebSocketTransport`, `IWebSocketConnectOptions`, `IWebSocketCloseInfo`, `IWebSocketMessageEnvelope`, `IWebSocketMessageHandler` |
+| `@mcp-abap-adt/interfaces-adt` | The ADT vocabulary: `IAbapConnection`, `IAbapRequestOptions`, `IAdtWireResponse`, `IAdtResponse`, `ITimeoutConfig`, and the capability atoms — `ISessionLifecycleAware`, `ICriticalSection`, `IRequestProfiling` — with `ADT_SESSION_ERROR` and `AdtSessionErrorCode` |
+| `@mcp-abap-adt/interfaces-auth` | The credential axis: `IAuthProvider`, `IRenewableCredential`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
+| `@mcp-abap-adt/interfaces-auth-sap` | The SAP side of it: `ISapConfig`, `SapAuthType`, `SapConnectionType`, `ICertificateMaterialLoader` |
+| `@mcp-abap-adt/interfaces-network` | The wire: `NETWORK_ERROR_CODES` and the WebSocket contracts — `IWebSocketTransport`, `IWebSocketConnectOptions`, `IWebSocketCloseInfo`, `IWebSocketMessageEnvelope`, `IWebSocketMessageHandler` |
 | `@mcp-abap-adt/interfaces-utils` | `ILogger` |
 
-This package now depends on those four and **no longer depends on
-`@mcp-abap-adt/interfaces` at all**. That is the breaking part, and it is the
+This package now depends on those five and **no longer depends on
+`@mcp-abap-adt/interfaces` at all** — that package is itself deleted as of its
+52.0.0, with npm serving 51.0.0 to anyone pinned to it. That is the breaking part, and it is the
 only breaking part: a consumer who was getting the umbrella transitively through
 this package stops getting it.
 
@@ -27,7 +29,7 @@ If you do import them, move each import to the package it now lives in. Install
 the ones you name:
 
 ```bash
-npm install @mcp-abap-adt/interfaces-adt @mcp-abap-adt/interfaces-auth
+npm install @mcp-abap-adt/interfaces-adt @mcp-abap-adt/interfaces-auth @mcp-abap-adt/interfaces-auth-sap
 ```
 
 Before:
@@ -40,7 +42,7 @@ After:
 
 ```ts
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
-import type { ITokenRefresher } from '@mcp-abap-adt/interfaces-adt';
+import type { ITokenRefresher } from '@mcp-abap-adt/interfaces-auth';
 ```
 
 The table above says which package each name went to. Nothing was renamed, so
@@ -97,6 +99,7 @@ change for this package at a moment chosen by someone else.
 ```bash
 npm ls @mcp-abap-adt/interfaces-adt    # should print one version, deduped
 npm ls @mcp-abap-adt/interfaces-auth
+npm ls @mcp-abap-adt/interfaces-auth-sap
 ```
 
 Two versions of a contract package in one tree is the failure this release is

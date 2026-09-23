@@ -2,7 +2,7 @@
  * Token refresh utilities for JWT authentication
  */
 
-import type { ITokenRefreshResult } from '@mcp-abap-adt/interfaces-adt';
+import type { ITokenRefreshResult } from '@mcp-abap-adt/interfaces-auth';
 import axios from 'axios';
 
 // Re-export for backward compatibility

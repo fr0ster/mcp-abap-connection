@@ -205,16 +205,18 @@ anything your own signatures name has to be installed. Install the ones you
 actually use:
 
 ```bash
-npm install @mcp-abap-adt/interfaces-adt    # IAbapConnection, ISapConfig, ITokenRefresher, ADT_SESSION_ERROR
-npm install @mcp-abap-adt/interfaces-auth   # IAuthProvider, IRenewableCredential
-npm install @mcp-abap-adt/interfaces-network # ITimeoutConfig, the WebSocket contracts
-npm install @mcp-abap-adt/interfaces-utils  # ILogger
+npm install @mcp-abap-adt/interfaces-adt      # IAbapConnection, ITimeoutConfig, ADT_SESSION_ERROR
+npm install @mcp-abap-adt/interfaces-auth     # IAuthProvider, IRenewableCredential, ITokenRefresher
+npm install @mcp-abap-adt/interfaces-auth-sap # ISapConfig, SapAuthType, ICertificateMaterialLoader
+npm install @mcp-abap-adt/interfaces-network  # NETWORK_ERROR_CODES, the WebSocket contracts
+npm install @mcp-abap-adt/interfaces-utils    # ILogger
 ```
 
 Nothing is needed here if you only call what this package exports — the types
-travel with it. Do **not** reach for `@mcp-abap-adt/interfaces`: that name is an
-umbrella of deprecated re-exports, and installing it alongside a contract
-package at a different major puts two copies of the same contract in your tree.
+travel with it. Do **not** reach for `@mcp-abap-adt/interfaces`: it is **deleted**
+as of its 52.0.0, npm still serves 51.0.0 with every symbol re-exported and
+deprecated, and installing that alongside a contract package at a different major
+puts two copies of the same contract in your tree.
 [Migration to 9.0.0](./MIGRATION-9.0.md) has the details.
 
 ### Create `tsconfig.json`
