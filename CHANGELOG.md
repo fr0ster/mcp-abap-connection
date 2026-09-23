@@ -5,6 +5,56 @@ All notable changes to the `@mcp-abap-adt/connection` package will be documented
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The contracts split again, and this package follows the names.**
+  `@mcp-abap-adt/interfaces-adt@^9.0.0` (was `^8.0.0`), `-auth@^1.2.0` (was
+  `^1.1.0`), `-network@^2.0.0` (was `^1.1.0`), `-utils@^1.1.0` (was `^1.0.0`),
+  and **`@mcp-abap-adt/interfaces-auth-sap@^1.0.0` is new**.
+
+  **This time the names moved, not just the ranges.** Of the 15 names this
+  package takes from the ADT contract, six left it:
+
+  | name | now in |
+  |---|---|
+  | `ISapConfig`, `SapAuthType`, `SapConnectionType`, `ICertificateMaterialLoader` | `interfaces-auth-sap` |
+  | `ITokenRefresher`, `ITokenRefreshResult` | `interfaces-auth` |
+
+  and one came the other way: **`ITimeoutConfig` is `interfaces-adt` now**,
+  because `csrf` names an SAP operation rather than a transport primitive. The
+  nine that stay are the connection contract itself — `IAbapConnection`,
+  `IAbapRequestOptions`, `IAdtResponse`, `IAdtWireResponse`, `ICriticalSection`,
+  `IRequestProfiling`, `ISessionLifecycleAware`, `ADT_SESSION_ERROR`,
+  `AdtSessionErrorCode`. That is the criterion in the contract repository
+  working: what this package takes from the ADT contract is ADT.
+
+  17 files repointed. **Nothing this package exports changes shape**, and no
+  name is renamed, so a consumer sees a dependency set with one more package in
+  it and nothing else.
+
+  Every range names the version the moved names actually land in. A range one
+  major behind is what npm answers by silently nesting a second copy — this
+  repository shipped 9.1.0 into a tree that held `interfaces-adt` 8 beside
+  `adt-clients`' 9 for exactly that reason. Checked after installing, rather than
+  assumed:
+
+  ```
+  find node_modules -path "*@mcp-abap-adt/interfaces-*/package.json"
+  ```
+
+  Five paths, all at the top level, and no `"link": true` in the lockfile.
+
+- **Documentation, and `check:docs` found the first three.** Three snippets
+  imported `ITokenRefresher` from `interfaces-adt` — `README.md` twice and
+  `docs/MIGRATION-9.0.md` once — and the compiler behind `npm test` caught them
+  before a reader could. Swept with them: the package tables in `README.md` and
+  `docs/MIGRATION-9.0.md` (a new `-auth-sap` row, `ITimeoutConfig` moved to the
+  `-adt` row, the token contracts to `-auth`), the install lines there and in
+  `docs/INSTALLATION.md`, `docs/SCOPE.md`'s ownership table, and
+  `docs/INDEX.md`'s one-line summary.
+
 ## [9.1.0] - 2026-09-23
 
 ### Changed
