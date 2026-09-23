@@ -20,7 +20,7 @@
  * axis only — the cloud connector has one transport and is not touched.
  */
 
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import { BasicAuthProvider } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';

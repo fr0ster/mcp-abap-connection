@@ -6,7 +6,7 @@ import {
   type ICriticalSection,
   type IRequestProfiling,
   type ISessionLifecycleAware,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-adt';
 import axios, {
   AxiosError,
   type AxiosInstance,

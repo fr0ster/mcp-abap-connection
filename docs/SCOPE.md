@@ -14,9 +14,9 @@ This package is **one component of the `@mcp-abap-adt/*` family**. Each package 
 | Concern | Belongs in |
 |---|---|
 | Token acquisition (SAML/OAuth2 flows, browser login, PKCE) | `@mcp-abap-adt/auth-broker` |
-| Token validation, refresh, re-authentication, expiry tracking | consumer via `ITokenProvider` (from `@mcp-abap-adt/interfaces`) |
+| Token validation, refresh, re-authentication, expiry tracking | consumer via `ITokenProvider` (from `@mcp-abap-adt/interfaces-adt`) |
 | Session state persistence across processes | `@mcp-abap-adt/auth-broker` |
-| Auth-type constants, provider error codes, auth lifecycle contracts | `@mcp-abap-adt/interfaces` |
+| Auth-type constants, provider error codes, auth lifecycle contracts | `@mcp-abap-adt/interfaces-adt`, `@mcp-abap-adt/interfaces-auth` |
 
 The rule: **if it is about *acquiring* or *refreshing* credentials, it is not our job.** We receive credentials that are valid at call time and use them. The consumer is responsible for handing us fresh ones — they know their IdP, their refresh cadence, their re-auth UX.
 
@@ -41,4 +41,4 @@ It forwards every `(name, value)` pair from the JS `Client(params)` object to `R
 
 - [`INSTALLATION.md`](./INSTALLATION.md)
 - [`USAGE.md`](./USAGE.md)
-- Sibling packages: `@mcp-abap-adt/interfaces`, `@mcp-abap-adt/sap-rfc-lite`, `@mcp-abap-adt/auth-broker`
+- Sibling packages: `@mcp-abap-adt/interfaces-adt`, `@mcp-abap-adt/interfaces-auth`, `@mcp-abap-adt/interfaces-network`, `@mcp-abap-adt/interfaces-utils`, `@mcp-abap-adt/sap-rfc-lite`, `@mcp-abap-adt/auth-broker`

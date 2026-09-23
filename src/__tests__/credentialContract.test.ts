@@ -14,11 +14,11 @@
  *     and what the loader already produces.
  */
 
+import type { ICertificateMaterialLoader } from '@mcp-abap-adt/interfaces-adt';
 import type {
   IAuthProvider,
   ICertificateMaterial,
-  ICertificateMaterialLoader,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
 import {
   BasicAuthProvider,
   CertificateAuthProvider,

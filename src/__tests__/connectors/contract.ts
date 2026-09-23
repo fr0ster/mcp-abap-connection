@@ -20,7 +20,7 @@
 import type {
   IAbapConnection,
   ISessionLifecycleAware,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-adt';
 
 export type Connection = IAbapConnection & ISessionLifecycleAware;
 

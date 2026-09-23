@@ -432,7 +432,16 @@ function usesThisPackage(body) {
 function unresolvable(body) {
   for (const m of body.matchAll(/from\s*['"]([^'"]+)['"]/g)) {
     const from = m[1];
-    if (from.startsWith('@mcp-abap-adt/') || from.startsWith('node:')) continue;
+    // This package resolves to its own source, and `node:` builtins need no
+    // install. Every OTHER scope package is an ordinary dependency and gets the
+    // ordinary question. The exemption used to cover the whole scope, which was
+    // true while `@mcp-abap-adt/interfaces` was a single umbrella this package
+    // depended on. Since the contracts split into -adt/-auth/-network/-utils,
+    // a migration note can legitimately show an import this repo no longer
+    // installs — the one a 6.x consumer actually wrote — and a blanket
+    // exemption turned that into a hard error on a page that is correct.
+    if (from === '@mcp-abap-adt/connection' || from.startsWith('node:'))
+      continue;
     if (!existsSync(join('node_modules', from))) return from;
   }
   return null;
@@ -443,9 +452,19 @@ let elided = 0;
 let unresolved = 0;
 let compiled = 0;
 const compilable = new Map();
+const pageVocabulary = new Map();
 for (const file of documented.filter((f) => f.endsWith('.md'))) {
-  const snippets = codeBlocks(file)
-    .filter((b) => b.lang === 'typescript' || b.lang === 'ts')
+  const typescript = codeBlocks(file).filter(
+    (b) => b.lang === 'typescript' || b.lang === 'ts',
+  );
+  // Every name the page binds, gathered BEFORE the filters below. A fence that
+  // is skipped still taught the reader a name, and a later fence leaning on it
+  // is not making anything up. Gathering this from the surviving fences instead
+  // made a skip contagious: drop the fence that imports `IAuthProvider` because
+  // it stands on a package this repo no longer installs, and the continuation
+  // that names the type is reported as an undefined name on a correct page.
+  pageVocabulary.set(file, typescript);
+  const snippets = typescript
     .filter((b) => usesThisPackage(b.body))
     .filter((b) => {
       const fragment = /^\s*(\/\/\s*)?\.\.\./m.test(b.body);
@@ -472,7 +491,7 @@ if (compilable.size) {
       // Every name the page binds anywhere in its TypeScript — the vocabulary a
       // later fence is allowed to lean on.
       const pageDeclares = new Set();
-      for (const snippet of snippets) {
+      for (const snippet of pageVocabulary.get(file) ?? snippets) {
         for (const m of snippet.body.matchAll(
           /\b(?:const|let|var|function|class)\s+(\w+)|import\s+(?:type\s+)?\{([^}]*)\}/g,
         )) {
@@ -516,9 +535,6 @@ if (compilable.size) {
           baseUrl: '.',
           paths: {
             '@mcp-abap-adt/connection': [join(root, 'src', 'index.ts')],
-            '@mcp-abap-adt/interfaces': [
-              join(root, 'node_modules', '@mcp-abap-adt', 'interfaces'),
-            ],
             // Anything else resolves from the project's own node_modules: axios
             // is a dependency of this package, and a doc naming `AxiosResponse`
             // should be able to say where the type comes from.

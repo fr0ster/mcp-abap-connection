@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import type {
-  ICertificateMaterial,
   ICertificateMaterialLoader,
   ISapConfig,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-adt';
+import type { ICertificateMaterial } from '@mcp-abap-adt/interfaces-auth';
 
 export class FileCertificateMaterialLoader
   implements ICertificateMaterialLoader

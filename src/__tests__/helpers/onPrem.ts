@@ -7,7 +7,7 @@
  * is the point of the change, and also why a test that is about critical
  * sections should not have to say it eight times.
  */
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import { BasicAuthProvider } from '../../auth/providers.js';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';

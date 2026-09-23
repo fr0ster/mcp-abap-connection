@@ -17,7 +17,7 @@
  * because anything worked out where it was pointing.
  */
 
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { CredentialAbapConnection } from './CredentialAbapConnection.js';

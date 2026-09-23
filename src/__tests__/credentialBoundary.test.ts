@@ -20,7 +20,7 @@
 import type {
   IAuthProvider,
   IRenewableCredential,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';

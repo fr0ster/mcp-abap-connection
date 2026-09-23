@@ -11,7 +11,7 @@
  * the host name, or by asking the server.
  */
 
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import { BasicAuthProvider, TokenAuthProvider } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';

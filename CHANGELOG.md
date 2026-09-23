@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+**The contracts split, and this package follows them rather than the shim left
+behind.** `@mcp-abap-adt/interfaces` became an umbrella whose every export is
+marked `@deprecated`, re-exporting four packages that now hold the contracts.
+Building against the umbrella still works and says so in every editor; it is a
+bridge, and this package has crossed it. No API here changed.
+
+### Changed
+
+- **BREAKING** — the dependency on `@mcp-abap-adt/interfaces` is gone, replaced
+  by `@mcp-abap-adt/interfaces-adt`, `-auth`, `-network` and `-utils`. Every
+  contract import in `src/` names the package the contract lives in. Nothing was
+  renamed and no signature moved, so a consumer using only this package's own
+  exports changes nothing; a consumer that imported contract types through the
+  umbrella now installs the packages it names. See
+  [`docs/MIGRATION-9.0.md`](docs/MIGRATION-9.0.md).
+
+  A shim re-exports a name but not the identity of the type behind it. With the
+  consumer on the umbrella and this package on the split, the same contract can
+  be two distinct types that structural typing quietly reconciles — until a
+  nominal position stops reconciling them. Depending on where the contract
+  actually lives is what makes "the same contract" checkable.
+
+- `IWebSocketCloseInfo`, `IWebSocketConnectOptions`, `IWebSocketMessageEnvelope`,
+  `IWebSocketMessageHandler` and `IWebSocketTransport` are re-exported from
+  `@mcp-abap-adt/interfaces-network` instead of the umbrella. Same names, same
+  shapes, so an importer of this package's own exports sees no difference.
+
+### Fixed
+
+- `scripts/check-docs.mjs` exempted the whole `@mcp-abap-adt/` scope from the
+  "stands on a package this repo does not install" question, which was true
+  while the scope meant one umbrella this package depended on. After the split
+  it made a historical migration note — correct about the import a 6.x consumer
+  wrote — fail the build. The exemption is now this package alone.
+
+- `scripts/check-docs.mjs` gathered a page's vocabulary only from the fences it
+  went on to compile, so skipping one fence orphaned every later fence that
+  leaned on a name it bound. The comment above it already said "every name the
+  page binds anywhere in its TypeScript"; now it does.
+
+### Documentation
+
+- `docs/MIGRATION-9.0.md` (new): which package each contract moved to, what a
+  consumer does, and why staying on the deprecated umbrella is a bridge rather
+  than a destination.
+- `README.md`, `docs/USAGE.md`, `docs/SCOPE.md` and
+  `docs/STATEFUL_SESSION_GUIDE.md` name the package each contract is now in.
+  Historical migration notes are left alone: they describe the import that was
+  correct for the release they document.
+- `README.md` links the 7.0/8.0 migration note, which 8.0.1 added to
+  `docs/INDEX.md` and said it had added to both.
+
 ## [8.1.0] - 2026-09-21
 
 **The RFC wire can be asked for its payload, and what it logs is safe to

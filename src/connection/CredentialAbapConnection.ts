@@ -17,8 +17,8 @@ import type { AgentOptions } from 'node:https';
 import type {
   IAbapRequestOptions,
   IAdtResponse,
-  IAuthProvider,
-} from '@mcp-abap-adt/interfaces';
+} from '@mcp-abap-adt/interfaces-adt';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
