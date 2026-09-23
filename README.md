@@ -131,7 +131,7 @@ This package interacts with external packages **ONLY through interfaces**:
 - **Logger interface**: Uses `ILogger` interface for logging - does not know about concrete logger implementation
 - **No direct dependencies on auth packages**: All token-related operations are handled through configuration (`SapConfig`) passed by consumers
 
-The contracts themselves come from four packages, and are the only runtime
+The contracts themselves come from five packages, and are the only runtime
 dependencies of this one besides `axios`, `commander` and `open`:
 
 | Package | What this package takes from it |

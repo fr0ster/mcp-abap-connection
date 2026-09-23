@@ -4,7 +4,7 @@
 Nothing was renamed here, no signature moved, no behaviour is different. What
 changed is where the *contracts* come from.
 
-`@mcp-abap-adt/interfaces` split. The contracts now live in four packages:
+`@mcp-abap-adt/interfaces` split. The contracts now live in five packages — four in 9.0.0, and `interfaces-auth-sap` from the release that follows it, when authentication split into what is SAP's and what is not:
 
 | Package | What is in it |
 |---|---|
@@ -14,8 +14,9 @@ changed is where the *contracts* come from.
 | `@mcp-abap-adt/interfaces-network` | The wire: `NETWORK_ERROR_CODES` and the WebSocket contracts — `IWebSocketTransport`, `IWebSocketConnectOptions`, `IWebSocketCloseInfo`, `IWebSocketMessageEnvelope`, `IWebSocketMessageHandler` |
 | `@mcp-abap-adt/interfaces-utils` | `ILogger` |
 
-This package now depends on those four and **no longer depends on
-`@mcp-abap-adt/interfaces` at all**. That is the breaking part, and it is the
+This package now depends on those five and **no longer depends on
+`@mcp-abap-adt/interfaces` at all** — that package is itself deleted as of its
+52.0.0, with npm serving 51.0.0 to anyone pinned to it. That is the breaking part, and it is the
 only breaking part: a consumer who was getting the umbrella transitively through
 this package stops getting it.
 
