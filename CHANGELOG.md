@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.0.0] - 2026-09-23
+
 **The contracts split, and this package follows them rather than the shim left
 behind.** `@mcp-abap-adt/interfaces` became an umbrella whose every export is
 marked `@deprecated`, re-exporting four packages that now hold the contracts.
@@ -1648,6 +1650,7 @@ const connection = createAbapConnection(config, logger);
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
 [Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.1...HEAD
+[9.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.1.0...v9.0.0
 [8.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.1...v8.1.0
 [8.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.0.0...v8.0.1
 [8.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v7.0.0...v8.0.0
