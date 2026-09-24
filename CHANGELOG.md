@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.2.1] - 2026-09-24
+
 ### Removed
 
 - **The optional `kerberos` dependency, and the SPNEGO wrapper nothing called.**
@@ -1748,7 +1750,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.1...HEAD
+[9.2.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.0...v9.2.1
 [9.2.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.1.0...v9.2.0
 [9.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.0.0...v9.1.0
 [9.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.1.0...v9.0.0
