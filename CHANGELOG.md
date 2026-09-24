@@ -5,6 +5,25 @@ All notable changes to the `@mcp-abap-adt/connection` package will be documented
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [9.2.1] - 2026-09-24
+
+### Removed
+
+- **The optional `kerberos` dependency, and the SPNEGO wrapper nothing called.**
+  `KerberosAbapConnection` went in 6.0 (see `docs/MIGRATION-6.0.md#kerberos`);
+  what it left behind — `src/auth/kerberosSpnego.ts` — was not exported and not
+  reached from anywhere in the library, yet `optionalDependencies` still made
+  every install build a native module, and pull the archived `prebuild-install`
+  with it, for no code path. No API changes: nothing public named it. A
+  consumer who imported `dist/auth/kerberosSpnego.js` by deep path was on a
+  private file; `kerberos` itself is still on npm to call directly. Kerberos
+  belongs on the credential axis as an `IAuthProvider`, added with a KDC to
+  test it against.
+- `docs/USAGE.md` described the single-leg SPNEGO limitation of a connection
+  that no longer exists. It no longer does.
+
 ## [9.2.0] - 2026-09-24
 
 ### Changed
@@ -88,8 +107,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which contract version a consumer gets, and that `interfaces-adt` has majors 1
   through 6. The umbrella — `@mcp-abap-adt/interfaces` — was deleted in its
   52.0.0, for exactly the cost that paragraph describes. It says so now.
-
-## [Unreleased]
 
 ## [9.0.0] - 2026-09-23
 
@@ -1733,7 +1750,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.1...HEAD
+[9.2.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.0...v9.2.1
 [9.2.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.1.0...v9.2.0
 [9.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.0.0...v9.1.0
 [9.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v8.1.0...v9.0.0

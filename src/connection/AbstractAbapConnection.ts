@@ -331,11 +331,6 @@ abstract class AbstractAbapConnection
    *
    * Must be idempotent: `establishSession()` may prepare the same credential
    * again, and does.
-   *
-   * Kerberos deliberately does NOT implement it. Minting the SPNEGO token this
-   * early changes when the exchange happens, and that connection is not
-   * production-tested — its preflight fails the way it already did, is caught
-   * inside the strategy, and the connection falls back to ICF as before.
    */
   protected async prepareCredential(): Promise<void> {}
 
@@ -573,8 +568,8 @@ abstract class AbstractAbapConnection
     this.lifecycle.forgetIdentity();
     try {
       // First, because the preflight below has to be able to authenticate: the
-      // credential of a certificate or Kerberos connection is not in hand until
-      // it is loaded or minted, and assembling a request without it throws.
+      // credential of a certificate connection is not in hand until
+      // it is loaded, and assembling a request without it throws.
       await this.prepareCredential();
       // Before the establishing call, because on a system that has one this is
       // what creates the session the rest of the connection runs in — and the
