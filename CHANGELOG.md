@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`@mcp-abap-adt/interfaces-adt` `^10.0.0`, `-auth` `^2.0.1`, `-auth-sap`
+  `^1.0.1`.** Neither major touches a symbol this package takes: `interfaces-adt`
+  10 adds `analyse` to object contracts (the connection types are byte-identical
+  to 9), and `interfaces-auth` 2 makes `AssertionContext.expectedInResponseTo`
+  optional, which only an `IAssertionValidator` implementer sees. `-auth-sap`
+  1.0.1 is the one that accepts `-auth` 2 — with 1.0.0 an install carried a
+  second, private copy of `-auth` 1.x under it. No API changes.
+
 ## [9.2.1] - 2026-09-24
 
 ### Removed
