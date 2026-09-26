@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.3.1] - 2026-09-27
+
+### Fixed
+
+- **Over HTTP, a request that is not stateful no longer reaches the stateful
+  context.** `sap-contextid` names the context a `LOCK` opens, and SAP routes any
+  request that carries it into that context — session header or none. The wire
+  sent the whole jar on every request, so a "stateless" `PUT` after a `LOCK` ran
+  in the lock's context. Measured 2026-09-27 on one connection, a package locked,
+  written and unlocked twice:
+  - E19 (BASIS 816): the second `PUT` answered 400 PAK/058 "Package … is already
+    locked" — the first save was still in that context's `CL_PACKAGE` buffer, and
+    a delete on the same connection was refused the same way;
+  - E98 (BASIS 756): every `PUT` answered 423 "Resource … is not locked (invalid
+    lock handle)".
+
+  With the cookie kept to the stateful requests, both systems wrote twice and
+  deleted on the same connection. That is Eclipse ADT's split too: its trace
+  shows one stateful session for `LOCK` and `UNLOCK` alone and every other
+  request, the `PUT` included, outside it. The jar still holds the cookie, so
+  the `UNLOCK` that follows reaches the context holding the lock.
+
+  The cookie is filtered on the header as it finally goes out, not only on
+  the jar: the connection's CSRF and 401 retries write the whole jar into the
+  request's own `Cookie`, and a caller can spell that header in lower case.
+  Either way, a non-stateful request does not carry the context.
+
+### Changed
+
+- **The session type is the wire's to express, not the connection's.**
+  `setSessionType('stateful')` now marks each request `stateful: true` on
+  `IAdtTransportRequest` instead of writing `x-sap-adt-sessiontype` into its
+  headers.
+  - `HttpTransport` adds `x-sap-adt-sessiontype: stateful` and `sap-contextid`
+    to stateful requests only (overridable through `sessionTypeHeaders()`;
+    `LegacyOnPremHttpTransport` sends no header, as before). The legacy wire
+    decides stateful before it drops a header the caller wrote, so a caller
+    that asks for the session that way — `AdtClassLegacy` — keeps its context
+    cookie, and its `UNLOCK` still reaches the lock.
+  - `RfcTransport` sends no session header, which is what Eclipse's JCo trace
+    shows.
+
+  A request whose caller wrote the header themselves is still treated as
+  stateful.
+
+  **What a consumer does:** nothing, through the connectors. A custom
+  `IAdtTransport` reads `request.stateful` where it used to find the header.
+
 ## [9.3.0] - 2026-09-26
 
 ### Changed
@@ -1783,7 +1831,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.1...HEAD
+[9.3.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.0...v9.3.1
 [9.3.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.2...v9.3.0
 [9.2.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.1...v9.2.2
 [9.2.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.0...v9.2.1

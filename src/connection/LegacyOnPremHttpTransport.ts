@@ -13,6 +13,7 @@
  * system they are dialling, exactly as taking the cloud or the on-prem wire is.
  */
 
+import { isStatefulRequest } from './HttpTransport.js';
 import type {
   IAdtTransportRequest,
   IAdtTransportResponse,
@@ -24,8 +25,14 @@ const SESSION_TYPE_HEADER = 'x-sap-adt-sessiontype';
 export class LegacyOnPremHttpTransport extends OnPremHttpTransport {
   override readonly kind = 'onprem-http-legacy';
 
+  /** The stateful header is the one this system is hurt by, so it asks with none. */
+  protected override sessionTypeHeaders(): Record<string, string> {
+    return {};
+  }
+
   /**
-   * The header never goes out, whatever the caller set the session type to.
+   * The header never goes out, whatever the caller set the session type to —
+   * not even when a caller wrote it into the request themselves.
    *
    * Dropped here rather than refused above: `setSessionType()` records what the
    * caller wants, and what actually travels is the wire's business. A caller
@@ -36,7 +43,13 @@ export class LegacyOnPremHttpTransport extends OnPremHttpTransport {
   override async send(
     request: IAdtTransportRequest,
   ): Promise<IAdtTransportResponse> {
-    return super.send(this.withoutSessionType(request));
+    // Decided before the header is dropped: a caller that asked for the
+    // stateful session by writing the header itself still gets its context
+    // cookie, only without the header this system is hurt by.
+    return super.send({
+      ...this.withoutSessionType(request),
+      stateful: isStatefulRequest(request),
+    });
   }
 
   private withoutSessionType(

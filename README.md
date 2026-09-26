@@ -429,7 +429,11 @@ See [MIGRATION-4.0.md](./docs/MIGRATION-4.0.md).
 
 ### Stateful Sessions
 
-For operations that require session state (e.g., object modifications), you can enable stateful sessions:
+Enable stateful mode for requests that need the ABAP context, such as LOCK and
+UNLOCK. Switch to stateless for GET and PUT between them: a lock handle does
+not require the write itself to run in the lock’s context. Authentication
+cookies and the CSRF token remain available in both modes. See the
+[Stateful Session Guide](./docs/STATEFUL_SESSION_GUIDE.md) for transport behavior.
 
 ```typescript
 import {
@@ -450,18 +454,18 @@ const connection = new AdtOnPremConnector(
 );
 await connection.connect();
 
-// Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
+// Enable the stateful HTTP context (session header and context cookie)
 connection.setSessionType("stateful");
 
-// Make requests - SAP will maintain session state
-await connection.makeAdtRequest({
-  method: "POST",
-  url: "/sap/bc/adt/objects/domains",
-  data: { /* domain data */ },
-  timeout: getTimeout("default"),
-});
+// Send the LOCK request here, then leave its context for GET / PUT.
+connection.setSessionType("stateless");
 
-// Note: Session state persistence is handled by @mcp-abap-adt/auth-broker package
+// Send GET / PUT with the lock handle here.
+// Return to the same context when sending UNLOCK.
+connection.setSessionType("stateful");
+// Send UNLOCK here, then restore the default mode.
+connection.setSessionType("stateless");
+
 ```
 
 ### Custom Logger

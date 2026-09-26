@@ -442,12 +442,29 @@ describe('AbstractAbapConnection — headers that belong to the request', () => 
     expect(lower['X-sap-adt-profiling']).toBeUndefined();
   });
 
-  it('the session type is the only header that varies with the mode', async () => {
-    const stateful = await sent((conn) => {
-      conn.setSessionType('stateful');
-    });
-    expect(stateful['x-sap-adt-sessiontype']).toBe('stateful');
-    expect(stateful['sap-adt-request-id']).toBeDefined();
-    expect(stateful['X-sap-adt-profiling']).toBe('server-time');
+  it('says stateful to the wire as a flag, not as a header', async () => {
+    // How the stateful session is asked for is the wire's: HTTP adds the
+    // header and the context cookie, RFC neither. The connection only says so.
+    const conn = onPrem(baseConfig, mockLogger);
+    markConnectedForTest(conn);
+    (conn as any).transport.adoptCsrfToken('t');
+    const mock = jest
+      .fn()
+      .mockResolvedValue({ status: 200, data: 'ok', headers: {} });
+    attachMockAxios(conn, mock);
+
+    conn.setSessionType('stateful');
+    await conn.makeAdtRequest({ url: '/x', method: 'POST', timeout: 1000 });
+    conn.setSessionType('stateless');
+    await conn.makeAdtRequest({ url: '/x', method: 'POST', timeout: 1000 });
+
+    const [stateful, stateless] = mock.mock.calls.map((c) => c[0]);
+    expect(stateful.stateful).toBe(true);
+    expect(stateless.stateful).toBe(false);
+    for (const request of [stateful, stateless]) {
+      expect(request.headers['x-sap-adt-sessiontype']).toBeUndefined();
+      expect(request.headers['sap-adt-request-id']).toBeDefined();
+      expect(request.headers['X-sap-adt-profiling']).toBe('server-time');
+    }
   });
 });
