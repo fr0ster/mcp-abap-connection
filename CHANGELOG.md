@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Over RFC, a request that is not stateful runs on a conversation of its
+  own.** `RfcTransport` carried everything on one conversation, one ABAP
+  session, so whatever a program left in it stayed:
+  - after a package was created or written, every further write or delete of
+    it answered 400 PAK/058 "Package … is already locked" (`CL_PACKAGE`'s
+    instance buffer);
+  - a read straight after a create answered 400 SADT_RESOURCE/007.
+
+  Now the conversation `open()` makes carries the requests marked `stateful`
+  (the lock and its release), and every other request opens one of its own
+  and closes it when it answers. That is Eclipse ADT's split over JCo: one
+  stateful enqueue session, every other call in a session of its own.
+  Measured on E19, one connection: create, read, two lock/PUT/unlock rounds
+  and a delete all pass. The price is a logon per non-stateful call — about
+  0.5 s on E19, against about 0.1 s for the call itself.
+
+  Stateful is decided the same way on both wires (`isStatefulRequest`): the
+  connection's flag, or a session header the caller wrote itself. And a call
+  whose own conversation is still logging on when the wire is closed sends
+  nothing: it closes that conversation and refuses, rather than delivering a
+  `PUT` or `DELETE` on a wire already given back.
+
 ## [9.3.1] - 2026-09-27
 
 ### Fixed
@@ -34,28 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request's own `Cookie`, and a caller can spell that header in lower case.
   Either way, a non-stateful request does not carry the context.
 
-- **Over RFC, a request that is not stateful runs on a conversation of its
-  own.** `RfcTransport` carried everything on one conversation, one ABAP
-  session, so whatever a program left in it stayed:
-  - after a package was created or written, every further write or delete of
-    it answered 400 PAK/058 "Package … is already locked" (`CL_PACKAGE`'s
-    instance buffer);
-  - a read straight after a create answered 400 SADT_RESOURCE/007.
-
-  Now the conversation `open()` makes carries the requests marked `stateful`
-  (the lock and its release), and every other request opens one of its own
-  and closes it when it answers. That is Eclipse ADT's split over JCo: one
-  stateful enqueue session, every other call in a session of its own.
-  Measured on E19, one connection: create, read, two lock/PUT/unlock rounds
-  and a delete all pass. The price is a logon per non-stateful call — about
-  0.5 s on E19, against about 0.1 s for the call itself.
-
-  Stateful is decided the same way on both wires (`isStatefulRequest`): the
-  connection's flag, or a session header the caller wrote itself. And a call
-  whose own conversation is still logging on when the wire is closed sends
-  nothing: it closes that conversation and refuses, rather than delivering a
-  `PUT` or `DELETE` on a wire already given back.
-
 ### Changed
 
 - **The session type is the wire's to express, not the connection's.**
@@ -69,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     that asks for the session that way — `AdtClassLegacy` — keeps its context
     cookie, and its `UNLOCK` still reaches the lock.
   - `RfcTransport` sends no session header, which is what Eclipse's JCo trace
-    shows; `stateful` picks the conversation instead (see Fixed).
+    shows.
 
   A request whose caller wrote the header themselves is still treated as
   stateful.
