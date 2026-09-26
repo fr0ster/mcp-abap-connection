@@ -35,7 +35,7 @@ export { AdtCloudConnector } from './connection/AdtCloudConnector.js';
 export { AdtOnPremConnector } from './connection/AdtOnPremConnector.js';
 export { CloudHttpTransport } from './connection/CloudHttpTransport.js';
 // The session lifecycle vocabulary — ISessionLifecycleAware, ADT_SESSION_ERROR —
-// is deliberately NOT exported here. It lives in @mcp-abap-adt/interfaces-adt, and a
+// is deliberately NOT exported here. It lives in @mcp-abap-adt/interfaces-adt-connection, and a
 // consumer imports it from there: re-exporting a contract type gives it two
 // names and lets the two drift.
 // Connection classes - only final implementations

@@ -41,4 +41,4 @@ It forwards every `(name, value)` pair from the JS `Client(params)` object to `R
 
 - [`INSTALLATION.md`](./INSTALLATION.md)
 - [`USAGE.md`](./USAGE.md)
-- Sibling packages: `@mcp-abap-adt/interfaces-adt`, `@mcp-abap-adt/interfaces-auth`, `@mcp-abap-adt/interfaces-auth-sap`, `@mcp-abap-adt/interfaces-network`, `@mcp-abap-adt/interfaces-utils`, `@mcp-abap-adt/sap-rfc-lite`, `@mcp-abap-adt/auth-broker`
+- Sibling packages: `@mcp-abap-adt/interfaces-adt-connection`, `@mcp-abap-adt/interfaces-auth`, `@mcp-abap-adt/interfaces-auth-sap`, `@mcp-abap-adt/interfaces-network`, `@mcp-abap-adt/interfaces-utils`, `@mcp-abap-adt/sap-rfc-lite`, `@mcp-abap-adt/auth-broker`

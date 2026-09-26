@@ -16,7 +16,7 @@
 import type {
   IAbapConnection,
   ISessionLifecycleAware,
-} from '@mcp-abap-adt/interfaces-adt';
+} from '@mcp-abap-adt/interfaces-adt-connection';
 import { BasicAuthProvider } from '../../auth/providers.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { RfcTransport } from '../../connection/RfcTransport.js';

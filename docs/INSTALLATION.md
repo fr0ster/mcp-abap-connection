@@ -205,7 +205,7 @@ anything your own signatures name has to be installed. Install the ones you
 actually use:
 
 ```bash
-npm install @mcp-abap-adt/interfaces-adt      # IAbapConnection, ITimeoutConfig, ADT_SESSION_ERROR
+npm install @mcp-abap-adt/interfaces-adt-connection # IAbapConnection, ITimeoutConfig, ADT_SESSION_ERROR
 npm install @mcp-abap-adt/interfaces-auth     # IAuthProvider, IRenewableCredential, ITokenRefresher
 npm install @mcp-abap-adt/interfaces-auth-sap # ISapConfig, SapAuthType, ICertificateMaterialLoader
 npm install @mcp-abap-adt/interfaces-network  # NETWORK_ERROR_CODES, the WebSocket contracts

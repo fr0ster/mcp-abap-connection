@@ -292,7 +292,7 @@ implied. Four things follow from it.
 
 > **Availability.** `connect()` is on the shared `IAbapConnection` contract and
 > works on every connection. The rest of this section is on the contract too, but
-> as a **capability atom** in `@mcp-abap-adt/interfaces-adt` rather than as methods on
+> as a **capability atom** in `@mcp-abap-adt/interfaces-adt-connection` rather than as methods on
 > `IAbapConnection`: `ISessionLifecycleAware` — `disconnect()`, `isConnected()`,
 > `getSessionIdentity()`.
 >
@@ -397,10 +397,10 @@ establishment rather than opening a session each.
 
 Match on the code rather than the message, so a rename is a compile error on your
 side instead of a condition that silently stops matching. The codes live in
-`@mcp-abap-adt/interfaces-adt` — import them from there, not from this package:
+`@mcp-abap-adt/interfaces-adt-connection` — import them from there, not from this package:
 
 ```typescript
-import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt';
+import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
 import { getTimeout } from '@mcp-abap-adt/connection';
 
 const options = {

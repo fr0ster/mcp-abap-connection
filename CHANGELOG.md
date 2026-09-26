@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.3.0] - 2026-09-26
+
+### Changed
+
+- **The connection contract comes from `@mcp-abap-adt/interfaces-adt-connection`
+  `^1.0.0`, and `@mcp-abap-adt/interfaces-adt` is no longer a dependency.** Every
+  name this package takes from the contract — `IAbapConnection`,
+  `IAbapRequestOptions`, `IAdtWireResponse`, `ISessionLifecycleAware`,
+  `ICriticalSection`, `IRequestProfiling`, `ITimeoutConfig`, `ADT_SESSION_ERROR`
+  — moved there unchanged in `interfaces-adt` 11.0.0. The object contracts that
+  stayed behind released three majors in one day, and each one used to reach
+  this package as a range to raise or a second copy of the contract in the tree;
+  none of them touched a name this package uses. (One import, `IAdtResponse`,
+  was never used and is gone.)
+
+  **What a consumer does:** import the connection types from
+  `@mcp-abap-adt/interfaces-adt-connection` instead of
+  `@mcp-abap-adt/interfaces-adt`. The names and shapes are the same, so code that
+  still imports them from `interfaces-adt` 10 keeps compiling against this
+  release; it just carries that package for nothing.
+
 ## [9.2.2] - 2026-09-26
 
 ### Changed
@@ -1762,7 +1783,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.2...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.0...HEAD
+[9.3.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.2...v9.3.0
 [9.2.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.1...v9.2.2
 [9.2.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.0...v9.2.1
 [9.2.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.1.0...v9.2.0
