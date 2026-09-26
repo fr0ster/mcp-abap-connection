@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Over HTTP, a request that is not stateful no longer reaches the stateful
+  context.** `sap-contextid` names the context a `LOCK` opens, and SAP routes any
+  request that carries it into that context — session header or none. The wire
+  sent the whole jar on every request, so a "stateless" `PUT` after a `LOCK` ran
+  in the lock's context. Measured 2026-09-27 on one connection, a package locked,
+  written and unlocked twice:
+  - E19 (BASIS 816): the second `PUT` answered 400 PAK/058 "Package … is already
+    locked" — the first save was still in that context's `CL_PACKAGE` buffer, and
+    a delete on the same connection was refused the same way;
+  - E98 (BASIS 756): every `PUT` answered 423 "Resource … is not locked (invalid
+    lock handle)".
+
+  With the cookie kept to the stateful requests, both systems wrote twice and
+  deleted on the same connection. That is Eclipse ADT's split too: its trace
+  shows one stateful session for `LOCK` and `UNLOCK` alone and every other
+  request, the `PUT` included, outside it. The jar still holds the cookie, so
+  the `UNLOCK` that follows reaches the context holding the lock.
+
+### Changed
+
+- **The session type is the wire's to express, not the connection's.**
+  `setSessionType('stateful')` now marks each request `stateful: true` on
+  `IAdtTransportRequest` instead of writing `x-sap-adt-sessiontype` into its
+  headers.
+  - `HttpTransport` adds `x-sap-adt-sessiontype: stateful` and `sap-contextid`
+    to stateful requests only (overridable through `sessionTypeHeaders()`;
+    `LegacyOnPremHttpTransport` sends no header, as before).
+  - `RfcTransport` sends no session header, which is what Eclipse's JCo trace
+    shows.
+
+  A request whose caller wrote the header themselves is still treated as
+  stateful.
+
+  **What a consumer does:** nothing, through the connectors. A custom
+  `IAdtTransport` reads `request.stateful` where it used to find the header.
+
 ## [9.3.0] - 2026-09-26
 
 ### Changed

@@ -11,9 +11,12 @@
  * "invalid lock handle" on legacy systems (BASIS < 7.50) where stateful HTTP
  * sessions are not usable.
  *
- * **What is NOT here.** Cookies, the CSRF token, `x-sap-adt-sessiontype` and
- * the session lifecycle belong to the connection above this seam and are
- * already in `request.headers` by the time `send()` is called. A transport that
+ * **What is NOT here.** Cookies, the CSRF token and the session lifecycle
+ * belong to the connection above this seam and are already in
+ * `request.headers` by the time `send()` is called. `x-sap-adt-sessiontype` is
+ * not sent at all: `request.stateful` is HTTP's to express, and over RFC
+ * Eclipse's JCo trace carries no session header — its stateful session is a
+ * connection of its own, not a header on the request. A transport that
  * also captured cookies would be doing that work twice, and the two copies
  * would disagree the first time one of them was cleared.
  */

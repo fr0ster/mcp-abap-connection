@@ -32,6 +32,32 @@ import type {
   IAdtTransportResponse,
 } from './IAdtTransport.js';
 
+/** The cookie that names a stateful ABAP context. */
+const CONTEXT_COOKIE = 'sap-contextid';
+
+/** The header that asks SAP for the stateful session over HTTP. */
+const SESSION_TYPE_HEADER = 'x-sap-adt-sessiontype';
+
+/**
+ * Whether the request runs in the stateful session: marked so by the
+ * connection, or — kept for callers that still write it themselves — carrying
+ * the session header already.
+ */
+function isStateful(request: IAdtTransportRequest): boolean {
+  if (request.stateful) return true;
+  const headers = request.headers;
+  if (!headers) return false;
+  for (const [name, value] of Object.entries(headers)) {
+    if (
+      name.toLowerCase() === SESSION_TYPE_HEADER &&
+      String(value).toLowerCase() === 'stateful'
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** A 404 there means the system has no such endpoint, not that it is unwell. */
 function absentEndpoint(error: unknown): boolean {
   const status = (error as { response?: { status?: number } } | undefined)
@@ -330,18 +356,63 @@ export class HttpTransport implements IAdtTransport {
    * cookie, and replacing it would send the request out unauthenticated while
    * looking like it carried a session.
    */
-  private dress(headers?: Record<string, string>): Record<string, string> {
+  private dress(request: IAdtTransportRequest): Record<string, string> {
+    const headers = request.headers;
+    const stateful = isStateful(request);
     const dressed: Record<string, string> = {
       ...this.affinityHeaders(),
       ...this.sessionHeaders(),
+      ...(stateful ? this.sessionTypeHeaders() : {}),
       ...headers,
     };
     const merged = mergeCookieHeaders(
       headers?.Cookie,
-      this.combined ?? undefined,
+      (stateful ? this.combined : this.withoutContext()) ?? undefined,
     );
     if (merged) dressed.Cookie = merged;
     return dressed;
+  }
+
+  /**
+   * How this wire asks for the stateful session: `x-sap-adt-sessiontype:
+   * stateful`, as Eclipse sends on its `LOCK` and `UNLOCK` over HTTP. A wire
+   * whose system is hurt by the header overrides this (BASIS 7.40, see
+   * `LegacyOnPremHttpTransport`).
+   */
+  protected sessionTypeHeaders(): Record<string, string> {
+    return { [SESSION_TYPE_HEADER]: 'stateful' };
+  }
+
+  /**
+   * The jar without `sap-contextid`, for a request that is not stateful.
+   *
+   * `sap-contextid` names the stateful ABAP context a `LOCK` opened, and SAP
+   * routes any request carrying it into that context — header or no header. So
+   * a "stateless" request that carried it was not stateless: it ran in the
+   * lock's context. Measured on E19 (BASIS 816) and E98 (BASIS 756), 2026-09-27,
+   * one connection, a package locked, written and unlocked twice:
+   *
+   * - E19: the second `PUT` answered 400 PAK/058 "Package … is already locked" —
+   *   the first write's save was still in that context's `CL_PACKAGE` buffer;
+   * - E98: every `PUT` answered 423 "Resource … is not locked (invalid lock
+   *   handle)".
+   *
+   * Without the cookie on the non-stateful requests, both systems wrote twice
+   * and deleted on the same connection. Eclipse ADT does the same thing its
+   * own way: its trace shows one stateful session for `LOCK` and `UNLOCK`
+   * alone, and every other request — the `PUT` included — in a session of its
+   * own.
+   *
+   * The jar itself keeps the cookie: the stateful requests that follow, the
+   * `UNLOCK` above all, still need to reach the context that holds the lock.
+   */
+  private withoutContext(): string | null {
+    if (!this.jar.has(CONTEXT_COOKIE)) return this.combined;
+    const kept = Array.from(this.jar.entries())
+      .filter(([name]) => name !== CONTEXT_COOKIE)
+      .map(([name, value]) => (value ? `${name}=${value}` : name))
+      .join('; ');
+    return kept || null;
   }
 
   /** A path becomes an address; anything already absolute is left alone. */
@@ -401,7 +472,7 @@ export class HttpTransport implements IAdtTransport {
    * to add it.
    */
   async send(request: IAdtTransportRequest): Promise<IAdtTransportResponse> {
-    return this.dispatch(request, this.dress(request.headers));
+    return this.dispatch(request, this.dress(request));
   }
 
   /**

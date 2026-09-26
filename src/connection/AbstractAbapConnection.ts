@@ -207,7 +207,9 @@ abstract class AbstractAbapConnection
 
   /**
    * Set session type (stateful or stateless)
-   * Controls whether x-sap-adt-sessiontype: stateful header is added to requests
+   * Marks the requests that follow as `stateful` for the transport, which says
+   * so on its own wire (over HTTP: `x-sap-adt-sessiontype: stateful` and the
+   * context cookie; over RFC: nothing)
    * - stateful: SAP maintains session state between requests (locks, transactions)
    * - stateless: Each request is independent
    *
@@ -998,11 +1000,11 @@ abstract class AbstractAbapConnection
       requestHeaders['X-sap-adt-profiling'] = this.profilingRequest;
     }
 
-    // And this one really is the session's: it says how the server should treat
-    // the request, which is the only one of the three that varies with the mode.
-    if (this.sessionMode === 'stateful') {
-      requestHeaders['x-sap-adt-sessiontype'] = 'stateful';
-    }
+    // The session mode is NOT a header here. How a request asks for the
+    // stateful session is the wire's: HTTP says it with
+    // `x-sap-adt-sessiontype: stateful` and the context cookie, RFC with
+    // neither. It travels as `stateful` on the request below, and each
+    // transport expresses it its own way.
 
     // Add auth headers (these MUST NOT be overridden)
     Object.assign(requestHeaders, await this.getAuthHeaders());
@@ -1059,6 +1061,7 @@ abstract class AbstractAbapConnection
       // `unknown` on the caller's options, a record on the seam: the two
       // transports serialise a query differently and both need the pairs.
       params: params as Record<string, unknown> | undefined,
+      stateful: this.sessionMode === 'stateful',
     };
 
     if (data !== undefined) {

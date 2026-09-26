@@ -38,6 +38,18 @@ export interface IAdtTransportRequest {
    * this seam is written against.
    */
   validateStatus?: (status: number) => boolean;
+  /**
+   * Whether the request runs in the stateful session — the one a lock is
+   * taken and released in.
+   *
+   * A flag rather than a header, because how a session is asked for is the
+   * wire's own business. Over HTTP it is `x-sap-adt-sessiontype: stateful`
+   * plus the `sap-contextid` cookie that addresses the context; over RFC it is
+   * neither — Eclipse's JCo trace carries no session header at all. A request
+   * that is not stateful must not reach that context: see
+   * `HttpTransport.dress`.
+   */
+  stateful?: boolean;
 }
 
 /** What came back, in the terms every transport can produce. */

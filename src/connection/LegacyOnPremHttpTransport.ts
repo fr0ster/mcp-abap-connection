@@ -24,8 +24,14 @@ const SESSION_TYPE_HEADER = 'x-sap-adt-sessiontype';
 export class LegacyOnPremHttpTransport extends OnPremHttpTransport {
   override readonly kind = 'onprem-http-legacy';
 
+  /** The stateful header is the one this system is hurt by, so it asks with none. */
+  protected override sessionTypeHeaders(): Record<string, string> {
+    return {};
+  }
+
   /**
-   * The header never goes out, whatever the caller set the session type to.
+   * The header never goes out, whatever the caller set the session type to —
+   * not even when a caller wrote it into the request themselves.
    *
    * Dropped here rather than refused above: `setSessionType()` records what the
    * caller wants, and what actually travels is the wire's business. A caller
