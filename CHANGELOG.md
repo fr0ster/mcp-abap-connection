@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.3.2] - 2026-09-27
+
+### Fixed
+
+- **Over RFC, a request that is not stateful runs on a conversation of its
+  own.** `RfcTransport` carried everything on one conversation, one ABAP
+  session, so whatever a program left in it stayed:
+  - after a package was created or written, every further write or delete of
+    it answered 400 PAK/058 "Package … is already locked" (`CL_PACKAGE`'s
+    instance buffer);
+  - a read straight after a create answered 400 SADT_RESOURCE/007.
+
+  Now the conversation `open()` makes carries the requests marked `stateful`
+  (the lock and its release), and every other request opens one of its own
+  and closes it when it answers. That is Eclipse ADT's split over JCo: one
+  stateful enqueue session, every other call in a session of its own.
+  Measured on E19, one connection: create, read, two lock/PUT/unlock rounds
+  and a delete all pass. The price is a logon per non-stateful call — about
+  0.5 s on E19, against about 0.1 s for the call itself.
+
+  Stateful is decided the same way on both wires (`isStatefulRequest`): the
+  connection's flag, or a session header the caller wrote itself. And a call
+  whose own conversation is still logging on when the wire is closed sends
+  nothing: it closes that conversation and refuses, rather than delivering a
+  `PUT` or `DELETE` on a wire already given back.
+
 ## [9.3.1] - 2026-09-27
 
 ### Fixed
@@ -1831,7 +1857,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.2...HEAD
+[9.3.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.1...v9.3.2
 [9.3.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.0...v9.3.1
 [9.3.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.2...v9.3.0
 [9.2.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.1...v9.2.2

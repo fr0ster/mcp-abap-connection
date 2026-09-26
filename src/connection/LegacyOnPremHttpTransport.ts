@@ -13,12 +13,12 @@
  * system they are dialling, exactly as taking the cloud or the on-prem wire is.
  */
 
-import { isStatefulRequest } from './HttpTransport.js';
 import type {
   IAdtTransportRequest,
   IAdtTransportResponse,
 } from './IAdtTransport.js';
 import { OnPremHttpTransport } from './OnPremHttpTransport.js';
+import { isStatefulRequest } from './statefulRequest.js';
 
 const SESSION_TYPE_HEADER = 'x-sap-adt-sessiontype';
 

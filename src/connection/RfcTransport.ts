@@ -11,12 +11,32 @@
  * "invalid lock handle" on legacy systems (BASIS < 7.50) where stateful HTTP
  * sessions are not usable.
  *
+ * **Two conversations, the way Eclipse ADT holds them over JCo.** Its trace
+ * shows one long-lived stateful session (`JCoEnqueueSystemSession`) for `LOCK`
+ * and `UNLOCK`, and every other call — the `PUT` included — in a session of
+ * its own. Here:
+ *
+ * - the persistent conversation, opened by `open()` and kept while this wire
+ *   lives, carries the requests marked `stateful` — the lock and what must
+ *   share its session;
+ * - every other request opens a conversation of its own, and closes it when
+ *   it answers.
+ *
+ * One conversation for everything kept whatever an ABAP program left in the
+ * session. `CL_PACKAGE` buffers its instances for the life of the session and
+ * a save leaves them changeable, so after a create or a write every further
+ * write or delete of that package answered 400 PAK/058 "Package … is already
+ * locked"; a read straight after a create answered 400 SADT_RESOURCE/007.
+ * Measured on E19 (2026-09-27): LOCK and UNLOCK on one conversation, the PUT
+ * on another — two writes in a row fail on a shared second conversation and
+ * pass on a fresh one per call. The price is a logon per non-stateful call
+ * (~0.5 s on E19, against ~0.1 s for the call itself).
+ *
  * **What is NOT here.** Cookies, the CSRF token and the session lifecycle
  * belong to the connection above this seam and are already in
  * `request.headers` by the time `send()` is called. `x-sap-adt-sessiontype` is
- * not sent at all: `request.stateful` is HTTP's to express, and over RFC
- * Eclipse's JCo trace carries no session header — its stateful session is a
- * connection of its own, not a header on the request. A transport that
+ * not sent at all: over RFC `request.stateful` picks the conversation, and
+ * Eclipse's JCo trace carries no session header either. A transport that
  * also captured cookies would be doing that work twice, and the two copies
  * would disagree the first time one of them was cleared.
  */
@@ -30,6 +50,7 @@ import type {
   IAdtTransportResponse,
   IOnPremTransport,
 } from './IAdtTransport.js';
+import { isStatefulRequest } from './statefulRequest.js';
 
 /** The slice of the native client this needs, so the SDK is not a hard dependency. */
 export interface IRfcConversation {
@@ -151,6 +172,13 @@ export class RfcTransport implements IOnPremTransport {
   readonly system = 'onprem' as const;
 
   private conversation: IRfcConversation | null = null;
+  /**
+   * Bumped by every `close()`. A call that opened a conversation of its own
+   * compares it after the logon: the wire may have been closed while that
+   * logon was under way, and a write must not go out on a wire the caller has
+   * already given back.
+   */
+  private generation = 0;
   /** Names the conversation, and so the ABAP session it carries. */
   private conversationId = '';
 
@@ -257,11 +285,12 @@ export class RfcTransport implements IOnPremTransport {
     // to say so — a constant would report `unchanged` across a reconnect and
     // hide exactly the replacement the identity policy exists to catch.
     this.conversationId = randomUUID();
-    this.logger?.debug('RFC conversation opened (stateful by nature)');
+    this.logger?.debug('RFC conversation opened (the stateful one)');
   }
 
   /** Never throws, and a repeat call finds nothing owed. */
   async close(): Promise<void> {
+    this.generation += 1;
     const conversation = this.conversation;
     if (!conversation) return;
     this.conversation = null;
@@ -278,7 +307,57 @@ export class RfcTransport implements IOnPremTransport {
     if (!this.conversation?.alive) {
       throw new Error('RFC transport is not open. Call connect() first.');
     }
+    // The same verdict HTTP takes: the flag the connection sets, or a session
+    // header the caller wrote itself. A caller that asks for the lock's
+    // session either way has to land on the conversation that holds it.
+    return isStatefulRequest(request)
+      ? this.carry(request, this.conversation)
+      : this.carryOnItsOwn(request);
+  }
 
+  /**
+   * A request that is not stateful, on a conversation of its own: opened for
+   * it, closed when it answers, whatever it answered. Nothing it leaves in its
+   * ABAP session outlives it.
+   */
+  private async carryOnItsOwn(
+    request: IAdtTransportRequest,
+  ): Promise<IAdtTransportResponse> {
+    const generation = this.generation;
+    const own = this.connect();
+    try {
+      await own.open();
+    } catch (e) {
+      throw new Error(`Failed to open RFC connection: ${message(e)}`);
+    }
+    // The logon takes time (~0.5 s on E19). If the wire was closed meanwhile,
+    // nothing is sent — not a PUT, not a DELETE — on a wire already given back.
+    if (generation !== this.generation || !this.conversation?.alive) {
+      try {
+        await own.close();
+      } catch (e) {
+        this.logger?.debug(`RFC close error: ${message(e)}`);
+      }
+      throw new Error(
+        'RFC transport was closed while the call was being opened; nothing was sent.',
+      );
+    }
+    this.logger?.debug('RFC conversation opened for one stateless call');
+    try {
+      return await this.carry(request, own);
+    } finally {
+      try {
+        await own.close();
+      } catch (e) {
+        this.logger?.debug(`RFC close error: ${message(e)}`);
+      }
+    }
+  }
+
+  private async carry(
+    request: IAdtTransportRequest,
+    conversation: IRfcConversation,
+  ): Promise<IAdtTransportResponse> {
     const method = request.method.toUpperCase();
 
     // HTTP clients serialise `params`; RFC has no such step, so they go into
@@ -354,7 +433,7 @@ export class RfcTransport implements IOnPremTransport {
     // an abort cannot orphan a lock handle. Here that comes free.
     let raw: Record<string, any>;
     try {
-      raw = await this.conversation.call('SADT_REST_RFC_ENDPOINT', {
+      raw = await conversation.call('SADT_REST_RFC_ENDPOINT', {
         REQUEST: {
           REQUEST_LINE: {
             METHOD: method,
