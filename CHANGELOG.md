@@ -48,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a delete all pass. The price is a logon per non-stateful call — about
   0.5 s on E19, against about 0.1 s for the call itself.
 
+  Stateful is decided the same way on both wires (`isStatefulRequest`): the
+  connection's flag, or a session header the caller wrote itself. And a call
+  whose own conversation is still logging on when the wire is closed sends
+  nothing: it closes that conversation and refuses, rather than delivering a
+  `PUT` or `DELETE` on a wire already given back.
+
 ### Changed
 
 - **The session type is the wire's to express, not the connection's.**

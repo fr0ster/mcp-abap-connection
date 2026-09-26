@@ -102,6 +102,57 @@ describe('RFC: one stateful conversation, one conversation per other call', () =
     expect(opened[1].close).toHaveBeenCalledTimes(1);
   });
 
+  it('a caller that wrote the session header itself stays on the lock conversation', async () => {
+    // The same verdict HTTP takes (#60): without it such a caller's LOCK went
+    // to a conversation that closed straight after, and the lock with it.
+    const { opened, transport } = conversations();
+    await transport.open();
+
+    await transport.send({
+      method: 'POST',
+      url: '/lock',
+      headers: { 'X-sap-adt-sessiontype': 'stateful' },
+    });
+
+    expect(opened).toHaveLength(1);
+    expect(opened[0].call).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends nothing when the wire is closed while its own conversation logs on', async () => {
+    let releaseLogon: () => void = () => {};
+    const logon = new Promise<void>((resolve) => {
+      releaseLogon = resolve;
+    });
+    const opened: Array<{ call: jest.Mock; close: jest.Mock }> = [];
+    const connect = () => {
+      const isFirst = opened.length === 0;
+      const conversation = {
+        alive: true,
+        open: jest.fn(async () => {
+          if (!isFirst) await logon;
+        }),
+        close: jest.fn(async () => {
+          conversation.alive = false;
+        }),
+        call: jest.fn(async () => ok),
+      };
+      opened.push(conversation);
+      return conversation;
+    };
+    const transport = new RfcTransport(connect as never, null);
+    await transport.open();
+
+    const sending = transport.send({ method: 'DELETE', url: '/delete' });
+    await transport.close();
+    releaseLogon();
+
+    await expect(sending).rejects.toThrow(
+      /closed while the call was being opened/,
+    );
+    expect(opened[1].call).not.toHaveBeenCalled();
+    expect(opened[1].close).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses before connect(), stateless or not', async () => {
     const { opened, transport } = conversations();
 

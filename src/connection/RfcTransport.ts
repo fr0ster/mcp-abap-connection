@@ -50,6 +50,7 @@ import type {
   IAdtTransportResponse,
   IOnPremTransport,
 } from './IAdtTransport.js';
+import { isStatefulRequest } from './statefulRequest.js';
 
 /** The slice of the native client this needs, so the SDK is not a hard dependency. */
 export interface IRfcConversation {
@@ -171,6 +172,13 @@ export class RfcTransport implements IOnPremTransport {
   readonly system = 'onprem' as const;
 
   private conversation: IRfcConversation | null = null;
+  /**
+   * Bumped by every `close()`. A call that opened a conversation of its own
+   * compares it after the logon: the wire may have been closed while that
+   * logon was under way, and a write must not go out on a wire the caller has
+   * already given back.
+   */
+  private generation = 0;
   /** Names the conversation, and so the ABAP session it carries. */
   private conversationId = '';
 
@@ -282,6 +290,7 @@ export class RfcTransport implements IOnPremTransport {
 
   /** Never throws, and a repeat call finds nothing owed. */
   async close(): Promise<void> {
+    this.generation += 1;
     const conversation = this.conversation;
     if (!conversation) return;
     this.conversation = null;
@@ -298,7 +307,10 @@ export class RfcTransport implements IOnPremTransport {
     if (!this.conversation?.alive) {
       throw new Error('RFC transport is not open. Call connect() first.');
     }
-    return request.stateful
+    // The same verdict HTTP takes: the flag the connection sets, or a session
+    // header the caller wrote itself. A caller that asks for the lock's
+    // session either way has to land on the conversation that holds it.
+    return isStatefulRequest(request)
       ? this.carry(request, this.conversation)
       : this.carryOnItsOwn(request);
   }
@@ -311,11 +323,24 @@ export class RfcTransport implements IOnPremTransport {
   private async carryOnItsOwn(
     request: IAdtTransportRequest,
   ): Promise<IAdtTransportResponse> {
+    const generation = this.generation;
     const own = this.connect();
     try {
       await own.open();
     } catch (e) {
       throw new Error(`Failed to open RFC connection: ${message(e)}`);
+    }
+    // The logon takes time (~0.5 s on E19). If the wire was closed meanwhile,
+    // nothing is sent — not a PUT, not a DELETE — on a wire already given back.
+    if (generation !== this.generation || !this.conversation?.alive) {
+      try {
+        await own.close();
+      } catch (e) {
+        this.logger?.debug(`RFC close error: ${message(e)}`);
+      }
+      throw new Error(
+        'RFC transport was closed while the call was being opened; nothing was sent.',
+      );
     }
     this.logger?.debug('RFC conversation opened for one stateless call');
     try {

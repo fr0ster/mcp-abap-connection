@@ -31,6 +31,7 @@ import type {
   IAdtTransportRequest,
   IAdtTransportResponse,
 } from './IAdtTransport.js';
+import { isStatefulRequest, SESSION_TYPE_HEADER } from './statefulRequest.js';
 
 /** The cookie that names a stateful ABAP context. */
 const CONTEXT_COOKIE = 'sap-contextid';
@@ -67,31 +68,8 @@ function withoutContextCookie(cookie: string | undefined): string | undefined {
   return kept || undefined;
 }
 
-/** The header that asks SAP for the stateful session over HTTP. */
-const SESSION_TYPE_HEADER = 'x-sap-adt-sessiontype';
-
-/**
- * Whether the request runs in the stateful session: marked so by the
- * connection, or — kept for callers that still write it themselves — carrying
- * the session header already.
- *
- * Exported for the wires that rewrite a request before sending it: the
- * verdict has to be taken on the request as the caller made it.
- */
-export function isStatefulRequest(request: IAdtTransportRequest): boolean {
-  if (request.stateful) return true;
-  const headers = request.headers;
-  if (!headers) return false;
-  for (const [name, value] of Object.entries(headers)) {
-    if (
-      name.toLowerCase() === SESSION_TYPE_HEADER &&
-      String(value).toLowerCase() === 'stateful'
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
+// The one verdict every wire takes; re-exported for the wires built on this one.
+export { isStatefulRequest } from './statefulRequest.js';
 
 /** A 404 there means the system has no such endpoint, not that it is unwell. */
 function absentEndpoint(error: unknown): boolean {
