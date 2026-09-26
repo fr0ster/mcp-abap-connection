@@ -90,6 +90,15 @@ abstract class AbstractAbapConnection
    */
   private goodbye: Promise<void> = Promise.resolve();
 
+  /**
+   * What to ask the server to profile, or `null` to ask nothing.
+   *
+   * A value rather than a constant: the header is a request for a measurement,
+   * and which measurement — or whether to want one — is the caller's.
+   * `'server-time'` by default, which is what Eclipse asks for.
+   */
+  public profiling: string | null = 'server-time';
+
   private inCriticalSection = false;
   /** Reference count for nested beginCriticalSection()/endCriticalSection() pairs. */
   private criticalSectionDepth = 0;
@@ -927,11 +936,32 @@ abstract class AbstractAbapConnection
       requestHeaders['sap-adt-connection-id'] = this.sessionId;
     }
 
-    // Add stateful session headers if stateful mode is enabled
+    // Only the session type belongs to the stateful branch.
+    //
+    // The other two used to sit here with it, and that was wrong twice: a
+    // request id identifies the REQUEST, and asking the server to report its
+    // own time is not a property of the session either. Eclipse sends both on
+    // every request — measured on E19, its stateless `PUT`, its unit-test run
+    // and its result fetch all carry them, while only LOCK and UNLOCK carry the
+    // session type. The mistake only became visible when writes moved out of
+    // the stateful window and silently lost both.
     if (this.sessionMode === 'stateful') {
       requestHeaders['x-sap-adt-sessiontype'] = 'stateful';
-      requestHeaders['sap-adt-request-id'] = randomUUID().replace(/-/g, '');
-      requestHeaders['X-sap-adt-profiling'] = 'server-time';
+    }
+
+    // Unique per request, as the name says.
+    requestHeaders['sap-adt-request-id'] = randomUUID().replace(/-/g, '');
+
+    // Asked for, not assumed: `profiling` is a property so a caller can change
+    // what it asks for or stop asking. The default matches Eclipse, which sends
+    // `server-time` on everything; set it to `null` and the header is gone.
+    //
+    // Worth knowing before turning it on for good: nothing in this package or
+    // in `@mcp-abap-adt/adt-clients` reads the `X-sap-adt-profiling:
+    // server-time=…` that comes back, so today it buys a measurement the server
+    // makes and nobody looks at.
+    if (this.profiling) {
+      requestHeaders['X-sap-adt-profiling'] = this.profiling;
     }
 
     // Add auth headers (these MUST NOT be overridden)
