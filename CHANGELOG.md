@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Over RFC, the non-stateful calls share one conversation, reset after each
+  call, when the client can reset.** `@mcp-abap-adt/sap-rfc-lite` 0.2.0 adds
+  `resetServerContext()` (`RfcResetServerContext`). With it, a kept
+  conversation gets a fresh ABAP context after every call without a new
+  logon: about 0.24 s per call on E19, against about 0.67 s with a
+  conversation opened per call.
+  - A call and its reset go together. A call made while the kept
+    conversation is busy takes a conversation of its own, so it never runs in
+    another call's context.
+  - A conversation whose reset failed is closed, and the next call opens
+    another.
+  - With `sap-rfc-lite` 0.1.x, each call opens its own conversation, as
+    before.
+
+  The optional dependency range is `^0.1.0 || ^0.2.0`. Measured on E19, one
+  connection: create, read after create, two lock/PUT/unlock rounds and a
+  delete all pass.
+
 ### Fixed
 
 - **Over RFC, a request that is not stateful runs on a conversation of its

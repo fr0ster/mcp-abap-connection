@@ -61,6 +61,13 @@ export interface IRfcConversation {
     params: Record<string, unknown>,
   ): Promise<Record<string, any>>;
   readonly alive: boolean;
+  /**
+   * Ends the ABAP session context and keeps the connection open
+   * (`RfcResetServerContext`, `@mcp-abap-adt/sap-rfc-lite` >= 0.2.0). Where it
+   * exists, one conversation serves the non-stateful calls, reset after each;
+   * where it does not, each such call opens a conversation of its own.
+   */
+  resetServerContext?(): Promise<void>;
 }
 
 /**
@@ -179,6 +186,17 @@ export class RfcTransport implements IOnPremTransport {
    * already given back.
    */
   private generation = 0;
+
+  /**
+   * The conversation the non-stateful calls share when the client can reset
+   * it: opened on the first such call, reset after every call, closed with the
+   * wire. `null` until then, or after a reset failed.
+   */
+  private stateless: IRfcConversation | null = null;
+  /** Taken by the call on `stateless` until its reset is done. */
+  private statelessBusy = false;
+  /** `false` once a client showed it cannot reset; then every call opens its own. */
+  private canReset: boolean | undefined;
   /** Names the conversation, and so the ABAP session it carries. */
   private conversationId = '';
 
@@ -291,6 +309,9 @@ export class RfcTransport implements IOnPremTransport {
   /** Never throws, and a repeat call finds nothing owed. */
   async close(): Promise<void> {
     this.generation += 1;
+    const stateless = this.stateless;
+    this.stateless = null;
+    if (stateless) await this.closeQuietly(stateless);
     const conversation = this.conversation;
     if (!conversation) return;
     this.conversation = null;
@@ -316,13 +337,90 @@ export class RfcTransport implements IOnPremTransport {
   }
 
   /**
-   * A request that is not stateful, on a conversation of its own: opened for
-   * it, closed when it answers, whatever it answered. Nothing it leaves in its
-   * ABAP session outlives it.
+   * A request that is not stateful, in a fresh ABAP session.
+   *
+   * Where the client can reset (`resetServerContext`), one kept conversation
+   * serves these calls and is reset after each: a fresh context without a new
+   * logon, ~0.1 s instead of ~0.5 s on E19. Where it cannot, or while that
+   * conversation is busy with another call, the call opens a conversation of
+   * its own and closes it when it answers.
+   *
+   * A call and its reset go together: a second call on the kept conversation
+   * before the first one's reset would run in the first one's context — a
+   * package the first one saved would refuse the second one's write (PAK/058).
+   * So a concurrent call takes a conversation of its own instead of waiting.
    */
   private async carryOnItsOwn(
     request: IAdtTransportRequest,
   ): Promise<IAdtTransportResponse> {
+    if (this.canReset !== false && !this.statelessBusy) {
+      return this.carryOnKept(request);
+    }
+    return this.carryOnThrowaway(request);
+  }
+
+  private async carryOnKept(
+    request: IAdtTransportRequest,
+  ): Promise<IAdtTransportResponse> {
+    this.statelessBusy = true;
+    try {
+      if (!this.stateless?.alive) {
+        const opened = await this.openOwn();
+        if (typeof opened.resetServerContext !== 'function') {
+          // An older client: it cannot be reset, so it is used once and closed,
+          // and every later call opens its own.
+          this.canReset = false;
+          try {
+            return await this.carry(request, opened);
+          } finally {
+            await this.closeQuietly(opened);
+          }
+        }
+        this.canReset = true;
+        this.stateless = opened;
+        this.logger?.debug(
+          'RFC stateless conversation opened (reset per call)',
+        );
+      }
+      const kept = this.stateless;
+      try {
+        return await this.carry(request, kept);
+      } finally {
+        try {
+          await kept.resetServerContext?.();
+        } catch (e) {
+          // A context that could not be reset must not serve the next call.
+          this.logger?.debug(
+            `RFC reset failed, dropping the conversation: ${message(e)}`,
+          );
+          if (this.stateless === kept) this.stateless = null;
+          await this.closeQuietly(kept);
+        }
+      }
+    } finally {
+      this.statelessBusy = false;
+    }
+  }
+
+  /** A conversation opened for this one call, closed when it answers. */
+  private async carryOnThrowaway(
+    request: IAdtTransportRequest,
+  ): Promise<IAdtTransportResponse> {
+    const own = await this.openOwn();
+    this.logger?.debug('RFC conversation opened for one stateless call');
+    try {
+      return await this.carry(request, own);
+    } finally {
+      await this.closeQuietly(own);
+    }
+  }
+
+  /**
+   * A new conversation, logged on. The logon takes time (~0.5 s on E19); if the
+   * wire was closed meanwhile, the conversation is closed again and nothing is
+   * sent — not a PUT, not a DELETE — on a wire already given back.
+   */
+  private async openOwn(): Promise<IRfcConversation> {
     const generation = this.generation;
     const own = this.connect();
     try {
@@ -330,27 +428,20 @@ export class RfcTransport implements IOnPremTransport {
     } catch (e) {
       throw new Error(`Failed to open RFC connection: ${message(e)}`);
     }
-    // The logon takes time (~0.5 s on E19). If the wire was closed meanwhile,
-    // nothing is sent — not a PUT, not a DELETE — on a wire already given back.
     if (generation !== this.generation || !this.conversation?.alive) {
-      try {
-        await own.close();
-      } catch (e) {
-        this.logger?.debug(`RFC close error: ${message(e)}`);
-      }
+      await this.closeQuietly(own);
       throw new Error(
         'RFC transport was closed while the call was being opened; nothing was sent.',
       );
     }
-    this.logger?.debug('RFC conversation opened for one stateless call');
+    return own;
+  }
+
+  private async closeQuietly(conversation: IRfcConversation): Promise<void> {
     try {
-      return await this.carry(request, own);
-    } finally {
-      try {
-        await own.close();
-      } catch (e) {
-        this.logger?.debug(`RFC close error: ${message(e)}`);
-      }
+      await conversation.close();
+    } catch (e) {
+      this.logger?.debug(`RFC close error: ${message(e)}`);
     }
   }
 
