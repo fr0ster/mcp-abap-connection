@@ -8,7 +8,7 @@
  *
  * No SAP, no HTTP, no RFC: this unit knows about none of them.
  */
-import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt';
+import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
 import { SessionLifecycle } from '../session/SessionLifecycle.js';
 
 function deferred<T = void>() {

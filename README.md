@@ -136,7 +136,7 @@ dependencies of this one besides `axios`, `commander` and `open`:
 
 | Package | What this package takes from it |
 |---|---|
-| `@mcp-abap-adt/interfaces-adt` | `IAbapConnection`, `IAbapRequestOptions`, `IAdtResponse`, `IAdtWireResponse`, `ITimeoutConfig`, the capability atoms, `ADT_SESSION_ERROR` |
+| `@mcp-abap-adt/interfaces-adt-connection` | `IAbapConnection`, `IAbapRequestOptions`, `IAdtWireResponse`, `ITimeoutConfig`, the capability atoms, `ADT_SESSION_ERROR` |
 | `@mcp-abap-adt/interfaces-auth` | `IAuthProvider`, `IRenewableCredential`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
 | `@mcp-abap-adt/interfaces-auth-sap` | `ISapConfig`, `SapAuthType`, `SapConnectionType`, `ICertificateMaterialLoader` |
 | `@mcp-abap-adt/interfaces-network` | `NETWORK_ERROR_CODES`, the WebSocket contracts |
@@ -180,7 +180,7 @@ config you build — install the package it lives in as well, because this one n
 longer brings them along:
 
 ```bash
-npm install @mcp-abap-adt/interfaces-adt @mcp-abap-adt/interfaces-auth @mcp-abap-adt/interfaces-auth-sap
+npm install @mcp-abap-adt/interfaces-adt-connection @mcp-abap-adt/interfaces-auth @mcp-abap-adt/interfaces-auth-sap
 ```
 
 For detailed installation instructions, see [Installation Guide](./docs/INSTALLATION.md).
@@ -607,7 +607,7 @@ interface AbapConnection {
 ```
 
 The connectors carry the rest of the session lifecycle. It is on the shared
-contract as a **capability atom** in `@mcp-abap-adt/interfaces-adt` rather than as
+contract as a **capability atom** in `@mcp-abap-adt/interfaces-adt-connection` rather than as
 methods on `IAbapConnection`, so a consumer that only carries requests is
 unaffected by its existence. Note that a connection over RFC has the whole of it
 — what an RFC conversation has none of is a session RESOURCE to open and close
@@ -620,7 +620,7 @@ isConnected(): boolean;
 getSessionIdentity(): string | null; // WHICH SAP session; null is not "disconnected"
 ```
 
-Import those names from `@mcp-abap-adt/interfaces-adt`, not from this package: a
+Import those names from `@mcp-abap-adt/interfaces-adt-connection`, not from this package: a
 contract type re-exported under a second name is a contract type that can drift.
 
 **The connection does not track locks.** Deciding when to disconnect, and
