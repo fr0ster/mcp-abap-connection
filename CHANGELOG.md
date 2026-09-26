@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.2.2] - 2026-09-26
+
 ### Changed
 
 - **`@mcp-abap-adt/interfaces-adt` `^10.0.0`, `-auth` `^2.0.1`, `-auth-sap`
