@@ -1,8 +1,8 @@
 # Stateful Session Guide (Connection Layer)
 
 > **The header is not what tracks your lock.** `setSessionType('stateful')` sets
-> a per-request header and nothing more — another handler can flip it back while
-> your lock is genuinely open, and a batch never sets it at all. Nothing in this
+> the mode for subsequent requests; HTTP uses it to select the session header
+> and context cookie. Another handler can flip it back while your lock is open. Nothing in this
 > layer tracks locks: that belongs to `@mcp-abap-adt/adt-clients`, which holds the
 > handles and pairs each LOCK with its UNLOCK per object. What the connection
 > offers is `beginCriticalSection()` / `endCriticalSection()`, so a short timeout
@@ -23,6 +23,39 @@ This document explains how `@mcp-abap-adt/connection` manages HTTP-level session
 The connection layer **does not** decide when to lock/unlock objects—that logic lives in the ADT clients. Instead it ensures every request shares the same HTTP session when desired.
 
 ---
+
+## HTTP context isolation (9.3.1)
+
+The authentication session (`SAP_SESSIONID`) and the stateful ABAP context
+(`sap-contextid`) have different roles. HTTP requests keep authentication
+cookies and the CSRF token in either mode. Only stateful requests carry
+`sap-contextid`; the jar retains it while stateless requests run so that a
+later UNLOCK can still reach the context holding the lock.
+
+Use stateful mode for LOCK and UNLOCK, and stateless mode for the intervening
+GET and PUT. Passing a lock handle to PUT does not require the context cookie.
+The ADT clients choose these modes; callers using connectors directly must
+choose the mode for each operation themselves.
+
+Before 9.3.1, the whole jar went out even in stateless mode. After LOCK, a PUT
+therefore ran in the lock's context. Package updates on E19 (BASIS 816) failed
+on the second write with **400 PAK/058, “Package … is already locked”**, and a
+subsequent delete failed too. On E98 (BASIS 756), PUT failed with **423,
+“Resource … is not locked (invalid lock handle)”**. Filtering the context
+cookie allowed two updates and a delete on one connection on both systems.
+The filter also applies to cookies supplied in request headers and retries.
+
+| Transport | Stateful request |
+| --- | --- |
+| HTTP (on-prem / cloud) | Sends `x-sap-adt-sessiontype: stateful` and the context cookie, when held |
+| Legacy on-prem HTTP | Keeps the context cookie but omits the session-type header |
+| RFC | Uses its RFC conversation; `setSessionType()` adds no HTTP session-type header |
+
+A caller-supplied stateful header is also recognized, including by the legacy
+HTTP transport before it removes that header. Custom `IAdtTransport`
+implementations must read `request.stateful`; the connection no longer adds
+`x-sap-adt-sessiontype` itself. The cookie fix was verified on E19 and E98;
+BASIS 7.40 and ABAP Cloud were not integration-tested for this change.
 
 ## Enabling Stateful Sessions
 
@@ -62,10 +95,10 @@ const connection = new AdtOnPremConnector(
 );
 await connection.connect();   // required before any request
 
-// Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
+// Enable the stateful HTTP context (session header and context cookie)
 connection.setSessionType('stateful');
 
-// Now all requests share the same session (cookies, CSRF token)
+// Following requests use the stateful context until the mode is changed
 await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
 
 // Switch back to stateless
@@ -178,7 +211,7 @@ wrong fixes:
 |---|---|---|
 | **the connection** | one TCP socket | you, the network, a timeout firing. **Ends nothing on the server** |
 | **the HTTP session** | the ICF conversation, held by the cookie jar on this side | dropping the cookies, or a logoff. Nothing about it is in doubt |
-| **the ABAP session** | the server-side context named by `SAP_SESSIONID_<SID>_<CLIENT>` — the roll area a stateful request runs in | **only the server.** Its own idle timeout, which this side can neither read nor influence, or an explicit logoff |
+| **the ABAP session** | the authentication session named by `SAP_SESSIONID_<SID>_<CLIENT>`; `sap-contextid` separately addresses the stateful ABAP context | **only the server.** Its own idle timeout, which this side can neither read nor influence, or an explicit logoff |
 | **the lock** | an enqueue entry, **owned by the ABAP session** | that ABAP session ending. **When it goes, its locks go with it** |
 
 The two middle rows are the ones worth keeping apart, because everything that

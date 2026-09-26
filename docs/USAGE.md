@@ -250,9 +250,13 @@ await connection.connect();
 await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
 ```
 
-### Stateful Mode (Session Headers)
+### Stateful Mode (HTTP Context)
 
-Enable stateful session mode for operations requiring consistent session state:
+Use stateful mode for LOCK and UNLOCK, then stateless mode for GET and PUT
+between them. Since 9.3.1, stateless HTTP requests omit `sap-contextid` while
+retaining authentication cookies and the CSRF token. This prevents package
+writes from running in the lock context and failing with PAK/058 or an invalid
+lock handle. See [HTTP context isolation](./STATEFUL_SESSION_GUIDE.md#http-context-isolation-931).
 
 ```typescript
 import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
@@ -267,10 +271,10 @@ const connection = new AdtOnPremConnector(
 );
 await connection.connect();
 
-// Enable stateful session mode (adds x-sap-adt-sessiontype: stateful header)
+// Enable the stateful HTTP context (session header and context cookie)
 connection.setSessionType('stateful');
 
-// Now all requests share the same session (cookies, CSRF token)
+// Following requests use the stateful context until the mode is changed
 await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
 
 // Check session mode
@@ -972,7 +976,7 @@ See [examples/](../examples/) for complete working examples:
 ## Best Practices
 
 1. **State the three axes**: the connector says which system, the provider says which credential, the transport says which wire. Nothing is detected, and a connection that had to guess would guess wrong on the case that matters
-2. **Enable Stateful Mode**: Use `setSessionType('stateful')` for multi-request operations (locks, transactions)
+2. **Enable Stateful Mode**: Use `setSessionType('stateful')` for LOCK / UNLOCK and stateless mode for intervening GET / PUT
 3. **Token Refresh**: For cloud systems, use `@mcp-abap-adt/auth-broker` for token refresh functionality
 4. **Session State Persistence**: Use `@mcp-abap-adt/auth-broker` for session state persistence
 5. **Handle Errors Gracefully**: Wrap requests in try-catch blocks and check `failure.response` for HTTP errors

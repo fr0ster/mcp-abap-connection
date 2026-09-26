@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.3.1] - 2026-09-27
+
 ### Fixed
 
 - **Over HTTP, a request that is not stateful no longer reaches the stateful
@@ -1851,7 +1853,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.1...HEAD
+[9.3.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.0...v9.3.1
 [9.3.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.2...v9.3.0
 [9.2.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.1...v9.2.2
 [9.2.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.0...v9.2.1
