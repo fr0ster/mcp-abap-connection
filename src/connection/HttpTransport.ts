@@ -35,6 +35,38 @@ import type {
 /** The cookie that names a stateful ABAP context. */
 const CONTEXT_COOKIE = 'sap-contextid';
 
+/**
+ * A `Cookie` header without `sap-contextid`, for a request that is not stateful.
+ *
+ * `sap-contextid` names the stateful ABAP context a `LOCK` opened, and SAP
+ * routes any request carrying it into that context — header or no header. So
+ * a "stateless" request that carried it was not stateless: it ran in the
+ * lock's context. Measured on E19 (BASIS 816) and E98 (BASIS 756), 2026-09-27,
+ * one connection, a package locked, written and unlocked twice:
+ *
+ * - E19: the second `PUT` answered 400 PAK/058 "Package … is already locked" —
+ *   the first write's save was still in that context's `CL_PACKAGE` buffer;
+ * - E98: every `PUT` answered 423 "Resource … is not locked (invalid lock
+ *   handle)".
+ *
+ * Without the cookie on the non-stateful requests, both systems wrote twice
+ * and deleted on the same connection. Eclipse ADT does the same thing its
+ * own way: its trace shows one stateful session for `LOCK` and `UNLOCK`
+ * alone, and every other request — the `PUT` included — in a session of its
+ * own.
+ *
+ * The jar itself keeps the cookie: the stateful requests that follow, the
+ * `UNLOCK` above all, still need to reach the context that holds the lock.
+ */
+function withoutContextCookie(cookie: string | undefined): string | undefined {
+  if (!cookie) return cookie;
+  const kept = cookie
+    .split(/;\s*/)
+    .filter((pair) => pair && pair.split('=')[0]?.trim() !== CONTEXT_COOKIE)
+    .join('; ');
+  return kept || undefined;
+}
+
 /** The header that asks SAP for the stateful session over HTTP. */
 const SESSION_TYPE_HEADER = 'x-sap-adt-sessiontype';
 
@@ -42,8 +74,11 @@ const SESSION_TYPE_HEADER = 'x-sap-adt-sessiontype';
  * Whether the request runs in the stateful session: marked so by the
  * connection, or — kept for callers that still write it themselves — carrying
  * the session header already.
+ *
+ * Exported for the wires that rewrite a request before sending it: the
+ * verdict has to be taken on the request as the caller made it.
  */
-function isStateful(request: IAdtTransportRequest): boolean {
+export function isStatefulRequest(request: IAdtTransportRequest): boolean {
   if (request.stateful) return true;
   const headers = request.headers;
   if (!headers) return false;
@@ -358,18 +393,30 @@ export class HttpTransport implements IAdtTransport {
    */
   private dress(request: IAdtTransportRequest): Record<string, string> {
     const headers = request.headers;
-    const stateful = isStateful(request);
+    const stateful = isStatefulRequest(request);
     const dressed: Record<string, string> = {
       ...this.affinityHeaders(),
       ...this.sessionHeaders(),
       ...(stateful ? this.sessionTypeHeaders() : {}),
       ...headers,
     };
-    const merged = mergeCookieHeaders(
-      headers?.Cookie,
-      (stateful ? this.combined : this.withoutContext()) ?? undefined,
-    );
-    if (merged) dressed.Cookie = merged;
+    // Whatever the caller spelled the header as: HTTP does not tell `Cookie`
+    // from `cookie`, and a lowercase one spread in above would bypass the
+    // filter below.
+    let callerCookie: string | undefined;
+    for (const name of Object.keys(dressed)) {
+      if (name.toLowerCase() !== 'cookie') continue;
+      callerCookie = mergeCookieHeaders(callerCookie, dressed[name]);
+      delete dressed[name];
+    }
+    const merged = mergeCookieHeaders(callerCookie, this.combined ?? undefined);
+    // Filtered on the merged header, not only on the jar: a caller's own
+    // `Cookie` can carry the context too — the connection's CSRF and 401
+    // retries put the whole jar there — and a non-stateful request must not
+    // reach the context whichever way the cookie arrived.
+    const cookie = stateful ? merged : withoutContextCookie(merged);
+    if (cookie) dressed.Cookie = cookie;
+    else delete dressed.Cookie;
     return dressed;
   }
 
@@ -381,38 +428,6 @@ export class HttpTransport implements IAdtTransport {
    */
   protected sessionTypeHeaders(): Record<string, string> {
     return { [SESSION_TYPE_HEADER]: 'stateful' };
-  }
-
-  /**
-   * The jar without `sap-contextid`, for a request that is not stateful.
-   *
-   * `sap-contextid` names the stateful ABAP context a `LOCK` opened, and SAP
-   * routes any request carrying it into that context — header or no header. So
-   * a "stateless" request that carried it was not stateless: it ran in the
-   * lock's context. Measured on E19 (BASIS 816) and E98 (BASIS 756), 2026-09-27,
-   * one connection, a package locked, written and unlocked twice:
-   *
-   * - E19: the second `PUT` answered 400 PAK/058 "Package … is already locked" —
-   *   the first write's save was still in that context's `CL_PACKAGE` buffer;
-   * - E98: every `PUT` answered 423 "Resource … is not locked (invalid lock
-   *   handle)".
-   *
-   * Without the cookie on the non-stateful requests, both systems wrote twice
-   * and deleted on the same connection. Eclipse ADT does the same thing its
-   * own way: its trace shows one stateful session for `LOCK` and `UNLOCK`
-   * alone, and every other request — the `PUT` included — in a session of its
-   * own.
-   *
-   * The jar itself keeps the cookie: the stateful requests that follow, the
-   * `UNLOCK` above all, still need to reach the context that holds the lock.
-   */
-  private withoutContext(): string | null {
-    if (!this.jar.has(CONTEXT_COOKIE)) return this.combined;
-    const kept = Array.from(this.jar.entries())
-      .filter(([name]) => name !== CONTEXT_COOKIE)
-      .map(([name, value]) => (value ? `${name}=${value}` : name))
-      .join('; ');
-    return kept || null;
   }
 
   /** A path becomes an address; anything already absolute is left alone. */

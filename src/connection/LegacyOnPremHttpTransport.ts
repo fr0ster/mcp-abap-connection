@@ -13,6 +13,7 @@
  * system they are dialling, exactly as taking the cloud or the on-prem wire is.
  */
 
+import { isStatefulRequest } from './HttpTransport.js';
 import type {
   IAdtTransportRequest,
   IAdtTransportResponse,
@@ -42,7 +43,13 @@ export class LegacyOnPremHttpTransport extends OnPremHttpTransport {
   override async send(
     request: IAdtTransportRequest,
   ): Promise<IAdtTransportResponse> {
-    return super.send(this.withoutSessionType(request));
+    // Decided before the header is dropped: a caller that asked for the
+    // stateful session by writing the header itself still gets its context
+    // cookie, only without the header this system is hurt by.
+    return super.send({
+      ...this.withoutSessionType(request),
+      stateful: isStatefulRequest(request),
+    });
   }
 
   private withoutSessionType(

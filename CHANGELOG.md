@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request, the `PUT` included, outside it. The jar still holds the cookie, so
   the `UNLOCK` that follows reaches the context holding the lock.
 
+  The cookie is filtered on the header as it finally goes out, not only on
+  the jar: the connection's CSRF and 401 retries write the whole jar into the
+  request's own `Cookie`, and a caller can spell that header in lower case.
+  Either way, a non-stateful request does not carry the context.
+
 ### Changed
 
 - **The session type is the wire's to express, not the connection's.**
@@ -35,7 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   headers.
   - `HttpTransport` adds `x-sap-adt-sessiontype: stateful` and `sap-contextid`
     to stateful requests only (overridable through `sessionTypeHeaders()`;
-    `LegacyOnPremHttpTransport` sends no header, as before).
+    `LegacyOnPremHttpTransport` sends no header, as before). The legacy wire
+    decides stateful before it drops a header the caller wrote, so a caller
+    that asks for the session that way — `AdtClassLegacy` — keeps its context
+    cookie, and its `UNLOCK` still reaches the lock.
   - `RfcTransport` sends no session header, which is what Eclipse's JCo trace
     shows.
 

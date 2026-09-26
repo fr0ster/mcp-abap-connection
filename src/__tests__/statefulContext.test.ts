@@ -91,6 +91,52 @@ describe('the stateful context over HTTP', () => {
     expect(cookieNames(seen[0])).toContain('sap-contextid');
   });
 
+  it('a stateless retry that hands the whole jar back still leaves the context out', async () => {
+    // The connection's CSRF and 401 retries write `Cookie: <the whole jar>`
+    // into the request headers — the context included.
+    const { transport, seen } = wire(
+      new OnPremHttpTransport(() => ({}), null, { baseUrl: 'https://h' }),
+    );
+    const jar = transport.cookies() ?? '';
+    expect(jar).toContain('sap-contextid');
+
+    await transport.send({
+      method: 'PUT',
+      url: '/put',
+      headers: { Cookie: jar },
+    });
+    await transport.send({
+      method: 'PUT',
+      url: '/put',
+      headers: { cookie: jar },
+    });
+
+    for (const headers of seen) {
+      expect(cookieNames(headers)).toContain('SAP_SESSIONID_E19_100');
+      expect(cookieNames(headers)).not.toContain('sap-contextid');
+      expect(
+        Object.keys(headers).filter((k) => k.toLowerCase() === 'cookie'),
+      ).toHaveLength(1);
+    }
+  });
+
+  it('the legacy wire keeps the context for a caller that wrote the header itself', async () => {
+    // AdtClassLegacy (adt-clients) asks for the stateful session by writing
+    // the header, with no flag. The header is dropped on this system; the
+    // context cookie is what lets its UNLOCK reach the lock.
+    const { transport, seen } = wire(
+      new LegacyOnPremHttpTransport(() => ({}), null, { baseUrl: 'https://h' }),
+    );
+    await transport.send({
+      method: 'POST',
+      url: '/unlock',
+      headers: { 'x-sap-adt-sessiontype': 'stateful' },
+    });
+
+    expect(sessionType(seen[0])).toBeUndefined();
+    expect(cookieNames(seen[0])).toContain('sap-contextid');
+  });
+
   it('the legacy wire asks with no header, and keeps the context', async () => {
     const { transport, seen } = wire(
       new LegacyOnPremHttpTransport(() => ({}), null, { baseUrl: 'https://h' }),
