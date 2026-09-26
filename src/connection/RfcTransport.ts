@@ -308,14 +308,21 @@ export class RfcTransport implements IOnPremTransport {
 
   /** Never throws, and a repeat call finds nothing owed. */
   async close(): Promise<void> {
+    // Everything the wire holds is given up BEFORE the first await. Closing
+    // takes time, and a send() that ran meanwhile would otherwise find the
+    // old stateful conversation still `alive` — a lock request carried on a
+    // session already being given back — or open a stateless one of its own
+    // and send a write after close(). With both references gone and the
+    // generation moved on, such a send() is refused as "not open", and a
+    // logon still under way sees the change and sends nothing.
     this.generation += 1;
     const stateless = this.stateless;
-    this.stateless = null;
-    if (stateless) await this.closeQuietly(stateless);
     const conversation = this.conversation;
-    if (!conversation) return;
+    this.stateless = null;
     this.conversation = null;
     this.conversationId = '';
+    if (stateless) await this.closeQuietly(stateless);
+    if (!conversation) return;
     try {
       await conversation.close();
       this.logger?.debug('RFC conversation closed');

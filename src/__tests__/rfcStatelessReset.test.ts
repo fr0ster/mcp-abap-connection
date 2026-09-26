@@ -115,6 +115,33 @@ describe('RFC: one kept stateless conversation, reset after each call', () => {
     expect(opened[2].close).toHaveBeenCalledTimes(1);
   });
 
+  it('a send() made while close() is under way is refused, stateful or not', async () => {
+    // close() used to await the stateless conversation's close before it let
+    // go of the stateful one: in that window a LOCK still found the old
+    // session alive, and a stateless call opened a conversation of its own
+    // and sent after close().
+    let finishClose: () => void = () => {};
+    const slowClose = new Promise<void>((resolve) => {
+      finishClose = resolve;
+    });
+    const { opened, transport } = resettable();
+    await transport.open();
+    await transport.send(stateless);
+    opened[1].close.mockImplementationOnce(async () => {
+      await slowClose;
+    });
+
+    const closing = transport.close();
+    await expect(transport.send(stateful)).rejects.toThrow(/not open/);
+    await expect(transport.send(stateless)).rejects.toThrow(/not open/);
+    finishClose();
+    await closing;
+
+    expect(opened).toHaveLength(2);
+    expect(opened[0].call).not.toHaveBeenCalled();
+    expect(opened[1].call).toHaveBeenCalledTimes(1);
+  });
+
   it('close() closes the kept stateless conversation too', async () => {
     const { opened, transport } = resettable();
     await transport.open();
