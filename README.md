@@ -292,6 +292,14 @@ where stateful HTTP sessions are not usable: an RFC conversation is one ABAP
 session for its whole lifetime, which is the way past `423 invalid lock handle`
 on BASIS < 7.50.
 
+Since 9.3.2, LOCK and UNLOCK in stateful mode share the persistent RFC
+conversation; stateless requests use a separate ABAP context. With
+`sap-rfc-lite` 0.2.0 or newer, that context is reset between calls on a kept
+conversation; older clients open one conversation per call. This prevents stale
+package state from causing PAK/058 on later writes or SADT_RESOURCE/007 on a
+read after create. Concurrent calls use a separate conversation. See
+[RFC conversation isolation](./docs/STATEFUL_SESSION_GUIDE.md#rfc-conversation-isolation-933).
+
 Needs the SAP NW RFC SDK on the machine and `npm install @mcp-abap-adt/sap-rfc-lite`.
 
 ```typescript

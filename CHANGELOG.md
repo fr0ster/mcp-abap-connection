@@ -7,25 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.3.3] - 2026-09-27
+
 ### Changed
 
-- **Over RFC, the non-stateful calls share one conversation, reset after each
-  call, when the client can reset.** `@mcp-abap-adt/sap-rfc-lite` 0.2.0 adds
-  `resetServerContext()` (`RfcResetServerContext`). With it, a kept
-  conversation gets a fresh ABAP context after every call without a new
-  logon: about 0.24 s per call on E19, against about 0.67 s with a
-  conversation opened per call.
-  - A call and its reset go together. A call made while the kept
-    conversation is busy takes a conversation of its own, so it never runs in
-    another call's context.
-  - A conversation whose reset failed is closed, and the next call opens
-    another.
-  - With `sap-rfc-lite` 0.1.x, each call opens its own conversation, as
-    before.
+- **Over RFC, stateless calls reuse a conversation and reset its server
+  context when supported.** `@mcp-abap-adt/sap-rfc-lite` 0.2.0 adds
+  `resetServerContext()` (`RfcResetServerContext`), so each call gets a clean
+  ABAP context without logging in again. Measured on E19, this took about
+  0.24 s per call, compared with 0.67 s when opening a conversation each time.
+  Concurrent calls use a separate conversation so they cannot run between a
+  previous call and its reset. If reset fails, that conversation is closed.
+  With `sap-rfc-lite` 0.1.x, calls continue to use a new conversation each.
+  Create, read after create, two lock/write/unlock rounds and delete passed on
+  one E19 connection.
 
-  The optional dependency range is `^0.1.0 || ^0.2.0`. Measured on E19, one
-  connection: create, read after create, two lock/PUT/unlock rounds and a
-  delete all pass.
+## [9.3.2] - 2026-09-27
 
 ### Fixed
 
@@ -1875,7 +1872,9 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.3...HEAD
+[9.3.3]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.2...v9.3.3
+[9.3.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.1...v9.3.2
 [9.3.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.0...v9.3.1
 [9.3.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.2...v9.3.0
 [9.2.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.1...v9.2.2
