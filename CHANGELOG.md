@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.4.2] - 2026-09-27
+
+### Changed
+
+- **`@mcp-abap-adt/sap-rfc-lite` `^0.2.1`** (was `^0.2.0`). 0.2.0 on npm was
+  packed with a stale `lib/`: its JS client has no `resetServerContext`, so
+  this connector found no reset and fell back to a new RFC connection per
+  stateless call — correct, but a full RFC run took about 1010 s instead of
+  about 684 s. 0.2.1 is packed from `src/`. Raising the minimum makes npm
+  replace a locked 0.2.0 too, since it no longer satisfies the range.
+
 ## [9.4.1] - 2026-09-27
 
 ### Fixed
@@ -1912,7 +1923,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.2...HEAD
+[9.4.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.1...v9.4.2
 [9.4.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.0...v9.4.1
 [9.4.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.4...v9.4.0
 [9.3.4]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.3...v9.3.4

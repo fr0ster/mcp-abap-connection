@@ -62,7 +62,8 @@ BASIS 7.40 and ABAP Cloud were not integration-tested for this change.
 Stateful requests, including LOCK and UNLOCK, share the conversation opened
 by `connect()`. Stateless calls reuse a second conversation: the transport
 resets its ABAP server context after each call, keeping the RFC logon open
-(`sap-rfc-lite` 0.2.0, required since 9.4.0; 9.3.4 introduced it and still
+(`sap-rfc-lite` 0.2.1, required since 9.4.2; 9.4.0 required 0.2.0, whose npm
+package lacks the reset in its JS client, and 9.3.4 introduced it and still
 accepted 0.1.x). When that conversation is busy with another call, a stateless
 call gets a separate temporary conversation. Both `setSessionType('stateful')` and a caller-supplied stateful
 session header select the persistent conversation.
@@ -75,8 +76,8 @@ create, read, two lock/PUT/unlock rounds and delete passed on one connection.
 
 A resettable call took about 0.24 s total on E19; a temporary conversation
 pays for an RFC logon, about 0.5 s on top of about 0.1 s for the call — which
-is what every stateless call cost with `sap-rfc-lite` 0.1.x, and why 9.4.0
-requires 0.2.0. Direct connector users must mark
+is what every stateless call cost with `sap-rfc-lite` 0.1.x (and with 0.2.0,
+whose npm package lacks the reset), and why 9.4.2 requires 0.2.1. Direct connector users must mark
 LOCK and UNLOCK stateful to retain their conversation. If disconnect occurs
 while a temporary conversation is logging on, it is closed without sending
 the request; reconnect does not revive that pending request.
