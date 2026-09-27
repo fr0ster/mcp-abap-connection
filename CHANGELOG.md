@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.4.0] - 2026-09-27
+
+### Changed
+
+- **`@mcp-abap-adt/sap-rfc-lite` `^0.2.0`** (was `^0.1.0 || ^0.2.0`), still an
+  optional dependency. The range let an install that already had 0.1.0 in its
+  lockfile keep it: npm does not move a locked version that still satisfies
+  the range, so 9.3.4's context reset never reached it, and every stateless
+  RFC call opened a conversation of its own (~0.67 s instead of ~0.24 s,
+  measured on an on-premise system). With 0.2.0 required, every stateless
+  call reuses one conversation and resets its server context. A minor
+  release, not a patch: support for 0.1.x ends and the behaviour of an
+  install that had it changes. No API changes.
+
+  **What a consumer does:** reinstall with the SAP NW RFC SDK visible, so the
+  optional native build of 0.2.0 succeeds (npm drops a failed optional build
+  silently). The check for a client without `resetServerContext` stays as a
+  guard; with 0.2.0 it is not taken.
+
 ## [9.3.4] - 2026-09-27
 
 ### Changed
@@ -1883,7 +1902,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.4...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.0...HEAD
+[9.4.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.4...v9.4.0
 [9.3.4]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.3...v9.3.4
 [9.3.3]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.2...v9.3.3
 [9.3.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.1...v9.3.2

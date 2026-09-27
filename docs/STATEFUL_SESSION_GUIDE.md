@@ -57,14 +57,14 @@ implementations must read `request.stateful`; the connection no longer adds
 `x-sap-adt-sessiontype` itself. The cookie fix was verified on E19 and E98;
 BASIS 7.40 and ABAP Cloud were not integration-tested for this change.
 
-## RFC conversation isolation (9.3.2–9.3.4)
+## RFC conversation isolation (9.3.2–9.4.0)
 
 Stateful requests, including LOCK and UNLOCK, share the conversation opened
-by `connect()`. Since 9.3.4, `sap-rfc-lite` 0.2.0 and newer let stateless calls
-reuse a second conversation: the transport resets its ABAP server context after
-each call, keeping the RFC logon open. With older clients (0.1.x), or when a
-resettable conversation is busy, each stateless call gets a separate temporary
-conversation. Both `setSessionType('stateful')` and a caller-supplied stateful
+by `connect()`. Stateless calls reuse a second conversation: the transport
+resets its ABAP server context after each call, keeping the RFC logon open
+(`sap-rfc-lite` 0.2.0, required since 9.4.0; 9.3.4 introduced it and still
+accepted 0.1.x). When that conversation is busy with another call, a stateless
+call gets a separate temporary conversation. Both `setSessionType('stateful')` and a caller-supplied stateful
 session header select the persistent conversation.
 
 Previously all RFC requests shared one ABAP session. On E19, saving a package
@@ -73,9 +73,10 @@ with **400 PAK/058, “Package … is already locked”**. Reading immediately a
 creation could fail with **400 SADT_RESOURCE/007**. With separate conversations,
 create, read, two lock/PUT/unlock rounds and delete passed on one connection.
 
-When using `sap-rfc-lite` 0.1.x, each stateless call pays for an RFC logon:
-about 0.5 s on E19, in addition to about 0.1 s for the call. With 0.2.0+, a
-resettable call took about 0.24 s total on E19. Direct connector users must mark
+A resettable call took about 0.24 s total on E19; a temporary conversation
+pays for an RFC logon, about 0.5 s on top of about 0.1 s for the call — which
+is what every stateless call cost with `sap-rfc-lite` 0.1.x, and why 9.4.0
+requires 0.2.0. Direct connector users must mark
 LOCK and UNLOCK stateful to retain their conversation. If disconnect occurs
 while a temporary conversation is logging on, it is closed without sending
 the request; reconnect does not revive that pending request.
