@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.3.4] - 2026-09-27
+
+### Changed
+
+- **Release the RFC context reset under an available package version.** npm
+  already contained version `9.3.3`, so this release carries the RFC stateless
+  context reset as `9.3.4`. With `sap-rfc-lite` 0.2.0, stateless calls reuse a
+  conversation and reset its server context after each call; older clients
+  continue to open a conversation per call. See the `9.3.3` entry below for
+  measured behavior and performance.
+
 ## [9.3.3] - 2026-09-27
 
 ### Changed
@@ -1872,7 +1883,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.3...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.4...HEAD
+[9.3.4]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.3...v9.3.4
 [9.3.3]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.2...v9.3.3
 [9.3.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.1...v9.3.2
 [9.3.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.0...v9.3.1

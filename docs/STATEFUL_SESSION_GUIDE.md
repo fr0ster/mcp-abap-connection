@@ -49,7 +49,7 @@ The filter also applies to cookies supplied in request headers and retries.
 | --- | --- |
 | HTTP (on-prem / cloud) | Sends `x-sap-adt-sessiontype: stateful` and the context cookie, when held |
 | Legacy on-prem HTTP | Keeps the context cookie but omits the session-type header |
-| RFC | Uses the persistent conversation for stateful requests; since 9.3.3 resets a kept stateless conversation between calls when supported |
+| RFC | Uses the persistent conversation for stateful requests; since 9.3.4 resets a kept stateless conversation between calls when supported |
 
 A caller-supplied stateful header is also recognized, including by the legacy
 HTTP transport before it removes that header. Custom `IAdtTransport`
@@ -57,10 +57,10 @@ implementations must read `request.stateful`; the connection no longer adds
 `x-sap-adt-sessiontype` itself. The cookie fix was verified on E19 and E98;
 BASIS 7.40 and ABAP Cloud were not integration-tested for this change.
 
-## RFC conversation isolation (9.3.2 and 9.3.3)
+## RFC conversation isolation (9.3.2–9.3.4)
 
 Stateful requests, including LOCK and UNLOCK, share the conversation opened
-by `connect()`. Since 9.3.3, `sap-rfc-lite` 0.2.0 and newer let stateless calls
+by `connect()`. Since 9.3.4, `sap-rfc-lite` 0.2.0 and newer let stateless calls
 reuse a second conversation: the transport resets its ABAP server context after
 each call, keeping the RFC logon open. With older clients (0.1.x), or when a
 resettable conversation is busy, each stateless call gets a separate temporary

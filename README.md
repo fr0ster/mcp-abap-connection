@@ -298,7 +298,7 @@ conversation; stateless requests use a separate ABAP context. With
 conversation; older clients open one conversation per call. This prevents stale
 package state from causing PAK/058 on later writes or SADT_RESOURCE/007 on a
 read after create. Concurrent calls use a separate conversation. See
-[RFC conversation isolation](./docs/STATEFUL_SESSION_GUIDE.md#rfc-conversation-isolation-933).
+[RFC conversation isolation](./docs/STATEFUL_SESSION_GUIDE.md#rfc-conversation-isolation-932-and-933).
 
 Needs the SAP NW RFC SDK on the machine and `npm install @mcp-abap-adt/sap-rfc-lite`.
 
