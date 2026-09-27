@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.4.1] - 2026-09-27
+
+### Fixed
+
+- **`sap-abap-auth --version` printed `0.1.0`** — a number written into the CLI, not the package's. It reads `package.json` now.
+
+### Added
+
+- **`version` as a command, and `-v`**, for `sap-abap-auth`: `help` / `--help` / `-h` and `version` / `--version` / `-v` — the same set in every CLI of the family, each answering before anything starts or connects.
+
 ## [9.4.0] - 2026-09-27
 
 ### Changed
@@ -1902,7 +1912,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.1...HEAD
+[9.4.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.0...v9.4.1
 [9.4.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.4...v9.4.0
 [9.3.4]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.3...v9.3.4
 [9.3.3]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.2...v9.3.3
