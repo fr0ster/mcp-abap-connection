@@ -291,11 +291,18 @@ export class RfcTransport implements IOnPremTransport {
 
   async open(): Promise<void> {
     if (this.conversation?.alive) return;
+    const generation = this.generation;
     const conversation = this.connect();
     try {
       await conversation.open();
     } catch (e) {
       throw new Error(`Failed to open RFC connection: ${message(e)}`);
+    }
+    // close() ran while this logged on: the session it would have handed out
+    // belongs to a wire already given back, so it is closed, not kept.
+    if (generation !== this.generation) {
+      await this.closeQuietly(conversation);
+      throw new Error('RFC transport was closed while it was being opened.');
     }
     this.conversation = conversation;
     // Minted here, where the session begins. A conversation opened after an
@@ -338,9 +345,12 @@ export class RfcTransport implements IOnPremTransport {
     // The same verdict HTTP takes: the flag the connection sets, or a session
     // header the caller wrote itself. A caller that asks for the lock's
     // session either way has to land on the conversation that holds it.
+    // Taken once, here: every await below compares against it, and a call
+    // that finds the wire closed since it began sends nothing.
+    const generation = this.generation;
     return isStatefulRequest(request)
-      ? this.carry(request, this.conversation)
-      : this.carryOnItsOwn(request);
+      ? this.carry(request, this.conversation, generation)
+      : this.carryOnItsOwn(request, generation);
   }
 
   /**
@@ -359,26 +369,37 @@ export class RfcTransport implements IOnPremTransport {
    */
   private async carryOnItsOwn(
     request: IAdtTransportRequest,
+    generation: number,
   ): Promise<IAdtTransportResponse> {
     if (this.canReset !== false && !this.statelessBusy) {
-      return this.carryOnKept(request);
+      return this.carryOnKept(request, generation);
     }
-    return this.carryOnThrowaway(request);
+    return this.carryOnThrowaway(request, generation);
   }
 
   private async carryOnKept(
     request: IAdtTransportRequest,
+    generation: number,
   ): Promise<IAdtTransportResponse> {
     this.statelessBusy = true;
     try {
       if (!this.stateless?.alive) {
-        const opened = await this.openOwn();
+        const opened = await this.openOwn(generation);
+        // Checked again after the await: close() may have run since openOwn()
+        // checked, and a conversation of a closed wire must not become the
+        // kept one of the next.
+        if (generation !== this.generation) {
+          await this.closeQuietly(opened);
+          throw new Error(
+            'RFC transport was closed while the call was being opened; nothing was sent.',
+          );
+        }
         if (typeof opened.resetServerContext !== 'function') {
           // An older client: it cannot be reset, so it is used once and closed,
           // and every later call opens its own.
           this.canReset = false;
           try {
-            return await this.carry(request, opened);
+            return await this.carry(request, opened, generation);
           } finally {
             await this.closeQuietly(opened);
           }
@@ -391,7 +412,7 @@ export class RfcTransport implements IOnPremTransport {
       }
       const kept = this.stateless;
       try {
-        return await this.carry(request, kept);
+        return await this.carry(request, kept, generation);
       } finally {
         try {
           await kept.resetServerContext?.();
@@ -412,11 +433,12 @@ export class RfcTransport implements IOnPremTransport {
   /** A conversation opened for this one call, closed when it answers. */
   private async carryOnThrowaway(
     request: IAdtTransportRequest,
+    generation: number,
   ): Promise<IAdtTransportResponse> {
-    const own = await this.openOwn();
+    const own = await this.openOwn(generation);
     this.logger?.debug('RFC conversation opened for one stateless call');
     try {
-      return await this.carry(request, own);
+      return await this.carry(request, own, generation);
     } finally {
       await this.closeQuietly(own);
     }
@@ -427,8 +449,7 @@ export class RfcTransport implements IOnPremTransport {
    * wire was closed meanwhile, the conversation is closed again and nothing is
    * sent — not a PUT, not a DELETE — on a wire already given back.
    */
-  private async openOwn(): Promise<IRfcConversation> {
-    const generation = this.generation;
+  private async openOwn(generation: number): Promise<IRfcConversation> {
     const own = this.connect();
     try {
       await own.open();
@@ -455,6 +476,7 @@ export class RfcTransport implements IOnPremTransport {
   private async carry(
     request: IAdtTransportRequest,
     conversation: IRfcConversation,
+    generation: number,
   ): Promise<IAdtTransportResponse> {
     const method = request.method.toUpperCase();
 
@@ -529,6 +551,13 @@ export class RfcTransport implements IOnPremTransport {
     // mid-flight is precisely what the connection emulates over HTTP, where
     // a critical section raises the caller's timeout to a ten-minute ceiling so
     // an abort cannot orphan a lock handle. Here that comes free.
+    // The last point before anything leaves: nothing awaits between this
+    // check and the call, so a close() that ran at any await above stops it.
+    if (generation !== this.generation) {
+      throw new Error(
+        'RFC transport was closed before the call was sent; nothing was sent.',
+      );
+    }
     let raw: Record<string, any>;
     try {
       raw = await conversation.call('SADT_REST_RFC_ENDPOINT', {

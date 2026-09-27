@@ -24,13 +24,24 @@ type Fake = {
 };
 
 function resettable(
-  options: { failReset?: boolean; slowCall?: Promise<void> } = {},
+  options: {
+    failReset?: boolean;
+    slowCall?: Promise<void>;
+    slowOpen?: { index: number; until: Promise<void> };
+  } = {},
 ) {
   const opened: Fake[] = [];
   const connect = () => {
     const conversation: Fake = {
       alive: true,
-      open: jest.fn(async () => {}),
+      open: jest.fn(async () => {
+        if (
+          options.slowOpen &&
+          opened.indexOf(conversation) === options.slowOpen.index
+        ) {
+          await options.slowOpen.until;
+        }
+      }),
       close: jest.fn(async () => {
         conversation.alive = false;
       }),
@@ -140,6 +151,47 @@ describe('RFC: one kept stateless conversation, reset after each call', () => {
     expect(opened).toHaveLength(2);
     expect(opened[0].call).not.toHaveBeenCalled();
     expect(opened[1].call).toHaveBeenCalledTimes(1);
+  });
+
+  it('open() closed meanwhile does not hand out the session it logged on to', async () => {
+    let finishLogon: () => void = () => {};
+    const until = new Promise<void>((resolve) => {
+      finishLogon = resolve;
+    });
+    const { opened, transport } = resettable({ slowOpen: { index: 0, until } });
+
+    const opening = transport.open();
+    await transport.close();
+    finishLogon();
+
+    await expect(opening).rejects.toThrow(/closed while it was being opened/);
+    expect(opened[0].close).toHaveBeenCalledTimes(1);
+    await expect(transport.send(stateful)).rejects.toThrow(/not open/);
+  });
+
+  it('a stateless logon that close() overtook neither sends nor becomes the kept one', async () => {
+    let finishLogon: () => void = () => {};
+    const until = new Promise<void>((resolve) => {
+      finishLogon = resolve;
+    });
+    const { opened, transport } = resettable({ slowOpen: { index: 1, until } });
+    await transport.open();
+
+    const sending = transport.send(stateless);
+    await new Promise((r) => setImmediate(r));
+    await transport.close();
+    finishLogon();
+
+    await expect(sending).rejects.toThrow(/closed/);
+    expect(opened[1].call).not.toHaveBeenCalled();
+    expect(opened[1].close).toHaveBeenCalled();
+
+    // The next generation opens its own: the overtaken one was not kept.
+    await transport.open();
+    await transport.send(stateless);
+    expect(opened[1].call).not.toHaveBeenCalled();
+    expect(opened).toHaveLength(4);
+    expect(opened[3].call).toHaveBeenCalledTimes(1);
   });
 
   it('close() closes the kept stateless conversation too', async () => {
