@@ -49,7 +49,7 @@ The filter also applies to cookies supplied in request headers and retries.
 | --- | --- |
 | HTTP (on-prem / cloud) | Sends `x-sap-adt-sessiontype: stateful` and the context cookie, when held |
 | Legacy on-prem HTTP | Keeps the context cookie but omits the session-type header |
-| RFC | Uses the persistent conversation for stateful requests and a fresh conversation for each stateless request (since 9.3.2) |
+| RFC | Uses the persistent conversation for stateful requests; since 9.3.3 resets a kept stateless conversation between calls when supported |
 
 A caller-supplied stateful header is also recognized, including by the legacy
 HTTP transport before it removes that header. Custom `IAdtTransport`
@@ -57,12 +57,15 @@ implementations must read `request.stateful`; the connection no longer adds
 `x-sap-adt-sessiontype` itself. The cookie fix was verified on E19 and E98;
 BASIS 7.40 and ABAP Cloud were not integration-tested for this change.
 
-## RFC conversation isolation (9.3.2)
+## RFC conversation isolation (9.3.2 and 9.3.3)
 
 Stateful requests, including LOCK and UNLOCK, share the conversation opened
-by `connect()`. Each stateless request opens a separate conversation and closes
-it after the response or a call failure. Both `setSessionType('stateful')` and
-a caller-supplied stateful session header select the persistent conversation.
+by `connect()`. Since 9.3.3, `sap-rfc-lite` 0.2.0 and newer let stateless calls
+reuse a second conversation: the transport resets its ABAP server context after
+each call, keeping the RFC logon open. With older clients (0.1.x), or when a
+resettable conversation is busy, each stateless call gets a separate temporary
+conversation. Both `setSessionType('stateful')` and a caller-supplied stateful
+session header select the persistent conversation.
 
 Previously all RFC requests shared one ABAP session. On E19, saving a package
 left state in `CL_PACKAGE`'s instance buffer: later writes or deletes failed
@@ -70,11 +73,12 @@ with **400 PAK/058, “Package … is already locked”**. Reading immediately a
 creation could fail with **400 SADT_RESOURCE/007**. With separate conversations,
 create, read, two lock/PUT/unlock rounds and delete passed on one connection.
 
-Each stateless call now pays for an RFC logon: measured on E19, about 0.5 s
-in addition to about 0.1 s for the call. Direct connector users must mark LOCK
-and UNLOCK stateful to retain their conversation. If disconnect occurs while
-a temporary conversation is logging on, it is closed without sending the
-request; reconnect does not revive that pending request.
+When using `sap-rfc-lite` 0.1.x, each stateless call pays for an RFC logon:
+about 0.5 s on E19, in addition to about 0.1 s for the call. With 0.2.0+, a
+resettable call took about 0.24 s total on E19. Direct connector users must mark
+LOCK and UNLOCK stateful to retain their conversation. If disconnect occurs
+while a temporary conversation is logging on, it is closed without sending
+the request; reconnect does not revive that pending request.
 
 ## Enabling Stateful Sessions
 

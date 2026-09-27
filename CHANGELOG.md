@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.3.3] - 2026-09-27
+
+### Changed
+
+- **Over RFC, stateless calls reuse a conversation and reset its server
+  context when supported.** `@mcp-abap-adt/sap-rfc-lite` 0.2.0 adds
+  `resetServerContext()` (`RfcResetServerContext`), so each call gets a clean
+  ABAP context without logging in again. Measured on E19, this took about
+  0.24 s per call, compared with 0.67 s when opening a conversation each time.
+  Concurrent calls use a separate conversation so they cannot run between a
+  previous call and its reset. If reset fails, that conversation is closed.
+  With `sap-rfc-lite` 0.1.x, calls continue to use a new conversation each.
+  Create, read after create, two lock/write/unlock rounds and delete passed on
+  one E19 connection.
+
 ## [9.3.2] - 2026-09-27
 
 ### Fixed
@@ -1857,7 +1872,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.2...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.3...HEAD
+[9.3.3]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.2...v9.3.3
 [9.3.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.1...v9.3.2
 [9.3.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.0...v9.3.1
 [9.3.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.2...v9.3.0
