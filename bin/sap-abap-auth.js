@@ -595,7 +595,7 @@ async function main() {
     .description(
       "CLI utility for authentication in SAP BTP ABAP Environment (Steampunk) via browser. Creates .env file with connection configuration."
     )
-    .version("0.1.0")
+    .version(require("../package.json").version, "-v, --version", "Show version number")
     .helpOption("-h, --help", "Show help for all commands and options");
 
   program
@@ -734,6 +734,14 @@ async function main() {
         console.error(`Error during authentication: ${error.message}`);
         process.exit(1);
       }
+    });
+
+  // `version` as a command, like every CLI in the family (`help` is commander's).
+  program
+    .command("version")
+    .description("Show version number")
+    .action(() => {
+      console.log(require("../package.json").version);
     });
 
   // Parse and handle command-line arguments
