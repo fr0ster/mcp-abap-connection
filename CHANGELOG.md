@@ -7,6 +7,146 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.4.2] - 2026-09-27
+
+### Changed
+
+- **`@mcp-abap-adt/sap-rfc-lite` `^0.2.1`** (was `^0.2.0`). 0.2.0 on npm was
+  packed with a stale `lib/`: its JS client has no `resetServerContext`, so
+  this connector found no reset and fell back to a new RFC connection per
+  stateless call — correct, but a full RFC run took about 1010 s instead of
+  about 684 s. 0.2.1 is packed from `src/`. Raising the minimum makes npm
+  replace a locked 0.2.0 too, since it no longer satisfies the range.
+
+## [9.4.1] - 2026-09-27
+
+### Fixed
+
+- **`sap-abap-auth --version` printed `0.1.0`** — a number written into the CLI, not the package's. It reads `package.json` now.
+
+### Added
+
+- **`version` as a command, and `-v`**, for `sap-abap-auth`: `help` / `--help` / `-h` and `version` / `--version` / `-v` — the same set in every CLI of the family, each answering before anything starts or connects.
+
+## [9.4.0] - 2026-09-27
+
+### Changed
+
+- **`@mcp-abap-adt/sap-rfc-lite` `^0.2.0`** (was `^0.1.0 || ^0.2.0`), still an
+  optional dependency. The range let an install that already had 0.1.0 in its
+  lockfile keep it: npm does not move a locked version that still satisfies
+  the range, so 9.3.4's context reset never reached it, and every stateless
+  RFC call opened a conversation of its own (~0.67 s instead of ~0.24 s,
+  measured on an on-premise system). With 0.2.0 required, every stateless
+  call reuses one conversation and resets its server context. A minor
+  release, not a patch: support for 0.1.x ends and the behaviour of an
+  install that had it changes. No API changes.
+
+  **What a consumer does:** reinstall with the SAP NW RFC SDK visible, so the
+  optional native build of 0.2.0 succeeds (npm drops a failed optional build
+  silently). The check for a client without `resetServerContext` stays as a
+  guard; with 0.2.0 it is not taken.
+
+## [9.3.4] - 2026-09-27
+
+### Changed
+
+- **Release the RFC context reset under an available package version.** npm
+  already contained version `9.3.3`, so this release carries the RFC stateless
+  context reset as `9.3.4`. With `sap-rfc-lite` 0.2.0, stateless calls reuse a
+  conversation and reset its server context after each call; older clients
+  continue to open a conversation per call. See the `9.3.3` entry below for
+  measured behavior and performance.
+
+## [9.3.3] - 2026-09-27
+
+### Changed
+
+- **Over RFC, stateless calls reuse a conversation and reset its server
+  context when supported.** `@mcp-abap-adt/sap-rfc-lite` 0.2.0 adds
+  `resetServerContext()` (`RfcResetServerContext`), so each call gets a clean
+  ABAP context without logging in again. Measured on E19, this took about
+  0.24 s per call, compared with 0.67 s when opening a conversation each time.
+  Concurrent calls use a separate conversation so they cannot run between a
+  previous call and its reset. If reset fails, that conversation is closed.
+  With `sap-rfc-lite` 0.1.x, calls continue to use a new conversation each.
+  Create, read after create, two lock/write/unlock rounds and delete passed on
+  one E19 connection.
+
+## [9.3.2] - 2026-09-27
+
+### Fixed
+
+- **Over RFC, a request that is not stateful runs on a conversation of its
+  own.** `RfcTransport` carried everything on one conversation, one ABAP
+  session, so whatever a program left in it stayed:
+  - after a package was created or written, every further write or delete of
+    it answered 400 PAK/058 "Package … is already locked" (`CL_PACKAGE`'s
+    instance buffer);
+  - a read straight after a create answered 400 SADT_RESOURCE/007.
+
+  Now the conversation `open()` makes carries the requests marked `stateful`
+  (the lock and its release), and every other request opens one of its own
+  and closes it when it answers. That is Eclipse ADT's split over JCo: one
+  stateful enqueue session, every other call in a session of its own.
+  Measured on E19, one connection: create, read, two lock/PUT/unlock rounds
+  and a delete all pass. The price is a logon per non-stateful call — about
+  0.5 s on E19, against about 0.1 s for the call itself.
+
+  Stateful is decided the same way on both wires (`isStatefulRequest`): the
+  connection's flag, or a session header the caller wrote itself. And a call
+  whose own conversation is still logging on when the wire is closed sends
+  nothing: it closes that conversation and refuses, rather than delivering a
+  `PUT` or `DELETE` on a wire already given back.
+
+## [9.3.1] - 2026-09-27
+
+### Fixed
+
+- **Over HTTP, a request that is not stateful no longer reaches the stateful
+  context.** `sap-contextid` names the context a `LOCK` opens, and SAP routes any
+  request that carries it into that context — session header or none. The wire
+  sent the whole jar on every request, so a "stateless" `PUT` after a `LOCK` ran
+  in the lock's context. Measured 2026-09-27 on one connection, a package locked,
+  written and unlocked twice:
+  - E19 (BASIS 816): the second `PUT` answered 400 PAK/058 "Package … is already
+    locked" — the first save was still in that context's `CL_PACKAGE` buffer, and
+    a delete on the same connection was refused the same way;
+  - E98 (BASIS 756): every `PUT` answered 423 "Resource … is not locked (invalid
+    lock handle)".
+
+  With the cookie kept to the stateful requests, both systems wrote twice and
+  deleted on the same connection. That is Eclipse ADT's split too: its trace
+  shows one stateful session for `LOCK` and `UNLOCK` alone and every other
+  request, the `PUT` included, outside it. The jar still holds the cookie, so
+  the `UNLOCK` that follows reaches the context holding the lock.
+
+  The cookie is filtered on the header as it finally goes out, not only on
+  the jar: the connection's CSRF and 401 retries write the whole jar into the
+  request's own `Cookie`, and a caller can spell that header in lower case.
+  Either way, a non-stateful request does not carry the context.
+
+### Changed
+
+- **The session type is the wire's to express, not the connection's.**
+  `setSessionType('stateful')` now marks each request `stateful: true` on
+  `IAdtTransportRequest` instead of writing `x-sap-adt-sessiontype` into its
+  headers.
+  - `HttpTransport` adds `x-sap-adt-sessiontype: stateful` and `sap-contextid`
+    to stateful requests only (overridable through `sessionTypeHeaders()`;
+    `LegacyOnPremHttpTransport` sends no header, as before). The legacy wire
+    decides stateful before it drops a header the caller wrote, so a caller
+    that asks for the session that way — `AdtClassLegacy` — keeps its context
+    cookie, and its `UNLOCK` still reaches the lock.
+  - `RfcTransport` sends no session header, which is what Eclipse's JCo trace
+    shows.
+
+  A request whose caller wrote the header themselves is still treated as
+  stateful.
+
+  **What a consumer does:** nothing, through the connectors. A custom
+  `IAdtTransport` reads `request.stateful` where it used to find the header.
+
 ## [9.3.0] - 2026-09-26
 
 ### Changed
@@ -1783,7 +1923,14 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.2...HEAD
+[9.4.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.1...v9.4.2
+[9.4.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.0...v9.4.1
+[9.4.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.4...v9.4.0
+[9.3.4]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.3...v9.3.4
+[9.3.3]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.2...v9.3.3
+[9.3.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.1...v9.3.2
+[9.3.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.0...v9.3.1
 [9.3.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.2...v9.3.0
 [9.2.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.1...v9.2.2
 [9.2.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.2.0...v9.2.1

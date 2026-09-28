@@ -69,7 +69,7 @@ mcp-abap-connection/
 
 ### Session Management
 - **Overview**: [USAGE.md - Session Management](./USAGE.md#session-management)
-- **Stateful Mode**: Use `setSessionType('stateful')` for session headers
+- **Stateful Mode**: Use `setSessionType('stateful')` for the LOCK / UNLOCK context; use stateless mode for GET / PUT
 - **Session State Persistence**: Handled by `@mcp-abap-adt/auth-broker` package
 - **API Methods**:
   - `getSessionId()` - Get current session ID (auto-generated UUID)
