@@ -34,7 +34,8 @@ Cloud (browser OAuth through IAS already covers them), NTLM.
 | this package | `KerberosAbapConnection` removed in 6.0 — single-leg, untested against a KDC ([#35](https://github.com/fr0ster/mcp-abap-adt-connection/issues/35)); "a `KerberosAuthProvider` belongs on the credential axis … with a system to test it against" | `docs/MIGRATION-6.0.md#kerberos` |
 | this package | `IAuthProvider.authorizationHeader()` is asked per request and may return any scheme | `src/connection/CredentialAbapConnection.ts:75-90` |
 | this package | `isNtlmChallenge()` detects NTLM, used by nothing | `src/auth/ntlm.ts` |
-| this package | `RfcTransport` carries ADT over RFC (`SADT_REST_RFC_ENDPOINT`) through `@mcp-abap-adt/sap-rfc-lite`, an optional peer | `src/connection/RfcTransport.ts`, `rfcConversation.ts` |
+| this package | `RfcTransport` carries ADT over RFC (`SADT_REST_RFC_ENDPOINT`) through `@mcp-abap-adt/sap-rfc-lite` (`^0.2.1`), an optional peer | `src/connection/RfcTransport.ts`, `rfcConversation.ts` |
+| this package | `RfcTransport` holds **more than one conversation**: the stateful one opened by `open()` (lock, unlock), one shared by the non-stateful calls and reset after each (`RfcResetServerContext`), and one of a call's own when the shared one is busy or the client cannot reset. Every conversation comes from the same factory, which closes over one `rfcParamsFrom(config)` | `src/connection/RfcTransport.ts:14-33, 362-466`, `rfcConversation.ts:67-86` |
 | this package | `rfcParamsFrom()` requires `username` and `password`; no SNC parameters | `src/connection/rfcConversation.ts:37-57` |
 | NW RFC SDK | client logon supports `SNC_QOP`, `SNC_MYNAME`, `SNC_PARTNERNAME`, `SNC_LIB` "for Kerberos/x509 over RFC" | `docs/SCOPE.md:31` |
 
@@ -66,6 +67,24 @@ Kerberos. ADT's REST requests already travel over RFC in this package.
 
   No `user`/`passwd`. Everything else — `ashost`, `sysnr`, `client`, `lang` —
   unchanged.
+- **Every conversation logs on with SNC.** `RfcTransport` does not keep one
+  conversation for the session: it opens the stateful one at `connect()`, the
+  shared non-stateful one on the first such call, and one of a call's own
+  whenever the shared one is busy (or on every non-stateful call, with a client
+  that cannot reset). Each is a separate RFC logon, so each is a separate
+  Kerberos exchange through the GSS library. Nothing extra is needed to carry
+  the SNC parameters to them — `rfcConversationFrom()` computes the params once
+  and every conversation is built from them — but the rule "no `user`/`passwd`
+  when SNC is configured" holds for **every** conversation, not only the first,
+  and is tested that way.
+- **Ticket lifetime.** A reset (`RfcResetServerContext`) ends the ABAP session
+  context and keeps the logon, so the shared conversation logs on once. The
+  stateful conversation, too, lives as long as the wire. A conversation of a
+  call's own logs on when it is opened — after the Kerberos ticket has expired
+  (typically 10 h on a domain), that logon fails while the long-lived ones keep
+  working. The failure must name the cause (SNC/GSS logon refused, renew the
+  domain logon), not surface as a generic RFC error from one call in the
+  middle of a session.
 - **Credential:** the RFC logon authenticates, so the connector's credential
   contributes nothing: a credential whose `authorizationHeader()` and
   `cookies()` return `null` (see [Decisions](#decisions) 1 for its name and
@@ -80,7 +99,7 @@ Checked:
 - `sap-rfc-lite` passes every key of the params object to `RfcOpenConnection`
   unchanged: `getConnectionParams()` (`sap-rfc-lite/src/cpp/nwrfcsdk.cc:908-926`)
   copies each property name and value into `RFC_CONNECTION_PARAMETER[]`, with
-  no filter. What needs changing is this package's `RfcConnectionParams`
+  no filter (checked in 0.2.0; the function is unchanged there). What needs changing is this package's `RfcConnectionParams`
   interface (`src/connection/rfcConversation.ts:20`), whose `user` and
   `passwd` are required and which has no `snc_*` fields.
 
@@ -155,6 +174,8 @@ contract package, it is `interfaces-auth`, also a minor ([Decisions](#decisions)
 | What | How | Where |
 |---|---|---|
 | SNC parameters | `rfcParamsFrom()` unit tests: SNC config → SNC keys, no `user`/`passwd`; partial SNC config refused naming the missing field | this package, CI |
+| SNC on every conversation | `RfcTransport` with a recording fake client: a stateful call, two concurrent non-stateful calls (shared + own), and a client without `resetServerContext` — every constructed client got the SNC params and none got `user`/`passwd` | this package, CI |
+| SNC end to end, several conversations | live: a lock/unlock plus concurrent reads, then check **SMGW → Logged on Clients** shows every conversation as the domain user | live, manual |
 | SNC end to end | on the user's domain machine: `SAP_AUTH_TYPE=kerberos`, `SAP_CONNECTION_TYPE=rfc`, SNC fields set, no password → discovery answers | live, manual, results recorded in the PR |
 | `KerberosAuthProvider` (route B, deferred) | unit tests with a fake `INegotiateTokenSource`: fresh token per call, NTLM refused, SPN derivation, `prepare()` failure message, cloud refused | this package, CI |
 | SPNego wire contract (route B, deferred) | a stand in Docker: MIT krb5 KDC, a small HTTPS server requiring `Negotiate` (validated with a keytab), a client container with `kinit` → the default token source against it | this package, CI job — answers #35's "untested against a KDC" |
@@ -162,7 +183,7 @@ contract package, it is `interfaces-auth`, also a minor ([Decisions](#decisions)
 | SNC with the Secure Login Client on Windows | only live — no Windows domain in CI | live, manual |
 
 Each rule gets a test that goes red when the rule is removed: no `user` or
-`passwd` sent when SNC is configured; a partial SNC configuration refused;
+`passwd` sent when SNC is configured, on any conversation; a partial SNC configuration refused;
 Kerberos over HTTP still refused with its message.
 
 ## Order
@@ -201,6 +222,12 @@ One PR per repository per step, each merged before the next opens.
    macOS, and does the NW RFC SDK load it outside SAP GUI?
 3. Route B only: is SPNego enabled on the target system's ICF (the browser
    check), and does the system continue the exchange or accept one token?
-4. After an SNC logon, does one RFC conversation carry the whole
-   session, as it does with a password today, or does anything in
-   `RfcTransport` reopen the connection and need the SNC parameters again?
+4. ~~After an SNC logon, does one RFC conversation carry the whole session,
+   or does anything in `RfcTransport` reopen the connection and need the SNC
+   parameters again?~~ It reopens — since the two-conversation wire (#62) one
+   conversation never carries the whole session, with a password either. The
+   SNC parameters reach every conversation through the factory; see route A,
+   *Every conversation logs on with SNC*.
+5. Does a GSS logon on a conversation of a call's own add noticeable latency
+   on top of the ~0.5 s RFC logon measured on E19, and is the message the SDK
+   gives for an expired ticket specific enough to name the cause?
