@@ -1,7 +1,15 @@
 # connection 10.0.0 — goal and path
 
-**Status:** agreed direction, before the spec. The spec and then the plan come
-next, in this PR; this file fixes what they are for.
+**Status:** goal approved (#66); design agreed in discussion 2026-09-30. The
+spec and then the plan come next, in this PR. This file is the anchor: it says
+what they are for, and what neither may trade away.
+
+**Three documents, one direction.** This goal, then the spec, then the plan.
+The spec and the plan answer to this file, never to the code as it happens to
+be. When writing either, the easy move is to describe what exists and call it
+the design; that is how the reason for the whole change gets lost. If the
+spec or the plan needs to depart from anything under *Holds throughout*, this
+file changes first — explicitly, in review — and only then the spec.
 
 ## Goal
 
@@ -59,31 +67,66 @@ SNC over RFC (on-prem, Secure Login Client).
   not exist, and `docs/USAGE.md`'s claim that concurrent requests share one
   renewal (nothing implements it).
 
+## Holds throughout
+
+The spec, the plan and the code are checked against these; none is traded for
+a smaller diff.
+
+1. **The process never asks what it was given.** No branch on `kind`, no
+   `instanceof`, no narrowing of the provider. `kind` is for logs.
+2. **The credential comes only from the provider.** `config` says where the
+   system is (host, system number, client, language), never who logs on:
+   nothing in `src/` reads `username` / `password` to authenticate.
+3. **The provider's words reach the caller.** A refusal ends in the
+   provider's `reason` / `hint`; the wire's error travels beside it as the
+   cause, never instead of it.
+4. **The wire offers, the provider writes, the lifecycle decides.** The wire
+   owns its session (CSRF, cookies, affinity, conversations) and says only
+   *that* a logon failed; the provider fills the targets; the lifecycle owns
+   the policy — when to ask `rejected()`, and the one more attempt after Ok.
+5. **One more attempt, never a loop.** After Ok from `rejected()`, exactly
+   one further attempt; a second refusal is the verdict.
+6. **No runtime dependency on `@mcp-abap-adt/auth-providers`.** The
+   connection speaks the contract; the consumer brings the provider.
+7. **Success is measured, not inferred** — the live checks under *Success*,
+   on real systems.
+
 **Stays:** the three axes — which system (the connector), which credential
 (the provider), which wire (the transport) — all stated by the caller, none
 inferred; the lifecycle's ownership of connect/disconnect, epochs, critical
 sections and stale-request fencing; the wire's ownership of CSRF, cookies and
 affinity.
 
-## Open, for the spec
+## Decided in the design discussion (2026-09-30)
 
-1. **Which refusal is the credential's.** Today a 401 feeds two retry paths
-   that fetch a new CSRF token and resend (a login-form 401 on a mutation, a
-   401 on a GET), and a 403 without "CSRF" is never classified. Which of them
-   become `rejected({ at: 'request', status })`, which stay the wire's session
-   recovery, and in what order when both apply.
-2. **The session after a renewal.** When `rejected()` answers Ok, is the
-   resend made on the same session, or is the session discarded first — per
-   wire (cookie session, cloud security session, RFC conversation).
-3. **A logon refusal.** RFC wraps a failed open as a bare `Error` with no
-   status; an HTTP session establishment treats a 401 as retryable. What
-   reaches `rejected({ at: 'logon', error })`, with the wire's error as it
-   arrived so the provider can name it (SNC's `A2200019`, a password refused).
-4. **TLS material and the agent.** The agent is built once, the material
-   arrives in `establish()` per logon. Build the agent from what the first
-   logon offered, or rebuild when it changes.
-5. **Tests without the old providers.** Recording targets and a stub provider
-   inside this repo, or `@mcp-abap-adt/auth-providers` as a dev dependency.
+The spec details these; they answer the questions this file left open.
+
+1. **Which refusal is the credential's.** The wire's own session recovery
+   runs first, unchanged (a stale CSRF token on a mutation, a GET retried with
+   the cookies that arrived). Only a 401 that survives it goes to
+   `rejected({ at: 'request', status: 401 })`. A 403 never does.
+2. **The session after a renewal.** Ok → `authorize()` again and one resend
+   on the same session: locks and stateful sessions survive a renewal.
+3. **A logon refusal.** HTTP: a 401 while establishing the session. RFC: any
+   failure to open a conversation — the SDK reports SNC and network failures
+   with the same key, and auth-providers 5.0.1 tells them apart. The wire
+   marks it (`WireLogonError`, the raw error as its cause); the lifecycle asks
+   `rejected({ at: 'logon', error })`, then one more logon or the verdict.
+   Outward: `AuthRefusedError { refusal, at, cause }`.
+4. **TLS material and the agent.** The HTTP wire builds its client lazily,
+   from the material the logon offered, and rebuilds it when a later logon
+   offers different material. The constructor's `agentOptions` stay for
+   agent settings that are not the credential.
+5. **Tests.** A recording stub provider in this repo for the lifecycle; one
+   contract suite over the real providers of `@mcp-abap-adt/auth-providers`
+   (a dev dependency) on every wire.
+
+Also agreed: `prepare()` then `establish()` before the wire is opened;
+`authorize()` before every attempt, the CSRF fetch, cloud preflight and
+logoff included; `IAdtSessionContext.authHeaders` gives way to
+`authorize(target)` / `logon(target)`; RFC calls `logon` on every
+conversation it opens, the per-call ones included; a provider that writes no
+logon parameters (a bearer token) cannot log on over RFC, and says so.
 
 ## Path
 
@@ -91,8 +134,9 @@ affinity.
    2026-09-29 (interfaces #111).
 2. ~~`@mcp-abap-adt/auth-providers` 5.0.0~~ — released 2026-09-29
    (auth-providers #55, #57).
-3. **This package, 10.0.0** — goal → spec → plan → implementation, in this
-   PR. ← now
+3. **This package, 10.0.0** — in this PR (#66): goal (approved) → spec →
+   review → plan → review → implementation → external review → merge →
+   release 10.0.0. ← now
 4. `@mcp-abap-adt/auth-broker` 4.0.0 — `getProvider(destination)`: a provider
    already paired with the stores, SNC from `IConnectionConfig`'s
    `sncPartnerName`, `sncQop`, `sncLib`, `sncMyName`. Independent of step 3.
