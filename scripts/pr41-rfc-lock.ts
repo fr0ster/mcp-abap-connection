@@ -24,8 +24,8 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import * as dotenv from 'dotenv';
-import { BasicAuthProvider } from '../dist/auth/providers';
 import { AdtOnPremConnector } from '../dist/connection/AdtOnPremConnector';
 import { RfcTransport } from '../dist/connection/RfcTransport';
 import type { ILogger } from '../dist/logger';

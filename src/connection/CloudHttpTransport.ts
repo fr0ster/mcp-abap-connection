@@ -20,6 +20,7 @@
 import type { ILogger } from '../logger.js';
 import { mergeCookieHeaders } from '../utils/cookies.js';
 import { getTimeout } from '../utils/timeouts.js';
+import { AuthRefusedError } from './authErrors.js';
 import { HttpTransport } from './HttpTransport.js';
 import type { IAdtSessionContext, ICloudTransport } from './IAdtTransport.js';
 
@@ -69,11 +70,15 @@ export class CloudHttpTransport
   private resource: string | null = null;
 
   override async open(context: IAdtSessionContext): Promise<void> {
+    // The logon, outside the swallowing `try`: a credential that refuses it
+    // (`AuthRefusedError`) is the caller's to hear, not a preflight to shrug at.
+    await super.open(context);
     try {
-      // Read ONCE. The contract lets a provider answer differently each time —
-      // a token provider renews behind the call — so two reads can build one
-      // request out of two different credentials.
-      const auth = await context.authHeaders();
+      // Authorized ONCE. The contract lets a provider answer differently each
+      // time — a token provider renews behind the call — so two calls can
+      // build one request out of two different credentials.
+      const auth: Record<string, string> = {};
+      await context.authorize(auth);
       const response = await this.send({
         method: 'GET',
         // The cache-buster is Eclipse's; kept because this must not be served
@@ -112,6 +117,9 @@ export class CloudHttpTransport
       this.resource = resource;
       this.logger?.debug(`Security session opened: ${resource}`);
     } catch (error) {
+      // The provider will not authorize the preflight: its word, not a failed
+      // preflight.
+      if (error instanceof AuthRefusedError) throw error;
       // Not fatal here. If no session was opened, the establishment that
       // follows says so with the whole picture; an error raised from a
       // preflight would replace that with something less useful.
@@ -140,7 +148,8 @@ export class CloudHttpTransport
     }
 
     try {
-      const auth = await context.authHeaders();
+      const auth: Record<string, string> = {};
+      await context.authorize(auth);
       await this.sendDetached({
         method: 'DELETE',
         url: new URL(resource, context.baseUrl).toString(),

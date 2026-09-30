@@ -83,7 +83,8 @@ In your code:
 
 ```typescript
 import 'dotenv/config'; // or require('dotenv').config();
-import { AdtOnPremConnector, BasicAuthProvider } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
 const config = {
   url: process.env.SAP_URL!,
@@ -146,7 +147,8 @@ node -e "const { AdtOnPremConnector } = require('@mcp-abap-adt/connection'); con
 Create `test-connection.js`:
 
 ```javascript
-const { AdtOnPremConnector, BasicAuthProvider } = require('@mcp-abap-adt/connection');
+const { AdtOnPremConnector, OnPremHttpTransport } = require('@mcp-abap-adt/connection');
+const { BasicAuthProvider } = require('@mcp-abap-adt/auth-providers');
 
 const config = {
   url: 'https://your-sap-server.com',
@@ -165,7 +167,7 @@ const logger = {
 
 const connection = new AdtOnPremConnector(
   config,
-  new BasicAuthProvider(config.username!, config.password!),
+  new BasicAuthProvider(config.username, config.password),
   new OnPremHttpTransport(() => ({}), logger, {
     client: config.client,
     baseUrl: config.url,
@@ -206,7 +208,7 @@ actually use:
 
 ```bash
 npm install @mcp-abap-adt/interfaces-adt-connection # IAbapConnection, ITimeoutConfig, ADT_SESSION_ERROR
-npm install @mcp-abap-adt/interfaces-auth     # IAuthProvider, IRenewableCredential, ITokenRefresher
+npm install @mcp-abap-adt/interfaces-auth     # IAuthProvider, AuthOutcome, ITokenRefresher
 npm install @mcp-abap-adt/interfaces-auth-sap # ISapConfig, SapAuthType, ICertificateMaterialLoader
 npm install @mcp-abap-adt/interfaces-network  # NETWORK_ERROR_CODES, the WebSocket contracts
 npm install @mcp-abap-adt/interfaces-utils    # ILogger
@@ -218,6 +220,11 @@ as of its 52.0.0, npm still serves 51.0.0 with every symbol re-exported and
 deprecated, and installing that alongside a contract package at a different major
 puts two copies of the same contract in your tree.
 [Migration to 9.0.0](./MIGRATION-9.0.md) has the details.
+
+The credential providers (`BasicAuthProvider`, `TokenAuthProvider`,
+`SamlAuthProvider`, `CertificateAuthProvider`) are no longer part of this
+package as of 10.0.0; install `@mcp-abap-adt/auth-providers` for them. See
+[Migration to 10.0.0](./MIGRATION-10.0.md).
 
 ### Create `tsconfig.json`
 
@@ -245,11 +252,11 @@ puts two copies of the same contract in your tree.
 ```typescript
 import {
   AdtOnPremConnector,
-  BasicAuthProvider,
   ILogger,
   OnPremHttpTransport,
   SapConfig,
 } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
 const config: SapConfig = {
   url: 'https://your-sap-server.com',

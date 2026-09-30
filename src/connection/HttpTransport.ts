@@ -6,30 +6,37 @@
  * code path on one end cannot be named in a type — a default type parameter has
  * nothing to point at — so this is what makes the two ends symmetrical.
  *
- * No `open()` or `close()`. A request opens its own socket and there is no
- * conversation to establish or give back; those members exist for a transport
- * that owns a wire, which is RFC.
+ * Nothing to open or give back at this level. A request opens its own socket
+ * and there is no conversation to establish; `open()` only offers the
+ * credential its logon, and the subclasses add the session mechanism.
  *
  * **Where the two axes touch.** TLS client-certificate material comes from the
  * CREDENTIAL — a certificate authenticates through the transport rather than
- * through a header — and configures this. It is taken as a thunk rather than a
- * value so it is read when the client is first built, by which time the
- * credential has been prepared and knows what it holds. Read in a constructor,
- * it would be whatever was loaded before the connection started, which for a
- * certificate is nothing.
+ * through a header. The provider presents it at the logon (`logonTarget()`);
+ * the client is built lazily from it on the first request, over the
+ * constructor's `agentOptions` (`ca`, `rejectUnauthorized` — settings that are
+ * not the credential). Material that changes between logons drops the client;
+ * the cookie jar and the CSRF token are the session's and stay.
  */
 
 import { Agent, type AgentOptions } from 'node:https';
+import type {
+  AuthOutcome,
+  ICertificateMaterial,
+  ILogonTarget,
+} from '@mcp-abap-adt/interfaces-auth';
 import axios, { type AxiosInstance } from 'axios';
 import type { ILogger } from '../logger.js';
 import { mergeCookieHeaders } from '../utils/cookies.js';
+import { AuthRefusedError, WireLogonError } from './authErrors.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
-import type {
-  IAdtEstablishContext,
-  IAdtSessionContext,
-  IAdtTransport,
-  IAdtTransportRequest,
-  IAdtTransportResponse,
+import {
+  type IAdtEstablishContext,
+  type IAdtSessionContext,
+  type IAdtTransport,
+  type IAdtTransportRequest,
+  type IAdtTransportResponse,
+  refusalOf,
 } from './IAdtTransport.js';
 import { isStatefulRequest, SESSION_TYPE_HEADER } from './statefulRequest.js';
 
@@ -78,6 +85,37 @@ function absentEndpoint(error: unknown): boolean {
   return status === 404 || status === 501;
 }
 
+const MATERIAL_FIELDS = ['cert', 'key', 'pfx', 'passphrase'] as const;
+
+/**
+ * The material fields a provider offered, and nothing else: a key outside
+ * them (`ca`, `rejectUnauthorized`) belongs to `agentOptions`, and a field
+ * offered as `undefined` was not offered.
+ */
+function materialOf(offered: ICertificateMaterial): ICertificateMaterial {
+  const taken: ICertificateMaterial = {};
+  for (const field of MATERIAL_FIELDS) {
+    const value = offered[field];
+    if (value !== undefined) Object.assign(taken, { [field]: value });
+  }
+  return taken;
+}
+
+/** Material is the same when every field holds the same value, buffers by bytes. */
+function sameMaterial(
+  a: ICertificateMaterial | null,
+  b: ICertificateMaterial,
+): boolean {
+  if (!a) return Object.keys(b).length === 0;
+  return MATERIAL_FIELDS.every((field) => {
+    const left = a[field];
+    const right = b[field];
+    if (left === right) return true;
+    if (left === undefined || right === undefined) return false;
+    return Buffer.from(left).equals(Buffer.from(right));
+  });
+}
+
 export class HttpTransport implements IAdtTransport {
   /**
    * A real wire, usable on its own: it sends, holds a jar, and earns a CSRF
@@ -92,6 +130,12 @@ export class HttpTransport implements IAdtTransport {
   readonly kind: string = 'http';
 
   private instance: AxiosInstance | null = null;
+
+  /**
+   * The TLS material the last logon offered. The client is built from it, and
+   * a logon offering different material drops the client — never the jar.
+   */
+  private material: ICertificateMaterial | null = null;
 
   /**
    * The wire's own state.
@@ -252,8 +296,9 @@ export class HttpTransport implements IAdtTransport {
       if (index > 0 && !absentEndpoint(last)) break;
       for (let attempt = 0; attempt <= retries; attempt++) {
         try {
-          // Read per attempt: a provider may renew behind the call.
-          const auth = await context.authHeaders();
+          // Authorized per attempt: a provider may renew behind the call.
+          const auth: Record<string, string> = {};
+          await context.authorize(auth);
           const response = await this.send({
             method: 'GET',
             url,
@@ -284,8 +329,12 @@ export class HttpTransport implements IAdtTransport {
           last = new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
         } catch (error) {
           // Not a failed exchange: see `isFatal`. Leaves immediately, past the
-          // retries and past the fallback endpoint.
-          if (context.isFatal?.(error)) throw error;
+          // retries and past the fallback endpoint. So does the provider's
+          // refusal to authorize: it is its word, and asking again only asks
+          // it again.
+          if (error instanceof AuthRefusedError || context.isFatal?.(error)) {
+            throw error;
+          }
 
           last = error instanceof Error ? error : new Error(String(error));
           const response = (
@@ -295,7 +344,17 @@ export class HttpTransport implements IAdtTransport {
             // A refusal can still carry the cookies that matter.
             context.observe(response.headers);
             this.ingest(response.headers);
+          }
 
+          // A refused logon, named as one — after its cookies are in, and
+          // without a retry: asking again with the credential just refused
+          // tells the system nothing new. What to do about it is not the
+          // wire's to decide.
+          if (refusalOf(error)?.status === 401) {
+            throw new WireLogonError(error, 401);
+          }
+
+          if (response?.headers) {
             // …and the token itself. SAP answers 405 to a GET on some
             // endpoints and puts the token in the header anyway, and other
             // refusals carry one too. A retry would throw away a token the
@@ -417,6 +476,31 @@ export class HttpTransport implements IAdtTransport {
     return `${base}${url}`;
   }
 
+  /**
+   * What this wire says to a provider at a logon.
+   *
+   * TLS material is taken: the client is built from it, over `agentOptions`,
+   * and material that differs by value from the last logon's drops the client
+   * so the next request builds a new agent. Logon parameters belong to the RFC
+   * wire; a provider that needs them is told so and decides what that means.
+   */
+  protected logonTarget(): ILogonTarget {
+    return {
+      tlsMaterial: (offered): AuthOutcome => {
+        const material = materialOf(offered);
+        if (!sameMaterial(this.material, material)) {
+          this.instance = null;
+        }
+        this.material = material;
+        return { ok: true };
+      },
+      logonParameters: (): AuthOutcome => ({
+        ok: false,
+        refusal: { reason: 'this wire takes no logon parameters (HTTP)' },
+      }),
+    };
+  }
+
   private client(): AxiosInstance {
     if (!this.instance) {
       // Kept as it was: an explicit opt-IN, so a misread env var cannot quietly
@@ -434,6 +518,7 @@ export class HttpTransport implements IAdtTransport {
         httpsAgent: new Agent({
           rejectUnauthorized,
           ...this.agentOptions(),
+          ...this.material,
         }),
       });
     }
@@ -441,13 +526,16 @@ export class HttpTransport implements IAdtTransport {
   }
 
   /**
-   * Nothing to ask for: an HTTP session arrives with the establishing call.
+   * The logon, and nothing else to ask for: an HTTP session arrives with the
+   * establishing call.
    *
-   * Empty rather than absent. "There is no session resource here" is a fact
-   * about this wire, and a fact is stated, not left for a caller to discover by
-   * checking whether the method exists.
+   * The credential is offered the logon here, before any request — a cloud
+   * preflight included. "There is no session resource here" is a fact about
+   * this wire, and a fact is stated, not left for a caller to discover.
    */
-  async open(_context: IAdtSessionContext): Promise<void> {}
+  async open(context: IAdtSessionContext): Promise<void> {
+    await context.logon(this.logonTarget());
+  }
 
   /**
    * Nothing to give back at this level.

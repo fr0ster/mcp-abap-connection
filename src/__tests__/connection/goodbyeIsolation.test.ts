@@ -17,6 +17,7 @@ import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
+import { credentialWriting } from '../helpers/credentials.js';
 
 const config: SapConfig = {
   url: 'https://sap.example.com',
@@ -78,23 +79,18 @@ describe('a logoff still in flight when the next session opens', () => {
     // Stubbed at the CLIENT, not at send(): the defect lives in the dressing
     // send() does on its way out, so replacing send() would step over it.
     (transport as unknown as { instance: unknown }).instance = w.send;
-    // The window this is about: `close()` suspends on `authHeaders()`, and a
+    // The window this is about: `close()` suspends on `authorize()`, and a
     // provider that takes a moment is ordinary — a token provider checks expiry
     // and may go to the network. While it is suspended, the connection is
     // already free to connect again.
     let slow = false;
-    const credential: IAuthProvider = {
+    const credential: IAuthProvider = credentialWriting({
       kind: 'slow',
-      // Empty where there is nothing to say: since interfaces 20.0.0 a credential
-      // states all of itself, so nothing has to ask whether it does.
-      prepare: async () => {},
-      cookies: () => null,
-      transportMaterial: () => ({}),
-      authorizationHeader: async () => {
+      authorization: async () => {
         if (slow) await new Promise((r) => setTimeout(r, 40));
         return 'Basic dTpw';
       },
-    };
+    });
     const conn = new AdtOnPremConnector(config, credential, transport, null);
 
     await conn.connect();

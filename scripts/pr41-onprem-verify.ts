@@ -26,8 +26,8 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import * as dotenv from 'dotenv';
-import { BasicAuthProvider } from '../dist/auth/providers';
 import { AdtOnPremConnector } from '../dist/connection/AdtOnPremConnector';
 import { LegacyOnPremHttpTransport } from '../dist/connection/LegacyOnPremHttpTransport';
 import { OnPremHttpTransport } from '../dist/connection/OnPremHttpTransport';
@@ -88,17 +88,16 @@ function describe(e: unknown): string {
 }
 
 /**
- * What the caller wires now: the credential's TLS material configures the wire
- * and the client is named on it, because nothing does either for them.
+ * What the caller wires now: the client and address are named on the wire,
+ * because nothing derives them. TLS material is not wired here — the provider
+ * offers it at logon, and `agentOptions` (empty here) carries what is not the
+ * credential's, such as `ca` and `rejectUnauthorized`.
  */
 function httpWire(kind: 'plain' | 'legacy'): OnPremHttpTransport {
-  const cred = credential();
   const Wire =
     kind === 'legacy' ? LegacyOnPremHttpTransport : OnPremHttpTransport;
-  // Called, not asked about: `transportMaterial()` is required on
-  // IAuthProvider, so `?.()` here would be a dead branch — and the exact
-  // "does this member exist" question this release removed from the base.
-  return new Wire(() => cred.transportMaterial(), logger, {
+  // Basic logon carries no TLS material, so the agent gets none.
+  return new Wire(() => ({}), logger, {
     client: config.client,
     baseUrl: config.url,
   });

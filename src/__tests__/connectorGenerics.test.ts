@@ -10,12 +10,12 @@
  * there is no cloud RFC.
  */
 
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import {
   BasicAuthProvider,
   CertificateAuthProvider,
   TokenAuthProvider,
-} from '../auth/providers.js';
+} from '@mcp-abap-adt/auth-providers';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
@@ -98,15 +98,16 @@ describe('on-prem carries both axes in its type', () => {
       onPremHttpTransport(config, null),
     );
 
-    // Typed as CertificateAuthProvider, so its own members are reachable
-    // without narrowing.
-    expect(typeof conn.credential.transportMaterial).toBe('function');
+    // Typed as CertificateAuthProvider, so what it is stays visible without
+    // narrowing.
+    expect(conn.credential).toBe(credential);
+    expect(conn.credential.kind).toBe('certificate');
   });
 });
 
 describe('cloud carries one', () => {
   it('remembers the credential', () => {
-    const credential = new TokenAuthProvider('t');
+    const credential = TokenAuthProvider.fixed('t');
     const conn = new AdtCloudConnector(
       config,
       credential,

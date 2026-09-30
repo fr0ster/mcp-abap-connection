@@ -23,8 +23,8 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import * as dotenv from 'dotenv';
-import { BasicAuthProvider } from '../dist/auth/providers';
 import { AdtOnPremConnector } from '../dist/connection/AdtOnPremConnector';
 import { OnPremHttpTransport } from '../dist/connection/OnPremHttpTransport';
 import { RfcTransport } from '../dist/connection/RfcTransport';
@@ -85,11 +85,10 @@ async function main(): Promise<void> {
       : new AdtOnPremConnector(
           config as never,
           credential,
-          new OnPremHttpTransport(
-            () => credential.transportMaterial(),
-            logger,
-            { client: config.client, baseUrl: config.url },
-          ),
+          new OnPremHttpTransport(() => ({}), logger, {
+            client: config.client,
+            baseUrl: config.url,
+          }),
           logger,
         );
 

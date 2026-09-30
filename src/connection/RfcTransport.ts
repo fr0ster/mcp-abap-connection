@@ -42,9 +42,12 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import type { AuthOutcome, ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '../logger.js';
+import { WireLogonError } from './authErrors.js';
 import type {
   IAdtEstablishContext,
+  IAdtSessionContext,
   IAdtTransport,
   IAdtTransportRequest,
   IAdtTransportResponse,
@@ -199,6 +202,12 @@ export class RfcTransport implements IOnPremTransport {
   private canReset: boolean | undefined;
   /** Names the conversation, and so the ABAP session it carries. */
   private conversationId = '';
+  /**
+   * Where each logon asks the provider what to open with. Kept from `open()`;
+   * `null` when the wire is driven without a lifecycle, and then a conversation
+   * opens with the address alone.
+   */
+  private context: IAdtSessionContext | null = null;
 
   /**
    * Nothing to fold in. `SADT_REST_RFC_ENDPOINT` answers with two header
@@ -269,7 +278,9 @@ export class RfcTransport implements IOnPremTransport {
    * machine without it.
    */
   constructor(
-    private readonly connect: () => IRfcConversation,
+    private readonly connect: (
+      logon: Readonly<Record<string, string>>,
+    ) => IRfcConversation,
     private readonly logger: ILogger | null = null,
     private readonly options: IRfcTransportOptions = {},
   ) {}
@@ -289,15 +300,11 @@ export class RfcTransport implements IOnPremTransport {
     return clip(text, ceiling);
   }
 
-  async open(): Promise<void> {
+  async open(context?: IAdtSessionContext): Promise<void> {
+    if (context) this.context = context;
     if (this.conversation?.alive) return;
     const generation = this.generation;
-    const conversation = this.connect();
-    try {
-      await conversation.open();
-    } catch (e) {
-      throw new Error(`Failed to open RFC connection: ${message(e)}`);
-    }
+    const conversation = await this.loggedOn();
     // close() ran while this logged on: the session it would have handed out
     // belongs to a wire already given back, so it is closed, not kept.
     if (generation !== this.generation) {
@@ -450,12 +457,7 @@ export class RfcTransport implements IOnPremTransport {
    * sent — not a PUT, not a DELETE — on a wire already given back.
    */
   private async openOwn(generation: number): Promise<IRfcConversation> {
-    const own = this.connect();
-    try {
-      await own.open();
-    } catch (e) {
-      throw new Error(`Failed to open RFC connection: ${message(e)}`);
-    }
+    const own = await this.loggedOn();
     if (generation !== this.generation || !this.conversation?.alive) {
       await this.closeQuietly(own);
       throw new Error(
@@ -463,6 +465,43 @@ export class RfcTransport implements IOnPremTransport {
       );
     }
     return own;
+  }
+
+  /**
+   * The target a provider writes its logon into.
+   *
+   * Parameters accumulate over the calls of one logon and go into this open
+   * alone. TLS material is refused: there is no TLS to configure on this wire,
+   * and whether that matters is the provider's call.
+   */
+  private logonTarget(parameters: Record<string, string>): ILogonTarget {
+    return {
+      tlsMaterial: (): AuthOutcome => ({
+        ok: false,
+        refusal: { reason: 'this wire carries no TLS material (RFC)' },
+      }),
+      logonParameters: (written): AuthOutcome => {
+        Object.assign(parameters, written);
+        return { ok: true };
+      },
+    };
+  }
+
+  /**
+   * A new conversation, logged on: the provider is asked what to open with,
+   * every time, and a failed open is a refused logon whose cause is the SDK's
+   * own error, untouched — a provider reads its `key` and message.
+   */
+  private async loggedOn(): Promise<IRfcConversation> {
+    const parameters: Record<string, string> = {};
+    await this.context?.logon(this.logonTarget(parameters));
+    const conversation = this.connect(parameters);
+    try {
+      await conversation.open();
+    } catch (e) {
+      throw new WireLogonError(e);
+    }
+    return conversation;
   }
 
   private async closeQuietly(conversation: IRfcConversation): Promise<void> {

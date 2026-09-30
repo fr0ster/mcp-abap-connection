@@ -11,8 +11,11 @@
  * the host name, or by asking the server.
  */
 
+import {
+  BasicAuthProvider,
+  TokenAuthProvider,
+} from '@mcp-abap-adt/auth-providers';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
-import { BasicAuthProvider, TokenAuthProvider } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
@@ -62,7 +65,7 @@ describe('the cloud connector', () => {
   it('takes a credential', () => {
     const conn = new AdtCloudConnector(
       config,
-      new TokenAuthProvider('t'),
+      TokenAuthProvider.fixed('t'),
       cloudHttpTransport(config, null),
       null,
     );

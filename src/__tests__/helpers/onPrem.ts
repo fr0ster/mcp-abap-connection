@@ -2,13 +2,13 @@
  * An on-prem connection over HTTP, for tests whose subject is the shared
  * machinery.
  *
- * The wire is required now and the caller builds it — including the two things
- * only the caller can wire, the credential's TLS material and the client. That
- * is the point of the change, and also why a test that is about critical
- * sections should not have to say it eight times.
+ * The wire is required now and the caller builds it — including the client and
+ * address, which only the caller knows. The credential's TLS material is not
+ * wired by the caller: the provider offers it at logon. That is the point of the
+ * change, and also why a test that is about critical sections should not have to
+ * say it eight times.
  */
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
-import { BasicAuthProvider } from '../../auth/providers.js';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
@@ -19,14 +19,11 @@ export function onPremHttpTransport(
   config: SapConfig,
   logger: ILogger | null = null,
 ): OnPremHttpTransport {
-  const credential: IAuthProvider = new BasicAuthProvider(
-    config.username ?? '',
-    config.password ?? '',
-  );
   return new OnPremHttpTransport(
-    // What the caller must wire now: the credential's TLS material configures
-    // the wire, and nothing does it for them.
-    () => credential.transportMaterial?.() ?? {},
+    // What the caller must wire: the agent's options. The credential no longer
+    // supplies TLS material; it presents it at logon, which the session context
+    // arranges.
+    () => ({}),
     logger,
     { client: config.client, baseUrl: config.url },
   );

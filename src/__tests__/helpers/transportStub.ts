@@ -59,17 +59,16 @@ export function holdsItsSession(
      */
     establish: async (context: {
       baseUrl: string;
-      authHeaders: () => Promise<Record<string, string>>;
+      authorize: (headers: Record<string, string>) => Promise<void>;
       observe: (headers: unknown) => void;
     }) => {
       if (!send) return;
+      const auth: Record<string, string> = {};
+      await context.authorize(auth);
       const response = await send({
         method: 'GET',
         url: `${context.baseUrl}/sap/bc/adt/core/discovery`,
-        headers: {
-          ...(await context.authHeaders()),
-          'x-csrf-token': 'fetch',
-        },
+        headers: { ...auth, 'x-csrf-token': 'fetch' },
       });
       context.observe(response.headers);
       state.ingest(response.headers as Record<string, unknown>);

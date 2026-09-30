@@ -7,26 +7,23 @@
  * `/sap/bc/adt/discovery`, keep it, tolerate a failure — with the only
  * per-credential part being a step before it. That step is `prepare()`.
  *
- * So this owns the establishing call, and the credential contributes three
- * things at most: what to prepare, what header to send, and what TLS material
- * to present. Which system this is talking to was stated by the caller when it
+ * So this owns the establishing call, and the credential contributes what to
+ * prepare and what each request carries. Which system this is talking to was stated by the caller when it
  * chose the subclass, and is never worked out here.
  */
 
-import type { AgentOptions } from 'node:https';
 import type { IAbapRequestOptions } from '@mcp-abap-adt/interfaces-adt-connection';
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
+import type {
+  IAuthProvider,
+  IAuthRejection,
+  ILogonTarget,
+} from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
+import { AuthRefusedError, type GuardedAnswer, guarded } from './authErrors.js';
 import { type IAdtTransport, refusalOf } from './IAdtTransport.js';
-
-/** A 401 from the server, whatever transport shape it arrives in. */
-function isUnauthorized(error: unknown): boolean {
-  const status = (error as { response?: { status?: number } })?.response
-    ?.status;
-  return status === 401;
-}
+import { requestTargetOn } from './requestTarget.js';
 
 export abstract class CredentialAbapConnection<
   TCredential extends IAuthProvider = IAuthProvider,
@@ -45,53 +42,60 @@ export abstract class CredentialAbapConnection<
   /**
    * Whatever the credential needs before the first request goes out.
    *
-   * Runs before the preflight, not inside the establishing call: building the
-   * transport reads the TLS options, and a certificate whose material had not
-   * been loaded yet rejected the connect while the argument was still being
-   * evaluated — outside every catch, with no request sent.
+   * Runs before the preflight, not inside the establishing call: a credential
+   * that had not yet done its one-time work rejected the connect from inside an
+   * argument evaluation, outside every catch, with no request sent.
+   *
+   * A provider answers rather than throws; a throw is treated as an answer too
+   * (`guarded`), so a buggy provider fails the connect with words, not with an
+   * unhandled rejection.
    */
-  /** The header last put on the wire, so a change can be seen. */
-
   protected override async prepareCredential(): Promise<void> {
-    await this.credential.prepare();
+    const { outcome, thrown } = await guarded(() => this.credential.prepare());
+    if (!outcome.ok) {
+      throw new AuthRefusedError(outcome.refusal, 'prepare', thrown);
+    }
   }
 
   /**
-   * Nothing here: the header is asked for asynchronously in `getAuthHeaders()`,
-   * because a provider can renew behind the call and a synchronous read would
-   * have to hold what it returned. The base's abstract member is satisfied and
-   * unused.
-   */
-  protected buildAuthorizationHeader(): string {
-    return '';
-  }
-
-  /**
-   * The credential's cookies travel with its header.
+   * The credential writes what this request carries: its header, or its
+   * cookies, or both.
    *
    * On every path, not only on ordinary requests: a SAML session that is not
    * presented to the session preflight and the establishing call is a session
    * the server never sees us in.
    */
-  override async getAuthHeaders(): Promise<Record<string, string>> {
-    const headers = await super.getAuthHeaders();
-
+  protected override async authorizeRequest(
+    headers: Record<string, string>,
+  ): Promise<void> {
     // Asked per request, never held: a provider renews behind this call, and a
     // value kept here would be the stale one.
-    const authorization = await this.credential.authorizationHeader();
-    if (authorization) {
-      headers.Authorization = authorization;
+    const { outcome, thrown } = await guarded(() =>
+      this.credential.authorize(requestTargetOn(headers)),
+    );
+    if (!outcome.ok) {
+      throw new AuthRefusedError(outcome.refusal, 'request', thrown);
     }
-
-    const cookies = this.credential.cookies();
-    if (cookies) {
-      headers.Cookie = cookies;
-    }
-    return headers;
   }
 
-  protected override getHttpsAgentOptions(): AgentOptions {
-    return this.credential.transportMaterial();
+  /** What the credential brings to a logon: TLS material, logon parameters. */
+  protected override async logon(target: ILogonTarget): Promise<void> {
+    const { outcome, thrown } = await guarded(() =>
+      this.credential.establish(target),
+    );
+    if (!outcome.ok) {
+      throw new AuthRefusedError(outcome.refusal, 'logon', thrown);
+    }
+  }
+
+  /**
+   * The provider's answer, whole; a throw is an answer too (`guarded`), and
+   * is kept beside it to become the cause of the refusal.
+   */
+  protected override async credentialRejected(
+    rejection: IAuthRejection,
+  ): Promise<GuardedAnswer> {
+    return guarded(() => this.credential.rejected(rejection));
   }
 
   protected async establishSession(): Promise<void> {
@@ -102,19 +106,14 @@ export abstract class CredentialAbapConnection<
       // does nothing and holds no token. Demanding one here was what made
       // `connect()` impossible over RFC.
       //
-      // There is no second path. A credential that wanted to run the exchange
-      // itself would need the connection to ask which of the two does the work,
-      // and a credential whose way in IS a round trip does not need that: the
-      // wire asks `authHeaders()` PER ATTEMPT, so a one-shot token is offered
-      // on the establishing call and withheld afterwards by the credential
-      // itself, with nobody deciding anything.
+      // There is no second path. A credential whose way in IS a round trip
+      // does not need one: the wire authorizes PER ATTEMPT, so a one-shot token
+      // is offered on the establishing call and withheld afterwards by the
+      // credential itself, with nobody deciding anything.
       await this.transport.establish({
+        ...this.sessionContext(),
         baseUrl: await this.getBaseUrl(),
-        authHeaders: () => this.getAuthHeaders(),
-        extraHeaders: { 'sap-adt-connection-id': this.getSessionId() ?? '' },
-        observe: (headers) =>
-          this.observeResponse(headers as Record<string, unknown>),
-        isFatal: (error) => this.isSessionVerdict(error),
+        isFatal: (error) => this.endsTheExchange(error),
       });
       this.logger?.debug('Connected', {
         credential: this.credential.kind,

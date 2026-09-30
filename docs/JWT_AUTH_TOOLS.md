@@ -126,8 +126,8 @@ Or configure `SapConfig` directly:
 import {
   AdtCloudConnector,
   CloudHttpTransport,
-  TokenAuthProvider,
 } from "@mcp-abap-adt/connection";
+import { TokenAuthProvider } from "@mcp-abap-adt/auth-providers";
 import type { SapConfig } from "@mcp-abap-adt/connection";
 
 const config: SapConfig = {
@@ -139,7 +139,7 @@ const logger = console;
 
 const connection = new AdtCloudConnector(
   config,
-  new TokenAuthProvider(config.jwtToken!),
+  TokenAuthProvider.fixed(config.jwtToken!),
   new CloudHttpTransport(() => ({}), logger, {
     client: config.client,
     baseUrl: config.url,

@@ -210,8 +210,7 @@ describe('SessionLifecycle — transitions', () => {
 
     expect(order).toStrictEqual(['cleanup', 'caller disconnect']);
   });
-
-  // 15 — two recoveries with different baselines must decide independently.
+  // 15 — two cleanups with different baselines must decide independently.
   it('never joins recoveries', async () => {
     const lifecycle = connected();
     let runs = 0;
@@ -220,8 +219,8 @@ describe('SessionLifecycle — transitions', () => {
     };
 
     await Promise.all([
-      lifecycle.transition('recover', run),
-      lifecycle.transition('recover', run),
+      lifecycle.transition('cleanup', run),
+      lifecycle.transition('cleanup', run),
     ]);
 
     expect(runs).toBe(2);

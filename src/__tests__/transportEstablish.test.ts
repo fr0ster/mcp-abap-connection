@@ -12,12 +12,18 @@
  * connection, it was one implementation for both wires, and the RFC one could
  * not succeed: four attempts, four ABAP dumps, and a `connect()` that refused.
  */
+import { WireLogonError } from '../connection/authErrors.js';
 import { HttpTransport } from '../connection/HttpTransport.js';
+import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import { RfcTransport } from '../connection/RfcTransport.js';
+import { type SapStub, startSapStub } from './helpers/sapStub.js';
 
 const context = (over: Partial<Record<string, unknown>> = {}) => ({
   baseUrl: 'https://sap.example.com',
-  authHeaders: async () => ({ Authorization: 'Basic dTpw' }),
+  authorize: async (headers: Record<string, string>) => {
+    headers.Authorization = 'Basic dTpw';
+  },
+  logon: async () => {},
   observe: () => {},
   ...over,
 });
@@ -287,5 +293,79 @@ describe('establishing over RFC', () => {
     await transport.establish(context());
 
     expect(transport.csrfToken()).toBeNull();
+  });
+});
+
+/**
+ * A refused logon, named by the wire that saw it.
+ *
+ * A 401 from the establishing request is the credential refused at logon, and
+ * the wire says so with `WireLogonError`; what to do about it is not the
+ * wire's to decide. Anything else that fails the exchange is retried as before.
+ */
+describe('a refused logon over HTTP', () => {
+  let stub: SapStub;
+
+  beforeEach(async () => {
+    stub = await startSapStub();
+  });
+
+  afterEach(async () => {
+    await stub.close();
+  });
+
+  const wire = () =>
+    new OnPremHttpTransport(() => ({}), null, {
+      client: '100',
+      baseUrl: stub.baseUrl,
+    });
+
+  it('surfaces a 401 as WireLogonError, after folding in its cookies', async () => {
+    stub.discovery.push({
+      status: 401,
+      headers: { 'set-cookie': ['sap-login-XSRF_STUB=L1; Path=/'] },
+    });
+    const transport = wire();
+    const observed: unknown[] = [];
+
+    const error = await transport
+      .establish({
+        baseUrl: stub.baseUrl,
+        authorize: async () => {},
+        logon: async () => {},
+        observe: (headers) => observed.push(headers),
+        retries: 3,
+        retryDelayMs: 0,
+      })
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(WireLogonError);
+    expect((error as WireLogonError).status).toBe(401);
+    expect(
+      ((error as WireLogonError).cause as { response?: { status?: number } })
+        .response?.status,
+    ).toBe(401);
+    expect(transport.cookies()).toContain('sap-login-XSRF_STUB=L1');
+    expect(observed).toHaveLength(1);
+    // Not retried: asking again with the credential just refused tells the
+    // system nothing new.
+    expect(stub.sentTo('/sap/bc/adt/core/discovery')).toHaveLength(1);
+  });
+
+  it('still retries a 500', async () => {
+    stub.discovery.push(500);
+    const transport = wire();
+
+    await transport.establish({
+      baseUrl: stub.baseUrl,
+      authorize: async () => {},
+      logon: async () => {},
+      observe: () => {},
+      retries: 3,
+      retryDelayMs: 0,
+    });
+
+    expect(transport.csrfToken()).toBe('TOKEN-1');
+    expect(stub.sentTo('/sap/bc/adt/core/discovery')).toHaveLength(2);
   });
 });

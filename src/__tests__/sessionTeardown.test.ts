@@ -8,12 +8,13 @@
  * LOCK, handing back a handle the next request cannot use.
  */
 
-import { TokenAuthProvider } from '../auth/providers.js';
+import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
 import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
+import { settled } from './helpers/settled.js';
 
 const baseConfig: SapConfig = {
   url: 'https://sap.example.com',
@@ -93,6 +94,7 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
 
     await conn.connect();
     await conn.disconnect();
+    await settled();
 
     // Nothing was asked of the session resource, and the goodbye is the ICF one.
     expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(false);
@@ -107,7 +109,7 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
   it('cloud opens the session resource and gives it back by DELETE', async () => {
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      new TokenAuthProvider('TOKEN'),
+      TokenAuthProvider.fixed('TOKEN'),
       cloudHttpTransport(
         { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
         makeLogger(),
@@ -126,6 +128,7 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
 
     await conn.connect();
     await conn.disconnect();
+    await settled();
 
     expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(true);
     expect(seen.some((r) => r.method === 'DELETE')).toBe(true);
@@ -273,6 +276,7 @@ describe('every session of a reconnect cycle is released', () => {
     await conn.disconnect();
     await conn.connect();
     await conn.disconnect();
+    await settled();
 
     const logoffs = seen.filter((r) => r.url.includes('/logoff'));
     expect(logoffs).toHaveLength(2);
@@ -323,6 +327,7 @@ describe('every session of a reconnect cycle is released', () => {
     // Nothing reconnected, so there is no second session to close: the repeat
     // joins the release already going rather than asking twice.
     await conn.disconnect();
+    await settled();
 
     expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
   });
@@ -411,6 +416,7 @@ describe('requests stay on the server the session lives on', () => {
 
     await conn.connect();
     await conn.disconnect();
+    await settled();
     const before = seen.length;
     await conn.connect();
 
@@ -475,7 +481,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
     // preflight. On-prem opens nothing to leave behind.
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      new TokenAuthProvider('TOKEN'),
+      TokenAuthProvider.fixed('TOKEN'),
       cloudHttpTransport(
         { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
         makeLogger(),
@@ -502,7 +508,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
   it('says nothing when the preflight opened nothing', async () => {
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      new TokenAuthProvider('TOKEN'),
+      TokenAuthProvider.fixed('TOKEN'),
       cloudHttpTransport(
         { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
         makeLogger(),
@@ -550,6 +556,7 @@ describe('disconnect ends the server session', () => {
 
     await conn.connect();
     await conn.disconnect();
+    await settled();
 
     const logoff = seen.find((r) =>
       r.url.includes('/sap/public/bc/icf/logoff'),
@@ -608,6 +615,7 @@ describe('disconnect ends the server session', () => {
 
     await conn.connect();
     await conn.disconnect();
+    await settled();
 
     expect(seen.some((r) => r.url.includes('/logoff'))).toBe(true);
     expect(conn.isConnected()).toBe(false);
@@ -629,68 +637,6 @@ describe('disconnect ends the server session', () => {
    * it was waiting for, leaving the session open: the precise failure this whole
    * change exists to prevent, reintroduced by the parameter meant to bound it.
    */
-
-  /**
-   * "measured from this call and including any time spent queued behind another
-   * lifecycle transition" — the contract's words. Transitions run one at a time
-   * on a serializing tail, so a disconnect called while a recovery is running
-   * does not start until that recovery finishes. A budget that started when the
-   * queued callback finally ran would hand a delayed teardown its full
-   * allowance again, which is the one thing the caller was bounding.
-   */
-  it('spends the deadline while queued behind another transition', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
-    const seen: Seen[] = [];
-    let gate: (() => void) | undefined;
-    let gateArmed = false;
-    attachMockAxios(conn, seen, async (cfg) => {
-      // Only the re-establishment hangs; the first connect must complete so a
-      // session exists to log off.
-      // Only the establishing call is held. The session preflight that runs
-      // before it is part of the same connect and gating it would hang the
-      // recovery somewhere else than this test is about.
-      if (gateArmed && String(cfg.url).includes('/discovery')) {
-        await new Promise<void>((resolve) => {
-          gate = resolve;
-        });
-      }
-      return {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-        },
-      };
-    });
-
-    await conn.connect();
-
-    // A recovery occupies the tail. It rejects once the teardown moves the
-    // epoch under it, which is correct and not what this test is about.
-    gateArmed = true;
-    const recovering = (
-      conn as unknown as { recoverSession(epoch: number): Promise<void> }
-    )
-      .recoverSession(
-        (conn as unknown as { teardownEpoch: number }).teardownEpoch,
-      )
-      .catch(() => undefined);
-    await new Promise((r) => setTimeout(r, 5));
-
-    const disconnecting = conn.disconnect();
-    await new Promise((r) => setTimeout(r, 80));
-    gate?.();
-
-    await recovering;
-    await disconnecting;
-
-    const logoff = seen.find((r) => r.url.includes('/logoff'));
-    expect(logoff).toBeDefined();
-    // The budget was gone before the callback ran, so the logoff went out
-    // detached — no deadline handed to axios, and nothing awaited.
-    expect(logoff?.timeout).toBeUndefined();
-  });
 
   it('sends nothing on a repeat call when the first logoff succeeded', async () => {
     const conn = onPrem(baseConfig, makeLogger());

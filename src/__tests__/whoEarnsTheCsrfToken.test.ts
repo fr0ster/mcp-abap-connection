@@ -7,7 +7,7 @@
  * twice, once as a transport-shaped parameter and once as a capability atom.
  *
  * A credential whose way in IS a round trip does not need the connection to
- * arbitrate. The wire asks `authHeaders()` PER ATTEMPT, so a one-shot token is
+ * arbitrate. The wire authorizes PER ATTEMPT, so a one-shot token is
  * offered on the establishing call and withheld afterwards by the credential
  * itself, with nobody deciding anything.
  */
@@ -15,6 +15,7 @@
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
+import { credentialWriting } from './helpers/credentials.js';
 import { onPremHttpTransport } from './helpers/onPrem.js';
 
 const config: SapConfig = {
@@ -33,15 +34,10 @@ describe('a credential that does not', () => {
   // connection, it was one implementation for both, and the RFC one could not
   // succeed.
   it('leaves the exchange to the wire it travels over', async () => {
-    const credential: IAuthProvider = {
+    const credential: IAuthProvider = credentialWriting({
       kind: 'test-basic',
-      // Empty where there is nothing to say: since interfaces 20.0.0 a credential
-      // states all of itself, so nothing has to ask whether it does.
-      prepare: async () => {},
-      cookies: () => null,
-      transportMaterial: () => ({}),
-      authorizationHeader: async () => 'Basic dTpw',
-    };
+      authorization: 'Basic dTpw',
+    });
     const conn = new AdtOnPremConnector(
       config,
       credential,
@@ -61,15 +57,10 @@ describe('a credential that does not', () => {
   });
 
   it('hands the wire the server, the credential, and somewhere to report', async () => {
-    const credential: IAuthProvider = {
+    const credential: IAuthProvider = credentialWriting({
       kind: 'test-basic',
-      // Empty where there is nothing to say: since interfaces 20.0.0 a credential
-      // states all of itself, so nothing has to ask whether it does.
-      prepare: async () => {},
-      cookies: () => null,
-      transportMaterial: () => ({}),
-      authorizationHeader: async () => 'Basic dTpw',
-    };
+      authorization: 'Basic dTpw',
+    });
     const conn = new AdtOnPremConnector(
       config,
       credential,
@@ -84,11 +75,13 @@ describe('a credential that does not', () => {
 
     const context = wire.mock.calls[0][0] as {
       baseUrl: string;
-      authHeaders: () => Promise<Record<string, string>>;
+      authorize: (headers: Record<string, string>) => Promise<void>;
       observe: unknown;
     };
     expect(context.baseUrl).toBe(config.url);
-    expect((await context.authHeaders()).Authorization).toBe('Basic dTpw');
+    const headers: Record<string, string> = {};
+    await context.authorize(headers);
+    expect(headers.Authorization).toBe('Basic dTpw');
     expect(typeof context.observe).toBe('function');
   });
 });

@@ -104,10 +104,10 @@ const logger = console;
 ```ts
 import {
   AdtOnPremConnector,
-  BasicAuthProvider,
   OnPremHttpTransport,
   getTimeout,
 } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
 const connection = new AdtOnPremConnector(
   config,
@@ -135,7 +135,8 @@ connection.setSessionType('stateless');
 ## Knowing Which Session You Are In
 
 ```ts
-import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
 // getSessionIdentity() is on the HTTP connection classes, NOT on the
 // bare IAbapConnection type a caller may hand you.
@@ -170,13 +171,21 @@ Every ADT request issued through `makeAdtRequest` automatically:
 
 This logic is transparent to callers (Builders, handlers, CLI scripts).
 
-On a JWT connection a 401 is **not** handled here at all, and that is the point: since 6.0.0 the
-refusal surfaces and the session is left alone. Nothing replaces the credential behind you, so
-nothing replaces the SAP session behind you either — a lock window is not torn down by an
-authentication answer. A 403 never did this: it is an authorization answer, not a credential one.
+A 401 that survives the wire's own CSRF recovery is put to the provider (`rejected`). On Ok the
+request is sent once more, always under the same lease and generation as the attempt it repeats,
+so stale-request fencing applies. After a rejection at `'request'` that resend goes out on the
+same session; after a rejection at `'logon'` the wire logs on again before the resend.
+**Inside a critical section a renewal keeps the session, and the lock in it:** a mutation
+(POST / PUT / DELETE) refused with a 401 while a CSRF token is cached goes to the provider and is
+resent on the same session with the same token, and if SAP did replace the session the request
+fails with `SESSION_REPLACED` instead of carrying on in a new one. Outside a critical section
+that mutation takes the wire's own stale-session recovery first, which starts a new session
+before the provider is asked — so hold a lock inside `beginCriticalSection()` /
+`endCriticalSection()`.
+If the provider says no, or the retry is refused too, the caller gets an `AuthRefusedError`. A 403 is an authorization answer, not a credential one: it never goes to the
+provider. See [When the credential is refused](./USAGE.md#when-the-credential-is-refused).
 
-If you decide the refusal meant a stale token, `renew()` and reconnect are yours to call — and a
-reconnect is a NEW session, so do it outside a lock window rather than inside one.
+A reconnect is a NEW session, so do it outside a lock window rather than inside one.
 
 **Wait for the goodbye before opening the next one.** `disconnect()` dispatches the logoff and does
 not await it, so a reconnect otherwise opens the next session while the previous one's goodbye is
@@ -270,6 +279,10 @@ What it promises is narrow and worth stating exactly — inside a section the
 short: the ceiling is `SAP_TIMEOUT_CRITICAL`, ten minutes by default, and a
 socket ends a request whatever a contract says.
 
+Since 10.0.0 a section also keeps its session through a credential renewal: a
+mutation refused with a 401 inside it is renewed and resent on the same
+session, never moved to a new one (see [Request Hooks](#request-hooks)).
+
 ### Two sessions, and they are not the same thing
 
 There are two sessions here, and they are not the same thing:
@@ -326,7 +339,8 @@ you get by asking — `getSessionIdentity()` for which session you are in, and
   through the `ISessionLifecycleAware` atom:
 
   ```ts
-import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
   const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
   await connection.disconnect(); // ends the session on the server, then clears
