@@ -11,22 +11,10 @@ npm run lint           # Biome auto-fix (src and scripts)
 npm run lint:check     # Biome read-only check (src and scripts)
 npm test               # Jest (all tests)
 npx jest --testPathPatterns=rfcTransport      # Run a single test file
-SAP_ENV_FILE=e19.env npx jest --testPathPatterns=rfc-connection  # older live suite, needs an on-prem system
-npm run test:init          # copy src/__tests__/helpers/test-config.yaml.template -> test-config.yaml (git-ignored)
-npm run test:live:basic    # live suites, one per provider: basic | token | snc
+SAP_ENV_FILE=e19.env npx jest --testPathPatterns=rfc-connection  # live, needs an on-prem system
 ```
 
-The provider live suites live in `src/__tests__/live/` and are **excluded from
-`npm test`** (`jest.config.js`); `npm run test:live:<provider>` runs one through
-`jest.live.config.js`. Each reads its own section of `test-config.yaml`, which
-points at session env files (`env_file:`, `~` allowed) — no secret is in the
-config or the repo. A suite skips only when its section is **absent** (reason
-printed); a present section that fails is red. `helpers/liveConfig.ts` builds
-every provider explicitly, and its own unit tests (`liveConfig.test.ts`) run in
-`npm test`. `basic` makes one deliberate wrong-password logon per wire. See
-`docs/USAGE.md`, "Live suites".
-
-The older live suite (`rfc-connection`) reads an env file from the repo root and skips itself when it is
+Live suites read an env file from the repo root and skip themselves when it is
 absent — which is why the same command is green on a machine that cannot reach
 a system, and proves nothing there. The RFC suite also skips when
 `@mcp-abap-adt/sap-rfc-lite` does not resolve: nothing here is configured at
@@ -145,10 +133,9 @@ over them at each open) and loads the SDK lazily, so a machine without it fails 
 
 Unit tests cannot tell you that SAP accepts what is being built for it, and the
 on-prem half of this library is where that gap has bitten. The live suites are
-the durable part of that: one per provider under `src/__tests__/live/`, each run
-on the machine that has its system (basic and token on a developer's, SNC where
-the Secure Login Client is), configured through `test-config.yaml`. The RFC wire
-also needs the SDK it uses; `rfc-connection` skips when it is not installed.
+the durable part of that: they read an env file from the repo root and skip
+themselves when it is absent — and the RFC one also when the SDK it needs is
+not installed.
 
 `scripts/` also collects ad-hoc probes written for whatever release was being
 verified at the time. They are not part of the contract — they come and go, and

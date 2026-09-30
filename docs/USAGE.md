@@ -10,7 +10,6 @@
 - [Session Management](#session-management)
 - [Advanced Features](#advanced-features)
 - [API Reference](#api-reference)
-- [Live suites](#live-suites)
 
 ## Quick Start
 
@@ -1040,41 +1039,6 @@ type SapConfig = {
   // Token refresh is handled by @mcp-abap-adt/auth-broker package
 };
 ```
-
-## Live suites
-
-Unit tests cannot tell you that a system accepts what the connection builds, so
-there is one live suite per provider under `src/__tests__/live/`, run on the
-machine that has that system: `basic` and `token` on a developer's, `snc` where
-the SAP Secure Login Client is. They are not part of `npm test`.
-
-```bash
-npm run test:init          # copies test-config.yaml.template to test-config.yaml (git-ignored)
-# edit the lines marked "# ← CHANGE" in src/__tests__/helpers/test-config.yaml
-npm run test:live:basic    # user + password, over HTTP and/or RFC
-npm run test:live:token    # access token renewed by its refresh token
-npm run test:live:snc      # SNC logon over RFC
-npm run test:reinit        # overwrite the config from the template
-```
-
-The config has one optional section per provider. `basic` and `token` point at a
-session env file (`env_file: ~/.config/mcp-abap-adt/sessions/<name>.env`) that
-holds the URL and the secrets; `snc` carries its non-secret values itself. A
-suite is skipped only when its section is absent, with the reason printed; a
-present section that fails is red. `basic` names its `wires` (`http`, `rfc`;
-`ashost` / `sysnr` when the URL does not name the RFC endpoint), a `read_class`
-whose source is read, and a `lock_class` you may lock (without it the LOCK/UNLOCK
-case is skipped, with the reason printed). `basic` makes one deliberate
-wrong-password logon per wire, which counts against the account. The `token`
-suite refuses an interactive login and never writes the session file. Its
-"connects" case uses the access token alone, so an expired one fails it. The
-renewal case spends the refresh token, so it runs only with `allow_refresh: true`
-in the `token` section — and a UAA that rotates refresh tokens then invalidates
-the one stored in that file, so give the suite a dedicated env file from a
-separate login, not the one your MCP server uses. `TLS_REJECT_UNAUTHORIZED=false`
-in a session file turns TLS verification off for requests carrying passwords and
-tokens: only for a system you own. The
-`snc` "logged out" case (`A2200019`) cannot be automated and is checked by hand.
 
 ## Examples Directory
 

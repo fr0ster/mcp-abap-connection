@@ -30,7 +30,3 @@ mcp-abap-adt-connection*.tgz
 
 # Git worktrees
 .worktrees/
-
-# Live-suite config: points at session files that hold credentials. Made from
-# the .template by `npm run test:init`; never committed.
-src/__tests__/helpers/test-config.yaml
