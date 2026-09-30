@@ -30,6 +30,10 @@
 # WARNING — every wire listed makes ONE deliberate failed logon on this user's
 # account (a wrong password, to prove the refusal is reported as one). Two wires,
 # two failed logons. Keep that in mind on a system with a lockout threshold.
+# RFC (basic over rfc, snc) needs the SAP NW RFC SDK and @mcp-abap-adt/sap-rfc-lite
+# built against it — see its README. Windows (Git Bash):
+#   SAPNWRFC_HOME='C:\nwrfcsdk\nwrfcsdk' PATH='C:\nwrfcsdk\nwrfcsdk\lib;'"$PATH" npm run test:live:basic
+# Linux/macOS: SAPNWRFC_HOME=<SDK root>, and $SAPNWRFC_HOME/lib on LD_LIBRARY_PATH.
 basic:
   env_file: <PATH_TO_SESSION_ENV>          # ← CHANGE  e.g. ~/.config/mcp-abap-adt/sessions/e19-tunnel.env
   wires: [http, rfc]                       # ← CHANGE  http, rfc, or both
