@@ -468,10 +468,7 @@ abstract class AbstractAbapConnection
       // reconnect waits for it. Rejections are absorbed here so that holding
       // the promise never turns a failed goodbye into an unhandled rejection —
       // the transport already logs what went wrong.
-      this.goodbye = Promise.resolve(this.transport.close(context)).then(
-        () => undefined,
-        () => undefined,
-      );
+      this.goodbye = this.dispatchGoodbye(context);
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
@@ -506,6 +503,35 @@ abstract class AbstractAbapConnection
     } finally {
       if (timer) clearTimeout(timer);
     }
+  }
+
+  /**
+   * Say goodbye to the session `context` describes, without waiting for it.
+   *
+   * The one way every goodbye is sent, so that each behaves the same: a
+   * `close()` that rejects and one that throws synchronously — a custom wire
+   * may write it as a plain function — are both logged and absorbed, and the
+   * promise returned never rejects. Unguarded, a synchronous throw escaped
+   * before any `.catch` was attached, replaced the error the caller was owed
+   * and skipped the clearing that follows every call site.
+   *
+   * `close()` is CALLED here, synchronously, not deferred to a later turn: the
+   * wires read the cookie jar and the affinity headers on their first line,
+   * and every caller clears them right after this returns. A deferred call
+   * would send the goodbye without the session it is ending.
+   */
+  private dispatchGoodbye(context: IAdtSessionContext): Promise<void> {
+    let closing: Promise<void>;
+    try {
+      closing = Promise.resolve(this.transport.close(context));
+    } catch (error) {
+      closing = Promise.reject(error);
+    }
+    return closing.catch((error: unknown) => {
+      this.logger?.debug(
+        `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   }
 
   isConnected(): boolean {
@@ -632,12 +658,11 @@ abstract class AbstractAbapConnection
       // session has an address or it does not, and an on-prem one was
       // established or the cookie is debris from the refusal. The connection
       // asks, and each wire answers by doing nothing when it has nothing.
-      // Its rejection is absorbed: a wire's close() may reject — its
-      // context.authorize throws when the provider refuses — and nobody
-      // awaits this one.
-      const goodbye = Promise.resolve(
-        this.transport.close(this.sessionContext()),
-      ).catch(() => undefined);
+      // Its failure is absorbed, a synchronous throw included: a wire's
+      // close() may reject — its context.authorize throws when the provider
+      // refuses — and nobody awaits this one. A throw that escaped here would
+      // replace the establishment error and skip the clearing below.
+      const goodbye = this.dispatchGoodbye(this.sessionContext());
       this.invalidateSession();
       // And the identity with it. The rejecting response was still observed, so
       // its cookie was recorded as a session that had just been established —
@@ -706,17 +731,7 @@ abstract class AbstractAbapConnection
       // Refusing to connect must not leak the session the refusal is about.
       // Dispatched, not awaited; a close that throws or rejects is logged and
       // absorbed, never left unhandled.
-      const notFinished = (error: unknown) =>
-        this.logger?.debug(
-          `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      try {
-        void Promise.resolve(this.transport.close(this.sessionContext())).catch(
-          notFinished,
-        );
-      } catch (error) {
-        notFinished(error);
-      }
+      void this.dispatchGoodbye(this.sessionContext());
       this.invalidateSession();
       this.lifecycle.forgetIdentity();
       this.lifecycle.markDisconnected();
