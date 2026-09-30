@@ -823,6 +823,76 @@ describe('an answer that arrives after its session is gone', () => {
   });
 });
 
+describe('a stale request meets its credential', () => {
+  it('a logon refusal whose renewal outlives the session is NOT_CONNECTED, never the WireLogonError', async () => {
+    const { conn, provider } = await connected();
+    // The POST's cached token is refused as a login form, and the wire's own
+    // token fetch is refused as a logon: that goes to rejected(), held here.
+    stub.work(WORK, [401]);
+    stub.discovery.push(401);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reached!: () => void;
+    const asked = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const answer = provider.rejected.bind(provider);
+    provider.rejected = async (rejection) => {
+      reached();
+      await gate;
+      return answer(rejection);
+    };
+
+    const request = post(conn).catch((e: unknown) => e);
+    await asked;
+    await conn.disconnect();
+    await conn.connect();
+    release();
+    const error = await request;
+
+    expect(error).not.toBeInstanceOf(WireLogonError);
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    expect(stub.sentTo(WORK)).toHaveLength(1);
+    expect(conn.isConnected()).toBe(true);
+  });
+
+  it('an upfront fetch the provider refuses after the session went away is NOT_CONNECTED', async () => {
+    const { conn, provider, transport } = await connected();
+    transport.adoptCsrfToken(null);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reached!: () => void;
+    const asked = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    let armed = true;
+    const authorize = provider.authorize.bind(provider);
+    provider.authorize = async (request) => {
+      if (!armed) return authorize(request);
+      armed = false;
+      reached();
+      await gate;
+      return NO;
+    };
+
+    const request = post(conn).catch((e: unknown) => e);
+    await asked;
+    await conn.disconnect();
+    await conn.connect();
+    release();
+    const error = await request;
+
+    expect(error).not.toBeInstanceOf(AuthRefusedError);
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    expect(stub.sentTo(WORK)).toHaveLength(0);
+    expect(conn.isConnected()).toBe(true);
+  });
+});
+
 describe('a subclass that fetches a token itself', () => {
   class Fetching extends AdtOnPremConnector {
     fetchWith(generation: number): Promise<string> {

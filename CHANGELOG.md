@@ -43,6 +43,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A resend refused after its session went away is `NOT_CONNECTED`**, not
   `AuthRefusedError` (refused again): the session the request was admitted to
   is gone, so the refusal says nothing about the credential.
+- **A stale request ends `NOT_CONNECTED`, whatever stopped it.** When the
+  session a request was admitted to goes away while it readies its wire or
+  while the provider renews, the caller gets `NOT_CONNECTED` — never the
+  wire's `WireLogonError`, a network error, or the provider's
+  `AuthRefusedError` about a session the request no longer holds. A session
+  verdict (`SESSION_REPLACED`) still comes through as it is.
+
+### Changed
+
+- **`fetchCsrfToken`'s protected fourth parameter accepts a request lease as
+  well as a session generation number.** A number keeps its 10.0.0 meaning: it
+  fences what the connection does with the answer, not the wire's own ingest,
+  and never stops the fetch being sent. Only a lease fences the send.
+- **For custom-wire authors: `IAdtEstablishContext.observe` may throw.** For an
+  answer that belongs to a session that is gone, it throws a `NOT_CONNECTED`
+  session verdict. Call `observe` BEFORE your wire folds that answer into its
+  own state, and fold nothing when it throws; `HttpTransport` already does. A
+  wire that ingests first would write a gone session's cookies into the new
+  session's jar.
 
 ### Documentation
 

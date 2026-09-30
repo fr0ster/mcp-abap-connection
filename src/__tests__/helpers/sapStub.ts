@@ -97,7 +97,9 @@ export async function startSapStub(): Promise<SapStub> {
 
     // Drained before answering, so a request with a body is read whole.
     req.resume();
-    req.on('end', async () => {
+    // The answer may await a `hold`, and nobody awaits this handler: whatever
+    // it throws is caught here, never left as an unhandled rejection.
+    const respond = async () => {
       if (path.includes('/discovery')) {
         const next = discovery.shift();
         if (typeof next === 'object') await next.hold?.();
@@ -144,6 +146,9 @@ export async function startSapStub(): Promise<SapStub> {
         ...answer.headers,
       });
       res.end(answer.body);
+    };
+    req.on('end', () => {
+      respond().catch(() => res.destroy());
     });
   });
 

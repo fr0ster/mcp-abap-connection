@@ -1481,10 +1481,11 @@ abstract class AbstractAbapConnection
     const rejection = this.credentialRejection(failure);
     // A request from a previous session asks nobody anything: its recovery is
     // fenced, and so is the credential's.
-    if (!rejection || !this.lifecycle.isCurrent(lease)) throw failure;
+    if (!rejection) throw failure;
+    if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(failure);
 
     await this.renewCredential(rejection, renewal);
-    if (!this.lifecycle.isCurrent(lease)) throw failure;
+    if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(failure);
 
     try {
       if (rejection.at === 'logon') {
@@ -1506,12 +1507,7 @@ abstract class AbstractAbapConnection
       // The session the request was admitted to went away while the resend
       // was out: whatever came back is about a session this request no longer
       // holds, so it is not a credential verdict.
-      if (!this.lifecycle.isCurrent(lease)) {
-        throw sessionError(
-          ADT_SESSION_ERROR.NOT_CONNECTED,
-          'The session this request was admitted to is gone',
-        );
-      }
+      if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(again);
       // The resend's refusal is observed like the first attempt's: a session
       // SAP replaced in between is SESSION_REPLACED, not a bare status.
       const refusal = refusalOf(again);
@@ -1554,6 +1550,19 @@ abstract class AbstractAbapConnection
     throw sessionError(
       ADT_SESSION_ERROR.SESSION_REPLACED,
       'The SAP session no longer exists; any lock handle from it is dead',
+    );
+  }
+
+  /**
+   * What a request whose lease went stale gets: a session verdict as it is,
+   * anything else — the wire's error, the provider's refusal — replaced by
+   * NOT_CONNECTED, because it is about a session the request no longer holds.
+   */
+  private staleVerdict(error: unknown): unknown {
+    if (this.isSessionVerdict(error)) return error;
+    return sessionError(
+      ADT_SESSION_ERROR.NOT_CONNECTED,
+      'The session this request was admitted to is gone',
     );
   }
 
@@ -1630,18 +1639,12 @@ abstract class AbstractAbapConnection
         await this.ensureWireReady(lease);
         return;
       } catch (error) {
-        if (error instanceof AuthRefusedError) throw error;
         // The session the request was admitted to is gone: nothing more of it
         // is sent, the provider is not asked, and what the caller gets is the
-        // session verdict — never the wire's error about a session it no
-        // longer holds.
-        if (!this.lifecycle.isCurrent(lease)) {
-          if (this.isSessionVerdict(error)) throw error;
-          throw sessionError(
-            ADT_SESSION_ERROR.NOT_CONNECTED,
-            'The session this request was admitted to is gone; nothing more was sent',
-          );
-        }
+        // session verdict — never the wire's error, nor the provider's, about
+        // a session it no longer holds.
+        if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(error);
+        if (error instanceof AuthRefusedError) throw error;
         if (!(error instanceof WireLogonError)) {
           this.logger?.debug(
             `Could not fetch CSRF token upfront, will retry on error: ${error instanceof Error ? error.message : String(error)}`,
@@ -1676,8 +1679,10 @@ abstract class AbstractAbapConnection
     /**
      * The request's lease: fences what is sent and the response effects.
      * A plain session generation — what this parameter took before 10.0.1,
-     * and what a subclass may still pass — fences the response effects only,
-     * as it always did. Omitted during connect(), which has no lease.
+     * and what a subclass may still pass — keeps its 10.0.0 meaning: it fences
+     * what the connection does with the answer (the identity policy), not the
+     * wire's own ingest of it, and never stops the request being sent.
+     * Omitted during connect(), which has no lease.
      */
     fence?: number | Pick<RequestLease, 'generation'>,
   ): Promise<string> {
@@ -1764,7 +1769,8 @@ abstract class AbstractAbapConnection
    *
    * Without one — connect()'s own establishment, which is making the session
    * rather than working in it — nothing is fenced. `generation` alone fences
-   * the response effects and nothing else.
+   * what the connection does with an answer, and nothing else: the request is
+   * sent, and the wire still folds the answer into its jar.
    */
   private leasedContext(
     lease?: Pick<RequestLease, 'generation'>,
