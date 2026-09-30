@@ -34,6 +34,13 @@ it. See [`docs/MIGRATION-10.0.md`](docs/MIGRATION-10.0.md).
   credential was refused again after the provider renewed it"). A 403 never goes
   to the provider. A provider that throws is a refusal with the reason "the
   credential provider failed".
+- **Inside a critical section a renewal keeps the session.** A mutation refused
+  with a 401 while a CSRF token is cached used to drop the session and resend on
+  a new one, losing the lock the section held. Inside `beginCriticalSection()`
+  it now goes to `rejected({ at: 'request' })` and, on Ok, is resent on the same
+  session with the same token; a session SAP replaced surfaces as
+  `SESSION_REPLACED`. Outside a critical section the wire's recovery runs first,
+  as before.
 - **RFC: the factory takes the logon parameters.** `RfcTransport`'s first
   argument is `(logon) => IRfcConversation`, and every conversation it opens —
   the session's own and each per-call one — gets the parameters the provider
@@ -42,13 +49,21 @@ it. See [`docs/MIGRATION-10.0.md`](docs/MIGRATION-10.0.md).
   `RfcConnectionParams` loses `user` and `passwd`. A provider that writes no
   logon parameters (a bearer token) cannot log on over RFC.
 - **HTTP takes TLS material at logon.** The agent is built from
-  `{ rejectUnauthorized, ...agentOptions(), ...material }`; the constructor's
-  `agentOptions` stays for `ca` and `rejectUnauthorized`. A later logon offering
+  `{ rejectUnauthorized, ...agentOptions(), ...material }`, `material` being
+  only the defined `cert`, `key`, `pfx` and `passphrase` the provider offered;
+  the constructor's `agentOptions` stays for `ca` and `rejectUnauthorized`. A later logon offering
   different material replaces the client; the cookie jar and CSRF token stay.
   HTTP refuses logon parameters.
 - **A failed RFC open is thrown as `WireLogonError`** carrying the raw
   `sap-rfc-lite` error as `cause`, not wrapped in `Failed to open RFC
   connection: …`.
+- **An RFC open that fails for any reason, a network one included**
+  (`RFC_COMMUNICATION_FAILURE`, say), goes to the provider and reaches the
+  caller as `AuthRefusedError` at `'logon'` — the provider's words, or the fixed
+  "refused again" reason after its Ok — with the SDK error only in `cause`.
+- **A 401 while HTTP establishes its session** is thrown at once as
+  `WireLogonError { status: 401 }` and is not retried by the establishment's own
+  retry loop.
 
 ### Added
 
@@ -56,9 +71,6 @@ it. See [`docs/MIGRATION-10.0.md`](docs/MIGRATION-10.0.md).
   status? }` is the mark a wire puts on a failure that is a refused logon, so a
   consumer's own wire can say the same thing; it decides nothing.
 - `AuthRefusalMoment` (`'prepare' | 'logon' | 'request'`), exported.
-- A 401 while HTTP establishes its session is thrown at once as
-  `WireLogonError { status: 401 }` and is not retried by the establishment's own
-  retry loop.
 - `docs/MIGRATION-10.0.md`.
 
 ### Removed
@@ -91,7 +103,8 @@ it. See [`docs/MIGRATION-10.0.md`](docs/MIGRATION-10.0.md).
   import providers from this package, and no longer say that a 401 surfaces with
   nothing renewing behind it or that `renew()` on an `IRenewableCredential` is
   the seam. Concurrent requests meeting one expired token each call
-  `rejected()`; providers that renew share one renewal in flight.
+  `rejected()`; a provider that renews may share one renewal in flight
+  (`TokenAuthProvider.from` only if its refresher does).
 
 ## [9.4.2] - 2026-09-27
 

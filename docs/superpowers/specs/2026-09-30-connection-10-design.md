@@ -158,6 +158,12 @@ makeAdtRequest → performRequest
   presented token is already superseded answers Ok without renewing.
 - **Critical sections.** The resend runs under the same lease and generation
   as the attempt it repeats; stale-request fencing applies to it unchanged.
+- **The one exception to "recovery first".** Inside a critical section, a
+  mutation 401 with a cached CSRF token skips (a): curing it would discard the
+  session and the lock the section holds (goal decision 2). It goes to
+  `rejected({ at: 'request' })`; Ok resends on the same session with the same
+  token, and the resend's refusal is observed, so a session SAP replaced
+  surfaces as `SESSION_REPLACED`. Outside a critical section (a) runs as above.
 
 ### 3.4 The request target
 

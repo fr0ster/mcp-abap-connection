@@ -426,10 +426,12 @@ await connection.connect();
 // On a 401 the connection asks the provider (`rejected`); on Ok it sends the
 // request once more with the renewed token, otherwise you get an
 // AuthRefusedError. The resend always runs under the same lease and generation
-// as the attempt it repeats, so stale-request fencing applies. For a GET (or any
-// rejection at 'request') it goes out on the same session; two cases do not keep
-// it: a mutation refused while a CSRF token is cached (the wire's recovery drops
-// the session first), and a rejection at 'logon' (the wire logs on again).
+// as the attempt it repeats, so stale-request fencing applies. After a rejection
+// at 'request' it goes out on the same session; after one at 'logon' the wire
+// logs on again first. Inside a critical section a renewal keeps the session —
+// or the request fails with SESSION_REPLACED if SAP replaced it. Outside one, a
+// mutation refused with a 401 while a CSRF token is cached takes the wire's
+// stale-session recovery first, which starts a new session.
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",

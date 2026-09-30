@@ -64,8 +64,9 @@ objects, and the name says which.
 
 `.from` renews when the system refuses the token — not by checking expiry before
 each request, as the old class did. Many requests meeting one expired token each
-call `rejected()` and share one renewal in flight; the connection adds no
-single-flight of its own.
+call `rejected()`; the connection adds no single-flight of its own. Whether they
+share one renewal in flight is the refresher's: `.from` asks it on each
+rejection, so they share one only if your refresher shares one.
 
 ## 3. TLS material is taken at logon
 
@@ -85,7 +86,9 @@ the HTTPS agent only because you passed them in `agentOptions`:
 Now the HTTP wire offers a logon target to the provider at every logon; a
 provider such as `CertificateAuthProvider` hands over its material there, and the
 wire builds the agent from `{ rejectUnauthorized, ...agentOptions(), ...material }`
-on the first request. A later logon offering different material replaces the
+on the first request, where `material` is only the `cert`, `key`, `pfx` and
+`passphrase` the provider offered with a value — any other key it passes is
+ignored, and a field offered as `undefined` erases nothing. A later logon offering different material replaces the
 client; the cookie jar and CSRF token are the session's and stay.
 
 `agentOptions` stays for what is not the credential: `ca` and
@@ -124,6 +127,13 @@ A failed open is thrown as a `WireLogonError` whose `cause` is the raw
 `sap-rfc-lite` error. The old `Failed to open RFC connection: …` wrapping is
 gone, so a provider can read the SDK's `key` and message and, say, tell an SNC
 failure from a network one.
+
+**Every failed open, a network one included.** An open that fails because the
+host cannot be reached (`RFC_COMMUNICATION_FAILURE`, say) is put to the provider
+like a refused logon, and reaches you as an `AuthRefusedError` at `'logon'` — in
+the provider's words, or the fixed "refused again" reason after its Ok — with the
+SDK's error only in `cause`. A caller that matched the SDK error to tell an
+unreachable system from a refused one reads `cause` now.
 
 ## 5. Catch `AuthRefusedError`
 
@@ -171,6 +181,12 @@ class AuthRefusedError extends Error {
 - A `403` is never put to the provider and never becomes an `AuthRefusedError`; it
   reaches you unchanged, as before.
 
+Inside a critical section (`beginCriticalSection()`), a mutation refused with a
+401 while a CSRF token is cached is no longer moved to a new session: it goes to
+the provider and is resent on the same one, so the lock survives — or it fails
+with `SESSION_REPLACED` if SAP replaced the session. Outside a critical section
+the wire's stale-session recovery still runs first.
+
 `prepare()` now runs once at the start of `connect()`, before the wire opens; it
 used to come after `transport.open()`.
 
@@ -189,10 +205,21 @@ gone. Two methods replace it:
  async close(context: IAdtSessionContext): Promise<void> {
    const headers: Record<string, string> = {};
 -  Object.assign(headers, await context.authHeaders());
-+  await context.authorize(headers);
-   await this.client.post('/logoff', undefined, { headers });
+-  await this.client.post('/logoff', undefined, { headers });
++  // A goodbye never throws: `authorize` throws AuthRefusedError when the
++  // provider refuses, and the connection does not await every close.
++  try {
++    await context.authorize(headers);
++    await this.client.post('/logoff', undefined, { headers });
++  } catch {
++    // Nothing to tell anyone: the session falls to its idle timeout.
++  }
  }
 ```
+
+`close()` must not throw. `context.authorize` throws `AuthRefusedError` when the
+provider refuses, so a goodbye that authorizes catches it; the connection absorbs
+a rejected close it dispatched, but a close that never throws is the contract.
 
 ```ts
 import type {

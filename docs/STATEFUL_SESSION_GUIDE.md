@@ -173,12 +173,15 @@ This logic is transparent to callers (Builders, handlers, CLI scripts).
 
 A 401 that survives the wire's own CSRF recovery is put to the provider (`rejected`). On Ok the
 request is sent once more, always under the same lease and generation as the attempt it repeats,
-so stale-request fencing applies. For a GET (or any rejection at `'request'`) that resend goes out
-on the same session. Two cases do not keep it: after a rejection at `'logon'` the wire logs on
-again before the resend, and **a mutation (POST / PUT / DELETE) refused with a 401 while a CSRF
-token is cached takes the wire's own stale-session recovery first, which drops the session and its
-identity before the provider is asked — a lock held in that session is lost.** That is a known
-limit of this release; do not count on a lock surviving an authentication refusal of a mutation.
+so stale-request fencing applies. After a rejection at `'request'` that resend goes out on the
+same session; after a rejection at `'logon'` the wire logs on again before the resend.
+**Inside a critical section a renewal keeps the session, and the lock in it:** a mutation
+(POST / PUT / DELETE) refused with a 401 while a CSRF token is cached goes to the provider and is
+resent on the same session with the same token, and if SAP did replace the session the request
+fails with `SESSION_REPLACED` instead of carrying on in a new one. Outside a critical section
+that mutation takes the wire's own stale-session recovery first, which starts a new session
+before the provider is asked — so hold a lock inside `beginCriticalSection()` /
+`endCriticalSection()`.
 If the provider says no, or the retry is refused too, the caller gets an `AuthRefusedError`. A 403 is an authorization answer, not a credential one: it never goes to the
 provider. See [When the credential is refused](./USAGE.md#when-the-credential-is-refused).
 
@@ -275,6 +278,10 @@ What it promises is narrow and worth stating exactly — inside a section the
 *ordinary* per-request deadline does not apply. Not that no request can be cut
 short: the ceiling is `SAP_TIMEOUT_CRITICAL`, ten minutes by default, and a
 socket ends a request whatever a contract says.
+
+Since 10.0.0 a section also keeps its session through a credential renewal: a
+mutation refused with a 401 inside it is renewed and resent on the same
+session, never moved to a new one (see [Request Hooks](#request-hooks)).
 
 ### Two sessions, and they are not the same thing
 
