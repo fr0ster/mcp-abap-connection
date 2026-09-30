@@ -4,7 +4,7 @@
 
 ## Prerequisites
 
-- Node.js >= 18.0.0
+- Node.js 22, 24 or 26 (`engines`: `^22 || ^24 || ^26`)
 - npm or yarn package manager
 - Access to SAP ABAP system (on-premise or BTP)
 
@@ -313,7 +313,7 @@ If building from source fails:
 
 ```bash
 # Check Node version
-node --version  # Should be >= 18.0.0
+node --version  # Should be v22, v24 or v26
 
 # Rebuild
 npm run build
@@ -340,6 +340,7 @@ export NODE_TLS_REJECT_UNAUTHORIZED=0
 
 | Package Version | Node.js | TypeScript |
 |----------------|---------|------------|
+| 10.0.2 and later | 22, 24, 26 | >= 5.0 |
 | 0.1.10         | >= 18.0 | >= 5.0     |
 | 0.1.9          | >= 18.0 | >= 5.0     |
 | 0.1.8          | >= 18.0 | >= 5.0     |

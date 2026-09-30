@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.0.2] - 2026-09-30
+
+### Changed
+
+- **Node.js 22, 24 or 26**: `engines` is `"^22 || ^24 || ^26"` (was `>=18.0.0`), the versions SAP BTP Cloud Foundry runs — the same range as `@mcp-abap-adt/auth-providers` 5.x, which 10.x consumers install beside it. Node 18 and 20 are end of life and no longer tested; CI runs 22, 24 and 26 on Linux and Windows, and the release builds on 22.
+
 ## [10.0.1] - 2026-09-30
 
 ### Fixed
@@ -2095,7 +2101,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.2...HEAD
+[10.0.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.1...v10.0.2
 [10.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.0...v10.0.1
 [10.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.2...v10.0.0
 [9.4.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.1...v9.4.2
