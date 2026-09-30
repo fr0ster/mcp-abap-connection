@@ -21,7 +21,7 @@ jobs:
       fail-fast: false # a failure on one platform must not hide the other's
       matrix:
         os: [ubuntu-latest, windows-latest]
-        node: ['18', '20']
+        node: ['22', '24', '26']
 
     name: ${{ matrix.os }} · node ${{ matrix.node }}
 

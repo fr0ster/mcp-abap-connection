@@ -823,7 +823,7 @@ async function fetchCsrfToken(baseUrl: string): Promise<string> {
 
 ## Requirements
 
-- Node.js >= 18.0.0
+- Node.js 22, 24 or 26 (`engines`: `^22 || ^24 || ^26`)
 - Access to SAP ABAP system (on-premise or BTP)
 
 ## Changelog
