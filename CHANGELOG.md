@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the new session's cookies (no work request ever did). The request's lease
   is now checked after the provider has written, and the request ends
   `NOT_CONNECTED` with nothing sent. `connect()`'s own establishment is unchanged.
+- **A resend answered "session not found" is `SESSION_REPLACED`, like the first
+  attempt.** Only the first attempt's `400` went through the dead-session check;
+  a resend — the one more attempt after a renewal (inside a critical section
+  too), the CSRF resend, a GET resent with the session's cookies — surfaced the
+  raw `400` and left the connection connected to a dead session. Every attempt
+  now goes through the same check: the session is lost and the caller gets
+  `SESSION_REPLACED`.
 
 ### Documentation
 

@@ -1306,19 +1306,7 @@ abstract class AbstractAbapConnection
       );
     }
 
-    // The server telling us the session is gone is invisible to the identity
-    // comparison: the cookie, and therefore the fingerprint, is unchanged.
-    // Only the state can see it, and it must say so at once — otherwise a
-    // later unlockAll() finds a match and unlocks over a dead session.
-    if (this.isDeadSessionResponse(error)) {
-      this.raiseSessionLost('the server reports the session no longer exists');
-      // No internal retry: a blind retry here is what produced further locks
-      // in the field. The caller decides.
-      throw sessionError(
-        ADT_SESSION_ERROR.SESSION_REPLACED,
-        'The SAP session no longer exists; any lock handle from it is dead',
-      );
-    }
+    this.throwIfSessionDead(error, lease);
 
     // Check if this is a network error (connection refused, timeout, DNS, etc.)
     // Don't retry for network errors - these indicate infrastructure/VPN issues
@@ -1397,6 +1385,7 @@ abstract class AbstractAbapConnection
         requestConfig.headers = await this.authorizedFrom(requestHeaders);
         return await this.sendObserved<T, D>(requestConfig, lease);
       } catch (retryError) {
+        this.throwIfSessionDead(retryError, lease);
         // A session verdict outranks the error that started the retry: the
         // caller can retry a 403 itself, but it cannot discover that its lock
         // handle is dead from a 403. So does the credential's failure, which
@@ -1486,6 +1475,8 @@ abstract class AbstractAbapConnection
     lease: Pick<RequestLease, 'generation'>,
     renewal: CredentialRenewal,
   ): Promise<IAdtWireResponse<T, D>> {
+    // A resend inside the wire's recovery that met a dead session.
+    this.throwIfSessionDead(failure, lease);
     const rejection = this.credentialRejection(failure);
     // A request from a previous session asks nobody anything: its recovery is
     // fenced, and so is the credential's.
@@ -1517,6 +1508,7 @@ abstract class AbstractAbapConnection
           lease.generation,
         );
       }
+      this.throwIfSessionDead(again, lease);
       const refusedAgain = this.credentialRejection(again);
       if (!refusedAgain) throw again;
       throw new AuthRefusedError(
@@ -1525,6 +1517,31 @@ abstract class AbstractAbapConnection
         refusedAgain.error,
       );
     }
+  }
+
+  /**
+   * The server telling us the session is gone, on any attempt — the first or
+   * a resend — is the same verdict: SESSION_REPLACED, and the session is lost.
+   *
+   * Invisible to the identity comparison: the cookie, and therefore the
+   * fingerprint, is unchanged. Only the state can see it, and it must say so
+   * at once — otherwise a later unlockAll() finds a match and unlocks over a
+   * dead session. A request from a previous session says nothing about the
+   * current one, so its answer is not acted on.
+   */
+  private throwIfSessionDead(
+    error: unknown,
+    lease: Pick<RequestLease, 'generation'>,
+  ): void {
+    if (!this.isDeadSessionResponse(error)) return;
+    if (!this.lifecycle.isCurrent(lease)) return;
+    this.raiseSessionLost('the server reports the session no longer exists');
+    // No internal retry: a blind retry here is what produced further locks
+    // in the field. The caller decides.
+    throw sessionError(
+      ADT_SESSION_ERROR.SESSION_REPLACED,
+      'The SAP session no longer exists; any lock handle from it is dead',
+    );
   }
 
   /**

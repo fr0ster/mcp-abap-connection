@@ -464,6 +464,47 @@ describe('many requests, and a critical section', () => {
     expect(conn.isConnected()).toBe(false);
   });
 
+  it('inside a critical section, a resend answered "session not found" says SESSION_REPLACED', async () => {
+    const { conn, rejections } = await connected();
+    stub.work(WORK, [
+      401,
+      { status: 400, body: '<html><body>Session not found</body></html>' },
+    ]);
+
+    conn.beginCriticalSection();
+    let error: unknown;
+    try {
+      error = await put(conn).catch((e: unknown) => e);
+    } finally {
+      conn.endCriticalSection();
+    }
+
+    expect(rejections()).toHaveLength(1);
+    expect(stub.sentTo(WORK)).toHaveLength(2);
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.SESSION_REPLACED);
+    expect(conn.isConnected()).toBe(false);
+  });
+
+  it('the wire\'s own resends answered "session not found" say SESSION_REPLACED too', async () => {
+    // Path (a): a mutation's login-form 401 outside a critical section, then
+    // the CSRF resend; and a GET's 401 resent with the session's cookies.
+    for (const [send, answers] of [
+      [put, [401]],
+      [get, [401]],
+    ] as const) {
+      const { conn } = await connected();
+      stub.work(WORK, [
+        ...answers,
+        { status: 400, body: '<html><body>Session not found</body></html>' },
+      ]);
+
+      const error = await send(conn).catch((e: unknown) => e);
+
+      expect(codeOf(error)).toBe(ADT_SESSION_ERROR.SESSION_REPLACED);
+      expect(conn.isConnected()).toBe(false);
+    }
+  });
+
   it('inside a critical section, a dead session that answers the resend with the same cookie is REFUSED_AGAIN', async () => {
     // The trade-off the docs state: the renewal keeps the session, so a session
     // SAP really lost but still answers under the same cookie — no Set-Cookie —
