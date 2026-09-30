@@ -135,7 +135,9 @@ export async function startSapStub(): Promise<SapStub> {
         return;
       }
 
-      const answer = asAnswer(work.get(path)?.shift());
+      const queued = work.get(path)?.shift();
+      if (typeof queued === 'object') await queued.hold?.();
+      const answer = asAnswer(queued);
       record(answer.status);
       res.writeHead(answer.status, {
         'content-type': 'text/plain',

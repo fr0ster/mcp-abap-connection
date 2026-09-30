@@ -751,6 +751,78 @@ describe('a request whose session is gone', () => {
   });
 });
 
+/** An answer the stub holds until released, and a promise for its arrival. */
+function held(status: number) {
+  let arrived!: () => void;
+  const inFlight = new Promise<void>((resolve) => {
+    arrived = resolve;
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const answer = {
+    status,
+    hold: () => {
+      arrived();
+      return gate;
+    },
+  };
+  return { answer, inFlight, release };
+}
+
+describe('an answer that arrives after its session is gone', () => {
+  it("a request's token fetch answered after a reconnect writes nothing into the new session's jar", async () => {
+    const { conn, transport } = await connected();
+    // No token, so the POST readies the wire first; that fetch carries the
+    // first session's cookie, and its answer is held at the server.
+    transport.adoptCsrfToken(null);
+    const fetch = held(200);
+    stub.discovery.push(fetch.answer);
+
+    const request = post(conn).catch((e: unknown) => e);
+    await fetch.inFlight;
+    await conn.disconnect();
+    await conn.connect();
+    const jar = transport.cookies();
+    const token = transport.csrfToken();
+    const identity = conn.getSessionIdentity();
+    expect(jar).toContain('SAP_SESSIONID_STUB_100=S2');
+    fetch.release();
+    const error = await request;
+
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    // The held answer set S1 — the old session's cookie — and a token.
+    expect(transport.cookies()).toBe(jar);
+    expect(transport.cookies()).not.toContain('S1');
+    expect(transport.csrfToken()).toBe(token);
+    expect(conn.getSessionIdentity()).toBe(identity);
+    expect(stub.sentTo(WORK)).toHaveLength(0);
+    expect(conn.isConnected()).toBe(true);
+  });
+
+  it('a resend refused after its session went away is NOT_CONNECTED, not a credential verdict', async () => {
+    const { conn, rejections } = await connected();
+    // The GET's 401 survives the wire's cookie resend and goes to the
+    // provider; its one more attempt is held, and refused once released.
+    const resend = held(401);
+    stub.work(WORK, [401, 401, resend.answer]);
+
+    const request = get(conn).catch((e: unknown) => e);
+    await resend.inFlight;
+    await conn.disconnect();
+    await conn.connect();
+    resend.release();
+    const error = await request;
+
+    expect(error).not.toBeInstanceOf(AuthRefusedError);
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    expect(rejections()).toHaveLength(1);
+    expect(stub.sentTo(WORK)).toHaveLength(3);
+    expect(conn.isConnected()).toBe(true);
+  });
+});
+
 describe('a subclass that fetches a token itself', () => {
   class Fetching extends AdtOnPremConnector {
     fetchWith(generation: number): Promise<string> {

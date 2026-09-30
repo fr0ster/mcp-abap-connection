@@ -104,6 +104,10 @@ export interface IAdtEstablishContext extends IAdtSessionContext {
    * Where to hand each answer. The wire folds a response into its own state;
    * whether a new session id is an establishment or a replacement is a question
    * about the session's lifetime, which is decided above.
+   *
+   * Handed up BEFORE the wire folds the answer in. It may throw a session
+   * verdict — the answer belongs to a session that is gone — and the wire then
+   * folds nothing of it and ends the exchange (`isFatal`).
    */
   observe: (headers: unknown) => void;
   /** How many times to ask again. Absent means the transport's own default. */

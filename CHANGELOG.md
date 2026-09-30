@@ -33,6 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raw `400` and left the connection connected to a dead session. Every attempt
   now goes through the same check: the session is lost and the caller gets
   `SESSION_REPLACED`.
+- **An answer to a request's token fetch that arrives after a reconnect is not
+  folded into the new session.** The wire ingested an establishment answer's
+  cookies and token itself, after the connection's fenced `observe`, so an old
+  session's answer could overwrite the new session's jar. The connection now
+  refuses such an answer from `observe` with a session verdict, which the wire
+  hands up before folding anything in; the request ends `NOT_CONNECTED`.
+  `connect()`'s own establishment is unchanged.
+- **A resend refused after its session went away is `NOT_CONNECTED`**, not
+  `AuthRefusedError` (refused again): the session the request was admitted to
+  is gone, so the refusal says nothing about the credential.
 
 ### Documentation
 

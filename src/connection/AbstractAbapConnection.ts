@@ -1500,6 +1500,18 @@ abstract class AbstractAbapConnection
       requestConfig.headers = await this.authorizedFrom(requestHeaders);
       return await this.sendObserved<T, D>(requestConfig, lease);
     } catch (again) {
+      // A verdict about the session outranks everything: it is already the
+      // caller's answer.
+      if (this.isSessionVerdict(again)) throw again;
+      // The session the request was admitted to went away while the resend
+      // was out: whatever came back is about a session this request no longer
+      // holds, so it is not a credential verdict.
+      if (!this.lifecycle.isCurrent(lease)) {
+        throw sessionError(
+          ADT_SESSION_ERROR.NOT_CONNECTED,
+          'The session this request was admitted to is gone',
+        );
+      }
       // The resend's refusal is observed like the first attempt's: a session
       // SAP replaced in between is SESSION_REPLACED, not a bare status.
       const refusal = refusalOf(again);
@@ -1771,8 +1783,19 @@ abstract class AbstractAbapConnection
       },
       logon: (target) => this.logon(target),
       extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
-      observe: (headers) =>
-        this.observeResponse(headers as Record<string, unknown>, generation),
+      // An answer that arrives after the lease went stale belongs to a session
+      // that is gone. Refused with the session verdict, which every wire hands
+      // up BEFORE folding an answer in — so its cookies and token never reach
+      // the jar of the session that replaced it — and which ends the exchange.
+      observe: (headers) => {
+        if (lease && !this.lifecycle.isCurrent(lease)) {
+          throw sessionError(
+            ADT_SESSION_ERROR.NOT_CONNECTED,
+            'The session this request was admitted to is gone; its answer was not taken',
+          );
+        }
+        this.observeResponse(headers as Record<string, unknown>, generation);
+      },
     };
   }
 
