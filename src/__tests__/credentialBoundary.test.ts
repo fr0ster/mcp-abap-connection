@@ -17,13 +17,11 @@
  * session if it had changed. That is the connection managing a lifetime it does
  * not own, and it is gone. A refusal surfaces.
  */
-import type {
-  IAuthProvider,
-  IRenewableCredential,
-} from '@mcp-abap-adt/interfaces-auth';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
+import { credentialWriting } from './helpers/credentials.js';
 
 const config: SapConfig = {
   url: 'https://sap.example.com',
@@ -35,29 +33,19 @@ const config: SapConfig = {
 /** A provider that would renew if anyone asked it to. Nobody does. */
 function refusedCredential() {
   const asked = { header: 0, renew: 0 };
-  // Renewable, because it HAS renew() — which since interfaces 19.0.0 is an
-  // atom rather than an optional member of every credential. Typing it
-  // `IAuthProvider` would not compile, and that is the contract working: the
-  // point of the test is that nothing CALLS it.
-  // `IAuthProvider &`, not `IRenewableCredential` alone: renewing is an atom
-  // added to a credential, not a kind of credential. Interfaces 39.0.0 split
-  // them, and this object is a provider that also renews — `kind`, `prepare`,
-  // `authorizationHeader`, `cookies` and `transportMaterial` come from the
-  // provider half, `renew` from the atom.
-  const credential: IAuthProvider & IRenewableCredential = {
+  // `rejected` is what asks a provider to renew; nothing calls it here, and the
+  // test is that nothing does. `authorize` counts the per-request reads.
+  const credential: IAuthProvider = credentialWriting({
     kind: 'token',
-    // Empty where there is nothing to say: since interfaces 20.0.0 a credential
-    // states all of itself, so nothing has to ask whether it does.
-    prepare: async () => {},
-    cookies: () => null,
-    transportMaterial: () => ({}),
-    authorizationHeader: async () => {
+    authorization: () => {
       asked.header += 1;
       return 'Bearer STALE';
     },
-    renew: async () => {
-      asked.renew += 1;
-    },
+  });
+  const rejected = credential.rejected.bind(credential);
+  credential.rejected = async (rejection) => {
+    asked.renew += 1;
+    return rejected(rejection);
   };
   return { credential, asked };
 }

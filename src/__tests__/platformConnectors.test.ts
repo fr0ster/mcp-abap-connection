@@ -14,12 +14,13 @@ import {
   BasicAuthProvider,
   SamlAuthProvider,
   TokenAuthProvider,
-} from '../auth/providers.js';
+} from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
 import { cloudHttpTransport, onPremHttpTransport } from './helpers/onPrem.js';
+import { settled } from './helpers/settled.js';
 
 const config: SapConfig = {
   url: 'https://sap.example.com',
@@ -90,7 +91,7 @@ describe('the consumer decides the session mechanism, by which connector it take
     const seen: Seen[] = [];
     const conn = new AdtOnPremConnector(
       config,
-      new TokenAuthProvider('a-token'),
+      TokenAuthProvider.fixed('a-token'),
       onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
@@ -98,6 +99,7 @@ describe('the consumer decides the session mechanism, by which connector it take
 
     await conn.connect();
     await conn.disconnect();
+    await settled();
 
     // Never touched, even though this stub answers it — which is the whole
     // point: on-prem answers it too, so a probe would have chosen wrongly.
@@ -119,6 +121,7 @@ describe('the consumer decides the session mechanism, by which connector it take
 
     await conn.connect();
     await conn.disconnect();
+    await settled();
 
     const opened = seen.find((r) => r.url.includes('/core/http/sessions?'));
     expect(opened?.headers['x-sap-security-session']).toBe('create');
@@ -170,7 +173,7 @@ describe('the credential is what it authenticates with, and nothing more', () =>
     const seen: Seen[] = [];
     const conn = new AdtOnPremConnector(
       config,
-      new TokenAuthProvider({ getToken, refreshToken: getToken } as never),
+      TokenAuthProvider.from({ getToken, refreshToken: getToken }),
       onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
@@ -391,7 +394,7 @@ describe('the token provider is used the way its contract says', () => {
     const seen: Seen[] = [];
     const conn = new AdtOnPremConnector(
       config,
-      new TokenAuthProvider(refresher as never),
+      TokenAuthProvider.from(refresher),
       onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
@@ -453,15 +456,19 @@ describe('a request is built from one reading of the credential', () => {
     const seen: Seen[] = [];
     let reads = 0;
     const conn = build(
-      new TokenAuthProvider(async () => {
-        reads += 1;
-        return 'T';
+      TokenAuthProvider.from({
+        getToken: async () => {
+          reads += 1;
+          return 'T';
+        },
+        refreshToken: async () => 'T',
       }),
     );
     serverAnsweringEverything(conn, seen);
 
     await conn.connect();
     await conn.disconnect();
+    await settled();
 
     // Never more than one read per request that actually went out. More means
     // some request was assembled from two different answers.

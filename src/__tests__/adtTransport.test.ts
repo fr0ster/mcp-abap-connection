@@ -14,7 +14,7 @@
  * stub to have. A seam the tests already need is a seam.
  */
 
-import { BasicAuthProvider } from '../auth/providers.js';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { IOnPremTransport } from '../connection/IAdtTransport.js';

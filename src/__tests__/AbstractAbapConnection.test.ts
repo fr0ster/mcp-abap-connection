@@ -1,5 +1,8 @@
+import {
+  SamlAuthProvider,
+  TokenAuthProvider,
+} from '@mcp-abap-adt/auth-providers';
 import { AxiosError } from 'axios';
-import { SamlAuthProvider, TokenAuthProvider } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';

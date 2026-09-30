@@ -13,7 +13,7 @@
  * comparison cannot see it (there is no cookie to change), and `isConnected()`
  * goes on answering true over a session that no longer exists.
  */
-import { BasicAuthProvider } from '../../auth/providers.js';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { RfcTransport } from '../../connection/RfcTransport.js';

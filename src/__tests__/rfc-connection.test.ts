@@ -19,8 +19,8 @@
  *   SAP_ENV_FILE=e19.env npx jest --testPathPatterns=rfc-connection
  */
 
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import * as dotenv from 'dotenv';
-import { BasicAuthProvider } from '../auth/providers.js';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { RfcTransport } from '../connection/RfcTransport.js';

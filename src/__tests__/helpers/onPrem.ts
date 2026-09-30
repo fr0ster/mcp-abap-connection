@@ -7,8 +7,7 @@
  * is the point of the change, and also why a test that is about critical
  * sections should not have to say it eight times.
  */
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
-import { BasicAuthProvider } from '../../auth/providers.js';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
@@ -19,14 +18,11 @@ export function onPremHttpTransport(
   config: SapConfig,
   logger: ILogger | null = null,
 ): OnPremHttpTransport {
-  const credential: IAuthProvider = new BasicAuthProvider(
-    config.username ?? '',
-    config.password ?? '',
-  );
   return new OnPremHttpTransport(
-    // What the caller must wire now: the credential's TLS material configures
-    // the wire, and nothing does it for them.
-    () => credential.transportMaterial?.() ?? {},
+    // What the caller must wire: the agent's options. The credential no longer
+    // supplies TLS material; it presents it at logon, which the session context
+    // arranges.
+    () => ({}),
     logger,
     { client: config.client, baseUrl: config.url },
   );

@@ -15,6 +15,7 @@
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
+import { credentialWriting } from './helpers/credentials.js';
 import { onPremHttpTransport } from './helpers/onPrem.js';
 
 const config: SapConfig = {
@@ -33,15 +34,10 @@ describe('a credential that does not', () => {
   // connection, it was one implementation for both, and the RFC one could not
   // succeed.
   it('leaves the exchange to the wire it travels over', async () => {
-    const credential: IAuthProvider = {
+    const credential: IAuthProvider = credentialWriting({
       kind: 'test-basic',
-      // Empty where there is nothing to say: since interfaces 20.0.0 a credential
-      // states all of itself, so nothing has to ask whether it does.
-      prepare: async () => {},
-      cookies: () => null,
-      transportMaterial: () => ({}),
-      authorizationHeader: async () => 'Basic dTpw',
-    };
+      authorization: 'Basic dTpw',
+    });
     const conn = new AdtOnPremConnector(
       config,
       credential,
@@ -61,15 +57,10 @@ describe('a credential that does not', () => {
   });
 
   it('hands the wire the server, the credential, and somewhere to report', async () => {
-    const credential: IAuthProvider = {
+    const credential: IAuthProvider = credentialWriting({
       kind: 'test-basic',
-      // Empty where there is nothing to say: since interfaces 20.0.0 a credential
-      // states all of itself, so nothing has to ask whether it does.
-      prepare: async () => {},
-      cookies: () => null,
-      transportMaterial: () => ({}),
-      authorizationHeader: async () => 'Basic dTpw',
-    };
+      authorization: 'Basic dTpw',
+    });
     const conn = new AdtOnPremConnector(
       config,
       credential,

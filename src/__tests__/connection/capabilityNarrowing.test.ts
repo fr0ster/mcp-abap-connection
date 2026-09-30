@@ -13,11 +13,11 @@
  * IAbapConnection, which is what the atom was always for.
  */
 
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type {
   IAbapConnection,
   ISessionLifecycleAware,
 } from '@mcp-abap-adt/interfaces-adt-connection';
-import { BasicAuthProvider } from '../../auth/providers.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { RfcTransport } from '../../connection/RfcTransport.js';
 import { onPremHttpTransport } from '../helpers/onPrem.js';

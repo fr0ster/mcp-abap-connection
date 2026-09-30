@@ -12,7 +12,7 @@
  */
 
 import { createServer, type Server } from 'node:http';
-import { TokenAuthProvider } from '../../auth/providers.js';
+import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
@@ -229,7 +229,7 @@ describe('a credential refused while establishing', () => {
         authType: 'jwt',
         jwtToken: 'STALE',
       } as SapConfig,
-      new TokenAuthProvider({
+      TokenAuthProvider.from({
         getToken: async () => 'FRESH',
         refreshToken: async () => {
           refreshed += 1;

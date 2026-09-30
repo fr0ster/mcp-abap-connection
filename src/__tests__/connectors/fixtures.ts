@@ -12,7 +12,10 @@
  * jar, fingerprint, affinity — so what is under test is the connection over a
  * real wire implementation, not over a second copy of one.
  */
-import { BasicAuthProvider, TokenAuthProvider } from '../../auth/providers.js';
+import {
+  BasicAuthProvider,
+  TokenAuthProvider,
+} from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
@@ -116,7 +119,7 @@ export async function cloudFixture(): Promise<ConnectorFixture> {
       (transport as unknown as { instance: unknown }).instance = wire.send;
       const conn = new AdtCloudConnector(
         config,
-        new TokenAuthProvider('a-token'),
+        TokenAuthProvider.fixed('a-token'),
         transport,
         null,
       );

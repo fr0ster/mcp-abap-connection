@@ -17,6 +17,7 @@ import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
+import { credentialWriting } from '../helpers/credentials.js';
 
 const config: SapConfig = {
   url: 'https://sap.example.com',
@@ -83,18 +84,13 @@ describe('a logoff still in flight when the next session opens', () => {
     // and may go to the network. While it is suspended, the connection is
     // already free to connect again.
     let slow = false;
-    const credential: IAuthProvider = {
+    const credential: IAuthProvider = credentialWriting({
       kind: 'slow',
-      // Empty where there is nothing to say: since interfaces 20.0.0 a credential
-      // states all of itself, so nothing has to ask whether it does.
-      prepare: async () => {},
-      cookies: () => null,
-      transportMaterial: () => ({}),
-      authorizationHeader: async () => {
+      authorization: async () => {
         if (slow) await new Promise((r) => setTimeout(r, 40));
         return 'Basic dTpw';
       },
-    };
+    });
     const conn = new AdtOnPremConnector(config, credential, transport, null);
 
     await conn.connect();
