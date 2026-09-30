@@ -152,6 +152,40 @@ describe('the HTTP logon target', () => {
     expect(options.passphrase).toBe('mine');
   });
 
+  it('takes only the material fields: an extra key or an explicit undefined does not override agentOptions', async () => {
+    const transport = new HttpTransport(() => ({
+      ca: 'THE-CA',
+      rejectUnauthorized: true,
+      passphrase: 'from-options',
+    }));
+
+    await logonWith(transport, (t) =>
+      t.tlsMaterial({
+        cert: 'THE-CERT',
+        key: 'THE-KEY',
+        passphrase: undefined,
+        rejectUnauthorized: false,
+        ca: 'NOT-THE-CA',
+      } as unknown as Parameters<ILogonTarget['tlsMaterial']>[0]),
+    );
+
+    const options = agentOf(transport).options;
+    expect(options.cert).toBe('THE-CERT');
+    expect(options.key).toBe('THE-KEY');
+    expect(options.ca).toBe('THE-CA');
+    expect(options.rejectUnauthorized).toBe(true);
+    expect(options.passphrase).toBe('from-options');
+  });
+
+  it('keeps the client when a first logon offers nothing but undefined fields', async () => {
+    const transport = new HttpTransport();
+    const first = (transport as any).client();
+
+    await logonWith(transport, (t) => t.tlsMaterial({ cert: undefined }));
+
+    expect((transport as any).client()).toBe(first);
+  });
+
   it('keeps the client for the same material, compared by value', async () => {
     const transport = new HttpTransport();
     await logonWith(transport, (t) =>

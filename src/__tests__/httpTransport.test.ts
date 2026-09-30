@@ -39,18 +39,18 @@ describe('HttpTransport', () => {
     await expect(transport.close(context)).resolves.toBeUndefined();
   });
 
-  it('reads its TLS material when it builds the client, not before', () => {
+  it('reads its agentOptions when it builds the client, not before', () => {
     let asked = 0;
     const transport = new HttpTransport(() => {
       asked++;
-      return { cert: 'PEM' };
+      return { ca: 'PEM' };
     });
 
     expect(asked).toBe(0);
 
-    // Building the client is what asks — by which time the credential has been
-    // prepared. Asking in the constructor would read material that is not
-    // loaded yet.
+    // Building the client is what asks. Asking in the constructor would read
+    // options the caller may not have loaded yet; the credential's material
+    // is not among them — the provider offers it at logon.
     (transport as any).client();
     expect(asked).toBe(1);
   });

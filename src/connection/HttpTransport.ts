@@ -87,6 +87,20 @@ function absentEndpoint(error: unknown): boolean {
 
 const MATERIAL_FIELDS = ['cert', 'key', 'pfx', 'passphrase'] as const;
 
+/**
+ * The material fields a provider offered, and nothing else: a key outside
+ * them (`ca`, `rejectUnauthorized`) belongs to `agentOptions`, and a field
+ * offered as `undefined` was not offered.
+ */
+function materialOf(offered: ICertificateMaterial): ICertificateMaterial {
+  const taken: ICertificateMaterial = {};
+  for (const field of MATERIAL_FIELDS) {
+    const value = offered[field];
+    if (value !== undefined) Object.assign(taken, { [field]: value });
+  }
+  return taken;
+}
+
 /** Material is the same when every field holds the same value, buffers by bytes. */
 function sameMaterial(
   a: ICertificateMaterial | null,
@@ -472,11 +486,12 @@ export class HttpTransport implements IAdtTransport {
    */
   protected logonTarget(): ILogonTarget {
     return {
-      tlsMaterial: (material): AuthOutcome => {
+      tlsMaterial: (offered): AuthOutcome => {
+        const material = materialOf(offered);
         if (!sameMaterial(this.material, material)) {
           this.instance = null;
         }
-        this.material = { ...material };
+        this.material = material;
         return { ok: true };
       },
       logonParameters: (): AuthOutcome => ({
