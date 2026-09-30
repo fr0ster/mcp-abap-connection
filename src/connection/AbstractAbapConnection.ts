@@ -1441,6 +1441,7 @@ abstract class AbstractAbapConnection
           return await this.sendObserved<T, D>(requestConfig, lease);
         }
       } catch (csrfError) {
+        this.throwIfSessionDead(csrfError, lease);
         // Swallowed, unless it says more than the 401 that started this —
         // a session verdict, or the credential's failure.
         if (this.outranksOriginal(csrfError)) {
@@ -1619,8 +1620,16 @@ abstract class AbstractAbapConnection
       } catch (error) {
         if (error instanceof AuthRefusedError) throw error;
         // The session the request was admitted to is gone: nothing more of it
-        // is sent, and the verdict is the caller's.
-        if (!this.lifecycle.isCurrent(lease)) throw error;
+        // is sent, the provider is not asked, and what the caller gets is the
+        // session verdict — never the wire's error about a session it no
+        // longer holds.
+        if (!this.lifecycle.isCurrent(lease)) {
+          if (this.isSessionVerdict(error)) throw error;
+          throw sessionError(
+            ADT_SESSION_ERROR.NOT_CONNECTED,
+            'The session this request was admitted to is gone; nothing more was sent',
+          );
+        }
         if (!(error instanceof WireLogonError)) {
           this.logger?.debug(
             `Could not fetch CSRF token upfront, will retry on error: ${error instanceof Error ? error.message : String(error)}`,
@@ -1654,16 +1663,20 @@ abstract class AbstractAbapConnection
     retryDelay: number = CSRF_CONFIG.RETRY_DELAY,
     /**
      * The request's lease: fences what is sent and the response effects.
-     * Omitted during connect(), which has no lease.
+     * A plain session generation — what this parameter took before 10.0.1,
+     * and what a subclass may still pass — fences the response effects only,
+     * as it always did. Omitted during connect(), which has no lease.
      */
-    lease?: Pick<RequestLease, 'generation'>,
+    fence?: number | Pick<RequestLease, 'generation'>,
   ): Promise<string> {
     // Dropped first, because this is only ever reached to REPLACE one: the
     // establishment is idempotent and would hand back the very token the
     // caller has just been told is stale.
     this.transport.adoptCsrfToken(null);
     await this.transport.establish({
-      ...this.leasedContext(lease),
+      ...(typeof fence === 'number'
+        ? this.leasedContext(undefined, fence)
+        : this.leasedContext(fence)),
       retries: retryCount,
       retryDelayMs: retryDelay,
       timeoutMs: getTimeout('csrf'),
@@ -1738,10 +1751,12 @@ abstract class AbstractAbapConnection
    * session verdict, so the exchange stops at once, past its retries.
    *
    * Without one — connect()'s own establishment, which is making the session
-   * rather than working in it — nothing is fenced.
+   * rather than working in it — nothing is fenced. `generation` alone fences
+   * the response effects and nothing else.
    */
   private leasedContext(
     lease?: Pick<RequestLease, 'generation'>,
+    generation: number | undefined = lease?.generation,
   ): IAdtSessionContext {
     return {
       baseUrl: this.baseUrl,
@@ -1757,10 +1772,7 @@ abstract class AbstractAbapConnection
       logon: (target) => this.logon(target),
       extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
       observe: (headers) =>
-        this.observeResponse(
-          headers as Record<string, unknown>,
-          lease?.generation,
-        ),
+        this.observeResponse(headers as Record<string, unknown>, generation),
     };
   }
 

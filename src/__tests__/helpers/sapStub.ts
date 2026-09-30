@@ -24,6 +24,11 @@ export type StubAnswer =
       status: number;
       body?: string;
       headers?: Record<string, string | string[]>;
+      /**
+       * Called when the request arrives; the answer waits for it to settle —
+       * for a test that acts while the request is in flight.
+       */
+      hold?: () => Promise<void>;
     };
 
 export interface StubRequest {
@@ -92,9 +97,11 @@ export async function startSapStub(): Promise<SapStub> {
 
     // Drained before answering, so a request with a body is read whole.
     req.resume();
-    req.on('end', () => {
+    req.on('end', async () => {
       if (path.includes('/discovery')) {
-        const answer = asAnswer(discovery.shift());
+        const next = discovery.shift();
+        if (typeof next === 'object') await next.hold?.();
+        const answer = asAnswer(next);
         record(answer.status);
         if (answer.status !== 200) {
           res.writeHead(answer.status, {

@@ -22,6 +22,7 @@ import {
   AuthRefusedError,
   PROVIDER_FAILED,
   REFUSED_AGAIN,
+  WireLogonError,
 } from '../../connection/authErrors.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { type SapStub, startSapStub } from '../helpers/sapStub.js';
@@ -671,6 +672,126 @@ describe('a request whose session is gone', () => {
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
     expect(stub.sentTo(WORK)).toHaveLength(0);
+    expect(conn.isConnected()).toBe(true);
+  });
+
+  it('the first pass of the upfront token fetch sends nothing into the next session', async () => {
+    const { conn, provider, transport } = await connected();
+    // No token, so the POST readies the wire first; the first authorize from
+    // here is that fetch's.
+    transport.adoptCsrfToken(null);
+    const { asked, release } = gateAuthorize(provider, 1);
+
+    const request = post(conn).catch((e: unknown) => e);
+    await asked;
+    await conn.disconnect();
+    await conn.connect();
+    transport.adoptCsrfToken(null);
+    const discoveries = stub.sentTo(DISCOVERY).length;
+    release();
+    const error = await request;
+
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
+    expect(stub.sentTo(WORK)).toHaveLength(0);
+    expect(conn.isConnected()).toBe(true);
+  });
+
+  it('an upfront fetch refused after its session went away is NOT_CONNECTED, never the wire error', async () => {
+    const { conn, transport, rejections } = await connected();
+    transport.adoptCsrfToken(null);
+    let arrived!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      arrived = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // The upfront discovery is held at the server, then refused as a logon.
+    stub.discovery.push({
+      status: 401,
+      hold: () => {
+        arrived();
+        return gate;
+      },
+    });
+
+    const request = post(conn).catch((e: unknown) => e);
+    await inFlight;
+    await conn.disconnect();
+    await conn.connect();
+    release();
+    const error = await request;
+
+    expect(error).not.toBeInstanceOf(WireLogonError);
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    expect(rejections()).toHaveLength(0);
+    expect(stub.sentTo(WORK)).toHaveLength(0);
+    expect(conn.isConnected()).toBe(true);
+  });
+
+  it('a GET resent after its cookie fetch, answered "session not found", says SESSION_REPLACED', async () => {
+    const { conn, transport } = await connected();
+    // The GET goes out with no cookies, so its 401 is recovered by a token
+    // fetch that brings them, and the resend meets a dead session.
+    transport.forgetSession();
+    (conn as any).lifecycle.forgetIdentity();
+    stub.work(WORK, [
+      401,
+      { status: 400, body: '<html><body>Session not found</body></html>' },
+    ]);
+
+    const error = await get(conn).catch((e: unknown) => e);
+
+    expect(stub.sentTo(WORK)).toHaveLength(2);
+    expect(stub.sentTo(WORK)[0].headers.cookie).toBeUndefined();
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.SESSION_REPLACED);
+    expect(conn.isConnected()).toBe(false);
+  });
+});
+
+describe('a subclass that fetches a token itself', () => {
+  class Fetching extends AdtOnPremConnector {
+    fetchWith(generation: number): Promise<string> {
+      return this.fetchCsrfToken('/sap/bc/adt/work', 0, 0, generation);
+    }
+    current(): number {
+      return this.sessionGeneration;
+    }
+  }
+
+  async function fetching() {
+    const config = {
+      url: stub.baseUrl,
+      client: '100',
+      authType: 'basic',
+    } as SapConfig;
+    const transport = new OnPremHttpTransport(() => ({}), null, {
+      client: '100',
+      baseUrl: stub.baseUrl,
+    });
+    const conn = new Fetching(config, stubProvider(), transport, null);
+    await conn.connect();
+    return conn;
+  }
+
+  it('passing a generation number, as before 10.0.1, still fetches', async () => {
+    const conn = await fetching();
+
+    const token = await conn.fetchWith(conn.current());
+
+    expect(token).toBe(stub.tokens[stub.tokens.length - 1]);
+    expect(stub.sentTo(DISCOVERY)).toHaveLength(2);
+  });
+
+  it('a number that is not the current generation still fetches: it fences only what the answer does', async () => {
+    const conn = await fetching();
+
+    const token = await conn.fetchWith(conn.current() - 1);
+
+    expect(token).toBe(stub.tokens[stub.tokens.length - 1]);
+    expect(stub.sentTo(DISCOVERY)).toHaveLength(2);
     expect(conn.isConnected()).toBe(true);
   });
 });
