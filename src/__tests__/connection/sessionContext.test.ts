@@ -15,6 +15,7 @@ import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import {
   AuthRefusedError,
+  PROVIDER_FAILED,
   REFUSED_AGAIN,
 } from '../../connection/authErrors.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
@@ -257,6 +258,27 @@ describe('a 401 while establishing', () => {
       ((error as AuthRefusedError).cause as { response?: { status?: number } })
         .response?.status,
     ).toBe(401);
+    expect(rejections()).toHaveLength(1);
+    expect(conn.isConnected()).toBe(false);
+  });
+
+  it('a rejected() that throws is PROVIDER_FAILED at logon, the throw as cause', async () => {
+    const boom = new Error('boom');
+    const { conn, rejections } = onPremWith({
+      rejected: [
+        () => {
+          throw boom;
+        },
+      ],
+    });
+    stub.discovery.push(401);
+
+    const error = await conn.connect().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AuthRefusedError);
+    expect((error as AuthRefusedError).at).toBe('logon');
+    expect((error as AuthRefusedError).refusal).toBe(PROVIDER_FAILED);
+    expect((error as AuthRefusedError).cause).toBe(boom);
     expect(rejections()).toHaveLength(1);
     expect(conn.isConnected()).toBe(false);
   });

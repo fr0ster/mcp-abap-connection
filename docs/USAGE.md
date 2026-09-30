@@ -995,7 +995,8 @@ try {
 } catch (error) {
   if (error instanceof AuthRefusedError) {
     // error.refusal.reason / .hint are the provider's words;
-    // error.at is 'prepare' | 'logon' | 'request'; error.cause is the wire's error.
+    // error.at is 'prepare' | 'logon' | 'request'; error.cause is the provider's
+    // throw when it threw, else the wire's error.
     console.error(error.message);
   }
   throw error;

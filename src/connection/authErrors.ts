@@ -14,7 +14,8 @@ export type AuthRefusalMoment = 'prepare' | 'logon' | 'request';
  *
  * `refusal` is the provider's own words; `cause` keeps the wire's error as it
  * arrived, so a network failure stays visible even when a provider words it as
- * a credential problem.
+ * a credential problem — unless the provider threw instead of answering, when
+ * it is that throw.
  */
 export class AuthRefusedError extends Error {
   readonly refusal: IAuthRefusal;
@@ -70,6 +71,16 @@ export const NO_CREDENTIAL_TO_RENEW: IAuthRefusal = {
 };
 
 /**
+ * A provider's answer, and what it threw when the answer is a throw. `thrown`
+ * is present only then, so a provider that threw `undefined` is still told
+ * apart from one that answered.
+ */
+export interface GuardedAnswer {
+  outcome: AuthOutcome;
+  thrown?: unknown;
+}
+
+/**
  * Run one provider call so that a throw is an answer too.
  *
  * A consumer's provider may be buggy; the connection must not let that surface
@@ -78,7 +89,7 @@ export const NO_CREDENTIAL_TO_RENEW: IAuthRefusal = {
  */
 export async function guarded(
   call: () => Promise<AuthOutcome>,
-): Promise<{ outcome: AuthOutcome; thrown?: unknown }> {
+): Promise<GuardedAnswer> {
   try {
     return { outcome: await call() };
   } catch (thrown) {

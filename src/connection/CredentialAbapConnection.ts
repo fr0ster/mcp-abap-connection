@@ -14,7 +14,6 @@
 
 import type { IAbapRequestOptions } from '@mcp-abap-adt/interfaces-adt-connection';
 import type {
-  AuthOutcome,
   IAuthProvider,
   IAuthRejection,
   ILogonTarget,
@@ -22,7 +21,7 @@ import type {
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
-import { AuthRefusedError, guarded } from './authErrors.js';
+import { AuthRefusedError, type GuardedAnswer, guarded } from './authErrors.js';
 import { type IAdtTransport, refusalOf } from './IAdtTransport.js';
 import { requestTargetOn } from './requestTarget.js';
 
@@ -89,11 +88,14 @@ export abstract class CredentialAbapConnection<
     }
   }
 
-  /** The provider's answer, whole; a throw is an answer too (`guarded`). */
+  /**
+   * The provider's answer, whole; a throw is an answer too (`guarded`), and
+   * is kept beside it to become the cause of the refusal.
+   */
   protected override async credentialRejected(
     rejection: IAuthRejection,
-  ): Promise<AuthOutcome> {
-    return (await guarded(() => this.credential.rejected(rejection))).outcome;
+  ): Promise<GuardedAnswer> {
+    return guarded(() => this.credential.rejected(rejection));
   }
 
   protected async establishSession(): Promise<void> {

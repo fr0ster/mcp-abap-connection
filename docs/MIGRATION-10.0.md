@@ -165,7 +165,7 @@ more; if the provider says no, or the retry is refused too, the caller gets an
 class AuthRefusedError extends Error {
   readonly refusal: { reason: string; hint?: string }; // the provider's words
   readonly at: 'prepare' | 'logon' | 'request';         // when it refused
-  readonly cause?: unknown;                             // the wire's error, as it arrived
+  readonly cause?: unknown;                             // the provider's throw when it threw, else the wire's error
 }
 ```
 

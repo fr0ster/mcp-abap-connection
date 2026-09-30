@@ -82,9 +82,13 @@ describe('the credential hooks on a connector', () => {
     const provider = stubProvider({ rejected: [NO, { ok: true }] });
     const conn = connectorOn(provider);
     const rejection = { at: 'request', status: 401, error: new Error('x') };
-    expect(await conn.credentialRejected(rejection)).toBe(NO);
+    const refused = await conn.credentialRejected(rejection);
+    expect(refused.outcome).toBe(NO);
+    expect('thrown' in refused).toBe(false);
     expect(provider.calls[0].argument).toBe(rejection);
-    expect(await conn.credentialRejected(rejection)).toEqual({ ok: true });
+    expect(await conn.credentialRejected(rejection)).toEqual({
+      outcome: { ok: true },
+    });
     expect(provider.renewals()).toBe(1);
   });
 
@@ -112,10 +116,9 @@ describe('the credential hooks on a connector', () => {
       expect(error.refusal).toBe(PROVIDER_FAILED);
       expect(error.cause).toBe(boom);
     }
-    expect(await conn.credentialRejected({ at: 'request', error: 1 })).toEqual({
-      ok: false,
-      refusal: PROVIDER_FAILED,
-    });
+    const answer = await conn.credentialRejected({ at: 'request', error: 1 });
+    expect(answer.outcome).toEqual({ ok: false, refusal: PROVIDER_FAILED });
+    expect(answer.thrown).toBe(boom);
   });
 });
 
@@ -135,8 +138,7 @@ describe('the base class alone', () => {
     expect(await conn.getAuthHeaders()).toEqual({ 'X-SAP-Client': '100' });
     await expect(conn.logon({})).resolves.toBeUndefined();
     expect(await conn.credentialRejected({ at: 'request', error: 1 })).toEqual({
-      ok: false,
-      refusal: NO_CREDENTIAL_TO_RENEW,
+      outcome: { ok: false, refusal: NO_CREDENTIAL_TO_RENEW },
     });
   });
 });

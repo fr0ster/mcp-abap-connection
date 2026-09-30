@@ -8,7 +8,6 @@ import type {
 } from '@mcp-abap-adt/interfaces-adt-connection';
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
 import type {
-  AuthOutcome,
   IAuthRejection,
   ILogonTarget,
 } from '@mcp-abap-adt/interfaces-auth';
@@ -29,6 +28,7 @@ import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import {
   AuthRefusedError,
+  type GuardedAnswer,
   NO_CREDENTIAL_TO_RENEW,
   REFUSED_AGAIN,
   WireLogonError,
@@ -944,13 +944,14 @@ abstract class AbstractAbapConnection
 
   /**
    * The system refused the credential. The answer is the credential's: Ok
-   * means it renewed and one more attempt is worth making. The base has
+   * means it renewed and one more attempt is worth making; `thrown`, when
+   * present, is what the provider threw instead of answering. The base has
    * nothing to renew.
    */
   protected async credentialRejected(
     _rejection: IAuthRejection,
-  ): Promise<AuthOutcome> {
-    return { ok: false, refusal: NO_CREDENTIAL_TO_RENEW };
+  ): Promise<GuardedAnswer> {
+    return { outcome: { ok: false, refusal: NO_CREDENTIAL_TO_RENEW } };
   }
 
   async makeAdtRequest<T = any, D = any>(
@@ -1494,9 +1495,10 @@ abstract class AbstractAbapConnection
   /**
    * The provider's answer to a refusal, within the request's one retry.
    *
-   * Returns when it renewed. Its Oops is thrown in its own words; a refusal
-   * after the retry was spent is the verdict, and the provider is not asked
-   * again — asking would invite a second renewal.
+   * Returns when it renewed. Its Oops is thrown in its own words, the wire's
+   * error as the cause — or, when the provider threw instead of answering,
+   * that throw. A refusal after the retry was spent is the verdict, and the
+   * provider is not asked again — asking would invite a second renewal.
    */
   private async renewCredential(
     rejection: IAuthRejection,
@@ -1506,12 +1508,12 @@ abstract class AbstractAbapConnection
       throw new AuthRefusedError(REFUSED_AGAIN, rejection.at, rejection.error);
     }
     renewal.spent = true;
-    const outcome = await this.credentialRejected(rejection);
-    if (!outcome.ok) {
+    const answer = await this.credentialRejected(rejection);
+    if (!answer.outcome.ok) {
       throw new AuthRefusedError(
-        outcome.refusal,
+        answer.outcome.refusal,
         rejection.at,
-        rejection.error,
+        'thrown' in answer ? answer.thrown : rejection.error,
       );
     }
   }

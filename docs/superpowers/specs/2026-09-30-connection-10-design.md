@@ -40,7 +40,7 @@ Two exported classes, `src/connection/authErrors.ts`:
 class AuthRefusedError extends Error {
   readonly refusal: IAuthRefusal;             // the provider's words (H3)
   readonly at: 'prepare' | 'logon' | 'request';
-  readonly cause?: unknown;                   // the wire's error, as it arrived
+  readonly cause?: unknown;                   // the provider's throw when it threw, else the wire's error
   // message: `${refusal.reason}` + (hint ? ` — ${refusal.hint}` : '')
 }
 

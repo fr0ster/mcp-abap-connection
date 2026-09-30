@@ -20,6 +20,7 @@ import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import {
   AuthRefusedError,
+  PROVIDER_FAILED,
   REFUSED_AGAIN,
 } from '../../connection/authErrors.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
@@ -106,6 +107,27 @@ describe('a 401 that survives the wire', () => {
       (NO as { refusal: unknown }).refusal,
     );
     expect(statusOf((error as AuthRefusedError).cause)).toBe(401);
+    expect(stub.sentTo(WORK)).toHaveLength(2);
+  });
+
+  it('a rejected() that throws is PROVIDER_FAILED at request, the throw as cause', async () => {
+    const boom = new Error('boom');
+    const { conn, rejections } = await connected({
+      rejected: [
+        () => {
+          throw boom;
+        },
+      ],
+    });
+    stub.work(WORK, [401, 401]);
+
+    const error = await get(conn).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AuthRefusedError);
+    expect((error as AuthRefusedError).at).toBe('request');
+    expect((error as AuthRefusedError).refusal).toBe(PROVIDER_FAILED);
+    expect((error as AuthRefusedError).cause).toBe(boom);
+    expect(rejections()).toHaveLength(1);
     expect(stub.sentTo(WORK)).toHaveLength(2);
   });
 
