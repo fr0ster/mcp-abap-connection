@@ -10,6 +10,7 @@
 - [Session Management](#session-management)
 - [Advanced Features](#advanced-features)
 - [API Reference](#api-reference)
+- [Live suites](#live-suites)
 
 ## Quick Start
 
@@ -1039,6 +1040,35 @@ type SapConfig = {
   // Token refresh is handled by @mcp-abap-adt/auth-broker package
 };
 ```
+
+## Live suites
+
+Unit tests cannot tell you that a system accepts what the connection builds, so
+there is one live suite per provider under `src/__tests__/live/`, run on the
+machine that has that system: `basic` and `token` on a developer's, `snc` where
+the SAP Secure Login Client is. They are not part of `npm test`.
+
+```bash
+npm run test:init          # copies test-config.yaml.template to test-config.yaml (git-ignored)
+# edit the lines marked "# ← CHANGE" in src/__tests__/helpers/test-config.yaml
+npm run test:live:basic    # user + password, over HTTP and/or RFC
+npm run test:live:token    # access token renewed by its refresh token
+npm run test:live:snc      # SNC logon over RFC
+npm run test:reinit        # overwrite the config from the template
+```
+
+The config has one optional section per provider. `basic` and `token` point at a
+session env file (`env_file: ~/.config/mcp-abap-adt/sessions/<name>.env`) that
+holds the URL and the secrets; `snc` carries its non-secret values itself. A
+suite is skipped only when its section is absent, with the reason printed; a
+present section that fails is red. `basic` names its `wires` (`http`, `rfc`;
+`ashost` / `sysnr` when the URL does not name the RFC endpoint), a `read_class`
+whose source is read, and a `lock_class` you may lock (without it the LOCK/UNLOCK
+case is skipped, with the reason printed). `basic` makes one deliberate
+wrong-password logon per wire, which counts against the account. The `token`
+suite refuses an interactive login: an expired refresh token fails it, and a
+tenant that rotates refresh tokens invalidates the one in the session file. The
+`snc` "logged out" case (`A2200019`) cannot be automated and is checked by hand.
 
 ## Examples Directory
 

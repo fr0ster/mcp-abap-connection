@@ -1,0 +1,66 @@
+# Live-suite configuration for @mcp-abap-adt/connection
+#
+# Usage:
+#   npm run test:init        # copies this file to test-config.yaml (git-ignored)
+#   # Edit ONLY the lines marked with "# ← CHANGE" below
+#   npm run test:live:basic  # or test:live:token / test:live:snc
+#
+# ┌──────────────────────────────────────────────────────────────────┐
+# │  One section per provider, each OPTIONAL. A suite is skipped     │
+# │  only when its section is absent (the reason is printed); a      │
+# │  present section that fails — unreachable host, expired token,   │
+# │  refused session — is red. Delete a section to skip its suite.   │
+# │                                                                  │
+# │  Every value written as <LIKE_THIS> is a placeholder: the suite  │
+# │  will not run until you replace it.                              │
+# │                                                                  │
+# │  No secret lives here. `env_file:` points at a session file      │
+# │  (KEY=VALUE lines) that holds them; `~` is your home directory.  │
+# └──────────────────────────────────────────────────────────────────┘
+
+# ── basic: user and password, on-prem, over HTTP and/or RFC ─────────
+#
+# The env file is read for SAP_URL, SAP_CLIENT, SAP_USERNAME, SAP_PASSWORD and
+# (optional) TLS_REJECT_UNAUTHORIZED.
+#
+# WARNING — every wire listed makes ONE deliberate failed logon on this user's
+# account (a wrong password, to prove the refusal is reported as one). Two wires,
+# two failed logons. Keep that in mind on a system with a lockout threshold.
+basic:
+  env_file: <PATH_TO_SESSION_ENV>          # ← CHANGE  e.g. ~/.config/mcp-abap-adt/sessions/e19-tunnel.env
+  wires: [http, rfc]                       # ← CHANGE  http, rfc, or both
+  # RFC only, when SAP_URL does not name the RFC endpoint (a tunnel):
+  # ashost: <RFC_HOST>                     # ← CHANGE  the application server the RFC client dials
+  # sysnr: "00"                            # ← CHANGE  its system number, quoted
+  # A standard, read-only class whose source is read (default CL_ABAP_TYPEDESCR):
+  # read_class: CL_ABAP_TYPEDESCR
+  # A class YOU MAY LOCK, for the LOCK/UNLOCK case (nothing is changed; the lock
+  # is taken and given back). Without it that case is skipped, with a printed reason.
+  # lock_class: <A_CLASS_YOU_MAY_LOCK>     # ← CHANGE
+
+# ── token: BTP / ABAP Environment, a session's access + refresh token ─
+#
+# The env file is read for SAP_URL, SAP_JWT_TOKEN, SAP_REFRESH_TOKEN,
+# SAP_UAA_URL, SAP_UAA_CLIENT_ID, SAP_UAA_CLIENT_SECRET (and optionally
+# SAP_CLIENT, TLS_REJECT_UNAUTHORIZED). Interactive login is refused in the
+# suite: a refresh token the UAA no longer accepts fails it — re-login with your
+# usual tool to get a fresh session file. The renewal case uses the refresh
+# token, and a UAA that rotates it invalidates the one in the file; expect to
+# refresh the session file after a run on such a tenant.
+token:
+  env_file: <PATH_TO_SESSION_ENV>          # ← CHANGE  e.g. ~/.config/mcp-abap-adt/sessions/trial.env
+
+# ── snc: passwordless RFC logon through the Secure Login Client ─────
+#
+# Run on the machine with the Client, its SNC library and the SAP NW RFC SDK.
+# Values are given here, not in a session file: nothing in them is a secret.
+snc:
+  url: <SYSTEM_URL>                        # ← CHANGE  e.g. http://host:8000 (names the RFC host and sysnr)
+  client: "<CLIENT>"                       # ← CHANGE  e.g. "001", quoted
+  partner_name: <SNC_PARTNER_NAME>         # ← CHANGE  e.g. p:CN=SID, O=ACME, C=DE
+  # qop: "9"                               # 1, 2, 3, 8 or 9 (default 9)
+  # snc_lib: <PATH_TO_SNC_LIBRARY>         # when the library is not found by itself
+  # my_name: <SNC_MY_NAME>                 # only when the Client needs it
+  # ashost: <RFC_HOST>                     # when the url does not name the RFC endpoint
+  # sysnr: "00"
+  # read_class: CL_ABAP_TYPEDESCR
