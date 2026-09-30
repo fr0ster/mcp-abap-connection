@@ -24,6 +24,11 @@ export type StubAnswer =
       status: number;
       body?: string;
       headers?: Record<string, string | string[]>;
+      /**
+       * Called when the request arrives; the answer waits for it to settle —
+       * for a test that acts while the request is in flight.
+       */
+      hold?: () => Promise<void>;
     };
 
 export interface StubRequest {
@@ -92,9 +97,13 @@ export async function startSapStub(): Promise<SapStub> {
 
     // Drained before answering, so a request with a body is read whole.
     req.resume();
-    req.on('end', () => {
+    // The answer may await a `hold`, and nobody awaits this handler: whatever
+    // it throws is caught here, never left as an unhandled rejection.
+    const respond = async () => {
       if (path.includes('/discovery')) {
-        const answer = asAnswer(discovery.shift());
+        const next = discovery.shift();
+        if (typeof next === 'object') await next.hold?.();
+        const answer = asAnswer(next);
         record(answer.status);
         if (answer.status !== 200) {
           res.writeHead(answer.status, {
@@ -128,13 +137,18 @@ export async function startSapStub(): Promise<SapStub> {
         return;
       }
 
-      const answer = asAnswer(work.get(path)?.shift());
+      const queued = work.get(path)?.shift();
+      if (typeof queued === 'object') await queued.hold?.();
+      const answer = asAnswer(queued);
       record(answer.status);
       res.writeHead(answer.status, {
         'content-type': 'text/plain',
         ...answer.headers,
       });
       res.end(answer.body);
+    };
+    req.on('end', () => {
+      respond().catch(() => res.destroy());
     });
   });
 

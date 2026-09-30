@@ -314,7 +314,9 @@ export class HttpTransport implements IAdtTransport {
 
           // Handed up BEFORE the token is read: the cookies are the session,
           // and a fold that only happened on success would lose the session a
-          // tokenless answer still opened.
+          // tokenless answer still opened. And before the fold: an answer the
+          // connection refuses as a gone session's throws here, and nothing
+          // of it reaches the jar.
           context.observe(response.headers);
           this.ingest(response.headers as Record<string, unknown>);
 
@@ -341,7 +343,8 @@ export class HttpTransport implements IAdtTransport {
             error as { response?: { headers?: Record<string, unknown> } }
           ).response;
           if (response?.headers) {
-            // A refusal can still carry the cookies that matter.
+            // A refusal can still carry the cookies that matter — handed up
+            // first, so one the connection refuses is not folded in.
             context.observe(response.headers);
             this.ingest(response.headers);
           }

@@ -468,10 +468,7 @@ abstract class AbstractAbapConnection
       // reconnect waits for it. Rejections are absorbed here so that holding
       // the promise never turns a failed goodbye into an unhandled rejection —
       // the transport already logs what went wrong.
-      this.goodbye = Promise.resolve(this.transport.close(context)).then(
-        () => undefined,
-        () => undefined,
-      );
+      this.goodbye = this.dispatchGoodbye(context);
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
@@ -506,6 +503,35 @@ abstract class AbstractAbapConnection
     } finally {
       if (timer) clearTimeout(timer);
     }
+  }
+
+  /**
+   * Say goodbye to the session `context` describes, without waiting for it.
+   *
+   * The one way every goodbye is sent, so that each behaves the same: a
+   * `close()` that rejects and one that throws synchronously — a custom wire
+   * may write it as a plain function — are both logged and absorbed, and the
+   * promise returned never rejects. Unguarded, a synchronous throw escaped
+   * before any `.catch` was attached, replaced the error the caller was owed
+   * and skipped the clearing that follows every call site.
+   *
+   * `close()` is CALLED here, synchronously, not deferred to a later turn: the
+   * wires read the cookie jar and the affinity headers on their first line,
+   * and every caller clears them right after this returns. A deferred call
+   * would send the goodbye without the session it is ending.
+   */
+  private dispatchGoodbye(context: IAdtSessionContext): Promise<void> {
+    let closing: Promise<void>;
+    try {
+      closing = Promise.resolve(this.transport.close(context));
+    } catch (error) {
+      closing = Promise.reject(error);
+    }
+    return closing.catch((error: unknown) => {
+      this.logger?.debug(
+        `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   }
 
   isConnected(): boolean {
@@ -632,12 +658,11 @@ abstract class AbstractAbapConnection
       // session has an address or it does not, and an on-prem one was
       // established or the cookie is debris from the refusal. The connection
       // asks, and each wire answers by doing nothing when it has nothing.
-      // Its rejection is absorbed: a wire's close() may reject — its
-      // context.authorize throws when the provider refuses — and nobody
-      // awaits this one.
-      const goodbye = Promise.resolve(
-        this.transport.close(this.sessionContext()),
-      ).catch(() => undefined);
+      // Its failure is absorbed, a synchronous throw included: a wire's
+      // close() may reject — its context.authorize throws when the provider
+      // refuses — and nobody awaits this one. A throw that escaped here would
+      // replace the establishment error and skip the clearing below.
+      const goodbye = this.dispatchGoodbye(this.sessionContext());
       this.invalidateSession();
       // And the identity with it. The rejecting response was still observed, so
       // its cookie was recorded as a session that had just been established —
@@ -706,17 +731,7 @@ abstract class AbstractAbapConnection
       // Refusing to connect must not leak the session the refusal is about.
       // Dispatched, not awaited; a close that throws or rejects is logged and
       // absorbed, never left unhandled.
-      const notFinished = (error: unknown) =>
-        this.logger?.debug(
-          `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      try {
-        void Promise.resolve(this.transport.close(this.sessionContext())).catch(
-          notFinished,
-        );
-      } catch (error) {
-        notFinished(error);
-      }
+      void this.dispatchGoodbye(this.sessionContext());
       this.invalidateSession();
       this.lifecycle.forgetIdentity();
       this.lifecycle.markDisconnected();
@@ -1106,7 +1121,13 @@ abstract class AbstractAbapConnection
       // What the credential writes outranks the caller's custom headers, and
       // is written anew for every resend below; the wire's session token and
       // the request's content negotiation outrank it (`authorizedFrom`).
-      headers: await this.authorizedFrom(requestHeaders),
+      // A provider that answers after the session went away answers for a
+      // request that no longer has one.
+      headers: await this.authorizedFrom(requestHeaders).catch(
+        (error: unknown) => {
+          throw this.staleOr(error, lease);
+        },
+      ),
       timeout: effectiveTimeout,
       // `unknown` on the caller's options, a record on the seam: the two
       // transports serialise a query differently and both need the pairs.
@@ -1291,19 +1312,7 @@ abstract class AbstractAbapConnection
       );
     }
 
-    // The server telling us the session is gone is invisible to the identity
-    // comparison: the cookie, and therefore the fingerprint, is unchanged.
-    // Only the state can see it, and it must say so at once — otherwise a
-    // later unlockAll() finds a match and unlocks over a dead session.
-    if (this.isDeadSessionResponse(error)) {
-      this.raiseSessionLost('the server reports the session no longer exists');
-      // No internal retry: a blind retry here is what produced further locks
-      // in the field. The caller decides.
-      throw sessionError(
-        ADT_SESSION_ERROR.SESSION_REPLACED,
-        'The SAP session no longer exists; any lock handle from it is dead',
-      );
-    }
+    this.throwIfSessionDead(error, lease);
 
     // Check if this is a network error (connection refused, timeout, DNS, etc.)
     // Don't retry for network errors - these indicate infrastructure/VPN issues
@@ -1367,7 +1376,7 @@ abstract class AbstractAbapConnection
 
       try {
         this.setCsrfToken(
-          await this.fetchCsrfToken(requestUrl, 5, 2000, lease.generation),
+          await this.fetchCsrfToken(requestUrl, 5, 2000, lease),
         );
         const refreshedToken = this.getCsrfToken();
         if (refreshedToken) {
@@ -1382,6 +1391,12 @@ abstract class AbstractAbapConnection
         requestConfig.headers = await this.authorizedFrom(requestHeaders);
         return await this.sendObserved<T, D>(requestConfig, lease);
       } catch (retryError) {
+        // The session went away while the retry was out: nothing it met —
+        // the provider's refusal included — is about this request's session.
+        if (!this.lifecycle.isCurrent(lease)) {
+          throw this.staleVerdict(retryError);
+        }
+        this.throwIfSessionDead(retryError, lease);
         // A session verdict outranks the error that started the retry: the
         // caller can retry a 403 itself, but it cannot discover that its lock
         // handle is dead from a 403. So does the credential's failure, which
@@ -1413,8 +1428,12 @@ abstract class AbstractAbapConnection
         );
         requestHeaders.Cookie = afterError;
 
-        requestConfig.headers = await this.authorizedFrom(requestHeaders);
-        return await this.sendObserved<T, D>(requestConfig, lease);
+        try {
+          requestConfig.headers = await this.authorizedFrom(requestHeaders);
+          return await this.sendObserved<T, D>(requestConfig, lease);
+        } catch (resendError) {
+          throw this.staleOr(resendError, lease);
+        }
       }
 
       // If no cookies, try to get them via CSRF token fetch
@@ -1424,7 +1443,7 @@ abstract class AbstractAbapConnection
       try {
         // Try to get CSRF token (this will also get cookies)
         this.setCsrfToken(
-          await this.fetchCsrfToken(requestUrl, 3, 1000, lease.generation),
+          await this.fetchCsrfToken(requestUrl, 3, 1000, lease),
         );
         const afterCsrf = this.transport.cookies();
         if (afterCsrf) {
@@ -1437,6 +1456,11 @@ abstract class AbstractAbapConnection
           return await this.sendObserved<T, D>(requestConfig, lease);
         }
       } catch (csrfError) {
+        // As in path (a): a stale request gets the session verdict.
+        if (!this.lifecycle.isCurrent(lease)) {
+          throw this.staleVerdict(csrfError);
+        }
+        this.throwIfSessionDead(csrfError, lease);
         // Swallowed, unless it says more than the 401 that started this —
         // a session verdict, or the credential's failure.
         if (this.outranksOriginal(csrfError)) {
@@ -1471,18 +1495,23 @@ abstract class AbstractAbapConnection
     lease: Pick<RequestLease, 'generation'>,
     renewal: CredentialRenewal,
   ): Promise<IAdtWireResponse<T, D>> {
+    // A resend inside the wire's recovery that met a dead session.
+    this.throwIfSessionDead(failure, lease);
     const rejection = this.credentialRejection(failure);
     // A request from a previous session asks nobody anything: its recovery is
     // fenced, and so is the credential's.
-    if (!rejection || !this.lifecycle.isCurrent(lease)) throw failure;
+    if (!rejection) throw failure;
+    if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(failure);
 
-    await this.renewCredential(rejection, renewal);
-    if (!this.lifecycle.isCurrent(lease)) throw failure;
+    await this.renewCredential(rejection, renewal).catch((error: unknown) => {
+      throw this.staleOr(error, lease);
+    });
+    if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(failure);
 
     try {
       if (rejection.at === 'logon') {
         this.transport.adoptCsrfToken(null);
-        await this.ensureWireReady(lease.generation);
+        await this.ensureWireReady(lease);
         const token = this.transport.csrfToken();
         if (token && ['POST', 'PUT', 'DELETE'].includes(requestConfig.method)) {
           requestHeaders['x-csrf-token'] = token;
@@ -1493,6 +1522,13 @@ abstract class AbstractAbapConnection
       requestConfig.headers = await this.authorizedFrom(requestHeaders);
       return await this.sendObserved<T, D>(requestConfig, lease);
     } catch (again) {
+      // A verdict about the session outranks everything: it is already the
+      // caller's answer.
+      if (this.isSessionVerdict(again)) throw again;
+      // The session the request was admitted to went away while the resend
+      // was out: whatever came back is about a session this request no longer
+      // holds, so it is not a credential verdict.
+      if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(again);
       // The resend's refusal is observed like the first attempt's: a session
       // SAP replaced in between is SESSION_REPLACED, not a bare status.
       const refusal = refusalOf(again);
@@ -1502,6 +1538,7 @@ abstract class AbstractAbapConnection
           lease.generation,
         );
       }
+      this.throwIfSessionDead(again, lease);
       const refusedAgain = this.credentialRejection(again);
       if (!refusedAgain) throw again;
       throw new AuthRefusedError(
@@ -1510,6 +1547,52 @@ abstract class AbstractAbapConnection
         refusedAgain.error,
       );
     }
+  }
+
+  /**
+   * The server telling us the session is gone, on any attempt — the first or
+   * a resend — is the same verdict: SESSION_REPLACED, and the session is lost.
+   *
+   * Invisible to the identity comparison: the cookie, and therefore the
+   * fingerprint, is unchanged. Only the state can see it, and it must say so
+   * at once — otherwise a later unlockAll() finds a match and unlocks over a
+   * dead session. A request from a previous session says nothing about the
+   * current one, so its answer is not acted on.
+   */
+  private throwIfSessionDead(
+    error: unknown,
+    lease: Pick<RequestLease, 'generation'>,
+  ): void {
+    if (!this.isDeadSessionResponse(error)) return;
+    if (!this.lifecycle.isCurrent(lease)) return;
+    this.raiseSessionLost('the server reports the session no longer exists');
+    // No internal retry: a blind retry here is what produced further locks
+    // in the field. The caller decides.
+    throw sessionError(
+      ADT_SESSION_ERROR.SESSION_REPLACED,
+      'The SAP session no longer exists; any lock handle from it is dead',
+    );
+  }
+
+  /**
+   * What a request whose lease went stale gets: a session verdict as it is,
+   * anything else — the wire's error, the provider's refusal — replaced by
+   * NOT_CONNECTED, because it is about a session the request no longer holds.
+   */
+  private staleVerdict(error: unknown): unknown {
+    if (this.isSessionVerdict(error)) return error;
+    return sessionError(
+      ADT_SESSION_ERROR.NOT_CONNECTED,
+      'The session this request was admitted to is gone',
+    );
+  }
+
+  /** `error` as it is while the lease is current; its stale verdict once not. */
+  private staleOr(
+    error: unknown,
+    lease: Pick<RequestLease, 'generation'>,
+  ): unknown {
+    return this.lifecycle.isCurrent(lease) ? error : this.staleVerdict(error);
   }
 
   /**
@@ -1582,9 +1665,14 @@ abstract class AbstractAbapConnection
   ): Promise<void> {
     for (;;) {
       try {
-        await this.ensureWireReady();
+        await this.ensureWireReady(lease);
         return;
       } catch (error) {
+        // The session the request was admitted to is gone: nothing more of it
+        // is sent, the provider is not asked, and what the caller gets is the
+        // session verdict — never the wire's error, nor the provider's, about
+        // a session it no longer holds.
+        if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(error);
         if (error instanceof AuthRefusedError) throw error;
         if (!(error instanceof WireLogonError)) {
           this.logger?.debug(
@@ -1593,7 +1681,11 @@ abstract class AbstractAbapConnection
           return;
         }
         const rejection = this.credentialRejection(error) as IAuthRejection;
-        await this.renewCredential(rejection, renewal);
+        await this.renewCredential(rejection, renewal).catch(
+          (refused: unknown) => {
+            throw this.staleOr(refused, lease);
+          },
+        );
         if (!this.lifecycle.isCurrent(lease)) {
           throw sessionError(
             ADT_SESSION_ERROR.NOT_CONNECTED,
@@ -1617,20 +1709,24 @@ abstract class AbstractAbapConnection
     _url: string,
     retryCount: number = CSRF_CONFIG.RETRY_COUNT,
     retryDelay: number = CSRF_CONFIG.RETRY_DELAY,
-    /** Fences the response effects; omitted during connect(), which has no lease. */
-    generation?: number,
+    /**
+     * The request's lease: fences what is sent and the response effects.
+     * A plain session generation — what this parameter took before 10.0.1,
+     * and what a subclass may still pass — keeps its 10.0.0 meaning: it fences
+     * what the connection does with the answer (the identity policy), not the
+     * wire's own ingest of it, and never stops the request being sent.
+     * Omitted during connect(), which has no lease.
+     */
+    fence?: number | Pick<RequestLease, 'generation'>,
   ): Promise<string> {
     // Dropped first, because this is only ever reached to REPLACE one: the
     // establishment is idempotent and would hand back the very token the
     // caller has just been told is stale.
     this.transport.adoptCsrfToken(null);
     await this.transport.establish({
-      baseUrl: this.baseUrl,
-      authorize: (headers) => this.credentialHeaders(headers),
-      logon: (target) => this.logon(target),
-      extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
-      observe: (headers) =>
-        this.observeResponse(headers as Record<string, unknown>, generation),
+      ...(typeof fence === 'number'
+        ? this.leasedContext(undefined, fence)
+        : this.leasedContext(fence)),
       retries: retryCount,
       retryDelayMs: retryDelay,
       timeoutMs: getTimeout('csrf'),
@@ -1684,18 +1780,62 @@ abstract class AbstractAbapConnection
    * by the caller, but logged as an error and repeated on the next one.
    */
   private async ensureWireReady(
-    /** Fences the response effects; omitted before the request has a failure to recover. */
-    generation?: number,
+    /** The request's lease: fences what is sent and the response effects. */
+    lease: Pick<RequestLease, 'generation'>,
   ): Promise<void> {
     await this.transport.establish({
-      baseUrl: this.baseUrl,
-      authorize: (headers) => this.credentialHeaders(headers),
-      logon: (target) => this.logon(target),
-      extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
-      observe: (headers) =>
-        this.observeResponse(headers as Record<string, unknown>, generation),
+      ...this.leasedContext(lease),
       isFatal: (error) => this.endsTheExchange(error),
     });
+  }
+
+  /**
+   * The context for a token exchange a request makes on its own behalf — its
+   * wire's upfront fetch, a CSRF recovery, the fetch after a refused logon.
+   *
+   * With a lease, nothing is sent once the session the request was admitted
+   * to is gone. The check is made in `authorize`, AFTER the provider has
+   * written: that is the last await before the wire sends, and a provider may
+   * take long enough for the caller to disconnect and connect again — sent
+   * then, the request would carry the new session's cookies. The throw is a
+   * session verdict, so the exchange stops at once, past its retries.
+   *
+   * Without one — connect()'s own establishment, which is making the session
+   * rather than working in it — nothing is fenced. `generation` alone fences
+   * what the connection does with an answer, and nothing else: the request is
+   * sent, and the wire still folds the answer into its jar.
+   */
+  private leasedContext(
+    lease?: Pick<RequestLease, 'generation'>,
+    generation: number | undefined = lease?.generation,
+  ): IAdtSessionContext {
+    return {
+      baseUrl: this.baseUrl,
+      authorize: async (headers) => {
+        await this.credentialHeaders(headers);
+        if (lease && !this.lifecycle.isCurrent(lease)) {
+          throw sessionError(
+            ADT_SESSION_ERROR.NOT_CONNECTED,
+            'The session this request was admitted to is gone; nothing was sent',
+          );
+        }
+      },
+      logon: (target) => this.logon(target),
+      extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
+      // An answer that arrives after the lease went stale belongs to a session
+      // that is gone. Refused with the session verdict, which every wire hands
+      // up BEFORE folding an answer in — so its cookies and token never reach
+      // the jar of the session that replaced it — and which ends the exchange.
+      observe: (headers) => {
+        if (lease && !this.lifecycle.isCurrent(lease)) {
+          throw sessionError(
+            ADT_SESSION_ERROR.NOT_CONNECTED,
+            'The session this request was admitted to is gone; its answer was not taken',
+          );
+        }
+        this.observeResponse(headers as Record<string, unknown>, generation);
+      },
+    };
   }
 
   /**

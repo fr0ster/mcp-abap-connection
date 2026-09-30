@@ -984,6 +984,15 @@ request fails with `SESSION_REPLACED` rather than carrying on in a new one.
 Outside a critical section that mutation takes the wire's stale-session recovery
 first (above), which starts a new session.
 
+**The price of keeping the lock.** Inside a critical section the connection
+cannot tell a dead session from a refused credential when SAP answers the resend
+with the same session cookie and no `Set-Cookie`: the 401 comes back a second
+time, and the request ends as `AuthRefusedError` with the refused-again verdict
+(`at: 'request'`), not `SESSION_REPLACED`. The connection stays connected on
+that session. If you get this inside a critical section, treat the lock as lost:
+`disconnect()`, `connect()`, and redo the work under a new lock. That is the
+intended trade-off — a renewal must not discard a lock the session still holds.
+
 One credential retry per request: the upfront token fetch before a mutation and
 a later rejection draw on the same allowance.
 
@@ -1009,10 +1018,9 @@ problem. A provider that throws is treated as refusing with the reason "the
 credential provider failed" and the throw as the cause.
 
 **Concurrency.** Many requests meeting the same expired token each call
-`rejected()`; the connection adds no single-flight of its own. Providers that
-renew share one renewal in flight (`BaseTokenProvider`, `TokenAuthProvider.from`
-through its refresher), and a provider whose presented token is already
-superseded answers Ok without renewing.
+`rejected()`; the connection adds no single-flight of its own. They share one
+renewal in flight only if the provider shares one: `TokenAuthProvider.from` asks
+its refresher on each rejection, so they share one only if your refresher does.
 
 **A refusal during `connect()`** is the same story: `prepare()` refused sends
 nothing; a logon the system refused goes to `rejected({ at: 'logon' })`, and on

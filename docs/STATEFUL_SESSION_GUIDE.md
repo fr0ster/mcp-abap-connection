@@ -182,6 +182,12 @@ fails with `SESSION_REPLACED` instead of carrying on in a new one. Outside a cri
 that mutation takes the wire's own stale-session recovery first, which starts a new session
 before the provider is asked — so hold a lock inside `beginCriticalSection()` /
 `endCriticalSection()`.
+**The price of keeping the lock:** when the session is really dead but SAP answers the resend with
+the SAME session cookie (no `Set-Cookie`), the connection cannot tell it from a refused
+credential — the second 401 ends the request as `AuthRefusedError` with the refused-again
+verdict (`at: 'request'`), not `SESSION_REPLACED`, and the connection stays connected. Inside a
+critical section, treat that as a lost lock: `disconnect()`, `connect()`, and redo the work under
+a new lock.
 If the provider says no, or the retry is refused too, the caller gets an `AuthRefusedError`. A 403 is an authorization answer, not a credential one: it never goes to the
 provider. See [When the credential is refused](./USAGE.md#when-the-credential-is-refused).
 

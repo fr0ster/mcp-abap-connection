@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.0.1] - 2026-09-30
+
+### Fixed
+
+- **A `close()` that throws synchronously is absorbed like one that rejects.**
+  A custom wire's non-async `close()` that threw escaped before any `.catch` was
+  attached: after a failed establishment it replaced the establishment error and
+  skipped the clearing behind it, so the failed attempt's cookies survived into
+  the next `connect()`; in `disconnect()` it made the method that never throws,
+  throw. Every goodbye now goes through one path that absorbs both. `close()` is
+  still called synchronously — the wires snapshot the cookie jar and the
+  affinity headers on their first line, before the teardown clears them.
+- **A request's own token fetch sends nothing once its session is gone.** The
+  upfront token fetch before a mutation, a CSRF recovery fetch and the fetch
+  after a refused logon awaited the provider's `authorize` before sending; a
+  `disconnect()` and `connect()` in that window let one discovery request go out
+  on the new session's cookies (no work request ever did). The request's lease
+  is now checked after the provider has written, and the request ends
+  `NOT_CONNECTED` with nothing sent. `connect()`'s own establishment is unchanged.
+- **A resend answered "session not found" is `SESSION_REPLACED`, like the first
+  attempt.** Only the first attempt's `400` went through the dead-session check;
+  a resend — the one more attempt after a renewal (inside a critical section
+  too), the CSRF resend, a GET resent with the session's cookies — surfaced the
+  raw `400` and left the connection connected to a dead session. Every attempt
+  now goes through the same check: the session is lost and the caller gets
+  `SESSION_REPLACED`.
+- **An answer to a request's token fetch that arrives after a reconnect is not
+  folded into the new session.** The wire ingested an establishment answer's
+  cookies and token itself, after the connection's fenced `observe`, so an old
+  session's answer could overwrite the new session's jar. The connection now
+  refuses such an answer from `observe` with a session verdict, which the wire
+  hands up before folding anything in; the request ends `NOT_CONNECTED`.
+  `connect()`'s own establishment is unchanged.
+- **A resend refused after its session went away is `NOT_CONNECTED`**, not
+  `AuthRefusedError` (refused again): the session the request was admitted to
+  is gone, so the refusal says nothing about the credential.
+- **A stale request ends `NOT_CONNECTED`, whatever stopped it.** When the
+  session a request was admitted to goes away while the provider authorizes
+  its first attempt, while it readies its wire, while the provider renews, or
+  during one of the wire's resends (the CSRF resend, a GET resent with its
+  cookies or after a token fetch), the caller gets `NOT_CONNECTED` — never the
+  wire's `WireLogonError`, a network error, or the provider's
+  `AuthRefusedError` about a session the request no longer holds. A session
+  verdict (`SESSION_REPLACED`) still comes through as it is. What the server
+  answered to an attempt sent while the session was current, other than a
+  credential refusal, still reaches the caller as it is.
+
+### Changed
+
+- **`fetchCsrfToken`'s protected fourth parameter accepts a request lease as
+  well as a session generation number.** A number keeps its 10.0.0 meaning: it
+  fences what the connection does with the answer, not the wire's own ingest,
+  and never stops the fetch being sent. Only a lease fences the send.
+- **For custom-wire authors: `IAdtEstablishContext.observe` may throw.** For an
+  answer that belongs to a session that is gone, it throws a `NOT_CONNECTED`
+  session verdict. Call `observe` BEFORE your wire folds that answer into its
+  own state, and fold nothing when it throws; `HttpTransport` already does. A
+  wire that ingests first would write a gone session's cookies into the new
+  session's jar.
+
+### Documentation
+
+- **A dead session inside a critical section.** `docs/USAGE.md` and
+  `docs/STATEFUL_SESSION_GUIDE.md` now state the price of keeping a lock through
+  a renewal: when SAP answers the resend with the same session cookie, a session
+  it really lost ends the request as `AuthRefusedError` (refused again), not
+  `SESSION_REPLACED`, and the connection stays connected. Treat the lock as lost
+  and reconnect.
+- **Renewal sharing.** `docs/USAGE.md` "Concurrency" no longer says providers
+  that renew share one renewal in flight: requests share one only if the provider
+  (for `TokenAuthProvider.from`, its refresher) does; the connection adds no
+  single-flight.
+
 ## [10.0.0] - 2026-09-30
 
 **The connection is the process on the `IAuthProvider` 3.0 contract.** It no
@@ -2022,7 +2095,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.2...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.1...HEAD
+[10.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.0...v10.0.1
 [10.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.2...v10.0.0
 [9.4.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.1...v9.4.2
 [9.4.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.0...v9.4.1
