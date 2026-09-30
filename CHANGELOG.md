@@ -44,11 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AuthRefusedError` (refused again): the session the request was admitted to
   is gone, so the refusal says nothing about the credential.
 - **A stale request ends `NOT_CONNECTED`, whatever stopped it.** When the
-  session a request was admitted to goes away while it readies its wire or
-  while the provider renews, the caller gets `NOT_CONNECTED` — never the
+  session a request was admitted to goes away while the provider authorizes
+  its first attempt, while it readies its wire, while the provider renews, or
+  during one of the wire's resends (the CSRF resend, a GET resent with its
+  cookies or after a token fetch), the caller gets `NOT_CONNECTED` — never the
   wire's `WireLogonError`, a network error, or the provider's
   `AuthRefusedError` about a session the request no longer holds. A session
-  verdict (`SESSION_REPLACED`) still comes through as it is.
+  verdict (`SESSION_REPLACED`) still comes through as it is. What the server
+  answered to an attempt sent while the session was current, other than a
+  credential refusal, still reaches the caller as it is.
 
 ### Changed
 

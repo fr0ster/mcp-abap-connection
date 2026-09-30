@@ -893,6 +893,109 @@ describe('a stale request meets its credential', () => {
   });
 });
 
+/**
+ * The `nth` call of `method` from now waits until released and then answers
+ * Oops — a provider that hangs, and says no once the caller has reconnected.
+ */
+function oopsWhenReleased(
+  provider: ReturnType<typeof stubProvider>,
+  method: 'authorize' | 'rejected',
+  nth: number,
+): { asked: Promise<void>; release: () => void } {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reached!: () => void;
+  const asked = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  let count = 0;
+  const original = provider[method].bind(provider) as (
+    argument: never,
+  ) => Promise<AuthOutcome>;
+  (provider as unknown as Record<string, unknown>)[method] = async (
+    argument: never,
+  ) => {
+    count += 1;
+    if (count !== nth) return original(argument);
+    reached();
+    await gate;
+    return NO;
+  };
+  return { asked, release };
+}
+
+describe("a provider's Oops that arrives after the session went away", () => {
+  async function staleOops(
+    method: 'authorize' | 'rejected',
+    nth: number,
+    send: (conn: AdtOnPremConnector) => Promise<unknown>,
+    arrange: (
+      conn: AdtOnPremConnector,
+      transport: OnPremHttpTransport,
+    ) => void = () => {},
+  ) {
+    const { conn, provider, transport } = await connected();
+    arrange(conn, transport);
+    const { asked, release } = oopsWhenReleased(provider, method, nth);
+
+    const request = send(conn).catch((e: unknown) => e);
+    await asked;
+    await conn.disconnect();
+    await conn.connect();
+    release();
+    const error = await request;
+
+    expect(error).not.toBeInstanceOf(AuthRefusedError);
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    expect(conn.isConnected()).toBe(true);
+  }
+
+  const forgetCookies = (
+    conn: AdtOnPremConnector,
+    transport: OnPremHttpTransport,
+  ) => {
+    transport.forgetSession();
+    (conn as any).lifecycle.forgetIdentity();
+  };
+
+  it('on the first attempt is NOT_CONNECTED', async () => {
+    await staleOops('authorize', 1, get);
+  });
+
+  it('on the CSRF resend (path a) is NOT_CONNECTED', async () => {
+    stub.work(WORK, [{ status: 403, body: 'CSRF token validation failed' }]);
+    // The POST (1), the token fetch (2), the resend (3).
+    await staleOops('authorize', 3, post);
+  });
+
+  it('on the GET resend after a cookie-bringing token fetch (path b) is NOT_CONNECTED', async () => {
+    stub.work(WORK, [401]);
+    // The GET (1), the token fetch (2), the resend (3).
+    await staleOops('authorize', 3, get, forgetCookies);
+  });
+
+  it('on the GET resend with the cookies it already holds (path b) is NOT_CONNECTED', async () => {
+    stub.work(WORK, [401]);
+    // The GET (1), the resend (2).
+    await staleOops('authorize', 2, get);
+  });
+
+  it('from rejected() after a refused request is NOT_CONNECTED', async () => {
+    stub.work(WORK, [401, 401]);
+    await staleOops('rejected', 1, get);
+  });
+
+  it('from rejected() after a refused upfront fetch is NOT_CONNECTED', async () => {
+    // Arranged after connect(), whose own token fetch must not meet the 401.
+    await staleOops('rejected', 1, post, (_conn, transport) => {
+      transport.adoptCsrfToken(null);
+      stub.discovery.push(401);
+    });
+  });
+});
+
 describe('a subclass that fetches a token itself', () => {
   class Fetching extends AdtOnPremConnector {
     fetchWith(generation: number): Promise<string> {

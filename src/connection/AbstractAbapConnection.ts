@@ -1121,7 +1121,13 @@ abstract class AbstractAbapConnection
       // What the credential writes outranks the caller's custom headers, and
       // is written anew for every resend below; the wire's session token and
       // the request's content negotiation outrank it (`authorizedFrom`).
-      headers: await this.authorizedFrom(requestHeaders),
+      // A provider that answers after the session went away answers for a
+      // request that no longer has one.
+      headers: await this.authorizedFrom(requestHeaders).catch(
+        (error: unknown) => {
+          throw this.staleOr(error, lease);
+        },
+      ),
       timeout: effectiveTimeout,
       // `unknown` on the caller's options, a record on the seam: the two
       // transports serialise a query differently and both need the pairs.
@@ -1385,6 +1391,11 @@ abstract class AbstractAbapConnection
         requestConfig.headers = await this.authorizedFrom(requestHeaders);
         return await this.sendObserved<T, D>(requestConfig, lease);
       } catch (retryError) {
+        // The session went away while the retry was out: nothing it met —
+        // the provider's refusal included — is about this request's session.
+        if (!this.lifecycle.isCurrent(lease)) {
+          throw this.staleVerdict(retryError);
+        }
         this.throwIfSessionDead(retryError, lease);
         // A session verdict outranks the error that started the retry: the
         // caller can retry a 403 itself, but it cannot discover that its lock
@@ -1417,8 +1428,12 @@ abstract class AbstractAbapConnection
         );
         requestHeaders.Cookie = afterError;
 
-        requestConfig.headers = await this.authorizedFrom(requestHeaders);
-        return await this.sendObserved<T, D>(requestConfig, lease);
+        try {
+          requestConfig.headers = await this.authorizedFrom(requestHeaders);
+          return await this.sendObserved<T, D>(requestConfig, lease);
+        } catch (resendError) {
+          throw this.staleOr(resendError, lease);
+        }
       }
 
       // If no cookies, try to get them via CSRF token fetch
@@ -1441,6 +1456,10 @@ abstract class AbstractAbapConnection
           return await this.sendObserved<T, D>(requestConfig, lease);
         }
       } catch (csrfError) {
+        // As in path (a): a stale request gets the session verdict.
+        if (!this.lifecycle.isCurrent(lease)) {
+          throw this.staleVerdict(csrfError);
+        }
         this.throwIfSessionDead(csrfError, lease);
         // Swallowed, unless it says more than the 401 that started this —
         // a session verdict, or the credential's failure.
@@ -1484,7 +1503,9 @@ abstract class AbstractAbapConnection
     if (!rejection) throw failure;
     if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(failure);
 
-    await this.renewCredential(rejection, renewal);
+    await this.renewCredential(rejection, renewal).catch((error: unknown) => {
+      throw this.staleOr(error, lease);
+    });
     if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(failure);
 
     try {
@@ -1564,6 +1585,14 @@ abstract class AbstractAbapConnection
       ADT_SESSION_ERROR.NOT_CONNECTED,
       'The session this request was admitted to is gone',
     );
+  }
+
+  /** `error` as it is while the lease is current; its stale verdict once not. */
+  private staleOr(
+    error: unknown,
+    lease: Pick<RequestLease, 'generation'>,
+  ): unknown {
+    return this.lifecycle.isCurrent(lease) ? error : this.staleVerdict(error);
   }
 
   /**
@@ -1652,7 +1681,11 @@ abstract class AbstractAbapConnection
           return;
         }
         const rejection = this.credentialRejection(error) as IAuthRejection;
-        await this.renewCredential(rejection, renewal);
+        await this.renewCredential(rejection, renewal).catch(
+          (refused: unknown) => {
+            throw this.staleOr(refused, lease);
+          },
+        );
         if (!this.lifecycle.isCurrent(lease)) {
           throw sessionError(
             ADT_SESSION_ERROR.NOT_CONNECTED,
