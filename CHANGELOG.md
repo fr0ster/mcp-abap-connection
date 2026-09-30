@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.0.1] - 2026-09-30
+
+### Fixed
+
+- **A `close()` that throws synchronously is absorbed like one that rejects.**
+  A custom wire's non-async `close()` that threw escaped before any `.catch` was
+  attached: after a failed establishment it replaced the establishment error and
+  skipped the clearing behind it, so the failed attempt's cookies survived into
+  the next `connect()`; in `disconnect()` it made the method that never throws,
+  throw. Every goodbye now goes through one path that absorbs both. `close()` is
+  still called synchronously — the wires snapshot the cookie jar and the
+  affinity headers on their first line, before the teardown clears them.
+- **A request's own token fetch sends nothing once its session is gone.** The
+  upfront token fetch before a mutation, a CSRF recovery fetch and the fetch
+  after a refused logon awaited the provider's `authorize` before sending; a
+  `disconnect()` and `connect()` in that window let one discovery request go out
+  on the new session's cookies (no work request ever did). The request's lease
+  is now checked after the provider has written, and the request ends
+  `NOT_CONNECTED` with nothing sent. `connect()`'s own establishment is unchanged.
+
+### Documentation
+
+- **A dead session inside a critical section.** `docs/USAGE.md` and
+  `docs/STATEFUL_SESSION_GUIDE.md` now state the price of keeping a lock through
+  a renewal: when SAP answers the resend with the same session cookie, a session
+  it really lost ends the request as `AuthRefusedError` (refused again), not
+  `SESSION_REPLACED`, and the connection stays connected. Treat the lock as lost
+  and reconnect.
+- **Renewal sharing.** `docs/USAGE.md` "Concurrency" no longer says providers
+  that renew share one renewal in flight: requests share one only if the provider
+  (for `TokenAuthProvider.from`, its refresher) does; the connection adds no
+  single-flight.
+
 ## [10.0.0] - 2026-09-30
 
 **The connection is the process on the `IAuthProvider` 3.0 contract.** It no
@@ -2022,7 +2055,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.2...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.1...HEAD
+[10.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.0...v10.0.1
 [10.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.2...v10.0.0
 [9.4.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.1...v9.4.2
 [9.4.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.0...v9.4.1
