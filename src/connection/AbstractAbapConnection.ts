@@ -495,19 +495,6 @@ abstract class AbstractAbapConnection
   }
 
   /**
-   * Establishes a session and publishes it — but only if nobody asked to stop
-   * meanwhile.
-   *
-   * The epoch is checked BEFORE, so a teardown already requested costs no round
-   * trip, and AFTER, because establishment takes time and a caller can ask to
-   * stop during it. Checking only before is the defect this exists to prevent:
-   * markConnected() would then clear the teardown state and hand back a session
-   * the caller had already discarded.
-   *
-   * Shared by connect() and the recovery paths rather than written twice —
-   * the two drifted apart once already, and a third caller would drift again.
-   */
-  /**
    * What a session strategy is given: enough to make one request and to prove
    * the session is ours, and nothing else. It cannot reach session state, so a
    * strategy can neither mark this connection connected nor tear it down.
@@ -541,6 +528,19 @@ abstract class AbstractAbapConnection
     };
   }
 
+  /**
+   * Establishes a session and publishes it — but only if nobody asked to stop
+   * meanwhile.
+   *
+   * The epoch is checked BEFORE, so a teardown already requested costs no round
+   * trip, and AFTER, because establishment takes time and a caller can ask to
+   * stop during it. Checking only before is the defect this exists to prevent:
+   * markConnected() would then clear the teardown state and hand back a session
+   * the caller had already discarded.
+   *
+   * Shared by connect() and the recovery paths rather than written twice —
+   * the two drifted apart once already, and a third caller would drift again.
+   */
   private async establishAndCommit(baselineEpoch: number): Promise<void> {
     if (this.lifecycle.teardownEpoch !== baselineEpoch) {
       throw sessionError(

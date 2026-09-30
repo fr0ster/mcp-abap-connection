@@ -17,7 +17,6 @@ import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { cloudHttpTransport, onPrem } from '../helpers/onPrem.js';
-import { recoverAs } from '../helpers/session.js';
 
 interface Stub {
   baseUrl: string;
@@ -319,8 +318,8 @@ describe('explicit connect is required', () => {
   });
 
   // A rejection can still carry a Set-Cookie, and every subclass reads a cookie
-  // as proof that auth is already settled — buildAuthorizationHeader() returns
-  // '' once one exists. Left behind, that cookie mutes the credentials on the
+  // as proof that auth is already settled — a credential may skip its
+  // header once one exists. Left behind, that cookie mutes the credentials on the
   // NEXT connect(), which then fails for a reason unrelated to the first one.
   it('keeps nothing from a failed establishment', async () => {
     const rejecting = createServer((_req, res) => {
@@ -431,110 +430,5 @@ describe('a teardown requested during establishment', () => {
     await teardown;
     expect(conn.isConnected()).toBe(false);
     expect(conn.getSessionIdentity()).toBeNull();
-  });
-
-  it('does not publish a recovery that finished after a disconnect was requested', async () => {
-    const conn = onPrem(configFor(stub.baseUrl), null);
-    await conn.connect();
-    const baseline = (conn as unknown as { teardownEpoch: number })
-      .teardownEpoch;
-
-    const { release, started } = stallEstablishment(conn);
-    const recovering = recoverAs(conn, baseline);
-    await started;
-    const teardown = conn.disconnect();
-    release();
-
-    await expect(recovering).rejects.toMatchObject({
-      code: 'ADT_NOT_CONNECTED',
-    });
-    await teardown;
-    expect(conn.isConnected()).toBe(false);
-  });
-});
-
-describe('an abandoned establishment leaves in-flight work alone', () => {
-  let stub: Stub;
-
-  beforeEach(async () => {
-    stub = await startStub();
-  });
-
-  afterEach(async () => {
-    await stub.close();
-  });
-
-  // The guard that abandons a doomed establishment must not clear the session
-  // itself — the queued teardown does that. What changed since: the teardown no
-  // longer waits, so "the live request keeps its cookies" is gone as a
-  // guarantee. What replaces it is fencing: the request runs to completion
-  // untouched, and its result cannot reach the connection.
-  it('leaves the clearing to the teardown, and fences the request', async () => {
-    const conn = onPrem(configFor(stub.baseUrl), null);
-    await conn.connect();
-
-    // A request that will not finish until the test says so.
-    let releaseRequest!: () => void;
-    const requestHeld = new Promise<void>((r) => {
-      releaseRequest = r;
-    });
-    const realSend = (conn as any).transport.send.bind((conn as any).transport);
-    (conn as any).transport.send = async (cfg: { url: string }) => {
-      if (cfg.url.includes('/slow')) await requestHeld;
-      return realSend(cfg);
-    };
-
-    const inFlight = conn.makeAdtRequest({
-      url: '/sap/bc/adt/slow',
-      method: 'GET',
-      timeout: 5000,
-    });
-    await new Promise((r) => setTimeout(r, 10));
-
-    // An establishment already in flight, so the guard is reached at all: a
-    // connect queued BEHIND the teardown could never run, since the teardown is
-    // waiting on the request this test is holding.
-    let releaseEstablishment!: () => void;
-    const establishmentHeld = new Promise<void>((r) => {
-      releaseEstablishment = r;
-    });
-    const originalEstablish = (conn as any).transport.establish.bind(
-      (conn as any).transport,
-    );
-    (conn as any).transport.establish = async (context: unknown) => {
-      await establishmentHeld;
-      return originalEstablish(context);
-    };
-    const baseline = (conn as unknown as { teardownEpoch: number })
-      .teardownEpoch;
-    const recovering = recoverAs(conn, baseline);
-    await new Promise((r) => setTimeout(r, 10));
-
-    // The caller asks to stop while establishment is in flight.
-    const teardown = conn.disconnect();
-    releaseEstablishment();
-    await expect(recovering).rejects.toMatchObject({
-      code: 'ADT_NOT_CONNECTED',
-    });
-
-    // The teardown does not wait, so by now the session is already gone. That is
-    // the trade this design accepts: the in-flight request loses the state it
-    // was using, rather than holding a teardown — and everything queued behind
-    // it — open for as long as it likes.
-    await teardown;
-    expect(
-      (conn as unknown as { getCookies(): string | null }).getCookies(),
-    ).toBeNull();
-    expect(conn.isConnected()).toBe(false);
-
-    // It is not aborted, though. It settles on its own terms, and whatever it
-    // returns cannot touch the connection: its lease belongs to a generation
-    // that is no longer current.
-    releaseRequest();
-    await inFlight.catch(() => undefined);
-    expect(conn.isConnected()).toBe(false);
-    expect(
-      (conn as unknown as { getCookies(): string | null }).getCookies(),
-    ).toBeNull();
   });
 });

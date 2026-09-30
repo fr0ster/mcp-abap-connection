@@ -29,7 +29,7 @@
 import type { AdtSessionErrorCode } from '@mcp-abap-adt/interfaces-adt-connection';
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
 
-export type TransitionKind = 'connect' | 'disconnect' | 'recover' | 'cleanup';
+export type TransitionKind = 'connect' | 'disconnect' | 'cleanup';
 
 export interface RequestLease {
   /** Teardown epoch at admission — the baseline a recovery compares against. */
