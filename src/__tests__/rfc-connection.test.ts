@@ -227,9 +227,9 @@ describe('the parameters the conversation is dialled with', () => {
     expect(() => rfcParamsFrom({ ...config, url: '' })).toThrow(/url/i);
   });
 
-  it('refuses a config with no credentials', () => {
+  it('takes a config with no credentials: the provider brings those', () => {
     expect(() =>
       rfcParamsFrom({ ...config, username: '', password: '' }),
-    ).toThrow(/username and a password/i);
+    ).not.toThrow();
   });
 });

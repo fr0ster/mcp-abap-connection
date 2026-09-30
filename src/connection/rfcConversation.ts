@@ -16,13 +16,15 @@
 import type { SapConfig } from '../config/sapConfig.js';
 import type { IRfcConversation } from './RfcTransport.js';
 
-/** What the native client is constructed with. */
+/**
+ * Where the native client dials. What it logs on with is not here: the
+ * provider writes that at each logon (`user`/`passwd`, or the SNC keys), and
+ * the factory spreads it over these.
+ */
 export interface RfcConnectionParams {
   ashost: string;
   sysnr: string;
   client: string;
-  user: string;
-  passwd: string;
   lang: string;
 }
 
@@ -33,13 +35,12 @@ export interface RfcConnectionParams {
  * the ICM port for system XX — the convention the port itself follows, not a
  * guess about the deployment. `SAP_SYSNR` overrides it for a port that follows
  * no convention, which is the case on a system reached through 50400.
+ *
+ * The address only: no username or password is read from the config.
  */
 export function rfcParamsFrom(config: SapConfig): RfcConnectionParams {
   if (!config.url) {
     throw new Error('An RFC conversation needs a url to take its host from');
-  }
-  if (!config.username || !config.password) {
-    throw new Error('An RFC conversation needs both a username and a password');
   }
 
   const parsed = new URL(config.url);
@@ -50,25 +51,28 @@ export function rfcParamsFrom(config: SapConfig): RfcConnectionParams {
     ashost: parsed.hostname,
     sysnr: process.env.SAP_SYSNR?.trim() || derived,
     client: config.client || '000',
-    user: config.username,
-    passwd: config.password,
     lang: 'EN',
   };
 }
 
 /**
- * The factory `RfcTransport` asks for.
+ * The factory `RfcTransport` asks for: the logon parameters the provider wrote
+ * for this open go in, spread over the address from the config.
  *
  * The SDK is loaded when a conversation is opened, not when this is called, so
  * a consumer can build the transport on a machine that has no SDK and find out
  * at `connect()` rather than at construction — with a message that says what to
  * install.
  */
-export function rfcConversationFrom(config: SapConfig): () => IRfcConversation {
+export function rfcConversationFrom(
+  config: SapConfig,
+): (logon: Readonly<Record<string, string>>) => IRfcConversation {
   const params = rfcParamsFrom(config);
 
-  return () => {
-    let Client: new (params: RfcConnectionParams) => IRfcConversation;
+  return (logon) => {
+    let Client: new (
+      params: RfcConnectionParams & Readonly<Record<string, string>>,
+    ) => IRfcConversation;
     try {
       // Dynamic, because the SDK is an optional peer: it needs the SAP NW RFC
       // SDK installed on the machine, and most consumers travel over HTTP.
@@ -81,6 +85,6 @@ export function rfcConversationFrom(config: SapConfig): () => IRfcConversation {
           `Details: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    return new Client(params);
+    return new Client({ ...params, ...logon });
   };
 }

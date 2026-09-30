@@ -51,17 +51,18 @@ describe('the connection parameters an RFC conversation needs', () => {
     }
   });
 
-  it('carries the credential and the client', () => {
-    const params = rfcParamsFrom(base);
+  it('returns the address only, and needs no user or password', () => {
+    const { username: _u, password: _p, ...noCredential } = base;
 
-    expect(params.user).toBe('USER');
-    expect(params.passwd).toBe('PASS');
-    expect(params.client).toBe('100');
+    expect(rfcParamsFrom(noCredential)).toStrictEqual({
+      ashost: 'saphost',
+      sysnr: '00',
+      client: '100',
+      lang: 'EN',
+    });
   });
 
   it('refuses a config it cannot dial', () => {
-    expect(() => rfcParamsFrom({ ...base, username: '' })).toThrow(
-      /username and a password/i,
-    );
+    expect(() => rfcParamsFrom({ ...base, url: '' })).toThrow(/url/i);
   });
 });
