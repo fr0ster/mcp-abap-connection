@@ -21,3 +21,20 @@ export function markConnectedForTest(
     }
   ).lifecycle.markConnected(fingerprint);
 }
+
+/**
+ * Run a `recover` lifecycle transition that re-establishes the session, as the
+ * wire's recovery does mid-request. Stands in for the removed `recoverSession`
+ * in the tests that put a teardown against a recovery in flight.
+ */
+export function recoverAs(conn: unknown, baselineEpoch: number): Promise<void> {
+  const c = conn as {
+    lifecycle: {
+      transition(name: string, work: () => Promise<void>): Promise<void>;
+    };
+    establishAndCommit(epoch: number): Promise<void>;
+  };
+  return c.lifecycle.transition('recover', async () => {
+    await c.establishAndCommit(baselineEpoch);
+  });
+}

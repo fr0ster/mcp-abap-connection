@@ -17,6 +17,7 @@ import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { cloudHttpTransport, onPrem } from '../helpers/onPrem.js';
+import { recoverAs } from '../helpers/session.js';
 
 interface Stub {
   baseUrl: string;
@@ -439,9 +440,7 @@ describe('a teardown requested during establishment', () => {
       .teardownEpoch;
 
     const { release, started } = stallEstablishment(conn);
-    const recovering = (
-      conn as unknown as { recoverSession: (e: number) => Promise<void> }
-    ).recoverSession(baseline);
+    const recovering = recoverAs(conn, baseline);
     await started;
     const teardown = conn.disconnect();
     release();
@@ -508,9 +507,7 @@ describe('an abandoned establishment leaves in-flight work alone', () => {
     };
     const baseline = (conn as unknown as { teardownEpoch: number })
       .teardownEpoch;
-    const recovering = (
-      conn as unknown as { recoverSession: (e: number) => Promise<void> }
-    ).recoverSession(baseline);
+    const recovering = recoverAs(conn, baseline);
     await new Promise((r) => setTimeout(r, 10));
 
     // The caller asks to stop while establishment is in flight.

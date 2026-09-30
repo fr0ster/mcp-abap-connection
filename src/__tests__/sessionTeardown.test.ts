@@ -14,6 +14,7 @@ import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
 import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
+import { recoverAs } from './helpers/session.js';
 import { settled } from './helpers/settled.js';
 
 const baseConfig: SapConfig = {
@@ -677,13 +678,10 @@ describe('disconnect ends the server session', () => {
     // A recovery occupies the tail. It rejects once the teardown moves the
     // epoch under it, which is correct and not what this test is about.
     gateArmed = true;
-    const recovering = (
-      conn as unknown as { recoverSession(epoch: number): Promise<void> }
-    )
-      .recoverSession(
-        (conn as unknown as { teardownEpoch: number }).teardownEpoch,
-      )
-      .catch(() => undefined);
+    const recovering = recoverAs(
+      conn,
+      (conn as unknown as { teardownEpoch: number }).teardownEpoch,
+    ).catch(() => undefined);
     await new Promise((r) => setTimeout(r, 5));
 
     const disconnecting = conn.disconnect();

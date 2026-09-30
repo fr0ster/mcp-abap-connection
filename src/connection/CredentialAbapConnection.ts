@@ -13,7 +13,12 @@
  */
 
 import type { IAbapRequestOptions } from '@mcp-abap-adt/interfaces-adt-connection';
-import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
+import type {
+  AuthOutcome,
+  IAuthProvider,
+  IAuthRejection,
+  ILogonTarget,
+} from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
@@ -54,16 +59,6 @@ export abstract class CredentialAbapConnection<
   }
 
   /**
-   * Nothing here: what the credential contributes is asked for asynchronously
-   * in `getAuthHeaders()`, because a provider can renew behind the call and a
-   * synchronous read would have to hold what it returned. The base's abstract
-   * member is satisfied and unused.
-   */
-  protected buildAuthorizationHeader(): string {
-    return '';
-  }
-
-  /**
    * The credential writes what this request carries: its header, or its
    * cookies, or both.
    *
@@ -71,9 +66,9 @@ export abstract class CredentialAbapConnection<
    * presented to the session preflight and the establishing call is a session
    * the server never sees us in.
    */
-  override async getAuthHeaders(): Promise<Record<string, string>> {
-    const headers = await super.getAuthHeaders();
-
+  protected override async authorizeRequest(
+    headers: Record<string, string>,
+  ): Promise<void> {
     // Asked per request, never held: a provider renews behind this call, and a
     // value kept here would be the stale one.
     const { outcome, thrown } = await guarded(() =>
@@ -82,7 +77,23 @@ export abstract class CredentialAbapConnection<
     if (!outcome.ok) {
       throw new AuthRefusedError(outcome.refusal, 'request', thrown);
     }
-    return headers;
+  }
+
+  /** What the credential brings to a logon: TLS material, logon parameters. */
+  protected override async logon(target: ILogonTarget): Promise<void> {
+    const { outcome, thrown } = await guarded(() =>
+      this.credential.establish(target),
+    );
+    if (!outcome.ok) {
+      throw new AuthRefusedError(outcome.refusal, 'logon', thrown);
+    }
+  }
+
+  /** The provider's answer, whole; a throw is an answer too (`guarded`). */
+  protected override async credentialRejected(
+    rejection: IAuthRejection,
+  ): Promise<AuthOutcome> {
+    return (await guarded(() => this.credential.rejected(rejection))).outcome;
   }
 
   protected async establishSession(): Promise<void> {

@@ -20,9 +20,6 @@ class TestConn extends (AbstractAbapConnection as any) {
     return { cert: 'C', key: 'K' };
   }
   async connect() {}
-  protected buildAuthorizationHeader() {
-    return '';
-  }
   /** The thunk the connection hands its default transport. */
   agentOptions() {
     return (this as any).getHttpsAgentOptions();

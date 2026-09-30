@@ -7,6 +7,11 @@ import type {
   ISessionLifecycleAware,
 } from '@mcp-abap-adt/interfaces-adt-connection';
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
+import type {
+  AuthOutcome,
+  IAuthRejection,
+  ILogonTarget,
+} from '@mcp-abap-adt/interfaces-auth';
 import axios, {
   AxiosError,
   type AxiosInstance,
@@ -22,6 +27,7 @@ import {
 import { isNetworkError } from '../utils/networkErrors.js';
 import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
+import { NO_CREDENTIAL_TO_RENEW } from './authErrors.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 import {
   type IAdtSessionContext,
@@ -489,25 +495,6 @@ abstract class AbstractAbapConnection
   }
 
   /**
-   * Re-establishes the session for a request that is recovering from a
-   * credential renewal, then lets that request retry.
-   *
-   * Runs as its own `recover` transition, which never joins another: each
-   * recovery carries the baseline of its own request. It yields to a caller's
-   * teardown — if the epoch moved since `baselineEpoch`, someone asked to stop
-   * while this was being prepared, and a retry must not resurrect a session
-   * they discarded.
-   *
-   * The transition queues behind the cleanup that the renewal itself raised, so
-   * it never re-establishes on top of stale transport state.
-   */
-  protected async recoverSession(baselineEpoch: number): Promise<void> {
-    await this.lifecycle.transition('recover', async () => {
-      await this.establishAndCommit(baselineEpoch);
-    });
-  }
-
-  /**
    * Establishes a session and publishes it — but only if nobody asked to stop
    * meanwhile.
    *
@@ -517,7 +504,7 @@ abstract class AbstractAbapConnection
    * markConnected() would then clear the teardown state and hand back a session
    * the caller had already discarded.
    *
-   * Shared by connect() and recoverSession() rather than written twice —
+   * Shared by connect() and the recovery paths rather than written twice —
    * the two drifted apart once already, and a third caller would drift again.
    */
   /**
@@ -588,7 +575,7 @@ abstract class AbstractAbapConnection
       // A failed establishment leaves debris that poisons the next attempt: the
       // 401 that rejected us may still have carried a Set-Cookie, and every
       // subclass treats a cookie as proof that auth is already settled —
-      // buildAuthorizationHeader() returns '' once one exists. So the next
+      // a credential that sees a cookie may skip its own header. So the next
       // connect() would go out with NO credentials at all, and be rejected for
       // a reason that has nothing to do with why the first one failed.
       //
@@ -748,11 +735,6 @@ abstract class AbstractAbapConnection
     });
   }
 
-  /** The credential-renewal raiser; see raiseSessionLost(). */
-  protected discardSession(): void {
-    this.raiseSessionLost('the credential backing it was renewed');
-  }
-
   /**
    * Whether an error is this connection's own verdict about the session rather
    * than something the server said about a request.
@@ -890,17 +872,47 @@ abstract class AbstractAbapConnection
 
   async getAuthHeaders(): Promise<Record<string, string>> {
     const headers: Record<string, string> = {};
+    await this.credentialHeaders(headers);
+    return headers;
+  }
 
+  /**
+   * What every request carries: the client, then whatever the credential
+   * writes. On every path, the establishing call included.
+   */
+  protected async credentialHeaders(
+    headers: Record<string, string>,
+  ): Promise<void> {
     if (this.config.client) {
       headers['X-SAP-Client'] = this.config.client;
     }
+    await this.authorizeRequest(headers);
+  }
 
-    const authorization = this.buildAuthorizationHeader();
-    if (authorization) {
-      headers.Authorization = authorization;
-    }
+  /**
+   * The credential writes what this request carries into `headers`. Asked per
+   * attempt, never held. Throws when the credential refuses. The base has no
+   * credential and writes nothing.
+   */
+  protected async authorizeRequest(
+    _headers: Record<string, string>,
+  ): Promise<void> {}
 
-    return headers;
+  /**
+   * A logon is being made; the credential says what it brings. Throws when the
+   * credential refuses. The base has no credential and brings nothing.
+   */
+  protected async logon(_target: ILogonTarget): Promise<void> {}
+
+  /**
+   * The system refused the credential. The answer is the credential's: Ok
+   * means it renewed and one more attempt is worth making. The base has
+   * nothing to renew.
+   */
+  protected async credentialRejected(
+    _rejection: IAuthRejection,
+  ): Promise<AuthOutcome> {
+    return { ok: false, refusal: NO_CREDENTIAL_TO_RENEW };
   }
 
   async makeAdtRequest<T = any, D = any>(
@@ -1180,12 +1192,8 @@ abstract class AbstractAbapConnection
       // token, so the token and the session it is bound to are dead and must be
       // discarded before the retry.
       //
-      // Not keyed on the credential any more. It used to be "basic auth only —
-      // JWT/SAML lifecycles are managed elsewhere", and elsewhere was
-      // JwtAbapConnection, which is gone. Credential renewal now lives a layer
-      // ABOVE this, in CredentialAbapConnection, which wraps the whole request:
-      // these retries happen first and it only sees a 401 that survived them.
-      // Nothing collides, so nothing needs to be excluded.
+      // These retries cure the session. A 401 that survives them is the
+      // credential's, not the session's.
       const isCachedTokenStale =
         (normalizedMethod === 'POST' ||
           normalizedMethod === 'PUT' ||
@@ -1311,8 +1319,6 @@ abstract class AbstractAbapConnection
     }
   }
 
-  protected abstract buildAuthorizationHeader(): string;
-
   /**
    * Ask the wire to establish itself, and hand back what it earned.
    *
@@ -1380,15 +1386,6 @@ abstract class AbstractAbapConnection
     this.transport.ingest({
       'set-cookie': cookies.split(';').map((entry) => entry.trim()),
     });
-  }
-
-  /**
-   * Subclasses override to inject extra https.Agent options (e.g. mTLS
-   * cert/key/pfx). The returned options are merged with the base options
-   * (rejectUnauthorized).
-   */
-  protected getHttpsAgentOptions(): import('node:https').AgentOptions {
-    return {};
   }
 
   /**
