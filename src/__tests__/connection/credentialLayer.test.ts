@@ -250,3 +250,31 @@ describe("the wire's own recovery", () => {
     expect(resend.headers['x-sap-client']).toBe('100');
   });
 });
+
+describe('what outranks the credential', () => {
+  it("a provider writing the CSRF token and content type cannot replace the wire's or the request's", async () => {
+    const { conn } = await connected(
+      providerWriting((request, renewals) => {
+        // Spelled unlike the request's own, which HTTP does not tell apart.
+        request.header('X-CSRF-Token', 'EVIL');
+        request.header('content-type', 'text/evil');
+        request.header('Authorization', `Bearer ${renewals}`);
+      }),
+    );
+    // The first attempt, path (a)'s resend, and the one more attempt after
+    // rejected() → Ok.
+    stub.work(WORK, [401, 401]);
+
+    const response = await post(conn);
+
+    expect(response.status).toBe(200);
+    const sent = stub.sentTo(WORK);
+    expect(sent.map((request) => request.status)).toEqual([401, 401, 200]);
+    for (const request of sent) {
+      expect(request.headers['x-csrf-token']).toMatch(/^TOKEN-\d+$/);
+      expect(request.headers['content-type']).toBe('text/plain; charset=utf-8');
+    }
+    expect(sent[2].headers['x-csrf-token']).toBe(stub.tokens.at(-1));
+    expect(sent[2].headers.authorization).toBe('Bearer 1');
+  });
+});

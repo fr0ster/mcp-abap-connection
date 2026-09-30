@@ -76,6 +76,12 @@ function hasHeader(headers: Record<string, string>, name: string): boolean {
   return Object.keys(headers).some((key) => key.toLowerCase() === wanted);
 }
 
+/**
+ * The request's own headers a credential may not replace, lowercased: the
+ * wire's session token and the request's content negotiation.
+ */
+const OUTRANK_THE_CREDENTIAL = ['x-csrf-token', 'content-type', 'accept'];
+
 /** A request's one credential retry (H5), spent by the first refusal it meets. */
 interface CredentialRenewal {
   spent: boolean;
@@ -1097,8 +1103,9 @@ abstract class AbstractAbapConnection
     const requestConfig: IAdtTransportRequest = {
       method: normalizedMethod,
       url: requestUrl,
-      // What the credential writes goes on last, so nothing overrides it, and
-      // is written anew for every resend below.
+      // What the credential writes outranks the caller's custom headers, and
+      // is written anew for every resend below; the wire's session token and
+      // the request's content negotiation outrank it (`authorizedFrom`).
       headers: await this.authorizedFrom(requestHeaders),
       timeout: effectiveTimeout,
       // `unknown` on the caller's options, a record on the seam: the two
@@ -1190,12 +1197,25 @@ abstract class AbstractAbapConnection
    * credential's cookies merge into the request's `Cookie` on the copy, so the
    * wire's session cookies in `base` survive and a stale credential cookie
    * does not.
+   *
+   * The credential owns authentication only. It outranks the caller's custom
+   * headers, but not the wire's CSRF token nor the request's `Content-Type`
+   * and `Accept`: those are put back from `base` whichever way the provider
+   * spelled them — as the wire's own token fetch already does.
    */
   private async authorizedFrom(
     base: Record<string, string>,
   ): Promise<Record<string, string>> {
     const headers = { ...base };
     await this.credentialHeaders(headers);
+    for (const name of OUTRANK_THE_CREDENTIAL) {
+      const own = Object.keys(base).filter((key) => key.toLowerCase() === name);
+      if (own.length === 0) continue;
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === name) delete headers[key];
+      }
+      for (const key of own) headers[key] = base[key];
+    }
     return headers;
   }
 
