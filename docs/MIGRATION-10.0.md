@@ -212,7 +212,7 @@ async function logOn(
   const target: ILogonTarget = {
     tlsMaterial: (): AuthOutcome => ({
       ok: false,
-      refusal: { reason: 'this wire carries no TLS material' },
+      refusal: { reason: 'this wire carries no TLS material (example wire)' },
     }),
     logonParameters: (offered): AuthOutcome => {
       parameters = { ...offered };

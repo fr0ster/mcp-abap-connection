@@ -967,11 +967,19 @@ token the provider renewed is on the very next attempt.
 
 | answer | what happens |
 |---|---|
-| **401** on a stale CSRF token or a login form | the wire's own session recovery runs first; a session fault is not a credential fault, and never reaches the provider |
+| **401** on a stale CSRF token or a login form | the wire's own session recovery runs first; a session fault is not a credential fault, and never reaches the provider. For a mutation refused while a CSRF token is cached, that recovery drops the session (and its identity) before anything else — a lock held in it is lost |
 | **401** that survives that recovery, or a logon the system refused | put to `provider.rejected({ at, status?, error })`. On Ok the request is authorized again and sent **once more**; on no, `AuthRefusedError` |
 | the same refusal after an Ok | the verdict. The provider is not asked again — asking would invite a second renewal — and you get an `AuthRefusedError` saying the credential was refused again after the provider renewed it |
 | **403** | propagates untouched, never put to the provider. The server authenticated the caller and refused the action anyway, so a new credential is the same caller — usually the body names the authorization object |
 | anything else | untouched |
+
+The one more attempt keeps the request's own lease and generation, so
+stale-request fencing applies to it: a request from a superseded session asks
+nobody and gets its error back. It goes out on the same session for a GET and for
+any rejection `at: 'request'`. Two cases do not keep the session: a mutation that
+met a 401 with a CSRF token cached (the wire's recovery, above), and a rejection
+`at: 'logon'`, after which the wire logs on again — token dropped, established
+anew — before the resend.
 
 One credential retry per request: the upfront token fetch before a mutation and
 a later rejection draw on the same allowance.

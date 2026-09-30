@@ -172,10 +172,14 @@ Every ADT request issued through `makeAdtRequest` automatically:
 This logic is transparent to callers (Builders, handlers, CLI scripts).
 
 A 401 that survives the wire's own CSRF recovery is put to the provider (`rejected`). On Ok the
-request is sent once more on the same session, under the same lease and generation as the attempt
-it repeats; if the provider says no, or the retry is refused too, the caller gets an
-`AuthRefusedError` and the session is left alone — a lock window is not torn down by an
-authentication answer. A 403 is an authorization answer, not a credential one: it never goes to the
+request is sent once more, always under the same lease and generation as the attempt it repeats,
+so stale-request fencing applies. For a GET (or any rejection at `'request'`) that resend goes out
+on the same session. Two cases do not keep it: after a rejection at `'logon'` the wire logs on
+again before the resend, and **a mutation (POST / PUT / DELETE) refused with a 401 while a CSRF
+token is cached takes the wire's own stale-session recovery first, which drops the session and its
+identity before the provider is asked — a lock held in that session is lost.** That is a known
+limit of this release; do not count on a lock surviving an authentication refusal of a mutation.
+If the provider says no, or the retry is refused too, the caller gets an `AuthRefusedError`. A 403 is an authorization answer, not a credential one: it never goes to the
 provider. See [When the credential is refused](./USAGE.md#when-the-credential-is-refused).
 
 A reconnect is a NEW session, so do it outside a lock window rather than inside one.
