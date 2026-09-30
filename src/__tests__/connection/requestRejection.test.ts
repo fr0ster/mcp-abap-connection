@@ -80,6 +80,35 @@ const codeOf = (error: unknown) =>
 const statusOf = (error: unknown) =>
   (error as { response?: { status?: number } } | undefined)?.response?.status;
 
+/**
+ * Holds the `nth` authorize call from now until released — the window in
+ * which a caller can disconnect and connect again.
+ */
+function gateAuthorize(
+  provider: ReturnType<typeof stubProvider>,
+  nth: number,
+): { asked: Promise<void>; release: () => void } {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reached!: () => void;
+  const asked = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  let count = 0;
+  const authorize = provider.authorize.bind(provider);
+  provider.authorize = async (request) => {
+    count += 1;
+    if (count === nth) {
+      reached();
+      await gate;
+    }
+    return authorize(request);
+  };
+  return { asked, release };
+}
+
 describe('a 401 that survives the wire', () => {
   it('asks rejected once, at request, and the resend carries the renewed credential', async () => {
     const { conn, rejections } = await connected();
@@ -503,6 +532,78 @@ describe('a request whose session is gone', () => {
     const error = await request;
 
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    expect(stub.sentTo(WORK)).toHaveLength(0);
+    expect(conn.isConnected()).toBe(true);
+  });
+
+  it('a logon rejection whose token fetch outlives its session sends no discovery into the next one', async () => {
+    const { conn, provider, rejections } = await connected();
+    // The POST's cached token is refused as a login form, the wire's own
+    // token fetch is refused as a logon, and the provider renews: the third
+    // authorize from here is the one that readies the wire for the resend.
+    stub.work(WORK, [401]);
+    stub.discovery.push(401);
+    const { asked, release } = gateAuthorize(provider, 3);
+
+    const request = post(conn).catch((e: unknown) => e);
+    await asked;
+    await conn.disconnect();
+    await conn.connect();
+    const discoveries = stub.sentTo(DISCOVERY).length;
+    release();
+    const error = await request;
+
+    expect(rejections()).toHaveLength(1);
+    expect(rejections()[0]).toMatchObject({ at: 'logon' });
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    // Nothing went out on the new session's cookies after the release.
+    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
+    expect(stub.sentTo(WORK)).toHaveLength(1);
+    expect(conn.isConnected()).toBe(true);
+  });
+
+  it('a CSRF recovery fetch that outlives its session sends no discovery into the next one', async () => {
+    const { conn, provider } = await connected();
+    // The login-form 401 discards the session and fetches a token anew; the
+    // second authorize from here is that fetch's.
+    stub.work(WORK, [401]);
+    const { asked, release } = gateAuthorize(provider, 2);
+
+    const request = post(conn).catch((e: unknown) => e);
+    await asked;
+    await conn.disconnect();
+    await conn.connect();
+    const discoveries = stub.sentTo(DISCOVERY).length;
+    release();
+    const error = await request;
+
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
+    expect(stub.sentTo(WORK)).toHaveLength(1);
+    expect(conn.isConnected()).toBe(true);
+  });
+
+  it('an upfront token fetch retried after a renewal sends no discovery into the next session', async () => {
+    const { conn, provider, transport, rejections } = await connected();
+    // No token, so the POST readies the wire first; that fetch is refused as
+    // a logon, the provider renews, and the second authorize from here is the
+    // fetch asked again.
+    transport.adoptCsrfToken(null);
+    stub.discovery.push(401);
+    const { asked, release } = gateAuthorize(provider, 2);
+
+    const request = post(conn).catch((e: unknown) => e);
+    await asked;
+    await conn.disconnect();
+    await conn.connect();
+    transport.adoptCsrfToken(null);
+    const discoveries = stub.sentTo(DISCOVERY).length;
+    release();
+    const error = await request;
+
+    expect(rejections()).toHaveLength(1);
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
     expect(stub.sentTo(WORK)).toHaveLength(0);
     expect(conn.isConnected()).toBe(true);
   });

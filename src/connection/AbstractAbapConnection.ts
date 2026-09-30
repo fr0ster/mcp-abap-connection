@@ -1382,7 +1382,7 @@ abstract class AbstractAbapConnection
 
       try {
         this.setCsrfToken(
-          await this.fetchCsrfToken(requestUrl, 5, 2000, lease.generation),
+          await this.fetchCsrfToken(requestUrl, 5, 2000, lease),
         );
         const refreshedToken = this.getCsrfToken();
         if (refreshedToken) {
@@ -1439,7 +1439,7 @@ abstract class AbstractAbapConnection
       try {
         // Try to get CSRF token (this will also get cookies)
         this.setCsrfToken(
-          await this.fetchCsrfToken(requestUrl, 3, 1000, lease.generation),
+          await this.fetchCsrfToken(requestUrl, 3, 1000, lease),
         );
         const afterCsrf = this.transport.cookies();
         if (afterCsrf) {
@@ -1497,7 +1497,7 @@ abstract class AbstractAbapConnection
     try {
       if (rejection.at === 'logon') {
         this.transport.adoptCsrfToken(null);
-        await this.ensureWireReady(lease.generation);
+        await this.ensureWireReady(lease);
         const token = this.transport.csrfToken();
         if (token && ['POST', 'PUT', 'DELETE'].includes(requestConfig.method)) {
           requestHeaders['x-csrf-token'] = token;
@@ -1597,10 +1597,13 @@ abstract class AbstractAbapConnection
   ): Promise<void> {
     for (;;) {
       try {
-        await this.ensureWireReady();
+        await this.ensureWireReady(lease);
         return;
       } catch (error) {
         if (error instanceof AuthRefusedError) throw error;
+        // The session the request was admitted to is gone: nothing more of it
+        // is sent, and the verdict is the caller's.
+        if (!this.lifecycle.isCurrent(lease)) throw error;
         if (!(error instanceof WireLogonError)) {
           this.logger?.debug(
             `Could not fetch CSRF token upfront, will retry on error: ${error instanceof Error ? error.message : String(error)}`,
@@ -1632,20 +1635,18 @@ abstract class AbstractAbapConnection
     _url: string,
     retryCount: number = CSRF_CONFIG.RETRY_COUNT,
     retryDelay: number = CSRF_CONFIG.RETRY_DELAY,
-    /** Fences the response effects; omitted during connect(), which has no lease. */
-    generation?: number,
+    /**
+     * The request's lease: fences what is sent and the response effects.
+     * Omitted during connect(), which has no lease.
+     */
+    lease?: Pick<RequestLease, 'generation'>,
   ): Promise<string> {
     // Dropped first, because this is only ever reached to REPLACE one: the
     // establishment is idempotent and would hand back the very token the
     // caller has just been told is stale.
     this.transport.adoptCsrfToken(null);
     await this.transport.establish({
-      baseUrl: this.baseUrl,
-      authorize: (headers) => this.credentialHeaders(headers),
-      logon: (target) => this.logon(target),
-      extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
-      observe: (headers) =>
-        this.observeResponse(headers as Record<string, unknown>, generation),
+      ...this.leasedContext(lease),
       retries: retryCount,
       retryDelayMs: retryDelay,
       timeoutMs: getTimeout('csrf'),
@@ -1699,18 +1700,51 @@ abstract class AbstractAbapConnection
    * by the caller, but logged as an error and repeated on the next one.
    */
   private async ensureWireReady(
-    /** Fences the response effects; omitted before the request has a failure to recover. */
-    generation?: number,
+    /** The request's lease: fences what is sent and the response effects. */
+    lease: Pick<RequestLease, 'generation'>,
   ): Promise<void> {
     await this.transport.establish({
+      ...this.leasedContext(lease),
+      isFatal: (error) => this.endsTheExchange(error),
+    });
+  }
+
+  /**
+   * The context for a token exchange a request makes on its own behalf — its
+   * wire's upfront fetch, a CSRF recovery, the fetch after a refused logon.
+   *
+   * With a lease, nothing is sent once the session the request was admitted
+   * to is gone. The check is made in `authorize`, AFTER the provider has
+   * written: that is the last await before the wire sends, and a provider may
+   * take long enough for the caller to disconnect and connect again — sent
+   * then, the request would carry the new session's cookies. The throw is a
+   * session verdict, so the exchange stops at once, past its retries.
+   *
+   * Without one — connect()'s own establishment, which is making the session
+   * rather than working in it — nothing is fenced.
+   */
+  private leasedContext(
+    lease?: Pick<RequestLease, 'generation'>,
+  ): IAdtSessionContext {
+    return {
       baseUrl: this.baseUrl,
-      authorize: (headers) => this.credentialHeaders(headers),
+      authorize: async (headers) => {
+        await this.credentialHeaders(headers);
+        if (lease && !this.lifecycle.isCurrent(lease)) {
+          throw sessionError(
+            ADT_SESSION_ERROR.NOT_CONNECTED,
+            'The session this request was admitted to is gone; nothing was sent',
+          );
+        }
+      },
       logon: (target) => this.logon(target),
       extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
       observe: (headers) =>
-        this.observeResponse(headers as Record<string, unknown>, generation),
-      isFatal: (error) => this.endsTheExchange(error),
-    });
+        this.observeResponse(
+          headers as Record<string, unknown>,
+          lease?.generation,
+        ),
+    };
   }
 
   /**
