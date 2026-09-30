@@ -78,7 +78,8 @@ describe('the legacy on-prem wire', () => {
 
     await transport.close({
       baseUrl: 'https://h',
-      authHeaders: async () => ({}),
+      authorize: async () => {},
+      logon: async () => {},
       observe: () => {},
     });
 

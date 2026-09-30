@@ -104,19 +104,14 @@ export abstract class CredentialAbapConnection<
       // does nothing and holds no token. Demanding one here was what made
       // `connect()` impossible over RFC.
       //
-      // There is no second path. A credential that wanted to run the exchange
-      // itself would need the connection to ask which of the two does the work,
-      // and a credential whose way in IS a round trip does not need that: the
-      // wire asks `authHeaders()` PER ATTEMPT, so a one-shot token is offered
-      // on the establishing call and withheld afterwards by the credential
-      // itself, with nobody deciding anything.
+      // There is no second path. A credential whose way in IS a round trip
+      // does not need one: the wire authorizes PER ATTEMPT, so a one-shot token
+      // is offered on the establishing call and withheld afterwards by the
+      // credential itself, with nobody deciding anything.
       await this.transport.establish({
+        ...this.sessionContext(),
         baseUrl: await this.getBaseUrl(),
-        authHeaders: () => this.getAuthHeaders(),
-        extraHeaders: { 'sap-adt-connection-id': this.getSessionId() ?? '' },
-        observe: (headers) =>
-          this.observeResponse(headers as Record<string, unknown>),
-        isFatal: (error) => this.isSessionVerdict(error),
+        isFatal: (error) => this.endsTheExchange(error),
       });
       this.logger?.debug('Connected', {
         credential: this.credential.kind,

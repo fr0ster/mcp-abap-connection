@@ -20,7 +20,10 @@ import { type SapStub, startSapStub } from './helpers/sapStub.js';
 
 const context = (over: Partial<Record<string, unknown>> = {}) => ({
   baseUrl: 'https://sap.example.com',
-  authHeaders: async () => ({ Authorization: 'Basic dTpw' }),
+  authorize: async (headers: Record<string, string>) => {
+    headers.Authorization = 'Basic dTpw';
+  },
+  logon: async () => {},
   observe: () => {},
   ...over,
 });
@@ -328,7 +331,8 @@ describe('a refused logon over HTTP', () => {
     const error = await transport
       .establish({
         baseUrl: stub.baseUrl,
-        authHeaders: async () => ({}),
+        authorize: async () => {},
+        logon: async () => {},
         observe: (headers) => observed.push(headers),
         retries: 3,
         retryDelayMs: 0,
@@ -354,7 +358,8 @@ describe('a refused logon over HTTP', () => {
 
     await transport.establish({
       baseUrl: stub.baseUrl,
-      authHeaders: async () => ({}),
+      authorize: async () => {},
+      logon: async () => {},
       observe: () => {},
       retries: 3,
       retryDelayMs: 0,

@@ -371,13 +371,34 @@ abstract class AbstractAbapConnection
     await this.lifecycle.transition('connect', async () => {
       if (this.lifecycle.connected) return;
 
-      // The wire gets a session in whatever way it has one: an RFC
-      // conversation opened, a cloud session resource asked for, nothing at
-      // all on a wire whose session arrives with the establishing call. Which
-      // of those it is belongs to the transport the caller handed in.
-      await this.transport.open(this.sessionContext());
+      // Before the wire opens, so that a credential which cannot get ready
+      // sends nothing and the wire's logon has something to bring.
+      await this.prepareCredential();
 
-      await this.establishAndCommit(baselineEpoch);
+      // The wire logs on inside, through the context, and then the session is
+      // established: one step, which a refused logon repeats once.
+      try {
+        await this.establishAndCommit(baselineEpoch);
+      } catch (error) {
+        const rejection = this.credentialRejection(error);
+        if (
+          !(error instanceof WireLogonError) ||
+          !rejection ||
+          this.lifecycle.teardownEpoch !== baselineEpoch
+        ) {
+          throw error;
+        }
+        // The step's own failure path has already said goodbye to whatever
+        // the wire opened and dropped what it held, so the second attempt
+        // starts from nothing.
+        await this.renewCredential(rejection, { spent: false });
+        try {
+          await this.establishAndCommit(baselineEpoch);
+        } catch (again) {
+          if (!(again instanceof WireLogonError)) throw again;
+          throw new AuthRefusedError(REFUSED_AGAIN, 'logon', again.cause);
+        }
+      }
     });
   }
 
@@ -531,7 +552,8 @@ abstract class AbstractAbapConnection
   protected sessionContext(): IAdtSessionContext {
     return {
       baseUrl: this.baseUrl,
-      authHeaders: () => this.getAuthHeaders(),
+      authorize: (headers) => this.credentialHeaders(headers),
+      logon: (target) => this.logon(target),
       extraHeaders: { 'sap-adt-connection-id': this.getSessionId() ?? '' },
       observe: (headers) =>
         this.observeResponse(headers as Record<string, unknown>),
@@ -566,13 +588,11 @@ abstract class AbstractAbapConnection
     // makes the new fingerprint `established`, which is what it is.
     this.lifecycle.forgetIdentity();
     try {
-      // First, because the preflight below has to be able to authenticate: the
-      // credential of a certificate connection is not in hand until
-      // it is loaded, and assembling a request without it throws.
-      await this.prepareCredential();
       // Before the establishing call, because on a system that has one this is
       // what creates the session the rest of the connection runs in — and the
-      // cookies it sets are the ones the establishing call must carry.
+      // cookies it sets are the ones the establishing call must carry. The wire
+      // logs on first, through the context, before anything is sent.
+      await this.transport.open(this.sessionContext());
       // Forgotten again, because the open was OURS. Establishment is now two
       // requests where it used to be one, and the identity policy answers "did
       // the server move us to a different session while we were working" — a
@@ -1503,7 +1523,8 @@ abstract class AbstractAbapConnection
     this.transport.adoptCsrfToken(null);
     await this.transport.establish({
       baseUrl: this.baseUrl,
-      authHeaders: () => this.getAuthHeaders(),
+      authorize: (headers) => this.credentialHeaders(headers),
+      logon: (target) => this.logon(target),
       extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
       observe: (headers) =>
         this.observeResponse(headers as Record<string, unknown>, generation),
@@ -1565,7 +1586,8 @@ abstract class AbstractAbapConnection
   ): Promise<void> {
     await this.transport.establish({
       baseUrl: this.baseUrl,
-      authHeaders: () => this.getAuthHeaders(),
+      authorize: (headers) => this.credentialHeaders(headers),
+      logon: (target) => this.logon(target),
       extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
       observe: (headers) =>
         this.observeResponse(headers as Record<string, unknown>, generation),
@@ -1578,7 +1600,7 @@ abstract class AbstractAbapConnection
    * or the provider's refusal to authorize it — asking again would only ask
    * the provider again.
    */
-  private endsTheExchange(error: unknown): boolean {
+  protected endsTheExchange(error: unknown): boolean {
     return this.isSessionVerdict(error) || error instanceof AuthRefusedError;
   }
 

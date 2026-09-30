@@ -21,18 +21,19 @@ describe('HttpTransport', () => {
     expect(transport.kind).toBe('http');
   });
 
-  it('has nothing to open or give back, and says so by doing nothing', async () => {
+  it('offers its logon on open and has nothing to give back', async () => {
     const transport: IAdtTransport = new HttpTransport();
     const context = {
       baseUrl: 'https://h',
-      authHeaders: async () => ({}),
+      authorize: async () => {},
+      logon: async () => {},
       observe: () => {},
     };
 
     // The members exist — they are the contract, so the connection calls them
-    // rather than asking whether they are there. What is true of a bare HTTP
-    // wire is that they do nothing: a request opens its own socket, and there
-    // is no session resource to give back.
+    // rather than asking whether they are there. A bare HTTP wire offers the
+    // credential its logon on open and nothing else: a request opens its own
+    // socket, and there is no session resource to give back.
     await expect(transport.open(context)).resolves.toBeUndefined();
     await expect(transport.close(context)).resolves.toBeUndefined();
   });

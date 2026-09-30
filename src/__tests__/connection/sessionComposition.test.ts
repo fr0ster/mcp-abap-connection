@@ -16,7 +16,6 @@ import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
-import { WireLogonError } from '../../connection/authErrors.js';
 import { cloudHttpTransport, onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
@@ -207,22 +206,16 @@ describe('a credential refused while establishing', () => {
   });
 
   // The per-credential JWT class renewed and retried here, inside its own
-  // `fetchCsrfToken`. That is gone, and deliberately not reproduced: renewal is
-  // the PROVIDER's, and it happens on an expiry the provider can see — on every
-  // call that asks for a header, not on a 401. With a refresh token outliving
-  // the session many times over, a token the provider still believes in and the
-  // server refuses is the case that does not arise. And `connect()` is one call
-  // the caller makes, so a refusal is theirs to answer.
+  // `fetchCsrfToken`. That is gone: renewal is the PROVIDER's. The connection
+  // carries the system's refusal to it (`rejected`, at logon) and, when the
+  // provider renews, logs on once more.
   //
   // The hazard the old test guarded is still guarded: an establishment that
-  // decides not to retry must not hang while deciding. It used to be
-  // establishSession calling connect(), which runs establishment as a joinable
-  // transition — so the nested call joined the one already in flight, which was
-  // itself, and waited forever.
-  // Until `connect()` hands a refused logon to the provider, the wire's mark is
-  // what the caller gets: the 401 named as a refused logon, the wire's error
-  // kept as it arrived.
-  it('surfaces the refusal as the wire named it, instead of renewing behind the caller', async () => {
+  // retries must not hang while doing it. It used to be establishSession
+  // calling connect(), which runs establishment as a joinable transition — so
+  // the nested call joined the one already in flight, which was itself, and
+  // waited forever.
+  it('renews through the provider and connects on the second logon', async () => {
     let refreshed = 0;
     stub.rejectDiscovery = true;
 
@@ -234,9 +227,11 @@ describe('a credential refused while establishing', () => {
         jwtToken: 'STALE',
       } as SapConfig,
       TokenAuthProvider.from({
-        getToken: async () => 'FRESH',
+        getToken: async () => (refreshed ? 'FRESH' : 'STALE'),
         refreshToken: async () => {
           refreshed += 1;
+          // The system accepts the renewed credential.
+          stub.rejectDiscovery = false;
           return 'FRESH';
         },
       }),
@@ -244,22 +239,12 @@ describe('a credential refused while establishing', () => {
       null,
     );
 
-    const outcome = await Promise.race([
-      conn.connect().then(
-        () => 'connected',
-        (error: unknown) => error,
-      ),
-      new Promise((r) => setTimeout(() => r('hung'), 15000)),
-    ]);
+    // A hang is a failure: the test's own timeout bounds it.
+    await conn.connect();
 
-    expect(outcome).toBeInstanceOf(WireLogonError);
-    expect((outcome as WireLogonError).status).toBe(401);
-    expect(
-      ((outcome as WireLogonError).cause as { response?: { status?: number } })
-        .response?.status,
-    ).toBe(401);
-    expect(refreshed).toBe(0);
-    expect(conn.isConnected()).toBe(false);
+    expect(refreshed).toBe(1);
+    expect(stub.discoveryAttempts).toBe(2);
+    expect(conn.isConnected()).toBe(true);
   }, 20000);
 });
 

@@ -7,7 +7,7 @@
  * twice, once as a transport-shaped parameter and once as a capability atom.
  *
  * A credential whose way in IS a round trip does not need the connection to
- * arbitrate. The wire asks `authHeaders()` PER ATTEMPT, so a one-shot token is
+ * arbitrate. The wire authorizes PER ATTEMPT, so a one-shot token is
  * offered on the establishing call and withheld afterwards by the credential
  * itself, with nobody deciding anything.
  */
@@ -75,11 +75,13 @@ describe('a credential that does not', () => {
 
     const context = wire.mock.calls[0][0] as {
       baseUrl: string;
-      authHeaders: () => Promise<Record<string, string>>;
+      authorize: (headers: Record<string, string>) => Promise<void>;
       observe: unknown;
     };
     expect(context.baseUrl).toBe(config.url);
-    expect((await context.authHeaders()).Authorization).toBe('Basic dTpw');
+    const headers: Record<string, string> = {};
+    await context.authorize(headers);
+    expect(headers.Authorization).toBe('Basic dTpw');
     expect(typeof context.observe).toBe('function');
   });
 });

@@ -83,9 +83,10 @@ export class OnPremHttpTransport
     }
 
     try {
-      // Read once: a provider may answer differently on a second call, and one
-      // request must be built from one credential.
-      const auth = await context.authHeaders();
+      // Authorized once: a provider may answer differently on a second call,
+      // and one request must be built from one credential.
+      const auth: Record<string, string> = {};
+      await context.authorize(auth);
       await this.sendDetached({
         method: 'GET',
         url: `${context.baseUrl}${ICF_LOGOFF_PATH}`,

@@ -79,7 +79,7 @@ describe('a logoff still in flight when the next session opens', () => {
     // Stubbed at the CLIENT, not at send(): the defect lives in the dressing
     // send() does on its way out, so replacing send() would step over it.
     (transport as unknown as { instance: unknown }).instance = w.send;
-    // The window this is about: `close()` suspends on `authHeaders()`, and a
+    // The window this is about: `close()` suspends on `authorize()`, and a
     // provider that takes a moment is ordinary — a token provider checks expiry
     // and may go to the network. While it is suspended, the connection is
     // already free to connect again.

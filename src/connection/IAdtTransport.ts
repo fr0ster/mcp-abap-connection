@@ -14,6 +14,8 @@
  * mechanics.
  */
 
+import type { ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
+
 /** One request, in the terms every transport can honour. */
 export interface IAdtTransportRequest {
   method: string;
@@ -77,8 +79,20 @@ export interface IAdtTransportResponse {
 export interface IAdtSessionContext {
   /** The server, for a wire that addresses one. */
   baseUrl: string;
-  /** Read once per request: a provider may renew behind the call. */
-  authHeaders: () => Promise<Record<string, string>>;
+  /**
+   * Fill the credential into a request the wire itself originates — the CSRF
+   * fetch, the cloud preflight, the logoff. Asked per request, never held: a
+   * provider may renew behind the call. Throws `AuthRefusedError` when the
+   * credential will not authorize it; the request is then not sent.
+   */
+  authorize(headers: Record<string, string>): Promise<void>;
+  /**
+   * Called by the wire at each of its logons, before any request: the
+   * credential says what it brings — TLS material, logon parameters — and the
+   * target says whether the wire took it. Throws `AuthRefusedError` when the
+   * credential refuses the logon.
+   */
+  logon(target: ILogonTarget): Promise<void>;
   /** Anything the conversation carries — the ADT connection id, today. */
   extraHeaders?: Record<string, string>;
   /** Where to hand each answer, so the connection sees what the wire saw. */
