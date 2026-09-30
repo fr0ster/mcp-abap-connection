@@ -16,6 +16,7 @@ import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
+import { WireLogonError } from '../../connection/authErrors.js';
 import { cloudHttpTransport, onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
@@ -218,7 +219,10 @@ describe('a credential refused while establishing', () => {
   // establishSession calling connect(), which runs establishment as a joinable
   // transition — so the nested call joined the one already in flight, which was
   // itself, and waited forever.
-  it('surfaces the refusal instead of renewing behind the caller', async () => {
+  // Until `connect()` hands a refused logon to the provider, the wire's mark is
+  // what the caller gets: the 401 named as a refused logon, the wire's error
+  // kept as it arrived.
+  it('surfaces the refusal as the wire named it, instead of renewing behind the caller', async () => {
     let refreshed = 0;
     stub.rejectDiscovery = true;
 
@@ -240,18 +244,20 @@ describe('a credential refused while establishing', () => {
       null,
     );
 
-    // Generous on purpose: the wire retries the exchange before the refusal
-    // surfaces at all, so a tight race reports "hung" for a connection that was
-    // merely being patient.
     const outcome = await Promise.race([
       conn.connect().then(
         () => 'connected',
-        () => 'refused',
+        (error: unknown) => error,
       ),
       new Promise((r) => setTimeout(() => r('hung'), 15000)),
     ]);
 
-    expect(outcome).toBe('refused');
+    expect(outcome).toBeInstanceOf(WireLogonError);
+    expect((outcome as WireLogonError).status).toBe(401);
+    expect(
+      ((outcome as WireLogonError).cause as { response?: { status?: number } })
+        .response?.status,
+    ).toBe(401);
     expect(refreshed).toBe(0);
     expect(conn.isConnected()).toBe(false);
   }, 20000);

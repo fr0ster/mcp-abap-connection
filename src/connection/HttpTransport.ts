@@ -23,13 +23,15 @@ import { Agent, type AgentOptions } from 'node:https';
 import axios, { type AxiosInstance } from 'axios';
 import type { ILogger } from '../logger.js';
 import { mergeCookieHeaders } from '../utils/cookies.js';
+import { WireLogonError } from './authErrors.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
-import type {
-  IAdtEstablishContext,
-  IAdtSessionContext,
-  IAdtTransport,
-  IAdtTransportRequest,
-  IAdtTransportResponse,
+import {
+  type IAdtEstablishContext,
+  type IAdtSessionContext,
+  type IAdtTransport,
+  type IAdtTransportRequest,
+  type IAdtTransportResponse,
+  refusalOf,
 } from './IAdtTransport.js';
 import { isStatefulRequest, SESSION_TYPE_HEADER } from './statefulRequest.js';
 
@@ -295,7 +297,17 @@ export class HttpTransport implements IAdtTransport {
             // A refusal can still carry the cookies that matter.
             context.observe(response.headers);
             this.ingest(response.headers);
+          }
 
+          // A refused logon, named as one — after its cookies are in, and
+          // without a retry: asking again with the credential just refused
+          // tells the system nothing new. What to do about it is not the
+          // wire's to decide.
+          if (refusalOf(error)?.status === 401) {
+            throw new WireLogonError(error, 401);
+          }
+
+          if (response?.headers) {
             // …and the token itself. SAP answers 405 to a GET on some
             // endpoints and puts the token in the header anyway, and other
             // refusals carry one too. A retry would throw away a token the

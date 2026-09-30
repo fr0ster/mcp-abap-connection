@@ -222,7 +222,10 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     expect((conn as any).transport.csrfToken()).toBe('fresh-token');
   });
 
-  it('401 with cached token, retry also 401: original AxiosError propagates', async () => {
+  // The retry's 401 is what survives the wire's recovery, so it — not the
+  // first attempt's — is what the provider is asked about. Basic cannot renew
+  // a password, so its answer is final, in its own words.
+  it('401 with cached token, retry also 401: the retry 401 goes to the provider', async () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).transport.adoptCsrfToken('stale-token');
@@ -259,12 +262,20 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
         timeout: 30000,
         data: '<x/>',
       }),
-    ).rejects.toBe(originalError);
+    ).rejects.toMatchObject({
+      name: 'AuthRefusedError',
+      at: 'request',
+      refusal: { reason: 'the user or password was refused' },
+      cause: secondError,
+    });
 
     expect(mock).toHaveBeenCalledTimes(3);
   });
 
-  it('401 with cached token, CSRF refetch fails: original AxiosError propagates', async () => {
+  // A refetch that fails for its own reasons says nothing about the
+  // credential, so the 401 that started the retry is what survives the wire —
+  // and a surviving 401 is the provider's to answer.
+  it('401 with cached token, CSRF refetch fails: the original 401 goes to the provider', async () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).transport.adoptCsrfToken('stale-token');
@@ -292,7 +303,11 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
         timeout: 30000,
         data: '<x/>',
       }),
-    ).rejects.toBe(originalError);
+    ).rejects.toMatchObject({
+      name: 'AuthRefusedError',
+      at: 'request',
+      cause: originalError,
+    });
 
     expect(mock).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledTimes(1);

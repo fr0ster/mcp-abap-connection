@@ -12,10 +12,12 @@
  *     That is a decision with a human or a secret behind it, and it belongs to
  *     whoever owns the credential.
  *
- * The connection did neither, but it used to ARRANGE the first: on a 401 it
+ * The connection does neither. It used to ARRANGE the first: on a 401 it
  * called `renew()`, compared the header with the previous one, and rebuilt the
- * session if it had changed. That is the connection managing a lifetime it does
- * not own, and it is gone. A refusal surfaces.
+ * session if it had changed — the connection managing a lifetime it does not
+ * own. Now a 401 that survives the wire's own recovery is put to the provider
+ * through `rejected()`, and the provider decides: Ok buys one more attempt,
+ * and a refusal after that is the verdict, never a loop.
  */
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
@@ -30,11 +32,11 @@ const config: SapConfig = {
   client: '100',
 };
 
-/** A provider that would renew if anyone asked it to. Nobody does. */
+/** A provider that answers Ok to every rejection, as if it had renewed. */
 function refusedCredential() {
   const asked = { header: 0, renew: 0 };
-  // `rejected` is what asks a provider to renew; nothing calls it here, and the
-  // test is that nothing does. `authorize` counts the per-request reads.
+  // `rejected` is what asks a provider to renew; counted, so a test can see how
+  // often it was asked. `authorize` counts the per-request reads.
   const credential: IAuthProvider = credentialWriting({
     kind: 'token',
     authorization: () => {
@@ -92,18 +94,26 @@ function connected(credential: IAuthProvider) {
 }
 
 describe('a credential the server refuses', () => {
-  it('surfaces the refusal instead of renewing behind the caller', async () => {
+  it('asks the provider once, and a refusal after its Ok is the verdict', async () => {
     const { credential, asked } = refusedCredential();
     const { conn } = connected(credential);
     await conn.connect();
 
     await expect(
       conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
-    ).rejects.toMatchObject({ response: { status: 401 } });
+    ).rejects.toMatchObject({
+      name: 'AuthRefusedError',
+      refusal: {
+        reason:
+          'the credential was refused again after the provider renewed it',
+      },
+      cause: { response: { status: 401 } },
+    });
 
-    // The one assertion that matters: nothing here decided to get a new
-    // credential. Whether to is the caller's call, with what it knows.
-    expect(asked.renew).toBe(0);
+    // The one assertion that matters: the provider was asked once, and not
+    // again after the retry it bought was refused — asking again would invite
+    // a second renewal, and a server that refuses everything would loop.
+    expect(asked.renew).toBe(1);
   });
 
   it('leaves the connection usable, because the session is not what failed', async () => {

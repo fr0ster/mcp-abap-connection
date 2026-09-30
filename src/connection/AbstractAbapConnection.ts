@@ -27,7 +27,12 @@ import {
 import { isNetworkError } from '../utils/networkErrors.js';
 import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
-import { NO_CREDENTIAL_TO_RENEW } from './authErrors.js';
+import {
+  AuthRefusedError,
+  NO_CREDENTIAL_TO_RENEW,
+  REFUSED_AGAIN,
+  WireLogonError,
+} from './authErrors.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 import {
   type IAdtSessionContext,
@@ -69,6 +74,11 @@ import {
 function hasHeader(headers: Record<string, string>, name: string): boolean {
   const wanted = name.toLowerCase();
   return Object.keys(headers).some((key) => key.toLowerCase() === wanted);
+}
+
+/** A request's one credential retry (H5), spent by the first refusal it meets. */
+interface CredentialRenewal {
+  spent: boolean;
 }
 
 abstract class AbstractAbapConnection
@@ -949,24 +959,21 @@ abstract class AbstractAbapConnection
     // whether it belongs in front of one at all — is the wire's to say.
     const requestUrl = endpoint;
 
-    // Try to ensure CSRF token is available for POST/PUT/DELETE, but don't fail if it can't be fetched
-    // The retry logic will handle CSRF token errors automatically
-    if (
+    const mutation =
       normalizedMethod === 'POST' ||
       normalizedMethod === 'PUT' ||
-      normalizedMethod === 'DELETE'
-    ) {
-      if (!this.transport.csrfToken()) {
-        try {
-          await this.ensureWireReady();
-        } catch (error) {
-          // If CSRF token can't be fetched upfront, continue anyway
-          // The retry logic will handle CSRF token errors automatically
-          this.logger?.debug(
-            `Could not fetch CSRF token upfront, will retry on error: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
+      normalizedMethod === 'DELETE';
+
+    // One per request (H5): whichever of the upfront token fetch or a later
+    // rejection meets a refused credential first spends it, and a second
+    // refusal anywhere in the same request is the verdict.
+    const renewal: CredentialRenewal = { spent: false };
+
+    // Get the wire ready for a mutation before sending it. A failure of the
+    // exchange itself does not stop the request — the CSRF recovery below
+    // handles a token that is missing — but a refused credential does.
+    if (mutation && !this.transport.csrfToken()) {
+      await this.readyWireUpfront(renewal);
     }
 
     // Start with default Accept header
@@ -1018,18 +1025,14 @@ abstract class AbstractAbapConnection
     // neither. It travels as `stateful` on the request below, and each
     // transport expresses it its own way.
 
-    // Add auth headers (these MUST NOT be overridden)
-    Object.assign(requestHeaders, await this.getAuthHeaders());
+    // What the credential writes goes on last, so nothing overrides it, and
+    // is asked for again before every resend below.
+    await this.credentialHeaders(requestHeaders);
 
     // Read once: the wire is asked what it holds, and the same value is what
     // goes on the header.
     const presented = this.transport.csrfToken();
-    if (
-      (normalizedMethod === 'POST' ||
-        normalizedMethod === 'PUT' ||
-        normalizedMethod === 'DELETE') &&
-      presented
-    ) {
+    if (mutation && presented) {
       requestHeaders['x-csrf-token'] = presented;
     }
 
@@ -1090,11 +1093,7 @@ abstract class AbstractAbapConnection
     );
 
     try {
-      const response = await this.transport.send(requestConfig);
-      this.observeResponse(
-        response.headers as Record<string, unknown>,
-        lease.generation,
-      );
+      const response = await this.sendObserved<T, D>(requestConfig, lease);
 
       this.logger?.debug(`Request succeeded with status ${response.status}`, {
         type: 'REQUEST_SUCCESS',
@@ -1103,219 +1102,382 @@ abstract class AbstractAbapConnection
         method: normalizedMethod,
       });
 
-      return response as unknown as IAdtWireResponse<T, D>;
+      return response;
     } catch (error) {
-      // FENCE FIRST, before anything reads or writes shared state.
-      //
-      // Fencing observeResponse() alone was not enough, and the gap was wide:
-      // everything below acts on this connection, not on the request. A late
-      // 400 "session not found" would call raiseSessionLost() and tear down the
-      // healthy session established since; a late 401/403 would call
-      // invalidateSession(), write a fresh CSRF token, and RETRY — replaying a
-      // mutation from a dead session inside the live one.
-      //
-      // A stale request gets its error back and nothing else happens.
-      if (!this.lifecycle.isCurrent(lease)) {
-        this.logger?.debug(
-          'A request from a previous session failed; its recovery is fenced',
-        );
-        throw error;
+      let survived: unknown;
+      try {
+        return await this.recoverOnWire<T, D>(error, requestConfig, lease);
+      } catch (failure) {
+        survived = failure;
       }
+      return await this.answerCredentialFailure<T, D>(
+        survived,
+        requestConfig,
+        lease,
+        renewal,
+      );
+    }
+  }
 
-      const errorDetails: {
-        type: string;
-        message: string;
-        url: string;
-        method: string;
-        status?: number;
-        data?: string;
-      } = {
-        type: 'REQUEST_ERROR',
-        message: error instanceof Error ? error.message : String(error),
-        url: requestUrl,
-        method: normalizedMethod,
-        status: refusalOf(error)?.status,
-        data: undefined,
-      };
+  /** One attempt: sent, and its response folded into the session. */
+  private async sendObserved<T, D>(
+    requestConfig: IAdtTransportRequest,
+    lease: Pick<RequestLease, 'generation'>,
+  ): Promise<IAdtWireResponse<T, D>> {
+    const response = await this.transport.send(requestConfig);
+    this.observeResponse(
+      response.headers as Record<string, unknown>,
+      lease.generation,
+    );
+    return response as unknown as IAdtWireResponse<T, D>;
+  }
 
-      const refusal = refusalOf(error);
-      if (refusal) {
-        errorDetails.data =
-          typeof refusal.data === 'string'
-            ? refusal.data.slice(0, 200)
-            : JSON.stringify(refusal.data).slice(0, 200);
-
-        // Every wire's refusal, not only axios's. A response the connection
-        // never observed is a session replacement it never noticed.
-        this.observeResponse(
-          refusal.headers as Record<string, unknown> | undefined,
-          lease.generation,
-        );
-      }
-
-      // The server telling us the session is gone is invisible to the identity
-      // comparison: the cookie, and therefore the fingerprint, is unchanged.
-      // Only the state can see it, and it must say so at once — otherwise a
-      // later unlockAll() finds a match and unlocks over a dead session.
-      if (this.isDeadSessionResponse(error)) {
-        this.raiseSessionLost(
-          'the server reports the session no longer exists',
-        );
-        // No internal retry: a blind retry here is what produced further locks
-        // in the field. The caller decides.
-        throw sessionError(
-          ADT_SESSION_ERROR.SESSION_REPLACED,
-          'The SAP session no longer exists; any lock handle from it is dead',
-        );
-      }
-
-      // Check if this is a network error (connection refused, timeout, DNS, etc.)
-      // Don't retry for network errors - these indicate infrastructure/VPN issues
-      const networkError = isNetworkError(error);
-
-      if (networkError) {
-        this.logger?.error(
-          `Network error - cannot connect to SAP system: ${errorDetails.message}`,
-          errorDetails,
-        );
-        throw error;
-      }
-
-      // Log 404 as debug (common for existence checks), other errors as error
-      if (errorDetails.status === 404) {
-        this.logger?.debug(errorDetails.message, errorDetails);
-      } else {
-        this.logger?.error(errorDetails.message, errorDetails);
-      }
-
-      // The "login-form 401": SAP refused a mutation while we hold a cached CSRF
-      // token, so the token and the session it is bound to are dead and must be
-      // discarded before the retry.
-      //
-      // These retries cure the session. A 401 that survives them is the
-      // credential's, not the session's.
-      const isCachedTokenStale =
-        (normalizedMethod === 'POST' ||
-          normalizedMethod === 'PUT' ||
-          normalizedMethod === 'DELETE') &&
-        refusalOf(error)?.status === 401 &&
-        this.getCsrfToken() !== null;
-
-      // Retry logic for CSRF token errors (403 with CSRF message) and the
-      // login-form 401 pattern.
-      if (this.shouldRetryCsrf(error, normalizedMethod) || isCachedTokenStale) {
-        this.logger?.debug(
-          isCachedTokenStale
-            ? 'Stale CSRF token / SAP session — invalidating and retrying'
-            : 'CSRF token validation failed, fetching new token and retrying request',
-          {
-            url: requestUrl,
-            method: normalizedMethod,
-          },
-        );
-
-        if (isCachedTokenStale) {
-          this.invalidateSession();
-          delete requestHeaders.Cookie;
-          delete requestHeaders.cookie;
-        }
-
-        try {
-          this.setCsrfToken(
-            await this.fetchCsrfToken(requestUrl, 5, 2000, lease.generation),
-          );
-          const refreshedToken = this.getCsrfToken();
-          if (refreshedToken) {
-            requestHeaders['x-csrf-token'] = refreshedToken;
-          }
-          const refreshedCookies = this.getCookies();
-          if (refreshedCookies) {
-            requestHeaders.Cookie = refreshedCookies;
-          }
-
-          const retryResponse = await this.transport.send(requestConfig);
-          this.observeResponse(
-            retryResponse.headers as Record<string, unknown>,
-            lease.generation,
-          );
-
-          return retryResponse as unknown as IAdtWireResponse<T, D>;
-        } catch (retryError) {
-          // A session verdict outranks the error that started the retry: the
-          // caller can retry a 403 itself, but it cannot discover that its lock
-          // handle is dead from a 403.
-          if (this.isSessionVerdict(retryError)) {
-            throw retryError;
-          }
-          this.logger?.debug(
-            `CSRF retry failed; rethrowing original error: ${
-              retryError instanceof Error
-                ? retryError.message
-                : String(retryError)
-            }`,
-          );
-          throw error;
-        }
-      }
-
-      // A 401 on a GET where cookies have since arrived: the first request had
-      // none, and the session they name is what the retry needs. Guarded below
-      // on actually holding some, so a wire that issues no cookies — RFC —
-      // never takes it.
-      if (refusalOf(error)?.status === 401 && normalizedMethod === 'GET') {
-        // If we already have cookies from error response, retry immediately
-        const afterError = this.transport.cookies();
-        if (afterError) {
-          this.logger?.debug(
-            `401 on GET request, retrying with cookies from error response`,
-          );
-          requestHeaders.Cookie = afterError;
-
-          const retryResponse = await this.transport.send(requestConfig);
-          this.observeResponse(
-            retryResponse.headers as Record<string, unknown>,
-            lease.generation,
-          );
-
-          return retryResponse as unknown as IAdtWireResponse<T, D>;
-        }
-
-        // If no cookies, try to get them via CSRF token fetch
-        this.logger?.debug(
-          `401 on GET request, attempting to get cookies via CSRF token fetch`,
-        );
-        try {
-          // Try to get CSRF token (this will also get cookies)
-          this.setCsrfToken(
-            await this.fetchCsrfToken(requestUrl, 3, 1000, lease.generation),
-          );
-          const afterCsrf = this.transport.cookies();
-          if (afterCsrf) {
-            requestHeaders.Cookie = afterCsrf;
-            this.logger?.debug(
-              `Retrying GET request with cookies from CSRF fetch`,
-            );
-
-            const retryResponse = await this.transport.send(requestConfig);
-            this.observeResponse(
-              retryResponse.headers as Record<string, unknown>,
-              lease.generation,
-            );
-
-            return retryResponse as unknown as IAdtWireResponse<T, D>;
-          }
-        } catch (csrfError) {
-          if (this.isSessionVerdict(csrfError)) {
-            throw csrfError;
-          }
-          this.logger?.debug(
-            `Failed to get CSRF token for 401 retry: ${csrfError instanceof Error ? csrfError.message : String(csrfError)}`,
-          );
-          // Fall through to throw original error
-        }
-      }
-
+  /**
+   * The wire's own recovery from a failed attempt: the session faults it can
+   * cure — a stale CSRF token, a login-form 401 on a mutation, a GET 401 that
+   * cookies answer — and the verdicts it must not hide.
+   *
+   * Runs before anything asks the credential, because it cures session
+   * faults, not credential ones: a stale CSRF token under Basic must not
+   * become "the user or password was refused". What it cannot cure it throws,
+   * and a credential failure among that goes on to the provider.
+   */
+  private async recoverOnWire<T, D>(
+    error: unknown,
+    requestConfig: IAdtTransportRequest,
+    lease: Pick<RequestLease, 'generation'>,
+  ): Promise<IAdtWireResponse<T, D>> {
+    const requestUrl = requestConfig.url;
+    const normalizedMethod = requestConfig.method;
+    const requestHeaders = requestConfig.headers as Record<string, string>;
+    // FENCE FIRST, before anything reads or writes shared state.
+    //
+    // Fencing observeResponse() alone was not enough, and the gap was wide:
+    // everything below acts on this connection, not on the request. A late
+    // 400 "session not found" would call raiseSessionLost() and tear down the
+    // healthy session established since; a late 401/403 would call
+    // invalidateSession(), write a fresh CSRF token, and RETRY — replaying a
+    // mutation from a dead session inside the live one.
+    //
+    // A stale request gets its error back and nothing else happens.
+    if (!this.lifecycle.isCurrent(lease)) {
+      this.logger?.debug(
+        'A request from a previous session failed; its recovery is fenced',
+      );
       throw error;
+    }
+
+    const errorDetails: {
+      type: string;
+      message: string;
+      url: string;
+      method: string;
+      status?: number;
+      data?: string;
+    } = {
+      type: 'REQUEST_ERROR',
+      message: error instanceof Error ? error.message : String(error),
+      url: requestUrl,
+      method: normalizedMethod,
+      status: refusalOf(error)?.status,
+      data: undefined,
+    };
+
+    const refusal = refusalOf(error);
+    if (refusal) {
+      errorDetails.data =
+        typeof refusal.data === 'string'
+          ? refusal.data.slice(0, 200)
+          : JSON.stringify(refusal.data).slice(0, 200);
+
+      // Every wire's refusal, not only axios's. A response the connection
+      // never observed is a session replacement it never noticed.
+      this.observeResponse(
+        refusal.headers as Record<string, unknown> | undefined,
+        lease.generation,
+      );
+    }
+
+    // The server telling us the session is gone is invisible to the identity
+    // comparison: the cookie, and therefore the fingerprint, is unchanged.
+    // Only the state can see it, and it must say so at once — otherwise a
+    // later unlockAll() finds a match and unlocks over a dead session.
+    if (this.isDeadSessionResponse(error)) {
+      this.raiseSessionLost('the server reports the session no longer exists');
+      // No internal retry: a blind retry here is what produced further locks
+      // in the field. The caller decides.
+      throw sessionError(
+        ADT_SESSION_ERROR.SESSION_REPLACED,
+        'The SAP session no longer exists; any lock handle from it is dead',
+      );
+    }
+
+    // Check if this is a network error (connection refused, timeout, DNS, etc.)
+    // Don't retry for network errors - these indicate infrastructure/VPN issues
+    const networkError = isNetworkError(error);
+
+    if (networkError) {
+      this.logger?.error(
+        `Network error - cannot connect to SAP system: ${errorDetails.message}`,
+        errorDetails,
+      );
+      throw error;
+    }
+
+    // Log 404 as debug (common for existence checks), other errors as error
+    if (errorDetails.status === 404) {
+      this.logger?.debug(errorDetails.message, errorDetails);
+    } else {
+      this.logger?.error(errorDetails.message, errorDetails);
+    }
+
+    // The "login-form 401": SAP refused a mutation while we hold a cached CSRF
+    // token, so the token and the session it is bound to are dead and must be
+    // discarded before the retry.
+    //
+    // These retries cure the session. A 401 that survives them is the
+    // credential's, not the session's.
+    const isCachedTokenStale =
+      (normalizedMethod === 'POST' ||
+        normalizedMethod === 'PUT' ||
+        normalizedMethod === 'DELETE') &&
+      refusalOf(error)?.status === 401 &&
+      this.getCsrfToken() !== null;
+
+    // Retry logic for CSRF token errors (403 with CSRF message) and the
+    // login-form 401 pattern.
+    if (this.shouldRetryCsrf(error, normalizedMethod) || isCachedTokenStale) {
+      this.logger?.debug(
+        isCachedTokenStale
+          ? 'Stale CSRF token / SAP session — invalidating and retrying'
+          : 'CSRF token validation failed, fetching new token and retrying request',
+        {
+          url: requestUrl,
+          method: normalizedMethod,
+        },
+      );
+
+      if (isCachedTokenStale) {
+        this.invalidateSession();
+        delete requestHeaders.Cookie;
+        delete requestHeaders.cookie;
+      }
+
+      try {
+        this.setCsrfToken(
+          await this.fetchCsrfToken(requestUrl, 5, 2000, lease.generation),
+        );
+        const refreshedToken = this.getCsrfToken();
+        if (refreshedToken) {
+          requestHeaders['x-csrf-token'] = refreshedToken;
+        }
+        const refreshedCookies = this.getCookies();
+        if (refreshedCookies) {
+          requestHeaders.Cookie = refreshedCookies;
+        }
+
+        // Re-authorized: a provider may have renewed since the first attempt.
+        await this.credentialHeaders(requestHeaders);
+        return await this.sendObserved<T, D>(requestConfig, lease);
+      } catch (retryError) {
+        // A session verdict outranks the error that started the retry: the
+        // caller can retry a 403 itself, but it cannot discover that its lock
+        // handle is dead from a 403. So does the credential's failure, which
+        // the 403 would hide from the provider.
+        if (this.outranksOriginal(retryError)) {
+          throw retryError;
+        }
+        this.logger?.debug(
+          `CSRF retry failed; rethrowing original error: ${
+            retryError instanceof Error
+              ? retryError.message
+              : String(retryError)
+          }`,
+        );
+        throw error;
+      }
+    }
+
+    // A 401 on a GET where cookies have since arrived: the first request had
+    // none, and the session they name is what the retry needs. Guarded below
+    // on actually holding some, so a wire that issues no cookies — RFC —
+    // never takes it.
+    if (refusalOf(error)?.status === 401 && normalizedMethod === 'GET') {
+      // If we already have cookies from error response, retry immediately
+      const afterError = this.transport.cookies();
+      if (afterError) {
+        this.logger?.debug(
+          `401 on GET request, retrying with cookies from error response`,
+        );
+        requestHeaders.Cookie = afterError;
+
+        await this.credentialHeaders(requestHeaders);
+        return await this.sendObserved<T, D>(requestConfig, lease);
+      }
+
+      // If no cookies, try to get them via CSRF token fetch
+      this.logger?.debug(
+        `401 on GET request, attempting to get cookies via CSRF token fetch`,
+      );
+      try {
+        // Try to get CSRF token (this will also get cookies)
+        this.setCsrfToken(
+          await this.fetchCsrfToken(requestUrl, 3, 1000, lease.generation),
+        );
+        const afterCsrf = this.transport.cookies();
+        if (afterCsrf) {
+          requestHeaders.Cookie = afterCsrf;
+          this.logger?.debug(
+            `Retrying GET request with cookies from CSRF fetch`,
+          );
+
+          await this.credentialHeaders(requestHeaders);
+          return await this.sendObserved<T, D>(requestConfig, lease);
+        }
+      } catch (csrfError) {
+        // Swallowed, unless it says more than the 401 that started this —
+        // a session verdict, or the credential's failure.
+        if (this.outranksOriginal(csrfError)) {
+          throw csrfError;
+        }
+        this.logger?.debug(
+          `Failed to get CSRF token for 401 retry: ${csrfError instanceof Error ? csrfError.message : String(csrfError)}`,
+        );
+        // Fall through to throw original error
+      }
+    }
+
+    throw error;
+  }
+
+  /**
+   * What reaches the provider: a failure the wire's recovery could not cure
+   * and that is the credential's — a refused logon, or a 401 on the request.
+   * Everything else is thrown as it is.
+   *
+   * Ok buys one more attempt on the same lease, re-authorized. After a refused
+   * logon the wire has no token, so it logs on anew first — its token dropped
+   * and earned again, nothing on RFC — and the new token and cookies go onto
+   * the request. The logon and the resend share the request's one retry: a
+   * credential failure in either is the verdict.
+   */
+  private async answerCredentialFailure<T, D>(
+    failure: unknown,
+    requestConfig: IAdtTransportRequest,
+    lease: Pick<RequestLease, 'generation'>,
+    renewal: CredentialRenewal,
+  ): Promise<IAdtWireResponse<T, D>> {
+    const rejection = this.credentialRejection(failure);
+    // A request from a previous session asks nobody anything: its recovery is
+    // fenced, and so is the credential's.
+    if (!rejection || !this.lifecycle.isCurrent(lease)) throw failure;
+
+    await this.renewCredential(rejection, renewal);
+    if (!this.lifecycle.isCurrent(lease)) throw failure;
+
+    const requestHeaders = requestConfig.headers as Record<string, string>;
+    try {
+      if (rejection.at === 'logon') {
+        this.transport.adoptCsrfToken(null);
+        await this.ensureWireReady(lease.generation);
+        const token = this.transport.csrfToken();
+        if (token && ['POST', 'PUT', 'DELETE'].includes(requestConfig.method)) {
+          requestHeaders['x-csrf-token'] = token;
+        }
+        const cookies = this.transport.cookies();
+        if (cookies) requestHeaders.Cookie = cookies;
+      }
+      await this.credentialHeaders(requestHeaders);
+      return await this.sendObserved<T, D>(requestConfig, lease);
+    } catch (again) {
+      const refusedAgain = this.credentialRejection(again);
+      if (!refusedAgain) throw again;
+      throw new AuthRefusedError(
+        REFUSED_AGAIN,
+        refusedAgain.at,
+        refusedAgain.error,
+      );
+    }
+  }
+
+  /**
+   * The provider's answer to a refusal, within the request's one retry.
+   *
+   * Returns when it renewed. Its Oops is thrown in its own words; a refusal
+   * after the retry was spent is the verdict, and the provider is not asked
+   * again — asking would invite a second renewal.
+   */
+  private async renewCredential(
+    rejection: IAuthRejection,
+    renewal: CredentialRenewal,
+  ): Promise<void> {
+    if (renewal.spent) {
+      throw new AuthRefusedError(REFUSED_AGAIN, rejection.at, rejection.error);
+    }
+    renewal.spent = true;
+    const outcome = await this.credentialRejected(rejection);
+    if (!outcome.ok) {
+      throw new AuthRefusedError(
+        outcome.refusal,
+        rejection.at,
+        rejection.error,
+      );
+    }
+  }
+
+  /**
+   * Whether a failure is the credential's to answer, and how to tell the
+   * provider: a wire's refused logon, with its raw error, or a 401 on the
+   * request. A 403 and every other status are not — the credential got in,
+   * and what it may do is not something renewing it changes.
+   */
+  private credentialRejection(error: unknown): IAuthRejection | null {
+    if (error instanceof WireLogonError) {
+      return { at: 'logon', status: error.status, error: error.cause };
+    }
+    if (refusalOf(error)?.status === 401) {
+      return { at: 'request', status: 401, error };
+    }
+    return null;
+  }
+
+  /**
+   * Whether a failure of the wire's retry says more than the error that
+   * started it. A session verdict does, and so does the credential's: a
+   * provider's refusal, a refused logon, a 401 — the original 403 would hide
+   * exactly what the caller or the provider has to answer.
+   */
+  private outranksOriginal(retryError: unknown): boolean {
+    return (
+      this.isSessionVerdict(retryError) ||
+      retryError instanceof AuthRefusedError ||
+      this.credentialRejection(retryError) !== null
+    );
+  }
+
+  /**
+   * The token fetch before a mutation. Its failures are swallowed as they
+   * always were — the CSRF recovery handles a missing token — except the
+   * credential's: the provider's refusal ends the request before anything is
+   * sent, and a refused logon goes to the provider, whose Ok buys one more
+   * fetch within the request's one retry.
+   */
+  private async readyWireUpfront(renewal: CredentialRenewal): Promise<void> {
+    for (;;) {
+      try {
+        await this.ensureWireReady();
+        return;
+      } catch (error) {
+        if (error instanceof AuthRefusedError) throw error;
+        if (!(error instanceof WireLogonError)) {
+          this.logger?.debug(
+            `Could not fetch CSRF token upfront, will retry on error: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return;
+        }
+        const rejection = this.credentialRejection(error) as IAuthRejection;
+        await this.renewCredential(rejection, renewal);
+      }
     }
   }
 
@@ -1348,7 +1510,7 @@ abstract class AbstractAbapConnection
       retries: retryCount,
       retryDelayMs: retryDelay,
       timeoutMs: getTimeout('csrf'),
-      isFatal: (error) => this.isSessionVerdict(error),
+      isFatal: (error) => this.endsTheExchange(error),
     });
 
     const token = this.transport.csrfToken();
@@ -1397,15 +1559,27 @@ abstract class AbstractAbapConnection
    * raised `No CSRF token in response headers` before every write — swallowed
    * by the caller, but logged as an error and repeated on the next one.
    */
-  private async ensureWireReady(): Promise<void> {
+  private async ensureWireReady(
+    /** Fences the response effects; omitted before the request has a failure to recover. */
+    generation?: number,
+  ): Promise<void> {
     await this.transport.establish({
       baseUrl: this.baseUrl,
       authHeaders: () => this.getAuthHeaders(),
       extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
       observe: (headers) =>
-        this.observeResponse(headers as Record<string, unknown>),
-      isFatal: (error) => this.isSessionVerdict(error),
+        this.observeResponse(headers as Record<string, unknown>, generation),
+      isFatal: (error) => this.endsTheExchange(error),
     });
+  }
+
+  /**
+   * What stops a token exchange at once, past its retries: a session verdict,
+   * or the provider's refusal to authorize it — asking again would only ask
+   * the provider again.
+   */
+  private endsTheExchange(error: unknown): boolean {
+    return this.isSessionVerdict(error) || error instanceof AuthRefusedError;
   }
 
   /**
