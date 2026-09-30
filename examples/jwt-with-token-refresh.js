@@ -4,11 +4,12 @@
  * This example demonstrates how to create a cloud connection with
  * automatic token refresh using ITokenRefresher from auth-broker.
  *
- * When a **401** occurs, the connection automatically:
+ * When a **401** survives the wire's own session recovery, the connection
+ * puts it to the provider (`rejected`). `TokenAuthProvider.from` then:
  * 1. Calls tokenRefresher.refreshToken() to get a new token
- * 2. Updates internal token state
- * 3. Re-establishes the SAP session, which the new credential cannot inherit
- * 4. Retries the failed request
+ * 2. Answers Ok, so the connection authorizes the request again
+ * 3. The request is sent exactly once more; a second refusal is an
+ *    AuthRefusedError carrying the provider's words
  *
  * A **403** is left alone. It means the server authenticated you and refused
  * the action anyway — an authorization gap, not an expired credential — so it
@@ -19,8 +20,8 @@
 const {
   CloudHttpTransport,
   AdtCloudConnector,
-  TokenAuthProvider,
 } = require('@mcp-abap-adt/connection');
+const { TokenAuthProvider } = require('@mcp-abap-adt/auth-providers');
 // const { AuthBroker } = require('@mcp-abap-adt/auth-broker');
 
 // Simple logger
@@ -66,12 +67,12 @@ async function main() {
     jwtToken: initialToken,
   };
 
-  // The refresher IS the credential: `TokenAuthProvider` asks it for a token on
-  // every request, so a provider that renews on expiry renews without anyone
-  // here deciding to. A bare string would be a token with nothing behind it.
+  // The refresher IS the credential: the provider asks it for a token before
+  // every attempt and renews when the system refuses one. `.fixed(token)` would
+  // be a token with nothing behind it.
   const connection = new AdtCloudConnector(
     config,
-    new TokenAuthProvider(tokenRefresher),
+    TokenAuthProvider.from(tokenRefresher),
     new CloudHttpTransport(() => ({}), console, {
       client: config.client,
       baseUrl: config.url,
@@ -82,12 +83,10 @@ async function main() {
   try {
     await connection.connect();
 
-    // This request will automatically refresh the token if a 401 occurs. A
-    // 403 arrives as-is — read err.response.status and err.response.data to
-    // see which authorization object the server named. Note
-    // that a refresh replaces the SAP session: with a lock window open the
-    // request would fail with ADT_SESSION_REPLACED rather than continue on a
-    // session your lock is not in.
+    // If a 401 survives the session recovery, the provider is asked once and
+    // the request is retried once. A 403 arrives as-is — read
+    // err.response.status and err.response.data to see which authorization
+    // object the server named.
     const response = await connection.makeAdtRequest({
       method: 'GET',
       url: '/sap/bc/adt/discovery',

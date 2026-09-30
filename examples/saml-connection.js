@@ -8,8 +8,8 @@
 const {
   OnPremHttpTransport,
   AdtOnPremConnector,
-  SamlAuthProvider,
 } = require('@mcp-abap-adt/connection');
+const { SamlAuthProvider } = require('@mcp-abap-adt/auth-providers');
 
 async function main() {
   const config = {

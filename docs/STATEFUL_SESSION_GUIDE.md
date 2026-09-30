@@ -104,10 +104,10 @@ const logger = console;
 ```ts
 import {
   AdtOnPremConnector,
-  BasicAuthProvider,
   OnPremHttpTransport,
   getTimeout,
 } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
 const connection = new AdtOnPremConnector(
   config,
@@ -135,7 +135,8 @@ connection.setSessionType('stateless');
 ## Knowing Which Session You Are In
 
 ```ts
-import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
 // getSessionIdentity() is on the HTTP connection classes, NOT on the
 // bare IAbapConnection type a caller may hand you.
@@ -170,13 +171,14 @@ Every ADT request issued through `makeAdtRequest` automatically:
 
 This logic is transparent to callers (Builders, handlers, CLI scripts).
 
-On a JWT connection a 401 is **not** handled here at all, and that is the point: since 6.0.0 the
-refusal surfaces and the session is left alone. Nothing replaces the credential behind you, so
-nothing replaces the SAP session behind you either — a lock window is not torn down by an
-authentication answer. A 403 never did this: it is an authorization answer, not a credential one.
+A 401 that survives the wire's own CSRF recovery is put to the provider (`rejected`). On Ok the
+request is sent once more on the same session, under the same lease and generation as the attempt
+it repeats; if the provider says no, or the retry is refused too, the caller gets an
+`AuthRefusedError` and the session is left alone — a lock window is not torn down by an
+authentication answer. A 403 is an authorization answer, not a credential one: it never goes to the
+provider. See [When the credential is refused](./USAGE.md#when-the-credential-is-refused).
 
-If you decide the refusal meant a stale token, `renew()` and reconnect are yours to call — and a
-reconnect is a NEW session, so do it outside a lock window rather than inside one.
+A reconnect is a NEW session, so do it outside a lock window rather than inside one.
 
 **Wait for the goodbye before opening the next one.** `disconnect()` dispatches the logoff and does
 not await it, so a reconnect otherwise opens the next session while the previous one's goodbye is
@@ -326,7 +328,8 @@ you get by asking — `getSessionIdentity()` for which session you are in, and
   through the `ISessionLifecycleAware` atom:
 
   ```ts
-import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
   const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
   await connection.disconnect(); // ends the session on the server, then clears

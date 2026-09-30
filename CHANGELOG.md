@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [10.0.0] - 2026-09-30
+
+**The connection is the process on the `IAuthProvider` 3.0 contract.** It no
+longer knows what a credential is: it asks the provider before every attempt,
+puts a refusal the wire could not cure to the provider, and gives the caller the
+provider's own words when the answer is no. The credential providers left with
+it. See [`docs/MIGRATION-10.0.md`](docs/MIGRATION-10.0.md).
+
+### Breaking
+
+- **`@mcp-abap-adt/interfaces-auth` `^3.0.0`.** The connection calls `prepare`
+  once, before the wire opens (it used to run after `transport.open()`);
+  `establish` at each logon; `authorize` before every attempt of every request,
+  including the CSRF fetch, the cloud preflight, the logoff and each resend; and
+  `rejected` when the system said no. A provider written against 2.x does not
+  type-check.
+- **`IAdtSessionContext.authHeaders` is replaced by `authorize(headers)` and
+  `logon(target)`.** A custom `IAdtTransport` fills a request it originates with
+  `context.authorize(headers)` and calls `context.logon(target)` at each of its
+  logons.
+- **A refusal reaches the caller as `AuthRefusedError { refusal, at, cause }`,
+  in the provider's words.** A 401 that survives the wire's own session recovery,
+  or a logon the system refused, goes to `rejected()`; on Ok the request is sent
+  exactly once more, and a second refusal is the verdict (the fixed reason "the
+  credential was refused again after the provider renewed it"). A 403 never goes
+  to the provider. A provider that throws is a refusal with the reason "the
+  credential provider failed".
+- **RFC: the factory takes the logon parameters.** `RfcTransport`'s first
+  argument is `(logon) => IRfcConversation`, and every conversation it opens —
+  the session's own and each per-call one — gets the parameters the provider
+  wrote. `rfcConversationFrom(config)` returns such a factory. `rfcParamsFrom`
+  returns the address only and no longer reads `username` / `password`;
+  `RfcConnectionParams` loses `user` and `passwd`. A provider that writes no
+  logon parameters (a bearer token) cannot log on over RFC.
+- **HTTP takes TLS material at logon.** The agent is built from
+  `{ rejectUnauthorized, ...agentOptions(), ...material }`; the constructor's
+  `agentOptions` stays for `ca` and `rejectUnauthorized`. A later logon offering
+  different material replaces the client; the cookie jar and CSRF token stay.
+  HTTP refuses logon parameters.
+- **A failed RFC open is thrown as `WireLogonError`** carrying the raw
+  `sap-rfc-lite` error as `cause`, not wrapped in `Failed to open RFC
+  connection: …`.
+
+### Added
+
+- `AuthRefusedError` and `WireLogonError`, exported. `WireLogonError { cause,
+  status? }` is the mark a wire puts on a failure that is a refused logon, so a
+  consumer's own wire can say the same thing; it decides nothing.
+- `AuthRefusalMoment` (`'prepare' | 'logon' | 'request'`), exported.
+- A 401 while HTTP establishes its session is thrown at once as
+  `WireLogonError { status: 401 }` and is not retried by the establishment's own
+  retry loop.
+- `docs/MIGRATION-10.0.md`.
+
+### Removed
+
+- **`BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`,
+  `CertificateAuthProvider` and `FileCertificateMaterialLoader`** — they are in
+  `@mcp-abap-adt/auth-providers` ^5.0.1, which this package depends on for
+  tests only. `TokenAuthProvider` is built with `.fixed(token)` or
+  `.from(refresher)`; `new TokenAuthProvider(x)` is gone.
+- `CredentialAbapConnection.getHttpsAgentOptions`, `buildAuthorizationHeader`
+  and `isUnauthorized`; `AbstractAbapConnection.recoverSession` and
+  `discardSession`; `src/utils/tokenRefresh.ts` and `src/auth/ntlm.ts` — nothing
+  read them.
+
+### Fixed
+
+- **A stale CSRF token under Basic is no longer read as a refused password.**
+  The wire's session recovery runs first; only a 401 that survives it reaches
+  the provider.
+- **Every resend is re-authorized.** The recovery resends used the
+  `Authorization` read once before the first attempt; a renewed token was never
+  on them.
+- **The wire's recovery no longer hides a credential failure.** A failed retry
+  of a CSRF recovery, a swallowed token fetch, and the upfront token fetch
+  before a mutation used to throw the original error or send the mutation
+  anyway; an `AuthRefusedError`, a `WireLogonError` or a surviving 401 goes on
+  to the provider instead. One credential retry per request, whichever comes
+  first.
+- **Documentation.** The README, `docs/USAGE.md` and the other guides no longer
+  import providers from this package, and no longer say that a 401 surfaces with
+  nothing renewing behind it or that `renew()` on an `IRenewableCredential` is
+  the seam. Concurrent requests meeting one expired token each call
+  `rejected()`; providers that renew share one renewal in flight.
+
 ## [9.4.2] - 2026-09-27
 
 ### Changed
@@ -1924,6 +2010,7 @@ const connection = createAbapConnection(config, logger);
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
 [Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.2...HEAD
+[10.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.2...v10.0.0
 [9.4.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.1...v9.4.2
 [9.4.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.4.0...v9.4.1
 [9.4.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v9.3.4...v9.4.0

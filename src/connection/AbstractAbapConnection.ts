@@ -338,17 +338,10 @@ abstract class AbstractAbapConnection
   /**
    * Gets the credential ready before anything is sent.
    *
-   * A no-op for the auth types whose credential is already in hand — basic
-   * builds a header from the configuration, JWT carries a token it was given.
-   * It exists for the ones that have to fetch or load theirs, because the
-   * preflight now runs BEFORE `establishSession()` and needs a credential to
-   * go out with: a certificate connection reads its material there, and
-   * without this the preflight throws `certificate material not loaded` while
-   * assembling the transport — before a single request is made, on every
-   * system, cloud or on-prem.
-   *
-   * Must be idempotent: `establishSession()` may prepare the same credential
-   * again, and does.
+   * `connect()` calls it once, before the wire opens, so that a credential
+   * which cannot get ready sends nothing and the wire's logon has something to
+   * bring. Nothing prepares again afterwards: not the preflight, not
+   * `establishSession()`, not the one more logon a refused one is given.
    */
   protected async prepareCredential(): Promise<void> {}
 
@@ -570,8 +563,8 @@ abstract class AbstractAbapConnection
    * markConnected() would then clear the teardown state and hand back a session
    * the caller had already discarded.
    *
-   * Shared by connect() and the recovery paths rather than written twice —
-   * the two drifted apart once already, and a third caller would drift again.
+   * Shared by connect() and its one more attempt after a refused logon rather
+   * than written twice — the two would drift apart, as they did once before.
    */
   private async establishAndCommit(baselineEpoch: number): Promise<void> {
     if (this.lifecycle.teardownEpoch !== baselineEpoch) {

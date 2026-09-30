@@ -7,14 +7,14 @@ This package is **one component of the `@mcp-abap-adt/*` family**. Each package 
 - **HTTP transport to SAP ADT** — request dispatch, CSRF token fetch, cookie and session handling, stateful/stateless session control.
 - **The session lifecycle** — establishing a session and refusing to work without one, tearing it down without cutting in-flight requests, tracking which SAP session it is talking to, and telling the caller when that session is lost while a lock is held. See [USAGE.md — Session Lifecycle](./USAGE.md#session-lifecycle).
 - **RFC transport to on-premise SAP** — via `@mcp-abap-adt/sap-rfc-lite` + NW RFC SDK, calling `SADT_REST_RFC_ENDPOINT` (the same FM Eclipse ADT uses on on-prem).
-- **Applying credentials** handed to it by the caller (Basic user/password, Bearer JWT, SAML session cookies).
+- **Carrying what an `IAuthProvider` hands it** (Basic user/password, Bearer JWT, SAML session cookies, TLS material, RFC logon parameters), and asking the provider again once when the system refuses it. The providers themselves are in `@mcp-abap-adt/auth-providers`.
 
 ## What this package does NOT do, and where it lives instead
 
 | Concern | Belongs in |
 |---|---|
 | Token acquisition (SAML/OAuth2 flows, browser login, PKCE) | `@mcp-abap-adt/auth-broker` |
-| Token validation, refresh, re-authentication, expiry tracking | consumer via `ITokenProvider` (from `@mcp-abap-adt/interfaces-auth`) |
+| Token validation, refresh, re-authentication, expiry tracking | the `IAuthProvider` the consumer hands in (`@mcp-abap-adt/interfaces-auth`; ready-made ones in `@mcp-abap-adt/auth-providers`) |
 | Session state persistence across processes | `@mcp-abap-adt/auth-broker` |
 | Auth-type constants, provider error codes, auth lifecycle contracts | `@mcp-abap-adt/interfaces-auth`, `@mcp-abap-adt/interfaces-auth-sap` |
 

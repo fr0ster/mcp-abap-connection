@@ -88,8 +88,10 @@ function describe(e: unknown): string {
 }
 
 /**
- * What the caller wires now: the credential's TLS material configures the wire
- * and the client is named on it, because nothing does either for them.
+ * What the caller wires now: the client and address are named on the wire,
+ * because nothing derives them. TLS material is not wired here — the provider
+ * offers it at logon, and `agentOptions` (empty here) is only for `ca` and
+ * `rejectUnauthorized`.
  */
 function httpWire(kind: 'plain' | 'legacy'): OnPremHttpTransport {
   const Wire =

@@ -8,6 +8,7 @@ This directory contains example code demonstrating how to use the `@mcp-abap-adt
 # Install dependencies
 cd packages/connection
 npm install
+npm install @mcp-abap-adt/auth-providers   # the credential providers the examples use
 
 # Build the package
 npm run build
@@ -42,9 +43,9 @@ node examples/jwt-with-token-refresh.js
 ```
 
 **What it demonstrates:**
-- Creating connection with token refresher injection
-- Automatic token refresh on 401 errors
-- Retry logic with refreshed token
+- Creating connection with `TokenAuthProvider.from(refresher)` (from `@mcp-abap-adt/auth-providers`)
+- A 401 put to the provider, which renews the token
+- Exactly one more attempt with the renewed token
 - A 403 propagating untouched, with its status and body intact
 
 ### saml-connection.js
@@ -56,7 +57,7 @@ node examples/saml-connection.js
 ```
 
 **What it demonstrates:**
-- Creating SAML connection via factory (`authType: "saml"`)
+- Creating a SAML connection with `SamlAuthProvider` (from `@mcp-abap-adt/auth-providers`)
 - Using `sessionCookies` from environment
 - Fetching CSRF token and making ADT request with cookie auth
 

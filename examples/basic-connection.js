@@ -7,8 +7,8 @@
 const {
   OnPremHttpTransport,
   AdtOnPremConnector,
-  BasicAuthProvider,
 } = require('@mcp-abap-adt/connection');
+const { BasicAuthProvider } = require('@mcp-abap-adt/auth-providers');
 
 async function main() {
   // Configuration from environment or hardcoded

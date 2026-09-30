@@ -56,16 +56,17 @@ The package uses a clean separation of concerns:
   session open while the logoff removes it — so asking the server would pick the
   mechanism that releases nothing.
 
-- **Auth providers** (`BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`,
-  `CertificateAuthProvider`):
-  - What a connection authenticates with, passed in
-  - A token provider renews on its own, and the connector asks it per request — which
-    is how a token that expired between two requests is replaced with nobody
-    deciding to replace it
-  - A `401` **surfaces**. Whether a refusal meant "the token is stale" or "these
-    credentials are refused" is a judgement made with what you know, so the
-    connector does not answer it for you. A credential that can be told to get a
-    new one says so through `IRenewableCredential`, which you narrow to
+- **Auth providers** (an `IAuthProvider` from `@mcp-abap-adt/interfaces-auth`; the
+  ready-made ones — `BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`,
+  `CertificateAuthProvider` — are in `@mcp-abap-adt/auth-providers`, not here):
+  - What a connection authenticates with, passed in. The connection never asks
+    what kind of provider it was given; it calls the same four methods on all of
+    them: `prepare` once before the wire opens, `establish` at each logon,
+    `authorize` before every attempt, `rejected` when the system refused
+  - A `401` that survives the wire's own session recovery, or a refused logon, is
+    put to the provider through `rejected`. If it answers Ok (a renewed token, say)
+    the request gets exactly one more attempt; if it says no, or the retry is
+    refused too, you get an `AuthRefusedError` carrying the provider's own words
 
 - **Transports** (`OnPremHttpTransport`, `CloudHttpTransport`, `RfcTransport`):
   - What a request travels over, and everything that is true of that wire.
@@ -75,7 +76,8 @@ The package uses a clean separation of concerns:
   - On-prem is where this is a real choice; ABAP Cloud has one wire and its
     connector takes no such parameter
   - `rfcConversationFrom(config)` builds what `RfcTransport` needs, deriving
-    `ashost` and `sysnr` and loading the SDK only when a conversation opens
+    `ashost` and `sysnr` and loading the SDK only when a conversation opens. It
+    reads no user or password: the provider writes the logon parameters
 
 - **`GenericWebSocketTransport`** (concrete, exported):
   - Transport abstraction for realtime WS message flows
@@ -137,7 +139,7 @@ dependencies of this one besides `axios`, `commander` and `open`:
 | Package | What this package takes from it |
 |---|---|
 | `@mcp-abap-adt/interfaces-adt-connection` | `IAbapConnection`, `IAbapRequestOptions`, `IAdtWireResponse`, `ITimeoutConfig`, the capability atoms, `ADT_SESSION_ERROR` |
-| `@mcp-abap-adt/interfaces-auth` | `IAuthProvider`, `IRenewableCredential`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
+| `@mcp-abap-adt/interfaces-auth` | `IAuthProvider`, `AuthOutcome`, `IAuthRefusal`, `IAuthRejection`, `ILogonTarget`, `IRequestTarget`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
 | `@mcp-abap-adt/interfaces-auth-sap` | `ISapConfig`, `SapAuthType`, `SapConnectionType`, `ICertificateMaterialLoader` |
 | `@mcp-abap-adt/interfaces-network` | `NETWORK_ERROR_CODES`, the WebSocket contracts |
 | `@mcp-abap-adt/interfaces-utils` | `ILogger` |
@@ -152,6 +154,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 10.0.0](./docs/MIGRATION-10.0.md)** - the credential providers moved to `@mcp-abap-adt/auth-providers`; the connection speaks `IAuthProvider` 3.0; `AuthRefusedError`; the RFC factory takes the logon parameters
 - 🚚 **[Migration to 9.0.0](./docs/MIGRATION-9.0.md)** - the contracts split out of `@mcp-abap-adt/interfaces`; which package each one moved to
 - 🚚 **[Migration to 7.0.0 and 8.0.0](./docs/MIGRATION-8.0.md)** - request headers leave the stateful branch, the contracts floor moves, and `flushGoodbye()`
 - 🚚 **[Migration to 6.0.0](./docs/MIGRATION-6.0.md)** - the factory and the per-credential classes are removed; RFC is a transport, not a class
@@ -183,6 +186,14 @@ longer brings them along:
 npm install @mcp-abap-adt/interfaces-adt-connection @mcp-abap-adt/interfaces-auth @mcp-abap-adt/interfaces-auth-sap
 ```
 
+The credential providers (`BasicAuthProvider`, `TokenAuthProvider`,
+`SamlAuthProvider`, `CertificateAuthProvider`) are not part of this package
+since 10.0.0. Install them from where they live:
+
+```bash
+npm install @mcp-abap-adt/auth-providers
+```
+
 For detailed installation instructions, see [Installation Guide](./docs/INSTALLATION.md).
 
 ## Quick Start
@@ -192,11 +203,11 @@ For detailed installation instructions, see [Installation Guide](./docs/INSTALLA
 ```typescript
 import {
   AdtOnPremConnector,
-  BasicAuthProvider,
   OnPremHttpTransport,
   SapConfig,
   getTimeout,
 } from "@mcp-abap-adt/connection";
+import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 
 const config: SapConfig = {
   url: "https://your-sap-system.com",
@@ -242,9 +253,9 @@ import {
   AdtCloudConnector,
   CloudHttpTransport,
   SapConfig,
-  TokenAuthProvider,
   getTimeout,
 } from "@mcp-abap-adt/connection";
+import { TokenAuthProvider } from "@mcp-abap-adt/auth-providers";
 
 // JWT configuration
 const config: SapConfig = {
@@ -262,12 +273,12 @@ const logger = {
 };
 
 // Logger is optional - if not provided, no logging output.
-// A bare string is a token with nothing behind it. Hand `TokenAuthProvider` an
-// `ITokenRefresher` instead and it checks expiry and renews on its own, which
+// `.fixed` is a token with nothing behind it. `TokenAuthProvider.from` takes an
+// `ITokenRefresher` instead and renews when the system refuses the token, which
 // is what you want in anything long-lived.
 const connection = new AdtCloudConnector(
   config,
-  new TokenAuthProvider(config.jwtToken!),
+  TokenAuthProvider.fixed(config.jwtToken!),
   new CloudHttpTransport(() => ({}), logger, {
     client: config.client,
     baseUrl: config.url,
@@ -306,10 +317,10 @@ Needs the SAP NW RFC SDK on the machine and `npm install @mcp-abap-adt/sap-rfc-l
 ```typescript
 import {
   AdtOnPremConnector,
-  BasicAuthProvider,
   RfcTransport,
   rfcConversationFrom,
 } from "@mcp-abap-adt/connection";
+import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 
 const connection = new AdtOnPremConnector(
   config,
@@ -337,10 +348,10 @@ takes no transport parameter at all.
 import {
   AdtOnPremConnector,
   OnPremHttpTransport,
-  SamlAuthProvider,
   SapConfig,
   getTimeout,
 } from "@mcp-abap-adt/connection";
+import { SamlAuthProvider } from "@mcp-abap-adt/auth-providers";
 
 const config: SapConfig = {
   url: "https://your-sap-system.com",
@@ -369,19 +380,20 @@ const response = await connection.makeAdtRequest({
 
 ### Cloud Usage with Automatic Token Refresh
 
-Give `TokenAuthProvider` an `ITokenRefresher` and the provider replaces an
-**expired** token on its own — it is asked per request and checks expiry before
-answering, so nobody decides to renew. A token the source still believes in and
-the server refuses is the other half, and that one **surfaces**:
+Build `TokenAuthProvider.from` over an `ITokenRefresher` and the provider
+replaces a token the system refused: the connection puts the `401` to
+`rejected`, the provider fetches a new token, and the request is sent once more.
+A token the source still believes in and the server refuses again is the
+verdict, and that one **surfaces** as an `AuthRefusedError`:
 
 ```typescript
 import {
   AdtCloudConnector,
   CloudHttpTransport,
   SapConfig,
-  TokenAuthProvider,
   getTimeout,
 } from "@mcp-abap-adt/connection";
+import { TokenAuthProvider } from "@mcp-abap-adt/auth-providers";
 import type { ITokenRefresher } from "@mcp-abap-adt/interfaces-auth";
 
 // Token refresher provides token acquisition and refresh
@@ -402,7 +414,7 @@ const config: SapConfig = {
 // authenticate. Neither decides the other.
 const connection = new AdtCloudConnector(
   config,
-  new TokenAuthProvider(tokenRefresher),
+  TokenAuthProvider.from(tokenRefresher),
   new CloudHttpTransport(() => ({}), logger, {
     client: config.client,
     baseUrl: config.url,
@@ -411,12 +423,10 @@ const connection = new AdtCloudConnector(
 );
 await connection.connect();
 
-// On a 401 nothing here decides to get a new credential: the refusal reaches
-// you. Whether it meant "stale" is a judgement made with what you know, and
-// `renew()` is the seam you make it with. The session is untouched — a refused
-// reaches you. A refresh replaces the SAP session, so if a lock window is open
-// the request fails with ADT_SESSION_REPLACED rather than continuing on a
-// session your lock is not in.
+// On a 401 the connection asks the provider (`rejected`); on Ok it sends the
+// request once more with the renewed token, otherwise you get an
+// AuthRefusedError. The resend runs on the same session, under the same lease
+// and generation as the attempt it repeats.
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
@@ -436,6 +446,29 @@ error. Code matching on that message must branch on `error.response.status`
 instead — which it can now do, since the status is no longer thrown away.
 See [MIGRATION-4.0.md](./docs/MIGRATION-4.0.md).
 
+### When the credential is refused
+
+Every request asks the provider first (`authorize`). A `401` that survives the
+wire's own session recovery, or a logon the system refused, is put to the
+provider (`rejected`); on Ok the request is sent once more, otherwise it fails
+with an `AuthRefusedError` carrying the provider's own words. A `403` is never
+put to the provider.
+
+```typescript
+import { AuthRefusedError } from "@mcp-abap-adt/connection";
+
+try {
+  await connection.connect();
+} catch (error) {
+  if (error instanceof AuthRefusedError) {
+    console.error(error.refusal.reason, error.refusal.hint, error.at);
+  }
+  throw error;
+}
+```
+
+See [USAGE.md](./docs/USAGE.md#when-the-credential-is-refused).
+
 ### Stateful Sessions
 
 Enable stateful mode for requests that need the ABAP context, such as LOCK and
@@ -447,10 +480,10 @@ cookies and the CSRF token remain available in both modes. See the
 ```typescript
 import {
   AdtOnPremConnector,
-  BasicAuthProvider,
   OnPremHttpTransport,
   getTimeout,
 } from "@mcp-abap-adt/connection";
+import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 
 const connection = new AdtOnPremConnector(
   config,
@@ -480,7 +513,8 @@ connection.setSessionType("stateless");
 ### Custom Logger
 
 ```typescript
-import { AdtOnPremConnector, BasicAuthProvider, ILogger, OnPremHttpTransport } from "@mcp-abap-adt/connection";
+import { AdtOnPremConnector, ILogger, OnPremHttpTransport } from "@mcp-abap-adt/connection";
+import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 
 class MyLogger implements ILogger {
   info(message: string, meta?: any): void {
@@ -677,17 +711,19 @@ so a machine without it fails at `connect()` with a message saying what to
 install rather than at construction.
 
 ```text
-function rfcConversationFrom(config: SapConfig): () => IRfcConversation;
-function rfcParamsFrom(config: SapConfig): RfcConnectionParams;
+function rfcConversationFrom(
+  config: SapConfig,
+): (logon: Readonly<Record<string, string>>) => IRfcConversation;
+function rfcParamsFrom(config: SapConfig): RfcConnectionParams; // the address only
 ```
 
 ```typescript
 import {
   AdtOnPremConnector,
-  BasicAuthProvider,
   RfcTransport,
   rfcConversationFrom,
 } from "@mcp-abap-adt/connection";
+import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 
 const connection = new AdtOnPremConnector(
   config,

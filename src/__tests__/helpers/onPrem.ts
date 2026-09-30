@@ -2,10 +2,11 @@
  * An on-prem connection over HTTP, for tests whose subject is the shared
  * machinery.
  *
- * The wire is required now and the caller builds it — including the two things
- * only the caller can wire, the credential's TLS material and the client. That
- * is the point of the change, and also why a test that is about critical
- * sections should not have to say it eight times.
+ * The wire is required now and the caller builds it — including the client and
+ * address, which only the caller knows. The credential's TLS material is not
+ * wired by the caller: the provider offers it at logon. That is the point of the
+ * change, and also why a test that is about critical sections should not have to
+ * say it eight times.
  */
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../../config/sapConfig.js';

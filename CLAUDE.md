@@ -33,11 +33,15 @@ whole design is arranged around.
 ```
                     which system            which credential        which wire
 AbstractAbapConnection ──┬── AdtOnPremConnector   IAuthProvider ──┐   IAdtTransport ──┐
-   (lifecycle only,      │      ICF session       BasicAuthProvider    HttpTransport
-    NOT exported)        └── AdtCloudConnector    TokenAuthProvider    RfcTransport
-                                security session  SamlAuthProvider
-                                                  CertificateAuthProvider
+   (lifecycle only,      │      ICF session       (any; the ones     HttpTransport
+    NOT exported)        └── AdtCloudConnector    shipped are in     RfcTransport
+                                security session  auth-providers)
 ```
+
+The providers (`BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`,
+`CertificateAuthProvider`) live in `@mcp-abap-adt/auth-providers`, which this
+package uses as a **dev** dependency only (tests). It has no runtime dependency
+on it, and nothing here may branch on which provider it was handed.
 
   new AdtCloudConnector(config, credential, new CloudHttpTransport(…), logger)
   new AdtOnPremConnector(config, credential, new OnPremHttpTransport(…), logger)
@@ -59,9 +63,18 @@ the RFC wire could not connect at all as a result.
   addressing it, establishing itself, and whatever session state it keeps.
   `HttpTransport` has a cookie jar, a CSRF token, affinity headers and axios;
   `RfcTransport` has a conversation that IS the session and none of the rest.
-- `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth`) — the credential, including
-  its own renewal. A provider checks expiry and refreshes when asked for a
-  header; the connection does not renew on its behalf.
+- `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth` ^3.0.0) — the credential,
+  including its own renewal. The connection calls `prepare()` once before the wire
+  opens, `establish(logon)` at each logon (through `IAdtSessionContext.logon`),
+  `authorize(request)` before every attempt (through
+  `IAdtSessionContext.authorize`), and `rejected(rejection)` on a 401 that survived
+  the wire's session recovery or a refused logon. Ok means exactly one more
+  attempt; a second refusal is `AuthRefusedError`, never a loop. A 403 never goes
+  to the provider. The wire offers what it can carry (`ILogonTarget`: TLS material
+  for HTTP, logon parameters for RFC), the provider writes, the connection decides
+  the lifecycle. A wire marks a refused logon with `WireLogonError` and decides
+  nothing else. The connection guards every provider call: a throw is a refusal
+  with the reason "the credential provider failed".
 - The connector — which session mechanism this system uses, and nothing else.
 
 **If you find yourself checking the transport's kind in the base, that is the
@@ -98,7 +111,8 @@ fact belongs on the transport instead.
 
 **Taking the RFC wire** needs the SAP NW RFC SDK on the machine and
 `@mcp-abap-adt/sap-rfc-lite` installed; `rfcConversationFrom(config)` derives
-`ashost`/`sysnr` and loads the SDK lazily, so a machine without it fails at
+`ashost`/`sysnr` (no user or password: the provider's logon parameters are spread
+over them at each open) and loads the SDK lazily, so a machine without it fails at
 `connect()` rather than at construction.
 
 ## Conventions

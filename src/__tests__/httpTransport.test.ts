@@ -6,10 +6,11 @@
  * a type — a default type parameter has nothing to point at when one of the two
  * values is a code path.
  *
- * The TLS material is the one place the two axes touch: it comes from the
- * CREDENTIAL (`transportMaterial()`) and configures the TRANSPORT. So it is
- * passed as a thunk, read when the client is first built — which is when the
- * credential has had its `prepare()` and knows what it holds.
+ * The TLS material is the one place the two axes touch: the CREDENTIAL offers
+ * it at logon (`ILogonTarget.tlsMaterial`) and the TRANSPORT builds its client
+ * from it. The constructor's `agentOptions` thunk carries only what is not the
+ * credential (`ca`, `rejectUnauthorized`), and is read when the client is
+ * first built.
  */
 import { HttpTransport } from '../connection/HttpTransport.js';
 import type { IAdtTransport } from '../connection/IAdtTransport.js';

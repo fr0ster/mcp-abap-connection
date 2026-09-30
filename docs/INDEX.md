@@ -15,6 +15,7 @@ mcp-abap-connection/
 │   ├── INSTALLATION.md             # Setup and installation guide
 │   ├── USAGE.md                    # API documentation and examples
 │   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── MIGRATION-10.0.md           # providers move to auth-providers; IAuthProvider 3.0; AuthRefusedError
 │   ├── MIGRATION-9.0.md            # the contracts split out of @mcp-abap-adt/interfaces
 │   ├── MIGRATION-8.0.md            # request headers leave the stateful branch; onto interfaces 39; flushGoodbye
 │   ├── MIGRATION-6.0.md            # the factory and the per-credential classes go; RFC is a transport
@@ -46,6 +47,7 @@ mcp-abap-connection/
 - 🔑 [JWT Auth Tools](./JWT_AUTH_TOOLS.md) - CLI tool for browser-based authentication
 
 ### Upgrading
+- 🚚 [Migrating to 10.0.0](./MIGRATION-10.0.md) - the credential providers moved to `@mcp-abap-adt/auth-providers`; the connection speaks `IAuthProvider` 3.0 and raises `AuthRefusedError`; the RFC factory takes the logon parameters
 - 🚚 [Migrating to 9.0.0](./MIGRATION-9.0.md) - the contracts split into `interfaces-adt`, `-auth`, `-network` and `-utils`, and this package stopped depending on the umbrella; `interfaces-auth-sap` joined them in the release after, when authentication split into what is SAP's and what is not
 - 🚚 [Migrating to 7.0.0 and 8.0.0](./MIGRATION-8.0.md) - `sap-adt-request-id` and `X-sap-adt-profiling` on every request, `x-sap-security-session: use` on cloud, the contracts floor at 39, and `flushGoodbye()`
 - 🚚 [Migrating to 6.0.0](./MIGRATION-6.0.md) - the factory and the per-credential classes are removed; the RFC wire is a transport you hand to the on-prem connector
@@ -79,7 +81,8 @@ mcp-abap-connection/
 - **Connection Interface**: [USAGE.md - API Reference](./USAGE.md#api-reference)
 - **Configuration Types**: [USAGE.md - Configuration Types](./USAGE.md#configuration-types)
 - **Connectors**: `AdtOnPremConnector`, `AdtCloudConnector`
-- **Credentials**: `BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`, `CertificateAuthProvider`
+- **Credentials**: an `IAuthProvider` (`@mcp-abap-adt/interfaces-auth`); the ready-made providers live in `@mcp-abap-adt/auth-providers`
+- **Errors**: `AuthRefusedError`, `WireLogonError`
 - **Transports**: `HttpTransport`, `RfcTransport` (+ `rfcConversationFrom()`)
 
 ## Version Highlights

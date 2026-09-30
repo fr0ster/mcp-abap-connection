@@ -18,10 +18,10 @@
 ```typescript
 import {
   AdtOnPremConnector,
-  BasicAuthProvider,
   OnPremHttpTransport,
   getTimeout,
 } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import { SapConfig } from '@mcp-abap-adt/connection';
 
 const config: SapConfig = {
@@ -90,9 +90,9 @@ For on-premise SAP systems using basic authentication:
 ```typescript
 import {
   AdtOnPremConnector,
-  BasicAuthProvider,
   OnPremHttpTransport,
 } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
 const config = {
   url: 'https://sap-server.local:8000',
@@ -123,9 +123,9 @@ For SAP BTP ABAP Environment. Token refresh belongs to
 import {
   AdtCloudConnector,
   CloudHttpTransport,
-  TokenAuthProvider,
   getTimeout,
 } from '@mcp-abap-adt/connection';
+import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 
 const config = {
   url: 'https://tenant.abap.cloud',
@@ -133,12 +133,12 @@ const config = {
   client: '100', // Optional for cloud
 };
 
-// A bare token works and has no renewal behind it. Hand the provider an
-// ITokenRefresher instead — from @mcp-abap-adt/auth-broker or your own — and it
-// checks expiry and refreshes on its own.
+// `.fixed` is a token with no renewal behind it. `TokenAuthProvider.from` takes
+// an ITokenRefresher — from @mcp-abap-adt/auth-broker or your own — and renews
+// when the system refuses the token.
 const connection = new AdtCloudConnector(
   config,
-  new TokenAuthProvider('eyJhbGciOiJSUzI1NiIs...'),
+  TokenAuthProvider.fixed('eyJhbGciOiJSUzI1NiIs...'),
   new CloudHttpTransport(() => ({}), logger, {
     client: config.client,
     baseUrl: config.url,
@@ -234,7 +234,8 @@ await connection.makeAdtRequest({
 By default, connections are stateless - each request gets fresh cookies and CSRF tokens:
 
 ```typescript
-import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
@@ -259,7 +260,8 @@ writes from running in the lock context and failing with PAK/058 or an invalid
 lock handle. See [HTTP context isolation](./STATEFUL_SESSION_GUIDE.md#http-context-isolation-931).
 
 ```typescript
-import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
@@ -375,7 +377,8 @@ implied. Four things follow from it.
 ### connect() is required, and it tells the truth
 
 ```typescript
-import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
 const connection = new AdtOnPremConnector(
   config,
@@ -490,8 +493,7 @@ precisely to avoid it.
 
 Two different things can cost you the session, and they do not behave alike.
 
-**The session was replaced** — a renewed credential, or a session cookie that
-changed underneath you. This is fatal **only while a lock window is open**:
+**The session was replaced** — a session cookie that changed underneath you. This is fatal **only while a lock window is open**:
 
 ```typescript
 // window open  → ADT_SESSION_REPLACED, the connection stops being usable
@@ -520,7 +522,8 @@ yours.
 Session IDs are auto-generated (UUID) when connection is created:
 
 ```typescript
-import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 const connection = new AdtOnPremConnector(
   config,
   new BasicAuthProvider(config.username!, config.password!),
@@ -550,7 +553,8 @@ console.log(connectionWithOwnId.getSessionId()); // 'custom-session-123'
 Dynamically switch between stateful and stateless modes:
 
 ```typescript
-import { AdtOnPremConnector, BasicAuthProvider, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 // Start in stateless mode (default)
 const connection = new AdtOnPremConnector(
   config,
@@ -592,7 +596,8 @@ in a `finally`. `disconnect()` never throws, so it is safe there.
 ### Using Custom Logger
 
 ```typescript
-import { AdtOnPremConnector, BasicAuthProvider, ILogger, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, ILogger, OnPremHttpTransport } from '@mcp-abap-adt/connection';
+import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
 class CustomLogger implements ILogger {
   info(message: string, meta?: any) {
@@ -791,7 +796,11 @@ establishing, and whatever session state it keeps.
 
 ```text
 new HttpTransport(agentOptions?, logger?, { client?, baseUrl? })
-new RfcTransport(connect: () => IRfcConversation, logger?, { logWire?, maxLoggedBodyChars? })
+new RfcTransport(
+  connect: (logon: Readonly<Record<string, string>>) => IRfcConversation,
+  logger?,
+  { logWire?, maxLoggedBodyChars? },
+)
 ```
 
 `HttpTransport` is the ordinary wire, and you name it because the connector
@@ -800,6 +809,21 @@ mechanism is what differs, and `OnPremHttpTransport` / `CloudHttpTransport` are
 what the connectors' type parameters admit. `RfcTransport`
 you build with `rfcConversationFrom(config)`, which derives `ashost` and `sysnr`
 and loads the SAP NW RFC SDK only when a conversation opens.
+
+**What the wire takes from the credential.** The provider writes it, the wire
+carries it; the wire never reads `config.username` or `config.password`.
+
+- HTTP takes TLS material (`cert`, `key`, `pfx`, `passphrase`) at logon and builds
+  its `https.Agent` from it. `agentOptions` stays for what is not the credential
+  — `ca` and `rejectUnauthorized`. A later logon offering different material
+  replaces the client; the cookie jar and CSRF token are the session's and stay.
+  HTTP refuses logon parameters.
+- RFC takes logon parameters (a password, or SNC settings) on every conversation
+  it opens, the session's own and each per-call one. RFC refuses TLS material,
+  and a provider that writes no logon parameters (a bearer token) cannot log on
+  over RFC: the open fails, the provider is asked, and you get its refusal.
+- A failed RFC open is thrown as `WireLogonError` with the SDK's own error as
+  `cause`, so a provider can read the SDK's `key` and message.
 
 **`logWire` dumps the wire, and is off.** With it on, `RfcTransport` adds three
 debug lines per request — the header fields, the request body and the response
@@ -909,41 +933,80 @@ export class CloudSdkAbapConnection {
 
 ### The credential, and how a refusal is classified
 
-For SAP BTP cloud systems, hand `AdtCloudConnector` a `TokenAuthProvider`. A bare
-string is a token with nothing behind it; an `ITokenRefresher` is a provider that
-checks expiry and renews on its own, which is what you want in anything
-long-lived. Obtaining tokens in the first place is `@mcp-abap-adt/auth-broker`'s
-job, not this package's.
+For SAP BTP cloud systems, hand `AdtCloudConnector` a token provider from
+`@mcp-abap-adt/auth-providers`: `TokenAuthProvider.fixed(token)` is a token with
+nothing behind it, `TokenAuthProvider.from(refresher)` takes an `ITokenRefresher`
+and renews a token the system refused. Obtaining tokens in the first place is
+`@mcp-abap-adt/auth-broker`'s job, not this package's.
 
 ```text
 new AdtCloudConnector(
   config,
-  new TokenAuthProvider(refresher),   // or a bare token string
+  TokenAuthProvider.from(refresher),   // or TokenAuthProvider.fixed(token)
   new CloudHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }),
   logger,
 );
 ```
 
-**How failures are classified** (6.0.0 — see
-[MIGRATION-6.0.md](./MIGRATION-6.0.md)):
+#### When the credential is refused
+
+The connection speaks four calls to whatever `IAuthProvider` it holds, and
+never asks what kind it is:
+
+| call | when |
+|---|---|
+| `prepare()` | once, in `connect()`, before the wire opens |
+| `establish(logon)` | at each logon the wire performs |
+| `authorize(request)` | before every attempt of every request — including the CSRF fetch, the cloud preflight, the logoff, and each resend |
+| `rejected(rejection)` | the system said no |
+
+**Each request asks the provider.** Nothing is cached by the connection, so a
+token the provider renewed is on the very next attempt.
+
+**How failures are classified:**
 
 | answer | what happens |
 |---|---|
-| **401** | **surfaces.** Nothing here decides to get a new credential. An EXPIRED token is already replaced without anyone deciding — the provider is asked per request and checks expiry before answering — so a 401 is the other case: a credential the source still believes in and the server refuses. Whether that means "stale" is a judgement made with what you know, and `renew()` on an `IRenewableCredential` is the seam you make it with. The session is untouched: a refused credential is not a lost session |
-| **403** | propagates untouched. The server authenticated the caller and refused the action anyway, so a new token is the same caller — usually the body names the authorization object |
+| **401** on a stale CSRF token or a login form | the wire's own session recovery runs first; a session fault is not a credential fault, and never reaches the provider |
+| **401** that survives that recovery, or a logon the system refused | put to `provider.rejected({ at, status?, error })`. On Ok the request is authorized again and sent **once more**; on no, `AuthRefusedError` |
+| the same refusal after an Ok | the verdict. The provider is not asked again — asking would invite a second renewal — and you get an `AuthRefusedError` saying the credential was refused again after the provider renewed it |
+| **403** | propagates untouched, never put to the provider. The server authenticated the caller and refused the action anyway, so a new credential is the same caller — usually the body names the authorization object |
 | anything else | untouched |
 
-The connection never replaces the server's error with one of its own:
-`failure.response.status` and `failure.response.data` are always what SAP sent.
+One credential retry per request: the upfront token fetch before a mutation and
+a later rejection draw on the same allowance.
 
-Concurrent requests that meet the same expired token share **one** renewal — a
-single token fetch and a single session re-establishment between them, not one
-each.
+```typescript
+import { AuthRefusedError } from '@mcp-abap-adt/connection';
 
-**A refusal during `connect()` surfaces.** Nothing is renewed behind you there:
-the provider already renews on expiry it can see, every time it is asked for a
-header, so a refusal at establishment means the credential needs attention that
-this library cannot give it.
+try {
+  await connection.connect();
+} catch (error) {
+  if (error instanceof AuthRefusedError) {
+    // error.refusal.reason / .hint are the provider's words;
+    // error.at is 'prepare' | 'logon' | 'request'; error.cause is the wire's error.
+    console.error(error.message);
+  }
+  throw error;
+}
+```
+
+`refusal` is the provider's, `cause` is the error the wire raised as it arrived,
+so a network failure stays visible even when a provider words it as a credential
+problem. A provider that throws is treated as refusing with the reason "the
+credential provider failed" and the throw as the cause.
+
+**Concurrency.** Many requests meeting the same expired token each call
+`rejected()`; the connection adds no single-flight of its own. Providers that
+renew share one renewal in flight (`BaseTokenProvider`, `TokenAuthProvider.from`
+through its refresher), and a provider whose presented token is already
+superseded answers Ok without renewing.
+
+**A refusal during `connect()`** is the same story: `prepare()` refused sends
+nothing; a logon the system refused goes to `rejected({ at: 'logon' })`, and on
+Ok the wire is closed and logged on once more. An `establish` refusal is the
+provider's own verdict on this logon (SNC with no library, a certificate the wire
+cannot take) and does not go to `rejected`.
 
 ### Configuration Types
 
