@@ -137,6 +137,14 @@ makeAdtRequest → performRequest
   retry in (a) now throws the original error, and where (b) swallows a failed
   token fetch, an `AuthRefusedError`, a `WireLogonError` or a 401 from the
   retry goes on instead (a session verdict still comes first).
+  The same holds for the upfront token fetch before a mutation, which today
+  swallows every failure and sends the mutation anyway: an `AuthRefusedError`
+  ends the request before anything is sent; a `WireLogonError` goes to
+  `rejected({ at: 'logon' })`, and after Ok the fetch runs once more. Other
+  failures of that fetch are swallowed as today.
+- **One credential retry per request.** Whichever comes first — the upfront
+  fetch or a later rejection — spends it; a second credential failure anywhere
+  in the same request is the verdict, and the provider is not asked again.
 - **After a `logon` rejection, the one more attempt starts with the logon.**
   A refused token fetch left the wire without a token, so after Ok the wire is
   made ready again — its token dropped and established anew, as the upfront
