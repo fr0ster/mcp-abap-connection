@@ -133,6 +133,16 @@ makeAdtRequest → performRequest
   not become "the user or password was refused".
 - **Every resend is re-authorized.** Today (a) and (b) resend with the
   `Authorization` read once before the first attempt.
+- **The wire's recovery does not hide a credential failure.** Where a failed
+  retry in (a) now throws the original error, and where (b) swallows a failed
+  token fetch, an `AuthRefusedError`, a `WireLogonError` or a 401 from the
+  retry goes on instead (a session verdict still comes first).
+- **After a `logon` rejection, the one more attempt starts with the logon.**
+  A refused token fetch left the wire without a token, so after Ok the wire is
+  made ready again — its token dropped and established anew, as the upfront
+  mutation step does; nothing on RFC — and only then is the request resent,
+  with the new token. The fetch and the resend share the one limit (H5): a
+  credential failure in either is the verdict.
 - **Concurrency.** Many requests meeting the same expired token each call
   `rejected()`; the connection adds no single-flight of its own. Providers
   that renew share one renewal in flight (auth-providers `BaseTokenProvider`,
