@@ -197,7 +197,9 @@ abstract class AbstractAbapConnection
      * config: the wire is a fact about the deployment, and a library that
      * picked one would be guessing at the thing this design exists to stop
      * guessing at. It also carries what the caller alone can wire — the
-     * credential's TLS material, the client — which is why it arrives built.
+     * client, the address, agent options such as `ca` — which is why it
+     * arrives built. The credential's TLS material is not among them: the
+     * provider offers it to the wire at logon.
      */
     readonly transport: IAdtTransport,
     protected readonly logger: ILogger | null,
@@ -624,7 +626,12 @@ abstract class AbstractAbapConnection
       // session has an address or it does not, and an on-prem one was
       // established or the cookie is debris from the refusal. The connection
       // asks, and each wire answers by doing nothing when it has nothing.
-      const goodbye = this.transport.close(this.sessionContext());
+      // Its rejection is absorbed: a wire's close() may reject — its
+      // context.authorize throws when the provider refuses — and nobody
+      // awaits this one.
+      const goodbye = Promise.resolve(
+        this.transport.close(this.sessionContext()),
+      ).catch(() => undefined);
       this.invalidateSession();
       // And the identity with it. The rejecting response was still observed, so
       // its cookie was recorded as a session that had just been established —
@@ -634,7 +641,7 @@ abstract class AbstractAbapConnection
       this.lifecycle.markDisconnected();
       // Not awaited, for the same reason a teardown does not wait: the caller
       // is owed the establishment error now, not after a round trip nobody is
-      // waiting on. closeSession never throws, so nothing here can go unhandled.
+      // waiting on. Its rejection was absorbed above, so nothing goes unhandled.
       void goodbye;
       throw error;
     }
@@ -691,12 +698,18 @@ abstract class AbstractAbapConnection
       // preflight may have opened a session — on cloud it does — and this path
       // is about to drop the cookies that are the only permission to close it.
       // Refusing to connect must not leak the session the refusal is about.
-      try {
-        void this.transport.close(this.sessionContext());
-      } catch (error) {
+      // Dispatched, not awaited; a close that throws or rejects is logged and
+      // absorbed, never left unhandled.
+      const notFinished = (error: unknown) =>
         this.logger?.debug(
           `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
         );
+      try {
+        void Promise.resolve(this.transport.close(this.sessionContext())).catch(
+          notFinished,
+        );
+      } catch (error) {
+        notFinished(error);
       }
       this.invalidateSession();
       this.lifecycle.forgetIdentity();
@@ -732,14 +745,16 @@ abstract class AbstractAbapConnection
   /**
    * Raises a session-lost teardown from inside request handling.
    *
-   * There are exactly three things that can cost us the ABAP session, and they
+   * There are exactly two things that can cost us the ABAP session, and they
    * were found one at a time precisely because they were written apart. They go
-   * through here so a fourth joins the list instead of inventing its own
+   * through here so a third joins the list instead of inventing its own
    * sequence:
    *
-   *   - the credential was renewed (the injected auth says so);
    *   - the server says the session is gone (a dead-session response);
-   *   - the tracked cookie changed under us while a lock was held.
+   *   - the tracked cookie changed under us.
+   *
+   * A renewed credential is not one: the session survives a renewal, and a
+   * resend that finds it replaced is the second case.
    *
    * `internal` origin, so it does not cancel the recovery that raised it, and
    * `sessionLost`, so admission shuts at once and the identity is dropped
@@ -986,7 +1001,7 @@ abstract class AbstractAbapConnection
     // exchange itself does not stop the request — the CSRF recovery below
     // handles a token that is missing — but a refused credential does.
     if (mutation && !this.transport.csrfToken()) {
-      await this.readyWireUpfront(renewal);
+      await this.readyWireUpfront(renewal, lease);
     }
 
     // Start with default Accept header
@@ -1132,11 +1147,25 @@ abstract class AbstractAbapConnection
     }
   }
 
-  /** One attempt: sent, and its response folded into the session. */
+  /**
+   * One attempt: sent, and its response folded into the session.
+   *
+   * Only while the session the request was admitted to is still the current
+   * one. Every attempt passes here — the first and each resend — and a resend
+   * can follow an await long enough for the caller to disconnect and connect
+   * again; sent then, it would carry the new session's cookie and token and
+   * act inside a session the request was never admitted to.
+   */
   private async sendObserved<T, D>(
     requestConfig: IAdtTransportRequest,
     lease: Pick<RequestLease, 'generation'>,
   ): Promise<IAdtWireResponse<T, D>> {
+    if (!this.lifecycle.isCurrent(lease)) {
+      throw sessionError(
+        ADT_SESSION_ERROR.NOT_CONNECTED,
+        'The session this request was admitted to is gone; nothing was sent',
+      );
+    }
     const response = await this.transport.send(requestConfig);
     this.observeResponse(
       response.headers as Record<string, unknown>,
@@ -1153,7 +1182,9 @@ abstract class AbstractAbapConnection
    * Runs before anything asks the credential, because it cures session
    * faults, not credential ones: a stale CSRF token under Basic must not
    * become "the user or password was refused". What it cannot cure it throws,
-   * and a credential failure among that goes on to the provider.
+   * and a credential failure among that goes on to the provider. One
+   * exception: inside a critical section the login-form 401 is not cured
+   * here, because curing it discards the session and the lock with it.
    */
   private async recoverOnWire<T, D>(
     error: unknown,
@@ -1256,6 +1287,15 @@ abstract class AbstractAbapConnection
         normalizedMethod === 'DELETE') &&
       refusalOf(error)?.status === 401 &&
       this.getCsrfToken() !== null;
+
+    // Not inside a critical section. Curing the login-form 401 discards the
+    // session, and with it the lock the section exists to hold; a renewal
+    // must keep it (goal decision 2). There the 401 goes to the provider,
+    // whose Ok resends on the same session — and a session SAP really
+    // replaced is reported as SESSION_REPLACED from that resend's refusal.
+    // Keyed on the section, not the session mode: the write under a lock is
+    // itself stateless.
+    if (isCachedTokenStale && this.inCriticalSection) throw error;
 
     // Retry logic for CSRF token errors (403 with CSRF message) and the
     // login-form 401 pattern.
@@ -1403,6 +1443,15 @@ abstract class AbstractAbapConnection
       await this.credentialHeaders(requestHeaders);
       return await this.sendObserved<T, D>(requestConfig, lease);
     } catch (again) {
+      // The resend's refusal is observed like the first attempt's: a session
+      // SAP replaced in between is SESSION_REPLACED, not a bare status.
+      const refusal = refusalOf(again);
+      if (refusal) {
+        this.observeResponse(
+          refusal.headers as Record<string, unknown> | undefined,
+          lease.generation,
+        );
+      }
       const refusedAgain = this.credentialRejection(again);
       if (!refusedAgain) throw again;
       throw new AuthRefusedError(
@@ -1473,9 +1522,13 @@ abstract class AbstractAbapConnection
    * always were — the CSRF recovery handles a missing token — except the
    * credential's: the provider's refusal ends the request before anything is
    * sent, and a refused logon goes to the provider, whose Ok buys one more
-   * fetch within the request's one retry.
+   * fetch within the request's one retry — unless the session the request
+   * was admitted to is gone by then, when nothing more is sent.
    */
-  private async readyWireUpfront(renewal: CredentialRenewal): Promise<void> {
+  private async readyWireUpfront(
+    renewal: CredentialRenewal,
+    lease: Pick<RequestLease, 'generation'>,
+  ): Promise<void> {
     for (;;) {
       try {
         await this.ensureWireReady();
@@ -1490,6 +1543,12 @@ abstract class AbstractAbapConnection
         }
         const rejection = this.credentialRejection(error) as IAuthRejection;
         await this.renewCredential(rejection, renewal);
+        if (!this.lifecycle.isCurrent(lease)) {
+          throw sessionError(
+            ADT_SESSION_ERROR.NOT_CONNECTED,
+            'The session this request was admitted to is gone; nothing was sent',
+          );
+        }
       }
     }
   }

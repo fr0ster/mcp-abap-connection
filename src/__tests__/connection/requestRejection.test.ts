@@ -10,6 +10,8 @@
  * A GET 401 is first retried by the wire itself while it holds the session's
  * cookies, so a 401 reaches the provider only when it comes twice.
  */
+
+import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
 import type {
   AuthOutcome,
   IAuthRejection,
@@ -67,6 +69,12 @@ const get = (conn: AdtOnPremConnector, url = WORK) =>
 
 const post = (conn: AdtOnPremConnector, url = WORK) =>
   conn.makeAdtRequest({ url, method: 'POST', timeout: 5000, data: '<x/>' });
+
+const put = (conn: AdtOnPremConnector, url = WORK) =>
+  conn.makeAdtRequest({ url, method: 'PUT', timeout: 5000, data: '<x/>' });
+
+const codeOf = (error: unknown) =>
+  (error as { code?: unknown } | undefined)?.code;
 
 const statusOf = (error: unknown) =>
   (error as { response?: { status?: number } } | undefined)?.response?.status;
@@ -353,5 +361,127 @@ describe('many requests, and a critical section', () => {
     expect(conn.getSessionIdentity()).toBe(identity);
     expect(conn.isConnected()).toBe(true);
     expect(stub.sentTo(DISCOVERY)).toHaveLength(1);
+  });
+
+  it('inside a critical section, a mutation 401 with a cached token is renewed and resent on the same session', async () => {
+    const { conn, transport, rejections } = await connected();
+    const identity = conn.getSessionIdentity();
+    const token = transport.csrfToken();
+    expect(token).not.toBeNull();
+    stub.work(WORK, [401]);
+
+    conn.beginCriticalSection();
+    try {
+      const response = await put(conn);
+      expect(response.status).toBe(200);
+    } finally {
+      conn.endCriticalSection();
+    }
+
+    expect(rejections()).toHaveLength(1);
+    expect(rejections()[0]).toMatchObject({ at: 'request', status: 401 });
+    const [first, resend] = stub.sentTo(WORK);
+    expect(first.headers.cookie).toContain('SAP_SESSIONID_STUB_100=S1');
+    expect(resend.headers.cookie).toBe(first.headers.cookie);
+    expect(resend.headers['x-csrf-token']).toBe(token);
+    expect(resend.headers.authorization).toBe('Stub 1');
+    expect(conn.getSessionIdentity()).toBe(identity);
+    expect(conn.isConnected()).toBe(true);
+    expect(stub.sentTo(DISCOVERY)).toHaveLength(1);
+  });
+
+  it('inside a critical section, a resend that finds the session replaced says SESSION_REPLACED', async () => {
+    const { conn } = await connected();
+    stub.work(WORK, [
+      401,
+      {
+        status: 403,
+        body: 'CSRF token validation failed',
+        headers: { 'set-cookie': ['SAP_SESSIONID_STUB_100=S9; Path=/'] },
+      },
+    ]);
+
+    conn.beginCriticalSection();
+    let error: unknown;
+    try {
+      error = await put(conn).catch((e: unknown) => e);
+    } finally {
+      conn.endCriticalSection();
+    }
+
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.SESSION_REPLACED);
+    expect(conn.isConnected()).toBe(false);
+  });
+});
+
+describe('a request whose session is gone', () => {
+  it('a POST whose rejected() outlives its session sends nothing into the next one', async () => {
+    const { conn, provider, transport } = await connected();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reached!: () => void;
+    const asked = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const answer = provider.rejected.bind(provider);
+    provider.rejected = async (rejection) => {
+      reached();
+      await gate;
+      return answer(rejection);
+    };
+    transport.adoptCsrfToken(null);
+    stub.discovery.push(401);
+
+    const request = post(conn).catch((e: unknown) => e);
+    await asked;
+    await conn.disconnect();
+    await conn.connect();
+    // The new session's wire holds no token either, so a loop that went on
+    // would fetch one for it.
+    transport.adoptCsrfToken(null);
+    const discoveries = stub.sentTo(DISCOVERY).length;
+    release();
+    const error = await request;
+
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    expect(stub.sentTo(WORK)).toHaveLength(0);
+    // Nor the token fetch that would have readied the wire for it.
+    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
+    expect(conn.isConnected()).toBe(true);
+  });
+
+  it('a GET whose authorization outlives its session is not sent into the next one', async () => {
+    const { conn, provider } = await connected();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reached!: () => void;
+    const asked = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    let armed = true;
+    const authorize = provider.authorize.bind(provider);
+    provider.authorize = async (request) => {
+      if (armed) {
+        armed = false;
+        reached();
+        await gate;
+      }
+      return authorize(request);
+    };
+
+    const request = get(conn).catch((e: unknown) => e);
+    await asked;
+    await conn.disconnect();
+    await conn.connect();
+    release();
+    const error = await request;
+
+    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    expect(stub.sentTo(WORK)).toHaveLength(0);
+    expect(conn.isConnected()).toBe(true);
   });
 });
