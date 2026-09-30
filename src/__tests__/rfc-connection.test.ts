@@ -14,12 +14,21 @@
  *   - SAP NW RFC SDK installed (SAPNWRFC_HOME set)
  *   - @mcp-abap-adt/sap-rfc-lite installed
  *   - An env file with SAP_URL, SAP_USERNAME, SAP_PASSWORD, SAP_CLIENT
+ *   - for SNC: Windows or macOS with the Secure Login Client, and
+ *     SAP_SNC_PARTNERNAME in the env file (optional SAP_SNC_QOP, SAP_SNC_LIB,
+ *     SAP_SNC_MYNAME)
+ *
+ * Each block states where it can run; elsewhere it is skipped with the reason
+ * in its title — not being runnable on this machine is not a failure.
  *
  * Run:
  *   SAP_ENV_FILE=e19.env npx jest --testPathPatterns=rfc-connection
  */
 
-import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
+import {
+  BasicAuthProvider,
+  SncLogonProvider,
+} from '@mcp-abap-adt/auth-providers';
 import * as dotenv from 'dotenv';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
@@ -73,144 +82,180 @@ function overRfc(config: SapConfig) {
  * goes red for a wire the machine has chosen not to build reports nothing about
  * the change under test.
  */
-function canRun(): boolean {
-  if (
-    !(
-      process.env.SAP_URL &&
-      process.env.SAP_USERNAME &&
-      process.env.SAP_PASSWORD &&
-      process.env.SAP_CLIENT
-    )
-  ) {
-    return false;
-  }
+/**
+ * Why the RFC wire cannot be taken here, or null when it can: the addon must
+ * load, which needs the SAP NW RFC SDK and a build for this Node. A copy that
+ * resolves but was never built is a machine that cannot take the wire.
+ */
+function rfcUnavailable(): string | null {
   try {
-    // Resolve rather than require: this asks whether the wire could be taken,
-    // and loading a native addon to answer that would be doing the work twice.
-    require.resolve('@mcp-abap-adt/sap-rfc-lite');
-    return true;
-  } catch {
-    return false;
+    require('@mcp-abap-adt/sap-rfc-lite');
+    return null;
+  } catch (error) {
+    const first = (
+      error instanceof Error ? error.message : String(error)
+    ).split('\n')[0];
+    return `@mcp-abap-adt/sap-rfc-lite does not load here (${first})`;
   }
 }
 
-const describeIfRfc = canRun() ? describe : describe.skip;
+/** Why the basic-over-RFC block cannot run here, or null when it can. */
+function basicUnavailable(): string | null {
+  const missing = [
+    'SAP_URL',
+    'SAP_USERNAME',
+    'SAP_PASSWORD',
+    'SAP_CLIENT',
+  ].filter((name) => !process.env[name]);
+  if (missing.length) return `${envFile} lacks ${missing.join(', ')}`;
+  return rfcUnavailable();
+}
 
-describeIfRfc('the on-prem connector over RFC (integration)', () => {
-  let conn: ReturnType<typeof overRfc>;
+/**
+ * Why the SNC block cannot run here, or null when it can. The Secure Login
+ * Client exists for Windows and macOS only, so anywhere else SNC is not
+ * testable — which is a fact about the machine, not a failure.
+ */
+function sncUnavailable(): string | null {
+  if (process.platform !== 'win32' && process.platform !== 'darwin') {
+    return `SNC needs Windows or macOS with the Secure Login Client; this is ${process.platform}`;
+  }
+  const missing = ['SAP_URL', 'SAP_CLIENT', 'SAP_SNC_PARTNERNAME'].filter(
+    (name) => !process.env[name],
+  );
+  if (missing.length) return `${envFile} lacks ${missing.join(', ')}`;
+  return rfcUnavailable();
+}
 
-  beforeAll(async () => {
-    conn = overRfc(buildConfig());
-    await conn.connect();
-  }, 15_000);
+/** Run the block, or skip it with the reason in its title. */
+function describeWhere(
+  title: string,
+  unavailable: string | null,
+  body: () => void,
+): void {
+  if (unavailable) describe.skip(`${title} — skipped: ${unavailable}`, body);
+  else describe(title, body);
+}
 
-  afterAll(async () => {
-    await conn?.disconnect();
-  });
+describeWhere(
+  'the on-prem connector over RFC (integration)',
+  basicUnavailable(),
+  () => {
+    let conn: ReturnType<typeof overRfc>;
 
-  it('travels over the wire it was given', () => {
-    expect(conn.transport.kind).toBe('rfc');
-  });
+    beforeAll(async () => {
+      conn = overRfc(buildConfig());
+      await conn.connect();
+    }, 15_000);
 
-  it('is on a session, and it is the conversation', () => {
-    // Not a cookie: this wire is never issued one. The conversation IS the
-    // session, so the connection is on one for as long as it is open.
-    expect(conn.getSessionIdentity()).toMatch(/^rfc-conversation=/);
-  });
-
-  it('should return base URL matching config', async () => {
-    const baseUrl = await conn.getBaseUrl();
-    expect(baseUrl).toBe(process.env.SAP_URL);
-  });
-
-  it('should return a session ID', () => {
-    const sessionId = conn.getSessionId();
-    expect(sessionId).toBeTruthy();
-    expect(typeof sessionId).toBe('string');
-  });
-
-  it('should GET /sap/bc/adt/compatibility/graph', async () => {
-    const resp = await conn.makeAdtRequest({
-      method: 'GET',
-      url: '/sap/bc/adt/compatibility/graph',
-      headers: { Accept: 'application/xml' },
-      timeout: 10_000,
+    afterAll(async () => {
+      await conn?.disconnect();
     });
 
-    expect(resp.status).toBe(200);
-    expect(typeof resp.data).toBe('string');
-  }, 15_000);
-
-  it('asks with no Accept of its own, and is still answered', async () => {
-    // Without a default, ADT refuses this with
-    // `400 ExceptionResourceBadRequest: Accept header missing` — axios supplies
-    // one over HTTP and nobody noticed until this wire had to.
-    const resp = await conn.makeAdtRequest({
-      method: 'GET',
-      url: '/sap/bc/adt/compatibility/graph',
-      timeout: 10_000,
+    it('travels over the wire it was given', () => {
+      expect(conn.transport.kind).toBe('rfc');
     });
 
-    expect(resp.status).toBe(200);
-  }, 15_000);
-
-  it('should return response headers', async () => {
-    const resp = await conn.makeAdtRequest({
-      method: 'GET',
-      url: '/sap/bc/adt/compatibility/graph',
-      headers: { Accept: 'application/xml' },
-      timeout: 10_000,
+    it('is on a session, and it is the conversation', () => {
+      // Not a cookie: this wire is never issued one. The conversation IS the
+      // session, so the connection is on one for as long as it is open.
+      expect(conn.getSessionIdentity()).toMatch(/^rfc-conversation=/);
     });
 
-    expect(resp.headers).toBeDefined();
-    expect(
-      (resp.headers as Record<string, unknown>)['content-type'],
-    ).toBeDefined();
-  }, 15_000);
-
-  it('should handle query params', async () => {
-    const resp = await conn.makeAdtRequest({
-      method: 'GET',
-      url: '/sap/bc/adt/compatibility/graph',
-      headers: { Accept: 'application/xml' },
-      params: { sap_language: 'EN' },
-      timeout: 10_000,
+    it('should return base URL matching config', async () => {
+      const baseUrl = await conn.getBaseUrl();
+      expect(baseUrl).toBe(process.env.SAP_URL);
     });
 
-    expect(resp.status).toBe(200);
-  }, 15_000);
+    it('should return a session ID', () => {
+      const sessionId = conn.getSessionId();
+      expect(sessionId).toBeTruthy();
+      expect(typeof sessionId).toBe('string');
+    });
 
-  it('should return 404 for non-existent resource', async () => {
-    await expect(
-      conn.makeAdtRequest({
+    it('should GET /sap/bc/adt/compatibility/graph', async () => {
+      const resp = await conn.makeAdtRequest({
         method: 'GET',
-        url: '/sap/bc/adt/programs/programs/ZZZZ_NONEXISTENT_99999',
+        url: '/sap/bc/adt/compatibility/graph',
         headers: { Accept: 'application/xml' },
         timeout: 10_000,
-      }),
-    ).rejects.toThrow(/4(0[0-9]|1[0-9]|2[0-9]|[0-9]{2})/);
-  }, 15_000);
+      });
 
-  it('should support stateful session type', () => {
-    conn.setSessionType('stateful');
-    // No error — session type accepted
-    conn.setSessionType('stateless');
-  });
+      expect(resp.status).toBe(200);
+      expect(typeof resp.data).toBe('string');
+    }, 15_000);
 
-  it('refuses a call once the conversation has been given back', async () => {
-    const other = overRfc(buildConfig());
-    await other.connect();
-    await other.disconnect();
-
-    await expect(
-      other.makeAdtRequest({
+    it('asks with no Accept of its own, and is still answered', async () => {
+      // Without a default, ADT refuses this with
+      // `400 ExceptionResourceBadRequest: Accept header missing` — axios supplies
+      // one over HTTP and nobody noticed until this wire had to.
+      const resp = await conn.makeAdtRequest({
         method: 'GET',
         url: '/sap/bc/adt/compatibility/graph',
         timeout: 10_000,
-      }),
-    ).rejects.toThrow(/ADT_NOT_CONNECTED/);
-  }, 20_000);
-});
+      });
+
+      expect(resp.status).toBe(200);
+    }, 15_000);
+
+    it('should return response headers', async () => {
+      const resp = await conn.makeAdtRequest({
+        method: 'GET',
+        url: '/sap/bc/adt/compatibility/graph',
+        headers: { Accept: 'application/xml' },
+        timeout: 10_000,
+      });
+
+      expect(resp.headers).toBeDefined();
+      expect(
+        (resp.headers as Record<string, unknown>)['content-type'],
+      ).toBeDefined();
+    }, 15_000);
+
+    it('should handle query params', async () => {
+      const resp = await conn.makeAdtRequest({
+        method: 'GET',
+        url: '/sap/bc/adt/compatibility/graph',
+        headers: { Accept: 'application/xml' },
+        params: { sap_language: 'EN' },
+        timeout: 10_000,
+      });
+
+      expect(resp.status).toBe(200);
+    }, 15_000);
+
+    it('should return 404 for non-existent resource', async () => {
+      await expect(
+        conn.makeAdtRequest({
+          method: 'GET',
+          url: '/sap/bc/adt/programs/programs/ZZZZ_NONEXISTENT_99999',
+          headers: { Accept: 'application/xml' },
+          timeout: 10_000,
+        }),
+      ).rejects.toThrow(/4(0[0-9]|1[0-9]|2[0-9]|[0-9]{2})/);
+    }, 15_000);
+
+    it('should support stateful session type', () => {
+      conn.setSessionType('stateful');
+      // No error — session type accepted
+      conn.setSessionType('stateless');
+    });
+
+    it('refuses a call once the conversation has been given back', async () => {
+      const other = overRfc(buildConfig());
+      await other.connect();
+      await other.disconnect();
+
+      await expect(
+        other.makeAdtRequest({
+          method: 'GET',
+          url: '/sap/bc/adt/compatibility/graph',
+          timeout: 10_000,
+        }),
+      ).rejects.toThrow(/ADT_NOT_CONNECTED/);
+    }, 20_000);
+  },
+);
 
 describe('the parameters the conversation is dialled with', () => {
   // Pure derivation, so these run wherever the suite does — the validation the
@@ -233,3 +278,44 @@ describe('the parameters the conversation is dialled with', () => {
     ).not.toThrow();
   });
 });
+
+describeWhere(
+  'SNC over RFC, through the Secure Login Client (integration)',
+  sncUnavailable(),
+  () => {
+    let conn: AdtOnPremConnector<SncLogonProvider, RfcTransport>;
+
+    beforeAll(async () => {
+      const config: SapConfig = {
+        url: process.env.SAP_URL as string,
+        client: process.env.SAP_CLIENT as string,
+        authType: 'basic',
+      };
+      conn = new AdtOnPremConnector(
+        config,
+        SncLogonProvider.forSecureLoginClient({
+          partnerName: process.env.SAP_SNC_PARTNERNAME as string,
+          qop: process.env.SAP_SNC_QOP || undefined,
+          sncLib: process.env.SAP_SNC_LIB || undefined,
+          myName: process.env.SAP_SNC_MYNAME || undefined,
+        }),
+        new RfcTransport(rfcConversationFrom(config), logger),
+        logger,
+      );
+      await conn.connect();
+    }, 60_000);
+
+    afterAll(async () => {
+      await conn?.disconnect();
+    });
+
+    it('logs on without a password and is answered', async () => {
+      const response = await conn.makeAdtRequest({
+        url: '/sap/bc/adt/compatibility/graph',
+        method: 'GET',
+        timeout: 15_000,
+      });
+      expect(response.status).toBe(200);
+    });
+  },
+);
