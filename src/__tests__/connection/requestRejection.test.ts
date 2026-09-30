@@ -463,6 +463,31 @@ describe('many requests, and a critical section', () => {
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.SESSION_REPLACED);
     expect(conn.isConnected()).toBe(false);
   });
+
+  it('inside a critical section, a dead session that answers the resend with the same cookie is REFUSED_AGAIN', async () => {
+    // The trade-off the docs state: the renewal keeps the session, so a session
+    // SAP really lost but still answers under the same cookie — no Set-Cookie —
+    // cannot be told from a credential refused twice.
+    const { conn, rejections } = await connected();
+    const identity = conn.getSessionIdentity();
+    stub.work(WORK, [401, 401]);
+
+    conn.beginCriticalSection();
+    let error: unknown;
+    try {
+      error = await put(conn).catch((e: unknown) => e);
+    } finally {
+      conn.endCriticalSection();
+    }
+
+    expect(error).toBeInstanceOf(AuthRefusedError);
+    expect((error as AuthRefusedError).refusal).toBe(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).at).toBe('request');
+    expect(rejections()).toHaveLength(1);
+    // Still connected, on the session the lock was taken in.
+    expect(conn.isConnected()).toBe(true);
+    expect(conn.getSessionIdentity()).toBe(identity);
+  });
 });
 
 describe('a request whose session is gone', () => {

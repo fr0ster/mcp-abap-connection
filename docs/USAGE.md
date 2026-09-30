@@ -984,6 +984,15 @@ request fails with `SESSION_REPLACED` rather than carrying on in a new one.
 Outside a critical section that mutation takes the wire's stale-session recovery
 first (above), which starts a new session.
 
+**The price of keeping the lock.** Inside a critical section the connection
+cannot tell a dead session from a refused credential when SAP answers the resend
+with the same session cookie and no `Set-Cookie`: the 401 comes back a second
+time, and the request ends as `AuthRefusedError` with the refused-again verdict
+(`at: 'request'`), not `SESSION_REPLACED`. The connection stays connected on
+that session. If you get this inside a critical section, treat the lock as lost:
+`disconnect()`, `connect()`, and redo the work under a new lock. That is the
+intended trade-off — a renewal must not discard a lock the session still holds.
+
 One credential retry per request: the upfront token fetch before a mutation and
 a later rejection draw on the same allowance.
 
