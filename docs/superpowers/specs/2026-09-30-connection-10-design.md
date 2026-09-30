@@ -280,6 +280,9 @@ must go red, then restored.
 
 ## 7. Live checks (H7)
 
+Run as a re-runnable live suite (plan Task 8): a committed `test-config.yaml.template`, a git-ignored
+`test-config.yaml` made from it, a helper that builds each provider explicitly.
+
 | Check | System |
 |---|---|
 | `BasicAuthProvider` over HTTP and over RFC; a wrong password refused in the provider's words | E19 (on-prem) |
