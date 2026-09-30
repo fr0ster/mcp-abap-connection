@@ -13,6 +13,7 @@ import {
   describeLive,
   type LiveWire,
   onPremOver,
+  safeErrorText,
 } from '../helpers/liveConfig.js';
 import {
   discovery,
@@ -74,19 +75,33 @@ describeLive('basic', (section) => {
     }
 
     // ONE failed logon on the user's account per wire — deliberate, and no
-    // retry: a second attempt would count against the account's lockout.
-    it('a wrong password is AuthRefusedError at logon: "the user or password was refused"', async () => {
-      const wrong = build(true);
+    // retry: a second attempt would count against the account's lockout. The
+    // provider counts the logons it is asked for, so the claim is measured.
+    it('a wrong password is AuthRefusedError at logon: "the user or password was refused", after one attempt', async () => {
+      const wrongProvider = setup.wrongProvider();
+      const wrong = onPremOver(
+        wire,
+        setup.config,
+        wrongProvider,
+        setup.rfc,
+        setup.rejectUnauthorized,
+      ) as unknown as LiveConnection;
       const error = await wrong.connect().then(
         () => undefined,
         (e: unknown) => e,
       );
       await wrong.disconnect().catch(() => undefined);
-      expect(error).toBeInstanceOf(AuthRefusedError);
-      expect((error as AuthRefusedError).at).toBe('logon');
-      expect((error as AuthRefusedError).refusal.reason).toBe(
-        'the user or password was refused',
-      );
+      // Never `expect(error)`: on a mismatch Jest prints the received value, and
+      // an axios error carries the Authorization header of the logon.
+      if (!(error instanceof AuthRefusedError)) {
+        throw new Error(
+          `expected AuthRefusedError at logon, got ${safeErrorText(error)}`,
+        );
+      }
+      expect(error.at).toBe('logon');
+      expect(error.refusal.reason).toBe('the user or password was refused');
+      expect(wrongProvider.establishes).toBe(1);
+      expect(wrongProvider.rejections).toBe(1);
     }, 60_000);
   });
 });

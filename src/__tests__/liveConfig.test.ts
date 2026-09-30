@@ -7,12 +7,14 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   basicSection,
+  CountingBasicAuthProvider,
   expandHome,
   invalidAccessToken,
   readEnvFile,
   readLiveConfig,
   requireKeys,
   rfcTransportFor,
+  safeErrorText,
   sectionOrSkip,
   sncSection,
   tokenSection,
@@ -148,9 +150,11 @@ describe('liveConfig', () => {
       expect(built.config).toMatchObject({
         url: 'https://h:44300',
         client: '100',
-        username: 'dev',
         authType: 'basic',
       });
+      // What authenticates is the provider, never the config.
+      expect(built.config.password).toBeUndefined();
+      expect(built.config.username).toBeUndefined();
       expect(built.wires).toStrictEqual(['http', 'rfc']);
       expect(built.rfc).toStrictEqual({ ashost: 'localhost', sysnr: '00' });
       expect(built.rejectUnauthorized).toBe(true);
@@ -193,6 +197,7 @@ describe('liveConfig', () => {
     it('the wrong password is the real one plus a suffix, never the real one', () => {
       const built = basicSection({ env_file: env, wires: ['http'] });
       expect(built.wrongPassword).toBe('s3cretx');
+      expect(built.wrongProvider()).toBeInstanceOf(CountingBasicAuthProvider);
     });
   });
 
@@ -209,8 +214,9 @@ describe('liveConfig', () => {
           'SAP_UAA_CLIENT_SECRET=csec',
         ].join('\n'),
       );
-      const built = tokenSection({ env_file: env });
+      const built = tokenSection({ env_file: env, allow_refresh: true });
       expect(built.config.url).toBe('https://t.example');
+      expect(built.allowRefresh).toBe(true);
       expect(built.tokens).toStrictEqual({
         accessToken: 'at',
         refreshToken: 'rt',
@@ -225,8 +231,40 @@ describe('liveConfig', () => {
         't2.env',
         'SAP_URL=https://t\nSAP_JWT_TOKEN=at\nSAP_UAA_URL=u\nSAP_UAA_CLIENT_ID=c\nSAP_UAA_CLIENT_SECRET=s\n',
       );
-      expect(() => tokenSection({ env_file: env })).toThrow(
-        /SAP_REFRESH_TOKEN/,
+      expect(() =>
+        tokenSection({ env_file: env, allow_refresh: true }),
+      ).toThrow(/SAP_REFRESH_TOKEN/);
+    });
+  });
+
+  describe('tokenSection without allow_refresh', () => {
+    it('does not need, and does not carry, the refresh token', () => {
+      const env = write(
+        'nr.env',
+        'SAP_URL=https://t\nSAP_JWT_TOKEN=at\nSAP_REFRESH_TOKEN=rt\nSAP_UAA_URL=u\nSAP_UAA_CLIENT_ID=c\nSAP_UAA_CLIENT_SECRET=s\n',
+      );
+      const built = tokenSection({ env_file: env });
+      expect(built.allowRefresh).toBe(false);
+      expect(built.tokens.refreshToken).toBeUndefined();
+    });
+  });
+
+  describe('safeErrorText', () => {
+    it('carries the class and message and nothing else of the error', () => {
+      const error = Object.assign(
+        new Error('Request failed with status code 401'),
+        {
+          config: { headers: { Authorization: 'Basic dXNlcjpodW50ZXIy' } },
+        },
+      );
+      const text = safeErrorText(error);
+      expect(text).toBe('Error: Request failed with status code 401');
+      expect(text).not.toMatch(/dXNlcjpodW50ZXIy/);
+    });
+
+    it('a non-Error is named by type, not printed', () => {
+      expect(safeErrorText({ secret: 'x' })).toBe(
+        'a non-Error value of type object',
       );
     });
   });

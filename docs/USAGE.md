@@ -1066,8 +1066,14 @@ present section that fails is red. `basic` names its `wires` (`http`, `rfc`;
 whose source is read, and a `lock_class` you may lock (without it the LOCK/UNLOCK
 case is skipped, with the reason printed). `basic` makes one deliberate
 wrong-password logon per wire, which counts against the account. The `token`
-suite refuses an interactive login: an expired refresh token fails it, and a
-tenant that rotates refresh tokens invalidates the one in the session file. The
+suite refuses an interactive login and never writes the session file. Its
+"connects" case uses the access token alone, so an expired one fails it. The
+renewal case spends the refresh token, so it runs only with `allow_refresh: true`
+in the `token` section — and a UAA that rotates refresh tokens then invalidates
+the one stored in that file, so give the suite a dedicated env file from a
+separate login, not the one your MCP server uses. `TLS_REJECT_UNAUTHORIZED=false`
+in a session file turns TLS verification off for requests carrying passwords and
+tokens: only for a system you own. The
 `snc` "logged out" case (`A2200019`) cannot be automated and is checked by hand.
 
 ## Examples Directory

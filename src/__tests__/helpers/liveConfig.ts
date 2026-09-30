@@ -31,6 +31,8 @@ import {
 import type {
   AuthOutcome,
   IAuthRejection,
+  ILogonTarget,
+  IRequestTarget,
 } from '@mcp-abap-adt/interfaces-auth';
 import * as dotenv from 'dotenv';
 import { parse as parseYaml } from 'yaml';
@@ -183,7 +185,7 @@ export interface BasicSetup {
   readClass: string;
   lockClass?: string;
   provider(): BasicAuthProvider;
-  wrongProvider(): BasicAuthProvider;
+  wrongProvider(): CountingBasicAuthProvider;
 }
 
 export function basicSection(section: LiveSection): BasicSetup {
@@ -209,33 +211,72 @@ export function basicSection(section: LiveSection): BasicSetup {
   );
   const username = env.SAP_USERNAME;
   const password = env.SAP_PASSWORD;
+  const wrongPassword = `${password}x`;
   return {
     config: {
       url: env.SAP_URL,
       client: env.SAP_CLIENT,
-      username,
-      password,
+      // No username or password here: the provider is what authenticates, and a
+      // secret in the config is one a connector could be tempted to read.
       authType: 'basic',
     },
     wires: wires as LiveWire[],
     rfc: rfcOverrides(section, 'basic'),
     rejectUnauthorized: env.TLS_REJECT_UNAUTHORIZED?.trim() !== 'false',
-    wrongPassword: `${password}x`,
+    wrongPassword,
     readClass:
       optionalText(section, 'read_class', 'basic') ?? DEFAULT_READ_CLASS,
     lockClass: optionalText(section, 'lock_class', 'basic'),
     provider: () => new BasicAuthProvider(username, password),
-    wrongProvider: () => new BasicAuthProvider(username, `${password}x`),
+    wrongProvider: () => new CountingBasicAuthProvider(username, wrongPassword),
   };
+}
+
+/**
+ * A provider that counts how often the connection asks it for a logon, so "one
+ * failed logon per wire" is measured rather than promised.
+ */
+export class CountingBasicAuthProvider extends BasicAuthProvider {
+  establishes = 0;
+  authorizes = 0;
+  rejections = 0;
+
+  override establish(logon: ILogonTarget): Promise<AuthOutcome> {
+    this.establishes++;
+    return super.establish(logon);
+  }
+
+  override authorize(request: IRequestTarget): Promise<AuthOutcome> {
+    this.authorizes++;
+    return super.authorize(request);
+  }
+
+  override rejected(rejection: IAuthRejection): Promise<AuthOutcome> {
+    this.rejections++;
+    return super.rejected(rejection);
+  }
+}
+
+/**
+ * All a live suite may say about an error it did not expect: its class and its
+ * message. Never the object — an axios error carries `config.headers`, and the
+ * Authorization header on it is `Basic base64(user:password)`.
+ */
+export function safeErrorText(error: unknown): string {
+  if (error instanceof Error) return `${error.name}: ${error.message}`;
+  return `a non-Error value of type ${typeof error}`;
 }
 
 export const DEFAULT_READ_CLASS = 'CL_ABAP_TYPEDESCR';
 
 export interface TokenSetup {
   config: SapConfig;
+  /** Renewal by refresh token was asked for (`allow_refresh: true`). */
+  allowRefresh: boolean;
   tokens: {
     accessToken: string;
-    refreshToken: string;
+    /** Only present when `allow_refresh` is true. */
+    refreshToken?: string;
     uaaUrl: string;
     clientId: string;
     clientSecret: string;
@@ -246,12 +287,13 @@ export interface TokenSetup {
 export function tokenSection(section: LiveSection): TokenSetup {
   const file = text(section, 'env_file', 'token');
   const env = readEnvFile(file);
+  const allowRefresh = section.allow_refresh === true;
   requireKeys(
     env,
     [
       'SAP_URL',
       'SAP_JWT_TOKEN',
-      'SAP_REFRESH_TOKEN',
+      ...(allowRefresh ? ['SAP_REFRESH_TOKEN'] : []),
       'SAP_UAA_URL',
       'SAP_UAA_CLIENT_ID',
       'SAP_UAA_CLIENT_SECRET',
@@ -264,9 +306,10 @@ export function tokenSection(section: LiveSection): TokenSetup {
       client: env.SAP_CLIENT?.trim() || undefined,
       authType: 'jwt',
     },
+    allowRefresh,
     tokens: {
       accessToken: env.SAP_JWT_TOKEN,
-      refreshToken: env.SAP_REFRESH_TOKEN,
+      refreshToken: allowRefresh ? env.SAP_REFRESH_TOKEN : undefined,
       uaaUrl: env.SAP_UAA_URL,
       clientId: env.SAP_UAA_CLIENT_ID,
       clientSecret: env.SAP_UAA_CLIENT_SECRET,
@@ -329,13 +372,20 @@ export class RenewalOnlyTokenProvider extends AuthorizationCodeProvider {
   /** How many times the connection asked this provider what to do about a refusal. */
   rejections = 0;
 
-  constructor(tokens: TokenSetup['tokens'], accessToken = tokens.accessToken) {
+  /**
+   * `useRefreshToken` false builds the provider with no refresh token at all, so
+   * an expired access token is a failure, never a silent refresh.
+   */
+  constructor(
+    tokens: TokenSetup['tokens'],
+    options: { accessToken?: string; useRefreshToken: boolean },
+  ) {
     super({
       uaaUrl: tokens.uaaUrl,
       clientId: tokens.clientId,
       clientSecret: tokens.clientSecret,
-      accessToken,
-      refreshToken: tokens.refreshToken,
+      accessToken: options.accessToken ?? tokens.accessToken,
+      refreshToken: options.useRefreshToken ? tokens.refreshToken : undefined,
       // Renewal is by refresh token only. A refresh the UAA refuses must fail
       // the suite, not open a browser on a machine nobody is sitting at.
       authorization: {
@@ -346,6 +396,11 @@ export class RenewalOnlyTokenProvider extends AuthorizationCodeProvider {
         },
       },
     });
+  }
+
+  /** The access token the provider holds now — what a renewal replaced. */
+  currentAccessToken(): string | undefined {
+    return this.authorizationToken;
   }
 
   override async rejected(rejection: IAuthRejection): Promise<AuthOutcome> {

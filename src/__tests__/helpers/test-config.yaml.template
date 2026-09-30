@@ -23,6 +23,10 @@
 # The env file is read for SAP_URL, SAP_CLIENT, SAP_USERNAME, SAP_PASSWORD and
 # (optional) TLS_REJECT_UNAUTHORIZED.
 #
+# TLS_REJECT_UNAUTHORIZED=false in that file turns TLS verification OFF for
+# requests that carry passwords and tokens. Acceptable only for a system you
+# own; never for a shared or production one.
+#
 # WARNING — every wire listed makes ONE deliberate failed logon on this user's
 # account (a wrong password, to prove the refusal is reported as one). Two wires,
 # two failed logons. Keep that in mind on a system with a lockout threshold.
@@ -40,15 +44,25 @@ basic:
 
 # ── token: BTP / ABAP Environment, a session's access + refresh token ─
 #
-# The env file is read for SAP_URL, SAP_JWT_TOKEN, SAP_REFRESH_TOKEN,
-# SAP_UAA_URL, SAP_UAA_CLIENT_ID, SAP_UAA_CLIENT_SECRET (and optionally
-# SAP_CLIENT, TLS_REJECT_UNAUTHORIZED). Interactive login is refused in the
-# suite: a refresh token the UAA no longer accepts fails it — re-login with your
-# usual tool to get a fresh session file. The renewal case uses the refresh
-# token, and a UAA that rotates it invalidates the one in the file; expect to
-# refresh the session file after a run on such a tenant.
+# The env file is read for SAP_URL, SAP_JWT_TOKEN, SAP_UAA_URL, SAP_UAA_CLIENT_ID,
+# SAP_UAA_CLIENT_SECRET (and optionally SAP_CLIENT, TLS_REJECT_UNAUTHORIZED —
+# see the TLS warning above), plus SAP_REFRESH_TOKEN when allow_refresh is true.
+#
+# USE A DEDICATED ENV FILE from a separate login, not the file your MCP server
+# uses. The suite NEVER writes the file, but a refresh against a UAA that
+# rotates refresh tokens invalidates the stored one on the server — and the
+# server that shares your file would find its refresh token dead.
+#
+# The "connects" case uses the access token alone (no refresh token): an expired
+# access token is a failure, not a silent refresh. Interactive login is refused.
+#
+# The renewal case spends the refresh token, so it is OPT-IN: without
+# `allow_refresh: true` it is skipped, with the reason printed.
 token:
-  env_file: <PATH_TO_SESSION_ENV>          # ← CHANGE  e.g. ~/.config/mcp-abap-adt/sessions/trial.env
+  env_file: <PATH_TO_SESSION_ENV>          # ← CHANGE  a dedicated file, e.g. ~/.config/mcp-abap-adt/sessions/trial-test.env
+  # WARNING: true lets the suite refresh — the refresh token may be rotated,
+  # invalidating the one stored in that file. Only for a dedicated env file.
+  # allow_refresh: true                    # ← CHANGE
 
 # ── snc: passwordless RFC logon through the Secure Login Client ─────
 #

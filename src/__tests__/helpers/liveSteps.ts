@@ -63,6 +63,8 @@ export async function lockAndUnlock(
       /<LOCK_HANDLE>([^<]+)<\/LOCK_HANDLE>/,
     )?.[1];
     if (!handle) {
+      // Nothing to unlock with. The lock belongs to the stateful session, and
+      // `disconnect()` ends that session, which releases it.
       throw new Error(
         `LOCK on ${name} answered ${locked.status} with no lock handle`,
       );
