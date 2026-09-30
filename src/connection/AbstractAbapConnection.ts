@@ -1004,7 +1004,8 @@ abstract class AbstractAbapConnection
       await this.readyWireUpfront(renewal, lease);
     }
 
-    // Start with default Accept header
+    // The request's own headers: everything but the credential's, which is
+    // written fresh onto a copy of these for every attempt (`authorizedFrom`).
     const requestHeaders: Record<string, string> = {};
     if (!customHeaders || !customHeaders.Accept) {
       requestHeaders.Accept =
@@ -1053,10 +1054,6 @@ abstract class AbstractAbapConnection
     // neither. It travels as `stateful` on the request below, and each
     // transport expresses it its own way.
 
-    // What the credential writes goes on last, so nothing overrides it, and
-    // is asked for again before every resend below.
-    await this.credentialHeaders(requestHeaders);
-
     // Read once: the wire is asked what it holds, and the same value is what
     // goes on the header.
     const presented = this.transport.csrfToken();
@@ -1099,7 +1096,9 @@ abstract class AbstractAbapConnection
     const requestConfig: IAdtTransportRequest = {
       method: normalizedMethod,
       url: requestUrl,
-      headers: requestHeaders,
+      // What the credential writes goes on last, so nothing overrides it, and
+      // is written anew for every resend below.
+      headers: await this.authorizedFrom(requestHeaders),
       timeout: effectiveTimeout,
       // `unknown` on the caller's options, a record on the seam: the two
       // transports serialise a query differently and both need the pairs.
@@ -1134,13 +1133,19 @@ abstract class AbstractAbapConnection
     } catch (error) {
       let survived: unknown;
       try {
-        return await this.recoverOnWire<T, D>(error, requestConfig, lease);
+        return await this.recoverOnWire<T, D>(
+          error,
+          requestConfig,
+          requestHeaders,
+          lease,
+        );
       } catch (failure) {
         survived = failure;
       }
       return await this.answerCredentialFailure<T, D>(
         survived,
         requestConfig,
+        requestHeaders,
         lease,
         renewal,
       );
@@ -1175,6 +1180,25 @@ abstract class AbstractAbapConnection
   }
 
   /**
+   * One attempt's headers: the request's own, with what the credential writes
+   * for THIS attempt on top.
+   *
+   * A fresh record every time, never the previous attempt's: a provider that
+   * wrote `Authorization` and, once renewed, writes only cookies — or renames
+   * its cookie — would otherwise send the stale value beside the new one. The
+   * credential's cookies merge into the request's `Cookie` on the copy, so the
+   * wire's session cookies in `base` survive and a stale credential cookie
+   * does not.
+   */
+  private async authorizedFrom(
+    base: Record<string, string>,
+  ): Promise<Record<string, string>> {
+    const headers = { ...base };
+    await this.credentialHeaders(headers);
+    return headers;
+  }
+
+  /**
    * The wire's own recovery from a failed attempt: the session faults it can
    * cure — a stale CSRF token, a login-form 401 on a mutation, a GET 401 that
    * cookies answer — and the verdicts it must not hide.
@@ -1185,15 +1209,19 @@ abstract class AbstractAbapConnection
    * and a credential failure among that goes on to the provider. One
    * exception: inside a critical section the login-form 401 is not cured
    * here, because curing it discards the session and the lock with it.
+   *
+   * `requestHeaders` are the request's own, without the credential's: what
+   * the recovery adds — a new token, the jar's cookies — goes there, and each
+   * resend is authorized anew on top (`authorizedFrom`).
    */
   private async recoverOnWire<T, D>(
     error: unknown,
     requestConfig: IAdtTransportRequest,
+    requestHeaders: Record<string, string>,
     lease: Pick<RequestLease, 'generation'>,
   ): Promise<IAdtWireResponse<T, D>> {
     const requestUrl = requestConfig.url;
     const normalizedMethod = requestConfig.method;
-    const requestHeaders = requestConfig.headers as Record<string, string>;
     // FENCE FIRST, before anything reads or writes shared state.
     //
     // Fencing observeResponse() alone was not enough, and the gap was wide:
@@ -1330,7 +1358,7 @@ abstract class AbstractAbapConnection
         }
 
         // Re-authorized: a provider may have renewed since the first attempt.
-        await this.credentialHeaders(requestHeaders);
+        requestConfig.headers = await this.authorizedFrom(requestHeaders);
         return await this.sendObserved<T, D>(requestConfig, lease);
       } catch (retryError) {
         // A session verdict outranks the error that started the retry: the
@@ -1364,7 +1392,7 @@ abstract class AbstractAbapConnection
         );
         requestHeaders.Cookie = afterError;
 
-        await this.credentialHeaders(requestHeaders);
+        requestConfig.headers = await this.authorizedFrom(requestHeaders);
         return await this.sendObserved<T, D>(requestConfig, lease);
       }
 
@@ -1384,7 +1412,7 @@ abstract class AbstractAbapConnection
             `Retrying GET request with cookies from CSRF fetch`,
           );
 
-          await this.credentialHeaders(requestHeaders);
+          requestConfig.headers = await this.authorizedFrom(requestHeaders);
           return await this.sendObserved<T, D>(requestConfig, lease);
         }
       } catch (csrfError) {
@@ -1412,11 +1440,13 @@ abstract class AbstractAbapConnection
    * logon the wire has no token, so it logs on anew first — its token dropped
    * and earned again, nothing on RFC — and the new token and cookies go onto
    * the request. The logon and the resend share the request's one retry: a
-   * credential failure in either is the verdict.
+   * credential failure in either is the verdict. As in `recoverOnWire`,
+   * `requestHeaders` are the request's own, and the resend is authorized anew.
    */
   private async answerCredentialFailure<T, D>(
     failure: unknown,
     requestConfig: IAdtTransportRequest,
+    requestHeaders: Record<string, string>,
     lease: Pick<RequestLease, 'generation'>,
     renewal: CredentialRenewal,
   ): Promise<IAdtWireResponse<T, D>> {
@@ -1428,7 +1458,6 @@ abstract class AbstractAbapConnection
     await this.renewCredential(rejection, renewal);
     if (!this.lifecycle.isCurrent(lease)) throw failure;
 
-    const requestHeaders = requestConfig.headers as Record<string, string>;
     try {
       if (rejection.at === 'logon') {
         this.transport.adoptCsrfToken(null);
@@ -1440,7 +1469,7 @@ abstract class AbstractAbapConnection
         const cookies = this.transport.cookies();
         if (cookies) requestHeaders.Cookie = cookies;
       }
-      await this.credentialHeaders(requestHeaders);
+      requestConfig.headers = await this.authorizedFrom(requestHeaders);
       return await this.sendObserved<T, D>(requestConfig, lease);
     } catch (again) {
       // The resend's refusal is observed like the first attempt's: a session
