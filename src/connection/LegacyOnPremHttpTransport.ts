@@ -13,6 +13,7 @@
  * system they are dialling, exactly as taking the cloud or the on-prem wire is.
  */
 
+import { CSRF_CONFIG } from './csrfConfig.js';
 import type {
   IAdtTransportRequest,
   IAdtTransportResponse,
@@ -28,6 +29,19 @@ export class LegacyOnPremHttpTransport extends OnPremHttpTransport {
   /** The stateful header is the one this system is hurt by, so it asks with none. */
   protected override sessionTypeHeaders(): Record<string, string> {
     return {};
+  }
+
+  /**
+   * Only `/sap/bc/adt/discovery`: this system has no `/sap/bc/adt/core/discovery`.
+   *
+   * And it does not say so with the 404 the inherited fallback waits for. BASIS
+   * 7.40 answers `200 text/html` with an empty body and no token there, while
+   * `/sap/bc/adt/discovery` on the same system hands one over (E77, measured
+   * 2026-09-29). Asked the inherited way, every connect was refused with
+   * `No CSRF token in response headers`.
+   */
+  protected override csrfEndpoints(): readonly string[] {
+    return [CSRF_CONFIG.FALLBACK_ENDPOINT];
   }
 
   /**

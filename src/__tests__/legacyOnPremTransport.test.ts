@@ -61,6 +61,59 @@ describe('the legacy on-prem wire', () => {
     expect(new OnPremHttpTransport().sessionEstablished()).toBe(false);
   });
 
+  it('asks for its token where this system has one, and only there', async () => {
+    // BASIS 7.40 answers /sap/bc/adt/core/discovery with `200 text/html`, an
+    // empty body and no token — not the 404 the ordinary wire falls back on —
+    // and hands the token over on /sap/bc/adt/discovery (E77, 2026-09-29).
+    const transport = new LegacyOnPremHttpTransport(() => ({}), null, {
+      baseUrl: 'https://h',
+    });
+    const asked: string[] = [];
+    (transport as unknown as { send: unknown }).send = async (request: {
+      url: string;
+    }) => {
+      asked.push(request.url);
+      return {
+        status: 200,
+        headers: request.url.endsWith('/sap/bc/adt/discovery')
+          ? { 'x-csrf-token': 'TOKEN' }
+          : { 'content-type': 'text/html' },
+        data: '',
+      };
+    };
+
+    await transport.establish({
+      baseUrl: 'https://h',
+      authHeaders: async () => ({}),
+      observe: () => {},
+      retries: 0,
+    });
+
+    expect(asked).toEqual(['https://h/sap/bc/adt/discovery']);
+    expect(transport.csrfToken()).toBe('TOKEN');
+  });
+
+  it('leaves the ordinary wire asking core/discovery first', async () => {
+    const transport = new OnPremHttpTransport(() => ({}), null, {
+      baseUrl: 'https://h',
+    });
+    const asked: string[] = [];
+    (transport as unknown as { send: unknown }).send = async (request: {
+      url: string;
+    }) => {
+      asked.push(request.url);
+      return { status: 200, headers: { 'x-csrf-token': 'TOKEN' }, data: '' };
+    };
+
+    await transport.establish({
+      baseUrl: 'https://h',
+      authHeaders: async () => ({}),
+      observe: () => {},
+    });
+
+    expect(asked).toEqual(['https://h/sap/bc/adt/core/discovery']);
+  });
+
   it('is still an on-prem wire, so it fits where one fits', () => {
     const transport = new LegacyOnPremHttpTransport();
 

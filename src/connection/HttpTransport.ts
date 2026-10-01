@@ -217,6 +217,17 @@ export class HttpTransport implements IAdtTransport {
   }
 
   /**
+   * The paths this wire asks for a CSRF token, in order.
+   *
+   * The second is for a system without the first — BASIS < 7.52 — which the
+   * server says by answering 404 there. A wire for a system that is known not
+   * to have the first asks only the one it has, and overrides this.
+   */
+  protected csrfEndpoints(): readonly string[] {
+    return [CSRF_CONFIG.ENDPOINT, CSRF_CONFIG.FALLBACK_ENDPOINT];
+  }
+
+  /**
    * Earn a CSRF token, and with it the cookies that name the session.
    *
    * The token and the session are one thing on this wire: SAP binds a lock
@@ -234,11 +245,7 @@ export class HttpTransport implements IAdtTransport {
     const base = context.baseUrl.endsWith('/')
       ? context.baseUrl.slice(0, -1)
       : context.baseUrl;
-    const endpoints = [
-      `${base}${CSRF_CONFIG.ENDPOINT}`,
-      // BASIS < 7.52 has no /sap/bc/adt/core/discovery.
-      `${base}${CSRF_CONFIG.FALLBACK_ENDPOINT}`,
-    ];
+    const endpoints = this.csrfEndpoints().map((path) => `${base}${path}`);
     const retries = context.retries ?? CSRF_CONFIG.RETRY_COUNT;
     const delay = context.retryDelayMs ?? CSRF_CONFIG.RETRY_DELAY;
 
