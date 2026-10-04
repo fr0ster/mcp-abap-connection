@@ -178,10 +178,10 @@ export class HttpTransport implements IAdtTransport {
     private readonly agentOptions: () => AgentOptions = () => ({}),
     protected readonly logger: ILogger | null = null,
     /**
-     * `client` because SAP answers `sap-usercontext` with the system default
-     * rather than the client that was asked for, and later requests then route
-     * to a client the caller never named — on a read-only one, every write
-     * comes back 403.
+     * The SAP client (mandant) every request on this wire addresses, from the
+     * first one on: the establishing call is where the session and its CSRF
+     * token are issued, so a client applied any later is applied to a session
+     * that already lives in another one. See `clientHeaders()`.
      */
     private readonly options: { client?: string; baseUrl?: string } = {},
   ) {}
@@ -214,6 +214,10 @@ export class HttpTransport implements IAdtTransport {
       this.jar.set(trimmed, rest.join('=').trim());
     }
 
+    // SAP answers `sap-usercontext` with the system default rather than the
+    // client that was asked for; folded in as it came, later requests would
+    // route to a client the caller never named — on a read-only one, every
+    // write comes back 403.
     if (this.options.client) {
       this.jar.set('sap-usercontext', `sap-client=${this.options.client}`);
     }
@@ -270,6 +274,41 @@ export class HttpTransport implements IAdtTransport {
         ? { saplb: this.appServer, 'saplb-options': 'REDISPATCH_ON_SHUTDOWN' }
         : {}),
     };
+  }
+
+  /**
+   * The client, said the way ABAP hears it: the `sap-client` header.
+   *
+   * ICF takes the client from the `sap-client` header or query parameter, or
+   * from the `sap-usercontext` cookie — and NOT from `X-SAP-Client`, which it
+   * ignores. Measured against an on-prem system (client 100 the default),
+   * plain curl with basic auth on `/sap/bc/adt/core/discovery`:
+   * `X-SAP-Client: 999` answers 200 from client 100, `sap-client: 999` answers
+   * 401. Before this, the client reached the system only through the cookie,
+   * which the wire holds from the first response on — so the first request,
+   * the one that opens the session and earns the CSRF token, always landed in
+   * the default client, and a wrong client failed one request late.
+   *
+   * The header rather than the query parameter: it addresses the client
+   * without rewriting a URL the caller built, and it rides on the detached
+   * goodbye the same way it rides on everything else.
+   */
+  protected clientHeaders(): Record<string, string> {
+    return this.options.client ? { 'sap-client': this.options.client } : {};
+  }
+
+  /**
+   * The `sap-usercontext` cookie the client is asserted with, from the first
+   * request on — before any response could have set one.
+   *
+   * Added when a request is dressed rather than put in the jar: the jar is
+   * what the server issued, and a jar that held something before the first
+   * answer would read as a connection that holds a session.
+   */
+  private clientCookie(): string | undefined {
+    return this.options.client
+      ? `sap-usercontext=sap-client=${this.options.client}`
+      : undefined;
   }
 
   /**
@@ -460,6 +499,7 @@ export class HttpTransport implements IAdtTransport {
     const stateful = isStatefulRequest(request);
     const dressed: Record<string, string> = {
       ...this.affinityHeaders(),
+      ...this.clientHeaders(),
       ...this.sessionHeaders(),
       ...(stateful ? this.sessionTypeHeaders() : {}),
       ...headers,
@@ -473,7 +513,13 @@ export class HttpTransport implements IAdtTransport {
       callerCookie = mergeCookieHeaders(callerCookie, dressed[name]);
       delete dressed[name];
     }
-    const merged = mergeCookieHeaders(callerCookie, this.combined ?? undefined);
+    // The client cookie last, so it wins: on the first request it is the only
+    // thing that names the client, and later the jar already holds the same
+    // value.
+    const merged = mergeCookieHeaders(
+      mergeCookieHeaders(callerCookie, this.combined ?? undefined),
+      this.clientCookie(),
+    );
     // Filtered on the merged header, not only on the jar: a caller's own
     // `Cookie` can carry the context too — the connection's CSRF and 401
     // retries put the whole jar there — and a non-stateful request must not

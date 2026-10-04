@@ -30,14 +30,13 @@ function connectorOn(provider: ReturnType<typeof stubProvider>) {
 }
 
 describe('the credential hooks on a connector', () => {
-  it('credentialHeaders writes X-SAP-Client, then the provider header', async () => {
+  it('credentialHeaders writes the provider header and not the client', async () => {
+    // The client is the wire's to address (`sap-client`); `X-SAP-Client` was
+    // written here and ABAP ignores it.
     const conn = connectorOn(stubProvider());
     const headers: Record<string, string> = {};
     await conn.credentialHeaders(headers);
-    expect(Object.entries(headers)).toEqual([
-      ['X-SAP-Client', '100'],
-      ['Authorization', 'Stub 0'],
-    ]);
+    expect(Object.entries(headers)).toEqual([['Authorization', 'Stub 0']]);
     expect(await conn.getAuthHeaders()).toEqual(headers);
   });
 
@@ -133,9 +132,9 @@ describe('the base class alone', () => {
       null,
     );
 
-  it('writes nothing but the client and answers NO_CREDENTIAL_TO_RENEW', async () => {
+  it('writes nothing and answers NO_CREDENTIAL_TO_RENEW', async () => {
     const conn = bare();
-    expect(await conn.getAuthHeaders()).toEqual({ 'X-SAP-Client': '100' });
+    expect(await conn.getAuthHeaders()).toEqual({});
     await expect(conn.logon({})).resolves.toBeUndefined();
     expect(await conn.credentialRejected({ at: 'request', error: 1 })).toEqual({
       outcome: { ok: false, refusal: NO_CREDENTIAL_TO_RENEW },

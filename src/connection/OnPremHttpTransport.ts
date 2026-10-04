@@ -92,6 +92,9 @@ export class OnPremHttpTransport
         url: `${context.baseUrl}${ICF_LOGOFF_PATH}`,
         headers: {
           ...affinity,
+          // Detached, so not dressed: the client is said here in so many
+          // words, as on every other request of this wire.
+          ...this.clientHeaders(),
           ...auth,
           ...context.extraHeaders,
           Cookie: mergeCookieHeaders(auth.Cookie, cookies),

@@ -6,7 +6,8 @@
  * or rename its cookie when it renews. Whatever it wrote before must not ride
  * along on a resend: a stale `Authorization` beside a new SSO cookie is a
  * request authenticated twice, as two different things. What the wire adds —
- * its session cookie, the new CSRF token — and `X-SAP-Client` must survive.
+ * its session cookie, the new CSRF token, the `sap-client` it addresses — must
+ * survive.
  *
  * A real `OnPremHttpTransport` against a local SAP that enforces CSRF.
  */
@@ -122,7 +123,7 @@ describe('after rejected() → Ok', () => {
     expect(resend.headers.authorization).toBeUndefined();
     expect(cookiesOf(resend.headers).get('MYSSO')).toEqual(['new']);
     expect(cookiesOf(resend.headers).get(SESSION)).toEqual(['S1']);
-    expect(resend.headers['x-sap-client']).toBe('100');
+    expect(resend.headers['sap-client']).toBe('100');
   });
 
   it('a provider whose cookie changes value: only the new value is sent', async () => {
@@ -155,7 +156,7 @@ describe('after rejected() → Ok', () => {
     expect(cookies.get('SSO_NEW')).toEqual(['2']);
     expect(cookies.has('SSO_OLD')).toBe(false);
     expect(cookies.get(SESSION)).toEqual(['S1']);
-    expect(resend.headers['x-sap-client']).toBe('100');
+    expect(resend.headers['sap-client']).toBe('100');
   });
 
   it('the one more attempt after a refused logon carries the new token, the jar, and only the new credential', async () => {
@@ -177,7 +178,7 @@ describe('after rejected() → Ok', () => {
     expect(resend.headers.authorization).toBeUndefined();
     expect(cookiesOf(resend.headers).get('MYSSO')).toEqual(['new']);
     expect(cookiesOf(resend.headers).get(SESSION)).toBeDefined();
-    expect(resend.headers['x-sap-client']).toBe('100');
+    expect(resend.headers['sap-client']).toBe('100');
   });
 });
 
@@ -203,7 +204,7 @@ describe("the wire's own recovery", () => {
     expect(resend.headers['x-csrf-token']).toBe(stub.tokens.at(-1));
     expect(cookiesOf(resend.headers).get('MYSSO')).toEqual(['new']);
     expect(cookiesOf(resend.headers).get(SESSION)).toBeDefined();
-    expect(resend.headers['x-sap-client']).toBe('100');
+    expect(resend.headers['sap-client']).toBe('100');
   });
 
   it('path (b), cookies at hand: the GET resend carries only the credential written for it', async () => {
@@ -224,7 +225,7 @@ describe("the wire's own recovery", () => {
     expect(resend.headers.authorization).toBeUndefined();
     expect(cookiesOf(resend.headers).get('MYSSO')).toEqual(['new']);
     expect(cookiesOf(resend.headers).get(SESSION)).toEqual(['S1']);
-    expect(resend.headers['x-sap-client']).toBe('100');
+    expect(resend.headers['sap-client']).toBe('100');
   });
 
   it('path (b), cookies fetched: the GET resend carries only the credential written for it', async () => {
@@ -247,7 +248,7 @@ describe("the wire's own recovery", () => {
     expect(resend.headers.authorization).toBeUndefined();
     expect(cookiesOf(resend.headers).get('MYSSO')).toEqual(['new']);
     expect(cookiesOf(resend.headers).get(SESSION)).toBeDefined();
-    expect(resend.headers['x-sap-client']).toBe('100');
+    expect(resend.headers['sap-client']).toBe('100');
   });
 });
 

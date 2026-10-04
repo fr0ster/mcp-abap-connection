@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The SAP client is addressed from the first request on.** An HTTP wire
+  given a `client` applied it only through the `sap-usercontext` cookie, which
+  it held only once a response had set one — so the first request, the one
+  that opens the session and earns the CSRF token, always landed in the
+  system's DEFAULT client, and a wrong client failed one request late. Every
+  request of `OnPremHttpTransport`, `LegacyOnPremHttpTransport` and
+  `CloudHttpTransport` now carries the `sap-client` header and the
+  `sap-usercontext=sap-client=<n>` cookie, the establishing call, the cloud
+  session preflight and the goodbye included. Measured on an on-prem system:
+  with client `999` the first request is now refused (`401`); before, it
+  answered `200` from the default client.
+
+### Changed
+
+- **`X-SAP-Client` is no longer sent**, and `getAuthHeaders()` no longer
+  returns it: ABAP ignores that header (`X-SAP-Client: 999` answers `200` from
+  the default client; `sap-client: 999` answers `401`). The client is the
+  wire's to address — `sap-client` over HTTP, the logon over RFC. A consumer
+  that put `config.client` on the connection but not on the transport was
+  never addressing the client over HTTP; pass it to the transport's `client`
+  option.
+
 ## [11.0.0] - 2026-10-04
 
 ### Breaking

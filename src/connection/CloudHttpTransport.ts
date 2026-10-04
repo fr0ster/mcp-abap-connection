@@ -155,6 +155,9 @@ export class CloudHttpTransport
         url: new URL(resource, context.baseUrl).toString(),
         headers: {
           ...affinity,
+          // Detached, so not dressed: the client is said here in so many
+          // words, as on every other request of this wire.
+          ...this.clientHeaders(),
           ...auth,
           ...context.extraHeaders,
           Cookie: mergeCookieHeaders(auth.Cookie, cookies),
