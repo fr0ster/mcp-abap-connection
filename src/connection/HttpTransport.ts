@@ -116,6 +116,27 @@ function sameMaterial(
   });
 }
 
+/**
+ * Whether the server certificate is verified: yes, as Node does, unless told
+ * otherwise in so many words.
+ *
+ * `agentOptions.rejectUnauthorized`, when the caller set it, decides — it is
+ * the caller's own code. Otherwise `TLS_REJECT_UNAUTHORIZED=0` or
+ * `NODE_TLS_REJECT_UNAUTHORIZED=0` turns verification off, and nothing else
+ * does: unset, `1` and a typo (`false`, `no`) all verify, so a misread
+ * variable fails closed. A self-signed system is trusted with
+ * `agentOptions.ca`, not by turning verification off.
+ */
+function verifiesServerCertificate(options: AgentOptions): boolean {
+  if (typeof options.rejectUnauthorized === 'boolean') {
+    return options.rejectUnauthorized;
+  }
+  return !(
+    process.env.TLS_REJECT_UNAUTHORIZED === '0' ||
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0'
+  );
+}
+
 export class HttpTransport implements IAdtTransport {
   /**
    * A real wire, usable on its own: it sends, holds a jar, and earns a CSRF
@@ -136,6 +157,9 @@ export class HttpTransport implements IAdtTransport {
    * a logon offering different material drops the client — never the jar.
    */
   private material: ICertificateMaterial | null = null;
+
+  /** Whether this wire has said that it does not verify the server certificate. */
+  private saidUnverified = false;
 
   /**
    * The wire's own state.
@@ -506,21 +530,20 @@ export class HttpTransport implements IAdtTransport {
 
   private client(): AxiosInstance {
     if (!this.instance) {
-      // Kept as it was: an explicit opt-IN, so a misread env var cannot quietly
-      // turn verification off.
-      const rejectUnauthorized =
-        process.env.NODE_TLS_REJECT_UNAUTHORIZED === '1' ||
-        (process.env.TLS_REJECT_UNAUTHORIZED === '1' &&
-          process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '0');
+      const options = this.agentOptions();
+      const rejectUnauthorized = verifiesServerCertificate(options);
 
-      this.logger?.debug(
-        `TLS configuration: rejectUnauthorized=${rejectUnauthorized}`,
-      );
+      if (!rejectUnauthorized && !this.saidUnverified) {
+        this.saidUnverified = true;
+        this.logger?.debug(
+          'TLS: the server certificate is not verified (explicit opt-out)',
+        );
+      }
 
       this.instance = axios.create({
         httpsAgent: new Agent({
+          ...options,
           rejectUnauthorized,
-          ...this.agentOptions(),
           ...this.material,
         }),
       });

@@ -23,6 +23,10 @@ dist/
 *.pfx
 *.p12
 *.jks
+# The one exception: a throwaway self-signed key for a local test server,
+# trusted by nothing (src/__tests__/fixtures/tls/README.md). Named file by
+# file, so a key dropped anywhere else is still ignored.
+!src/__tests__/fixtures/tls/server.key
 .DS_Store
 *.log
 
