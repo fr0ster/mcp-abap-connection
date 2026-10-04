@@ -815,7 +815,11 @@ carries it; the wire never reads `config.username` or `config.password`.
 
 - HTTP takes TLS material (`cert`, `key`, `pfx`, `passphrase`) at logon and builds
   its `https.Agent` from it. `agentOptions` stays for what is not the credential
-  — `ca` and `rejectUnauthorized`. A later logon offering different material
+  — `ca` and `rejectUnauthorized`. The server certificate is verified unless
+  `agentOptions.rejectUnauthorized` is `false`, or — with that left unset —
+  `TLS_REJECT_UNAUTHORIZED` or `NODE_TLS_REJECT_UNAUTHORIZED` is exactly `0`;
+  trust a self-signed system with `ca` rather than turning verification off
+  (see [MIGRATION-11.0.md](./MIGRATION-11.0.md)). A later logon offering different material
   replaces the client; the cookie jar and CSRF token are the session's and stay.
   HTTP refuses logon parameters.
 - RFC takes logon parameters (a password, or SNC settings) on every conversation
