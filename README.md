@@ -154,6 +154,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 11.0.0](./docs/MIGRATION-11.0.md)** - the server certificate is verified by default; trust a self-signed system with `agentOptions.ca`, or opt out explicitly
 - 🚚 **[Migration to 10.0.0](./docs/MIGRATION-10.0.md)** - the credential providers moved to `@mcp-abap-adt/auth-providers`; the connection speaks `IAuthProvider` 3.0; `AuthRefusedError`; the RFC factory takes the logon parameters
 - 🚚 **[Migration to 9.0.0](./docs/MIGRATION-9.0.md)** - the contracts split out of `@mcp-abap-adt/interfaces`; which package each one moved to
 - 🚚 **[Migration to 7.0.0 and 8.0.0](./docs/MIGRATION-8.0.md)** - request headers leave the stateful branch, the contracts floor moves, and `flushGoodbye()`
@@ -474,6 +475,28 @@ try {
 
 See [USAGE.md](./docs/USAGE.md#when-the-credential-is-refused).
 
+### The server certificate
+
+The HTTP wire verifies the server certificate, as Node does. For a system with a
+self-signed certificate or one from a company CA, trust that CA:
+
+```typescript
+import { readFileSync } from "node:fs";
+import { OnPremHttpTransport } from "@mcp-abap-adt/connection";
+
+const ca = readFileSync("/path/to/sap-system-ca.pem", "utf8");
+const transport = new OnPremHttpTransport(() => ({ ca }), logger, {
+  client: config.client,
+  baseUrl: config.url,
+});
+```
+
+Verification is turned off only explicitly — `agentOptions: { rejectUnauthorized:
+false }`, or (when `agentOptions` leaves it unset) `TLS_REJECT_UNAUTHORIZED=0` or
+`NODE_TLS_REJECT_UNAUTHORIZED=0`; any other value verifies. A last resort, never
+for production. Before 11.0.0 the certificate was not verified by default: see
+[MIGRATION-11.0.md](./docs/MIGRATION-11.0.md).
+
 ### Stateful Sessions
 
 Enable stateful mode for requests that need the ABAP context, such as LOCK and
@@ -536,14 +559,6 @@ class MyLogger implements ILogger {
 
   debug(message: string, meta?: any): void {
     // Your logging implementation
-  }
-
-  csrfToken(action: "fetch" | "retry" | "success" | "error", message: string, meta?: any): void {
-    // CSRF token specific logging
-  }
-
-  tlsConfig(rejectUnauthorized: boolean): void {
-    // TLS configuration logging
   }
 }
 
@@ -698,8 +713,6 @@ interface ILogger {
   error(message: string, meta?: any): void;
   warn(message: string, meta?: any): void;
   debug(message: string, meta?: any): void;
-  csrfToken?(action: "fetch" | "retry" | "success" | "error", message: string, meta?: any): void;
-  tlsConfig?(rejectUnauthorized: boolean): void;
 }
 ```
 

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [11.0.0] - 2026-10-04
+
+### Breaking
+
+- **The server certificate is verified by default.** Up to 10.x the HTTPS agent
+  verified it only when `NODE_TLS_REJECT_UNAUTHORIZED` or
+  `TLS_REJECT_UNAUTHORIZED` was `1`; with neither set it accepted any
+  certificate — on every HTTP wire, `CloudHttpTransport` included. Now it
+  verifies as Node does, and turns verification off only when told so:
+  `agentOptions: { rejectUnauthorized: false }`, or — with `agentOptions`
+  leaving it unset — `TLS_REJECT_UNAUTHORIZED=0` or
+  `NODE_TLS_REJECT_UNAUTHORIZED=0`. Any other value (`1`, `false`, `no`, empty)
+  verifies. `agentOptions.rejectUnauthorized` wins over the environment.
+  A system with a self-signed or company-CA certificate that worked without
+  any setting is now refused at the first request: trust its CA with
+  `agentOptions: { ca }` (or `NODE_EXTRA_CA_CERTS`), or opt out explicitly.
+  See [MIGRATION-11.0.md](./docs/MIGRATION-11.0.md).
+
+### Added
+
+- An opt-out is logged once per wire at debug level, in fixed words:
+  `TLS: the server certificate is not verified (explicit opt-out)`. The old
+  `TLS configuration: rejectUnauthorized=…` debug line is gone.
+
 ## [10.0.3] - 2026-10-02
 
 ### Changed
@@ -2114,7 +2138,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.3...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v11.0.0...HEAD
+[11.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.3...v11.0.0
 [10.0.3]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.2...v10.0.3
 [10.0.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.1...v10.0.2
 [10.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.0...v10.0.1

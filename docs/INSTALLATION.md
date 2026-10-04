@@ -328,13 +328,41 @@ npm run build
 
 ### SSL/TLS errors
 
-For development with self-signed certificates:
+The server certificate is verified by default (since 11.0.0). A system whose
+certificate Node does not trust — self-signed, or issued by a company CA — is
+refused at the first request with an error such as `DEPTH_ZERO_SELF_SIGNED_CERT`
+or `UNABLE_TO_VERIFY_LEAF_SIGNATURE`.
 
-```bash
-export NODE_TLS_REJECT_UNAUTHORIZED=0
+**Trust the system's CA** (preferred): pass it as `ca` in the transport's
+`agentOptions`, or add it to Node's store for the whole process.
+
+```typescript
+import { readFileSync } from 'node:fs';
+import { OnPremHttpTransport } from '@mcp-abap-adt/connection';
+
+const ca = readFileSync('/path/to/sap-system-ca.pem', 'utf8');
+const transport = new OnPremHttpTransport(() => ({ ca }), null, {
+  client: '100',
+  baseUrl: 'https://sap.example.com:44300',
+});
 ```
 
-**⚠️ Warning**: Never use this in production!
+```bash
+export NODE_EXTRA_CA_CERTS=/path/to/sap-system-ca.pem
+```
+
+**Turn verification off** (last resort, development only), explicitly — only the
+value `0` does it, anything else verifies:
+
+```bash
+export TLS_REJECT_UNAUTHORIZED=0        # this package's HTTP wire only
+export NODE_TLS_REJECT_UNAUTHORIZED=0   # every TLS connection in the process
+```
+
+or `agentOptions: { rejectUnauthorized: false }`, which wins over both
+variables. **⚠️ Warning**: never in production — anyone in the path can then
+read and change the traffic, credentials included. See
+[MIGRATION-11.0.md](./MIGRATION-11.0.md).
 
 ## Version Compatibility
 
