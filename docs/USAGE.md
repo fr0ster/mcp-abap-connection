@@ -617,16 +617,6 @@ class CustomLogger implements ILogger {
       console.debug(`[DEBUG] ${message}`, meta);
     }
   }
-  
-  // Optional: CSRF-specific logging
-  csrfToken?(action: 'fetch' | 'retry' | 'success' | 'error', message: string, meta?: any) {
-    console.log(`[CSRF:${action.toUpperCase()}] ${message}`, meta);
-  }
-  
-  // Optional: TLS config logging
-  tlsConfig?(rejectUnauthorized: boolean) {
-    console.log(`[TLS] rejectUnauthorized=${rejectUnauthorized}`);
-  }
 }
 
 const logger = new CustomLogger();

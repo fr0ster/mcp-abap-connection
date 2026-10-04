@@ -560,14 +560,6 @@ class MyLogger implements ILogger {
   debug(message: string, meta?: any): void {
     // Your logging implementation
   }
-
-  csrfToken(action: "fetch" | "retry" | "success" | "error", message: string, meta?: any): void {
-    // CSRF token specific logging
-  }
-
-  tlsConfig(rejectUnauthorized: boolean): void {
-    // TLS configuration logging
-  }
 }
 
 const logger = new MyLogger();
@@ -721,8 +713,6 @@ interface ILogger {
   error(message: string, meta?: any): void;
   warn(message: string, meta?: any): void;
   debug(message: string, meta?: any): void;
-  csrfToken?(action: "fetch" | "retry" | "success" | "error", message: string, meta?: any): void;
-  tlsConfig?(rejectUnauthorized: boolean): void;
 }
 ```
 
