@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import {
   authError,
   classifyOutcome,
@@ -55,7 +56,7 @@ describe('AuthRefusedError', () => {
     expect(new AuthRefusedError(refused, 'prepare').cause).toBe(undefined);
   });
 
-  it('RF3: over a structuredClone of a classified refusal, still reads reason — hint', () => {
+  it('RF3: over a structuredClone of a classified refusal, still reads reason — hint, rebuilt as a minted error', () => {
     const outcome = classifyOutcome(
       { ok: false, refusal: refused },
       providerFailed('request'),
@@ -63,9 +64,96 @@ describe('AuthRefusedError', () => {
     if (outcome.ok) throw new Error('expected a refusal');
     const cloned: IAuthRefusal = structuredClone(outcome.refusal);
     expect(isMinted(cloned)).toBe(false);
-    expect(new AuthRefusedError(cloned, 'request').message).toBe(
+    const error = new AuthRefusedError(cloned, 'request');
+    expect(error.message).toBe(
       'the user or password was refused — check the user and password',
     );
+    expect(isMinted(error.refusal)).toBe(true);
+    expect(error.refusal.kind).toBe('credential-refused');
+    expect(error.refusal.facts).toStrictEqual(refused.facts);
+  });
+});
+
+describe('AuthRefusedError classifies the refusal it is given', () => {
+  const SECRET = 'password=hunter2';
+  const library = authError.snc<'no-credential'>(
+    { problem: 'no-credential', libraryArchs: ['x64'] },
+    { library: '/opt/libsapcrypto.so' },
+  );
+
+  /** Every rendering of an error a log line or a report might use. */
+  function everywhere(error: AuthRefusedError): string[] {
+    return [
+      error.message,
+      String(error),
+      JSON.stringify(error),
+      JSON.stringify(error.refusal),
+      inspect(error, { depth: 10 }),
+      error.refusal.reason,
+      String(error.refusal.hint),
+    ];
+  }
+
+  it('keeps a refusal this copy minted as the same object', () => {
+    const error = new AuthRefusedError(library, 'logon');
+    expect(error.refusal).toBe(library);
+    expect(error.refusal.diagnostics).toStrictEqual({
+      library: '/opt/libsapcrypto.so',
+    });
+  });
+
+  it('rebuilds a tampered structuredClone from its kind and facts: the foreign text is nowhere', () => {
+    const tampered = Object.assign(structuredClone(library), {
+      reason: `${SECRET} reason`,
+      hint: `${SECRET} hint`,
+      diagnostics: { library: `/${SECRET}` },
+    });
+
+    const error = new AuthRefusedError(tampered, 'logon');
+
+    expect(isMinted(error.refusal)).toBe(true);
+    expect(error.refusal.kind).toBe('snc');
+    expect(error.refusal.facts).toStrictEqual(library.facts);
+    expect(error.refusal.reason).toBe(library.reason);
+    expect(error.refusal.hint).toBe(library.hint);
+    expect(error.refusal.diagnostics).toBeUndefined();
+    expect(error.message).toBe(`${library.reason} — ${library.hint}`);
+    for (const text of everywhere(error)) expect(text).not.toContain('hunter2');
+  });
+
+  it('rebuilds a refusal minted by another copy of auth-errors, without its diagnostics', () => {
+    let other: typeof import('@mcp-abap-adt/auth-errors') | undefined;
+    jest.isolateModules(() => {
+      other = require('@mcp-abap-adt/auth-errors');
+    });
+    if (other === undefined) throw new Error('no second copy');
+    const foreign = other.authError.snc<'no-credential'>(
+      { problem: 'no-credential', libraryArchs: ['x64'] },
+      { library: '/opt/libsapcrypto.so' },
+    );
+    expect(other.isMinted(foreign)).toBe(true);
+    expect(isMinted(foreign)).toBe(false);
+
+    const error = new AuthRefusedError(foreign, 'logon');
+
+    expect(error.refusal).not.toBe(foreign);
+    expect(isMinted(error.refusal)).toBe(true);
+    expect(error.refusal.kind).toBe('snc');
+    expect(error.refusal.facts).toStrictEqual(foreign.facts);
+    expect(error.refusal.diagnostics).toBeUndefined();
+    expect(error.message).toBe(`${foreign.reason} — ${foreign.hint}`);
+  });
+
+  it('answers provider-threw at the moment for anything that is no refusal', () => {
+    const garbage: IAuthRefusal = JSON.parse(
+      JSON.stringify({ reason: SECRET, hint: SECRET }),
+    );
+
+    const error = new AuthRefusedError(garbage, 'request');
+
+    expect(error.refusal).toStrictEqual(providerFailed('request'));
+    expect(error.message).toBe('the credential provider failed');
+    for (const text of everywhere(error)) expect(text).not.toContain('hunter2');
   });
 });
 

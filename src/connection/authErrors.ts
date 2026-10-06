@@ -14,8 +14,10 @@ export type AuthRefusalMoment = 'prepare' | 'logon' | 'request';
  * is final.
  *
  * `refusal` is the provider's error as `@mcp-abap-adt/auth-errors` minted it
- * (or the connection's own) — decide on its `kind` and `facts`; the message is
- * its `reason — hint`. `cause` keeps the wire's error as it arrived, so a network failure stays visible even when a provider words it as
+ * (or the connection's own), classified on the way in: a refusal that is not
+ * this copy's minted error is rebuilt from its kind and facts, or else is
+ * `provider-threw` — decide on its `kind` and `facts`; the message is its
+ * `reason — hint`. `cause` keeps the wire's error as it arrived, so a network failure stays visible even when a provider words it as
  * a credential problem — unless the provider threw instead of answering, when
  * it is that throw.
  */
@@ -25,14 +27,32 @@ export class AuthRefusedError extends Error {
   override readonly cause?: unknown;
 
   constructor(refusal: IAuthRefusal, at: AuthRefusalMoment, cause?: unknown) {
+    const checked = checkedRefusal(refusal, at);
     super(
-      refusal.hint ? `${refusal.reason} — ${refusal.hint}` : refusal.reason,
+      checked.hint ? `${checked.reason} — ${checked.hint}` : checked.reason,
     );
     this.name = 'AuthRefusedError';
-    this.refusal = refusal;
+    this.refusal = checked;
     this.at = at;
     this.cause = cause;
   }
+}
+
+/**
+ * The refusal an `AuthRefusedError` carries, never the object as given unread:
+ * anyone may build one — over a `structuredClone`, say — and its words reach
+ * the message. A refusal this copy of `auth-errors` minted is kept as the same
+ * object; one that rebuilds from its kind and facts (a clone, another copy's)
+ * is rebuilt, its words rendered anew and its diagnostics dropped; anything
+ * else is `provider-threw` at the moment.
+ */
+function checkedRefusal(
+  refusal: IAuthRefusal,
+  at: AuthRefusalMoment,
+): IAuthRefusal {
+  const fallback = providerFailed(at);
+  const outcome = classifyOutcome({ ok: false, refusal }, fallback);
+  return outcome.ok ? fallback : outcome.refusal;
 }
 
 /**

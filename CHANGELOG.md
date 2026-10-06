@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`AuthRefusedError.refusal` is an `IAuthProviderError`.** Decide on
   `refusal.kind` and `refusal.facts`. `reason`, `hint`, `at`, `cause` and the
   `reason — hint` message are unchanged.
+- **The constructor classifies the refusal it is given.**
+  - A refusal minted by this copy of `auth-errors` is kept as the same object.
+  - A `structuredClone`, or a refusal from another copy, is rebuilt from its
+    kind and facts, with its words rendered anew and no diagnostics.
+  - Anything else is `provider-threw` at `at`.
+  - Text written into a clone's `reason`, `hint` or `diagnostics` therefore
+    reaches neither `refusal` nor `message`.
 - **A custom `ILogonTarget` builds its refusal through `auth-errors`**
   (`authError['logon-target']({ wire, refused })`). An object literal no
   longer compiles. A custom `IAuthProvider` answers minted refusals too.

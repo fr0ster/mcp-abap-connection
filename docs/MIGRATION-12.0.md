@@ -62,10 +62,19 @@ kind that stops compiling when a kind is added, use `matchKind` from
 **A refusal is frozen.** It is deep-frozen, so don't write to it. Relay it as
 the object it is. Don't spread it into a new object (`{ ...refusal }`), because
 a copy is no longer a minted error. A `structuredClone` of a refusal (sent to
-a worker, say) keeps `reason` and `hint`, so an `AuthRefusedError` built over
-it still reads `reason — hint`. It is no longer minted, though, and
-`isMinted` answers false. Classify it again with `classify` from `auth-errors`
-before deciding on it.
+a worker, say) is no longer minted either: `isMinted` answers false. Classify
+it again with `classify` from `auth-errors` before deciding on it.
+
+**`AuthRefusedError` classifies the refusal it is given.** Its constructor
+reads none of its words as given:
+- A refusal minted by this copy of `auth-errors` is kept as the same object.
+- A clone or another copy's refusal is rebuilt from its `kind` and `facts`.
+  Its words are rendered anew, and its diagnostics are dropped.
+- Anything else is `provider-threw` at the error's moment.
+
+So an `AuthRefusedError` built over a clone still reads `reason — hint`, and
+text written into a clone's `reason`, `hint` or `diagnostics` reaches neither
+`refusal` nor `message`.
 
 ## The connection's own refusals
 
