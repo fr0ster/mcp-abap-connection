@@ -549,7 +549,8 @@ export class HttpTransport implements IAdtTransport {
   /**
    * The client belongs to the connection. Another client is another logon —
    * its own user and password, its own session and CSRF token — so a caller
-   * that names one in a `sap-client` header or query parameter, in any case,
+   * that names one in a `sap-client` header, query string or `params` entry, in
+   * any case,
    * is refused before anything is sent: sending it would land the request in
    * that client with the session and credential of this one. Naming the
    * connection's own client is harmless and passes.
@@ -566,6 +567,14 @@ export class HttpTransport implements IAdtTransport {
       const params = new URLSearchParams(url.slice(query + 1));
       for (const [name, value] of params) {
         if (name.toLowerCase() === 'sap-client') named.push(value);
+      }
+    }
+    // The structured parameters too: axios serialises them into the same query
+    // string. A list is several values, each of which must be the client.
+    for (const [name, value] of Object.entries(request.params ?? {})) {
+      if (name.toLowerCase() !== 'sap-client' || value === undefined) continue;
+      for (const each of Array.isArray(value) ? value : [value]) {
+        named.push(String(each));
       }
     }
     for (const client of named) {

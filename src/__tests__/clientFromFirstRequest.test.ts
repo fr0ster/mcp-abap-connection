@@ -202,8 +202,20 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
   'the %s wire keeps the client its connection was given',
   (wire) => {
     const CALLER_ADDRESSED: ReadonlyArray<
-      [string, { headers?: Record<string, string>; url?: string }]
+      [
+        string,
+        {
+          headers?: Record<string, string>;
+          url?: string;
+          params?: Record<string, unknown>;
+        },
+      ]
     > = [
+      ['a sap-client params entry', { params: { 'sap-client': '100' } }],
+      [
+        'an SAP-CLIENT params list with another client in it',
+        { params: { 'SAP-CLIENT': ['200', '100'] } },
+      ],
       ['a sap-client header', { headers: { 'sap-client': '100' } }],
       ['a SAP-Client header', { headers: { 'SAP-Client': '100' } }],
       ['a sap-client query parameter', { url: '/sap/bc/adt/x?sap-client=100' }],
@@ -226,6 +238,7 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
             method: 'GET',
             timeout: 5000,
             ...(request.headers ? { headers: request.headers } : {}),
+            ...(request.params ? { params: request.params } : {}),
           }),
         ).rejects.toThrow(/client 100.*connection.*client 200/);
         expect(icf.seen.length).toBe(before);
@@ -244,6 +257,7 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
         method: 'GET',
         timeout: 5000,
         headers: { 'SAP-Client': '200' },
+        params: { 'Sap-Client': '200' },
       });
 
       const last = icf.seen[icf.seen.length - 1];
@@ -273,6 +287,14 @@ describe('a wire given no client', () => {
         method: 'GET',
         timeout: 5000,
         headers: { 'sap-client': '200' },
+      }),
+    ).rejects.toThrow(/client 200.*connection.*no client/);
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/x',
+        method: 'GET',
+        timeout: 5000,
+        params: { 'sap-client': '200' },
       }),
     ).rejects.toThrow(/client 200.*connection.*no client/);
     expect(icf.seen.length).toBe(before);

@@ -30,8 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that put `config.client` on the connection but not on the transport was
   never addressing the client over HTTP; pass it to the transport's `client`
   option.
-- **A request cannot name another client.** A `sap-client` header or query
-  parameter, in any case, that differs from the transport's `client` — or
+- **A request cannot name another client.** A `sap-client` header, query
+  parameter or `params` entry, in any case, that differs from the transport's `client` — or
   names one when the transport was given none — is refused with an error
   before anything is sent; naming the same client passes, and the header goes
   out once. Another client is another logon (its own user, password, session
