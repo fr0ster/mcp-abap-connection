@@ -28,6 +28,8 @@ const SECURITY_SESSION_REL =
 interface Seen {
   method: string;
   path: string;
+  /** The request target as it arrived, query included. */
+  target: string;
   headers: Record<string, string>;
   /** The client this request landed in, as ICF would pick it. */
   client: string;
@@ -58,7 +60,13 @@ async function startIcf(): Promise<{
       }
       const path = (req.url ?? '').split('?')[0];
       const client = clientOf(headers);
-      seen.push({ method: req.method ?? 'GET', path, headers, client });
+      seen.push({
+        method: req.method ?? 'GET',
+        path,
+        target: req.url ?? '',
+        headers,
+        client,
+      });
 
       // A client the system does not have refuses the logon — as SAP does.
       if (!CLIENTS.has(client)) {
@@ -360,6 +368,30 @@ describe('a wire given no client', () => {
       }),
     ).rejects.toThrow(/client 200.*connection.*no client/);
     expect(icf.seen).toHaveLength(0);
+  });
+
+  it('reads the params once: what is checked is what goes out', async () => {
+    const transport = new OnPremHttpTransport(() => ({}), null, {
+      baseUrl: icf.baseUrl,
+    });
+    let reads = 0;
+    const params = {
+      get 'sap-client'() {
+        reads += 1;
+        return reads === 1 ? undefined : '200';
+      },
+    };
+
+    await transport.send({
+      url: '/sap/bc/adt/core/discovery',
+      method: 'GET',
+      params,
+    });
+
+    expect(reads).toBe(1);
+    expect(icf.seen).toHaveLength(1);
+    expect(icf.seen[0].target).not.toContain('sap-client');
+    expect(icf.seen[0].client).toBe(DEFAULT_CLIENT);
   });
 
   it('admits the client its jar holds — the connection’s own retries send it', async () => {

@@ -564,6 +564,8 @@ export class HttpTransport implements IAdtTransport {
     // `params`, serialised by axios itself (which trims and encodes names), so
     // what is checked is what goes out. A name is compared trimmed and in any
     // case, as ICF reads it.
+    // The request is fixed by now (`fix`): its URL already holds the `params`,
+    // serialised once by axios.
     const sent = axios.getUri({
       url: request.url ?? '',
       ...(request.params !== undefined ? { params: request.params } : {}),
@@ -715,7 +717,34 @@ export class HttpTransport implements IAdtTransport {
    * to add it.
    */
   async send(request: IAdtTransportRequest): Promise<IAdtTransportResponse> {
-    return this.dispatch(request, this.dress(request));
+    const fixed = this.fix(request);
+    return this.dispatch(fixed, this.dress(fixed));
+  }
+
+  /**
+   * The request read once, into plain values: what the client guard checks is
+   * then exactly what goes out. The headers are copied, and the URL and
+   * `params` are serialised here, once, by axios — the dispatch sends that URL
+   * and no `params`, so nothing the caller handed over is read a second time
+   * (a getter that answers differently on its second read changes nothing).
+   */
+  private fix(request: IAdtTransportRequest): IAdtTransportRequest {
+    const { headers, params, url, ...rest } = request;
+    const fixed: IAdtTransportRequest = {
+      ...rest,
+      url: axios.getUri({
+        url: url ?? '',
+        ...(params !== undefined ? { params } : {}),
+      }),
+    };
+    if (headers !== undefined) {
+      const copied: Record<string, string> = {};
+      for (const [name, value] of Object.entries(headers)) {
+        copied[name] = value;
+      }
+      fixed.headers = copied;
+    }
+    return fixed;
   }
 
   /**

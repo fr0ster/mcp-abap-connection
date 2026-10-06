@@ -83,17 +83,19 @@ describe('HttpTransport', () => {
     expect(seen[0]).toEqual(
       expect.objectContaining({
         method: 'GET',
-        url: 'https://h/sap/bc/adt/discovery',
+        // The params serialised into the URL, once, by axios — what the client
+        // guard checks is what goes out.
+        url: 'https://h/sap/bc/adt/discovery?q=1',
         // The caller's headers, plus what the wire adds of its own accord —
         // today the affinity ask, and the cookies once it holds any.
         headers: expect.objectContaining({
           Accept: 'application/xml',
           'sap-adt-saplb': 'fetch',
         }),
-        params: { q: '1' },
         timeout: 1234,
       }),
     );
+    expect(seen[0]).not.toHaveProperty('params');
     expect(response).toEqual(
       expect.objectContaining({ status: 200, data: 'ok' }),
     );
