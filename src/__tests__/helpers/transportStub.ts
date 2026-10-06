@@ -91,7 +91,6 @@ export function holdsItsSession(
  * while both lived on the connection. They are the transport's now, and a test
  * that reached around it would be seeding a jar nobody reads.
  */
-// biome-ignore lint/suspicious/noExplicitAny: reaches into a connection under test
 export function seedCookies(conn: any, cookies: string): void {
   conn.transport.ingest({
     'set-cookie': cookies.split(';').map((entry: string) => entry.trim()),
@@ -99,7 +98,6 @@ export function seedCookies(conn: any, cookies: string): void {
 }
 
 /** What the wire is holding, for an assertion that used to read a field. */
-// biome-ignore lint/suspicious/noExplicitAny: reaches into a connection under test
 export function heldCookies(conn: any): string | null {
   return conn.transport.cookies();
 }

@@ -1,17 +1,8 @@
-import {
-  SamlAuthProvider,
-  TokenAuthProvider,
-} from '@mcp-abap-adt/auth-providers';
 import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
-import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
-import {
-  cloudHttpTransport,
-  onPrem,
-  onPremHttpTransport,
-} from './helpers/onPrem.js';
+import { onPrem } from './helpers/onPrem.js';
 import { markConnectedForTest } from './helpers/session.js';
 import { heldCookies, seedCookies } from './helpers/transportStub.js';
 

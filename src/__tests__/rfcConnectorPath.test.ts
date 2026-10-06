@@ -25,13 +25,11 @@ import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type {
-  IAdtTransport,
   IAdtTransportRequest,
   IAdtTransportResponse,
   IOnPremTransport,
 } from '../connection/IAdtTransport.js';
 import { legacyProvider } from './helpers/legacyProvider.js';
-import { onPremHttpTransport } from './helpers/onPrem.js';
 import { holdsNoSession } from './helpers/transportStub.js';
 
 const config: SapConfig = {

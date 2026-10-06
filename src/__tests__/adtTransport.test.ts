@@ -19,7 +19,6 @@ import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { IOnPremTransport } from '../connection/IAdtTransport.js';
 import { legacyProvider } from './helpers/legacyProvider.js';
-import { onPremHttpTransport } from './helpers/onPrem.js';
 import { holdsItsSession } from './helpers/transportStub.js';
 
 const config: SapConfig = {

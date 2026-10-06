@@ -306,61 +306,6 @@ function serverRejectingUntilShared(
 }
 
 describe('a rejected credential is retried only when it actually changed', () => {
-  /** Accepts one header value on `/work`; everything else establishes fine. */
-  function serverRejectingUntil(
-    conn: object,
-    seen: Seen[],
-    accepted: string,
-    onReject: () => void = () => undefined,
-  ): void {
-    const instance = async (cfg: {
-      url?: string;
-      method?: string;
-      headers?: Record<string, string>;
-    }) => {
-      seen.push({
-        url: String(cfg.url),
-        method: cfg.method,
-        headers: cfg.headers ?? {},
-      });
-      const ok = {
-        status: 200,
-        data: '<service/>',
-        headers: {
-          'x-csrf-token': 'TOKEN',
-          'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-        },
-      };
-      if (!String(cfg.url).includes('/work')) return ok;
-      if (cfg.headers?.Authorization === accepted) return ok;
-      onReject();
-      const error = new Error('unauthorized') as Error & { response?: unknown };
-      error.response = { status: 401, headers: {}, data: '' };
-      throw error;
-    };
-    (instance as unknown as { interceptors: unknown }).interceptors = {
-      request: { clear: jest.fn() },
-      response: { clear: jest.fn() },
-    };
-    (conn as any).transport.instance = instance;
-  }
-
-  /**
-   * The credentials `/work` was attempted with, in order and without repeats.
-   *
-   * Counting raw attempts counted two things at once: the credential retry
-   * these tests are about, and the base's "401 on a GET with cookies in hand,
-   * try again" — which repeats the SAME credential and used to be invisible
-   * here only because the stub's refusal was not an AxiosError. Distinct
-   * credentials is what "was the credential retried" actually means.
-   */
-  const credentialsTried = (seen: Seen[]): (string | undefined)[] => {
-    const auths = seen
-      .filter((r) => r.url.includes('/work'))
-      .map((r) => r.headers.Authorization);
-    return auths.filter((auth, i) => i === 0 || auth !== auths[i - 1]);
-  };
-
   /**
    * One retry, not a loop.
    *

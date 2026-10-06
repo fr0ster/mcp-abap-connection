@@ -40,7 +40,6 @@ import {
 } from '../connection/rfcConversation.js';
 import type { ILogger } from '../logger.js';
 import { legacyProvider } from './helpers/legacyProvider.js';
-import { onPremHttpTransport } from './helpers/onPrem.js';
 
 // Load env file — default to e19.env, override via SAP_ENV_FILE
 const envFile = process.env.SAP_ENV_FILE || 'e19.env';

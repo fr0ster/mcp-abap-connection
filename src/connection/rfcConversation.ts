@@ -76,7 +76,6 @@ export function rfcConversationFrom(
     try {
       // Dynamic, because the SDK is an optional peer: it needs the SAP NW RFC
       // SDK installed on the machine, and most consumers travel over HTTP.
-      // biome-ignore lint/correctness/noNodejsModules: optional by design
       Client = require('@mcp-abap-adt/sap-rfc-lite').Client;
     } catch (error) {
       throw new Error(
