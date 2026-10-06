@@ -568,13 +568,19 @@ export class HttpTransport implements IAdtTransport {
       url: request.url ?? '',
       ...(request.params !== undefined ? { params: request.params } : {}),
     });
-    const query = sent.indexOf('?');
-    if (query !== -1) {
-      for (const [name, value] of new URLSearchParams(sent.slice(query + 1))) {
-        // A list goes out as `sap-client[]=…`; refused all the same.
-        if (/^sap-client(\[\])?$/.test(name.trim().toLowerCase())) {
-          named.push(value);
-        }
+    // Then read the way Node's adapter addresses it: through a WHATWG URL,
+    // which drops tabs and line breaks anywhere in it — `sap-cl\nient` goes
+    // out as `sap-client`. A URL that does not parse is not sent either.
+    let search: URLSearchParams;
+    try {
+      search = new URL(sent, 'http://client.check.invalid').searchParams;
+    } catch {
+      search = new URLSearchParams();
+    }
+    for (const [name, value] of search) {
+      // A list goes out as `sap-client[]=…`; refused all the same.
+      if (/^sap-client(\[\])?$/.test(name.trim().toLowerCase())) {
+        named.push(value);
       }
     }
     // And the cookie ICF also reads: `sap-usercontext=sap-client=<n>` in a

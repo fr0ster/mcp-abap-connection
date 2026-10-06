@@ -213,6 +213,22 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
     > = [
       ['a sap-client params entry', { params: { 'sap-client': '100' } }],
       [
+        'a query name broken by a line feed',
+        { url: '/sap/bc/adt/x?sap-cl\nient=100' },
+      ],
+      [
+        'a query name broken by a carriage return',
+        { url: '/sap/bc/adt/x?sap-cl\rient=100' },
+      ],
+      [
+        'a query name broken by a tab',
+        { url: '/sap/bc/adt/x?sap-cl\tient=100' },
+      ],
+      [
+        'a percent-encoded query name',
+        { url: '/sap/bc/adt/x?sap%2Dclient=100' },
+      ],
+      [
         'a params key padded with spaces',
         { params: { ' sap-client ': '100' } },
       ],
