@@ -336,6 +336,13 @@ describe('a wire given no client', () => {
         headers: { Cookie: 'sap-usercontext=sap-client=200' },
       }),
     ).rejects.toThrow(/client 200.*connection.*no client/);
+    await expect(
+      transport.send({
+        url: '/sap/bc/adt/core/discovery',
+        method: 'GET',
+        headers: { ' Cookie ': 'sap-usercontext=sap-client=200' },
+      }),
+    ).rejects.toThrow(/client 200.*connection.*no client/);
     expect(icf.seen).toHaveLength(0);
   });
 

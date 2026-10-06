@@ -515,7 +515,7 @@ export class HttpTransport implements IAdtTransport {
     // filter below.
     let callerCookie: string | undefined;
     for (const name of Object.keys(dressed)) {
-      if (name.toLowerCase() !== 'cookie') continue;
+      if (name.trim().toLowerCase() !== 'cookie') continue;
       callerCookie = mergeCookieHeaders(callerCookie, dressed[name]);
       delete dressed[name];
     }
@@ -584,7 +584,7 @@ export class HttpTransport implements IAdtTransport {
     const cookieOwn = own ?? this.jarClient();
     const cookieNamed: string[] = [];
     for (const [name, value] of Object.entries(request.headers ?? {})) {
-      if (name.toLowerCase() !== 'cookie') continue;
+      if (name.trim().toLowerCase() !== 'cookie') continue;
       for (const pair of String(value).split(';')) {
         const [cookieName, ...rest] = pair.split('=');
         if (cookieName?.trim().toLowerCase() !== 'sap-usercontext') continue;
