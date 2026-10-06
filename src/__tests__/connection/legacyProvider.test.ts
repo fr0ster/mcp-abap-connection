@@ -17,6 +17,7 @@ import {
   type LegacyAuthProvider,
   type LegacyOutcome,
   legacyProvider,
+  reportUntranslatedAtExit,
 } from '../helpers/legacyProvider.js';
 
 const REQUEST_401: IAuthRejection = { at: 'request', status: 401, error: {} };
@@ -162,6 +163,37 @@ describe('legacyProvider: outside the table', () => {
       at: 'prepare',
     });
     expect(drainUntranslated()).toHaveLength(1);
+  });
+});
+
+describe('legacyProvider: outside Jest (a probe script)', () => {
+  it('reportUntranslatedAtExit writes the untranslated words to stderr at exit, and drains them', async () => {
+    const handlers: (() => void)[] = [];
+    const on = jest
+      .spyOn(process, 'on')
+      .mockImplementation((event: string | symbol, listener) => {
+        if (event === 'exit') handlers.push(() => listener());
+        return process;
+      });
+    const write = jest
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
+    try {
+      reportUntranslatedAtExit();
+      await legacyProvider(refusing('odd 5.x words', 'a hint')).prepare();
+      expect(handlers).toHaveLength(1);
+      for (const handler of handlers) handler();
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(String(write.mock.calls[0]?.[0])).toContain(
+        'odd 5.x words — a hint',
+      );
+      expect(drainUntranslated()).toStrictEqual([]);
+      for (const handler of handlers) handler();
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally {
+      on.mockRestore();
+      write.mockRestore();
+    }
   });
 });
 

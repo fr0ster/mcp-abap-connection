@@ -30,7 +30,10 @@ import { OnPremHttpTransport } from '../dist/connection/OnPremHttpTransport';
 import { RfcTransport } from '../dist/connection/RfcTransport';
 import { rfcConversationFrom } from '../dist/connection/rfcConversation';
 import type { ILogger } from '../dist/logger';
-import { legacyProvider } from '../src/__tests__/helpers/legacyProvider.js';
+import {
+  legacyProvider,
+  reportUntranslatedAtExit,
+} from '../src/__tests__/helpers/legacyProvider.js';
 
 const stopFile = process.argv[2];
 const wire = (process.argv[3] ?? 'http').toLowerCase();
@@ -130,6 +133,10 @@ async function main(): Promise<void> {
   await connection.disconnect();
   say('RELEASED — look again');
 }
+
+// The test-only 5.x adapter (gone with auth-providers 6.0.0): a refusal
+// outside its table is printed to stderr when the probe ends.
+reportUntranslatedAtExit();
 
 main().catch((error) => {
   console.error('holder failed:', error);

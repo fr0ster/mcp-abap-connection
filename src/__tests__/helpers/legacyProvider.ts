@@ -152,6 +152,24 @@ if (typeof afterEach === 'function') {
   });
 }
 
+/**
+ * For a probe under `scripts/`, where no `afterEach` runs: when the process
+ * exits — normally or through `process.exit` — the 5.x refusals no row
+ * translated are written to stderr, so one is visible outside Jest too.
+ */
+export function reportUntranslatedAtExit(): void {
+  process.on('exit', () => {
+    const seen = drainUntranslated();
+    if (seen.length === 0) return;
+    const words = seen
+      .map((r) => (r.hint === undefined ? r.reason : `${r.reason} — ${r.hint}`))
+      .join('\n  ');
+    process.stderr.write(
+      `5.x refusals outside the legacy table (answered provider-threw):\n  ${words}\n`,
+    );
+  });
+}
+
 /** A 5.x answer, as an outcome of the error contract. */
 function translated(answer: LegacyOutcome, moment: Moment): AuthOutcome {
   const fallback = authError.connection({

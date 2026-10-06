@@ -35,7 +35,10 @@ import { OnPremHttpTransport } from '../dist/connection/OnPremHttpTransport';
 import { RfcTransport } from '../dist/connection/RfcTransport';
 import { rfcConversationFrom } from '../dist/connection/rfcConversation';
 import type { ILogger } from '../dist/logger';
-import { legacyProvider } from '../src/__tests__/helpers/legacyProvider.js';
+import {
+  legacyProvider,
+  reportUntranslatedAtExit,
+} from '../src/__tests__/helpers/legacyProvider.js';
 
 const envPath = path.resolve(__dirname, '..', process.argv[2] ?? 'e19.env');
 if (!fs.existsSync(envPath)) {
@@ -257,6 +260,10 @@ async function main(): Promise<void> {
     console.log(`${r.transport.padEnd(18)} ${r.step.padEnd(34)} ${r.outcome}`);
   }
 }
+
+// The test-only 5.x adapter (gone with auth-providers 6.0.0): a refusal
+// outside its table is printed to stderr when the probe ends.
+reportUntranslatedAtExit();
 
 main().catch((error) => {
   console.error('verification failed:', error);
