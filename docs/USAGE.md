@@ -928,7 +928,7 @@ export class CloudSdkAbapConnection {
 ### The credential, and how a refusal is classified
 
 For SAP BTP cloud systems, hand `AdtCloudConnector` a token provider from
-`@mcp-abap-adt/auth-providers`: `TokenAuthProvider.fixed(token)` is a token with
+`@mcp-abap-adt/auth-providers` (6.0.0 or later with connection 12.x): `TokenAuthProvider.fixed(token)` is a token with
 nothing behind it, `TokenAuthProvider.from(refresher)` takes an `ITokenRefresher`
 and renews a token the system refused. Obtaining tokens in the first place is
 `@mcp-abap-adt/auth-broker`'s job, not this package's.
@@ -997,9 +997,13 @@ try {
   await connection.connect();
 } catch (error) {
   if (error instanceof AuthRefusedError) {
-    // error.refusal.reason / .hint are the provider's words;
+    // error.refusal is an IAuthProviderError: decide on its kind and facts;
+    // .reason / .hint are the words to show (the message is `reason — hint`).
     // error.at is 'prepare' | 'logon' | 'request'; error.cause is the provider's
     // throw when it threw, else the wire's error.
+    if (error.refusal.kind === 'credential-refused') {
+      // the credential itself was refused
+    }
     console.error(error.message);
   }
   throw error;
@@ -1008,8 +1012,28 @@ try {
 
 `refusal` is the provider's, `cause` is the error the wire raised as it arrived,
 so a network failure stays visible even when a provider words it as a credential
-problem. A provider that throws is treated as refusing with the reason "the
-credential provider failed" and the throw as the cause.
+problem. A refusal is an `IAuthProviderError` minted by `@mcp-abap-adt/auth-errors`
+— frozen, with a `kind` and `facts` from closed allowlists; relay it, never copy
+it. Every provider answer is re-checked with `classifyOutcome`: a minted refusal
+passes as the same object, one from another copy of `auth-errors` is rebuilt,
+and anything else — a plain `{ reason }` from a JavaScript provider, a value that
+is no outcome — becomes `connection` / `provider-threw`, "the credential provider
+failed", its text in no message. A provider that throws is the same refusal,
+with the throw as the cause.
+
+The connection's own refusals:
+
+| `kind` | `facts` | words |
+|---|---|---|
+| `logon-target` | `{ wire: 'rfc', refused: 'tls-material' }` | this wire carries no TLS material (RFC) |
+| `logon-target` | `{ wire: 'http', refused: 'logon-parameters' }` | this wire takes no logon parameters (HTTP) |
+| `connection` | `{ problem: 'provider-threw', at }` | the credential provider failed |
+| `connection` | `{ problem: 'refused-after-renewal', at }` | the credential was refused again after the provider renewed it |
+| `connection` | `{ problem: 'no-credential' }` | this connection has no credential to renew |
+
+A wire of your own mints its target's refusals the same way
+(`authError['logon-target']({ wire: 'unknown', refused })`); see
+[MIGRATION-12.0.md](./MIGRATION-12.0.md).
 
 **Concurrency.** Many requests meeting the same expired token each call
 `rejected()`; the connection adds no single-flight of its own. They share one

@@ -21,6 +21,7 @@ import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import { RfcTransport } from '../connection/RfcTransport.js';
+import { legacyProvider } from './helpers/legacyProvider.js';
 import { cloudHttpTransport, onPremHttpTransport } from './helpers/onPrem.js';
 
 const config: SapConfig = {
@@ -53,7 +54,7 @@ describe('on-prem carries both axes in its type', () => {
   it('remembers the transport it was given', () => {
     const conn = new AdtOnPremConnector(
       config,
-      new BasicAuthProvider('u', 'p'),
+      legacyProvider(new BasicAuthProvider('u', 'p')),
       rfc,
       null,
       undefined,
@@ -67,7 +68,7 @@ describe('on-prem carries both axes in its type', () => {
   it('defaults to HTTP in the type as well as at runtime', () => {
     const conn = new AdtOnPremConnector(
       config,
-      new BasicAuthProvider('u', 'p'),
+      legacyProvider(new BasicAuthProvider('u', 'p')),
       onPremHttpTransport(config, null),
     );
 
@@ -78,7 +79,7 @@ describe('on-prem carries both axes in its type', () => {
   it('refuses the wrong combination at compile time', () => {
     const overHttp = new AdtOnPremConnector(
       config,
-      new BasicAuthProvider('u', 'p'),
+      legacyProvider(new BasicAuthProvider('u', 'p')),
       onPremHttpTransport(config, null),
     );
 
@@ -88,9 +89,11 @@ describe('on-prem carries both axes in its type', () => {
   });
 
   it('remembers the credential it was given', () => {
-    const credential = new CertificateAuthProvider(
-      { load: async () => ({ cert: 'C' }) },
-      config,
+    const credential = legacyProvider(
+      new CertificateAuthProvider(
+        { load: async () => ({ cert: 'C' }) },
+        config,
+      ),
     );
     const conn = new AdtOnPremConnector(
       config,
@@ -107,7 +110,7 @@ describe('on-prem carries both axes in its type', () => {
 
 describe('cloud carries one', () => {
   it('remembers the credential', () => {
-    const credential = TokenAuthProvider.fixed('t');
+    const credential = legacyProvider(TokenAuthProvider.fixed('t'));
     const conn = new AdtCloudConnector(
       config,
       credential,

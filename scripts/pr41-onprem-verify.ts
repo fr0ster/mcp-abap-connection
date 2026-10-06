@@ -27,6 +27,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import * as dotenv from 'dotenv';
 import { AdtOnPremConnector } from '../dist/connection/AdtOnPremConnector';
 import { LegacyOnPremHttpTransport } from '../dist/connection/LegacyOnPremHttpTransport';
@@ -34,6 +35,10 @@ import { OnPremHttpTransport } from '../dist/connection/OnPremHttpTransport';
 import { RfcTransport } from '../dist/connection/RfcTransport';
 import { rfcConversationFrom } from '../dist/connection/rfcConversation';
 import type { ILogger } from '../dist/logger';
+import {
+  legacyProvider,
+  reportUntranslatedAtExit,
+} from '../src/__tests__/helpers/legacyProvider.js';
 
 const envPath = path.resolve(__dirname, '..', process.argv[2] ?? 'e19.env');
 if (!fs.existsSync(envPath)) {
@@ -67,7 +72,7 @@ const config = {
 };
 
 const credential = () =>
-  new BasicAuthProvider(config.username, config.password);
+  legacyProvider(new BasicAuthProvider(config.username, config.password));
 
 /** The findings, printed as one table at the end. */
 const results: Array<{ transport: string; step: string; outcome: string }> = [];
@@ -106,7 +111,7 @@ function httpWire(kind: 'plain' | 'legacy'): OnPremHttpTransport {
 async function exercise(
   label: string,
   // biome-ignore lint/suspicious/noExplicitAny: any of the three on-prem wires
-  connection: AdtOnPremConnector<BasicAuthProvider, any>,
+  connection: AdtOnPremConnector<IAuthProvider, any>,
   opts: { sendAccept: boolean },
 ): Promise<void> {
   const accept = opts.sendAccept ? { Accept: '*/*' } : undefined;
@@ -231,7 +236,9 @@ async function main(): Promise<void> {
   head('A failed connect() throws rather than resolving');
   const bad = new AdtOnPremConnector(
     { ...config, password: 'definitely-not-the-password' } as never,
-    new BasicAuthProvider(config.username, 'definitely-not-the-password'),
+    legacyProvider(
+      new BasicAuthProvider(config.username, 'definitely-not-the-password'),
+    ),
     httpWire('plain'),
     logger,
   );
@@ -253,6 +260,10 @@ async function main(): Promise<void> {
     console.log(`${r.transport.padEnd(18)} ${r.step.padEnd(34)} ${r.outcome}`);
   }
 }
+
+// The test-only 5.x adapter (gone with auth-providers 6.0.0): a refusal
+// outside its table is printed to stderr when the probe ends.
+reportUntranslatedAtExit();
 
 main().catch((error) => {
   console.error('verification failed:', error);

@@ -51,7 +51,10 @@ export abstract class CredentialAbapConnection<
    * unhandled rejection.
    */
   protected override async prepareCredential(): Promise<void> {
-    const { outcome, thrown } = await guarded(() => this.credential.prepare());
+    const { outcome, thrown } = await guarded(
+      () => this.credential.prepare(),
+      'prepare',
+    );
     if (!outcome.ok) {
       throw new AuthRefusedError(outcome.refusal, 'prepare', thrown);
     }
@@ -70,8 +73,9 @@ export abstract class CredentialAbapConnection<
   ): Promise<void> {
     // Asked per request, never held: a provider renews behind this call, and a
     // value kept here would be the stale one.
-    const { outcome, thrown } = await guarded(() =>
-      this.credential.authorize(requestTargetOn(headers)),
+    const { outcome, thrown } = await guarded(
+      () => this.credential.authorize(requestTargetOn(headers)),
+      'request',
     );
     if (!outcome.ok) {
       throw new AuthRefusedError(outcome.refusal, 'request', thrown);
@@ -80,8 +84,9 @@ export abstract class CredentialAbapConnection<
 
   /** What the credential brings to a logon: TLS material, logon parameters. */
   protected override async logon(target: ILogonTarget): Promise<void> {
-    const { outcome, thrown } = await guarded(() =>
-      this.credential.establish(target),
+    const { outcome, thrown } = await guarded(
+      () => this.credential.establish(target),
+      'logon',
     );
     if (!outcome.ok) {
       throw new AuthRefusedError(outcome.refusal, 'logon', thrown);
@@ -95,7 +100,7 @@ export abstract class CredentialAbapConnection<
   protected override async credentialRejected(
     rejection: IAuthRejection,
   ): Promise<GuardedAnswer> {
-    return guarded(() => this.credential.rejected(rejection));
+    return guarded(() => this.credential.rejected(rejection), rejection.at);
   }
 
   protected async establishSession(): Promise<void> {

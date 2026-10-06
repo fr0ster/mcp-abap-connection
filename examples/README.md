@@ -8,7 +8,7 @@ This directory contains example code demonstrating how to use the `@mcp-abap-adt
 # Install dependencies
 cd packages/connection
 npm install
-npm install @mcp-abap-adt/auth-providers   # the credential providers the examples use
+npm install @mcp-abap-adt/auth-providers   # the credential providers the examples use (6.0.0 or later with connection 12.x)
 
 # Build the package
 npm run build

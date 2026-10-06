@@ -5,6 +5,7 @@
  * A real `OnPremHttpTransport` (or `CloudHttpTransport`) against a local SAP,
  * with a stub provider that records every call.
  */
+import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
   IAuthRejection,
@@ -13,20 +14,29 @@ import type {
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
-import {
-  AuthRefusedError,
-  PROVIDER_FAILED,
-  REFUSED_AGAIN,
-} from '../../connection/authErrors.js';
+import { AuthRefusedError } from '../../connection/authErrors.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
 import { HttpTransport } from '../../connection/HttpTransport.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { type SapStub, startSapStub } from '../helpers/sapStub.js';
 import { type StubScript, stubProvider } from '../helpers/stubProvider.js';
 
+/** connection's `provider-threw` (I3), whatever the moment. */
+const PROVIDER_FAILED = {
+  kind: 'connection',
+  facts: { problem: 'provider-threw' },
+  reason: 'the credential provider failed',
+};
+/** connection's `refused-after-renewal` (I4), whatever the moment. */
+const REFUSED_AGAIN = {
+  kind: 'connection',
+  facts: { problem: 'refused-after-renewal' },
+  reason: 'the credential was refused again after the provider renewed it',
+};
+
 const DISCOVERY = '/sap/bc/adt/core/discovery';
 const LOGOFF = '/sap/public/bc/icf/logoff';
-const REFUSAL = { reason: 'the stub says no', hint: 'ask it nicely' };
+const REFUSAL = authError['credential-refused']({ credential: 'token' });
 const NO: AuthOutcome = { ok: false, refusal: REFUSAL };
 
 let stub: SapStub;
@@ -126,8 +136,21 @@ describe('the HTTP logon target', () => {
 
     expect(outcome).toStrictEqual({
       ok: false,
-      refusal: { reason: 'this wire takes no logon parameters (HTTP)' },
+      refusal: authError['logon-target']({
+        wire: 'http',
+        refused: 'logon-parameters',
+      }),
     });
+    if (outcome.ok) throw new Error('expected a refusal');
+    expect(outcome.refusal.kind).toBe('logon-target');
+    expect(outcome.refusal.facts).toStrictEqual({
+      wire: 'http',
+      refused: 'logon-parameters',
+    });
+    expect(outcome.refusal.reason).toBe(
+      'this wire takes no logon parameters (HTTP)',
+    );
+    expect(outcome.refusal.hint).toBeUndefined();
   });
 
   const agentOf = (transport: HttpTransport) =>
@@ -277,7 +300,7 @@ describe('a 401 while establishing', () => {
 
     expect(error).toBeInstanceOf(AuthRefusedError);
     expect((error as AuthRefusedError).at).toBe('logon');
-    expect((error as AuthRefusedError).refusal).toBe(PROVIDER_FAILED);
+    expect((error as AuthRefusedError).refusal).toMatchObject(PROVIDER_FAILED);
     expect((error as AuthRefusedError).cause).toBe(boom);
     expect(rejections()).toHaveLength(1);
     expect(conn.isConnected()).toBe(false);
@@ -290,7 +313,10 @@ describe('a 401 while establishing', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toStrictEqual(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject({
+      facts: { at: 'logon' },
+    });
     expect((error as AuthRefusedError).at).toBe('logon');
     expect(rejections()).toHaveLength(1);
     expect(conn.isConnected()).toBe(false);

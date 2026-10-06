@@ -22,8 +22,24 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
+      # The tag names the version it publishes. A tag that does not match
+      # package.json would publish one version under another's name and notes.
+      - name: Check the tag matches package.json
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "::error::tag v$TAG_VERSION does not match package.json version $PACKAGE_VERSION"
+            exit 1
+          fi
+
       - name: Install dependencies
         run: npm ci
+
+      # Read-only, as in CI: Biome, then the auth error contract's shape check
+      # (rules 4, 5, 6).
+      - name: Lint
+        run: npm run lint:check
 
       - name: Build project
         run: npm run build
@@ -32,8 +48,10 @@ jobs:
       # from build to `npm pack`, so a tag could publish an artifact that no
       # test, no docs check and no package check had ever seen — and twice it
       # did: test helpers and 120KB of compiler bookkeeping both reached a
-      # published .tgz. Nothing here is new; it is the same gate CI runs, which
-      # is the point — a tag must not be a way around it.
+      # published .tgz. Nothing here is new: with the lint step above, these
+      # are the steps CI runs (lint:check, build, jest --no-cache, check:docs,
+      # check:pack), on one platform and Node 22 — a tag must not be a way
+      # around the gate.
       - name: Test
         run: npx jest --no-cache
 

@@ -29,6 +29,10 @@ import * as dotenv from 'dotenv';
 import { AdtOnPremConnector } from '../dist/connection/AdtOnPremConnector';
 import { RfcTransport } from '../dist/connection/RfcTransport';
 import type { ILogger } from '../dist/logger';
+import {
+  legacyProvider,
+  reportUntranslatedAtExit,
+} from '../src/__tests__/helpers/legacyProvider.js';
 
 const envPath = path.resolve(__dirname, '..', process.argv[2] ?? 'e19.env');
 if (!fs.existsSync(envPath)) {
@@ -93,7 +97,7 @@ function describe(e: unknown): string {
 async function main(): Promise<void> {
   const connection = new AdtOnPremConnector(
     config as never,
-    new BasicAuthProvider(config.username, config.password),
+    legacyProvider(new BasicAuthProvider(config.username, config.password)),
     new RfcTransport(rfcConversation(), logger),
     logger,
   );
@@ -205,6 +209,10 @@ async function main(): Promise<void> {
   await connection.disconnect();
   say('disconnect(): returned');
 }
+
+// The test-only 5.x adapter (gone with auth-providers 6.0.0): a refusal
+// outside its table is printed to stderr when the probe ends.
+reportUntranslatedAtExit();
 
 main().catch((error) => {
   console.error('lock proof failed:', describe(error));

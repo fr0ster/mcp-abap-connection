@@ -29,6 +29,7 @@ import {
   BasicAuthProvider,
   SncLogonProvider,
 } from '@mcp-abap-adt/auth-providers';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import * as dotenv from 'dotenv';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
@@ -38,6 +39,7 @@ import {
   rfcParamsFrom,
 } from '../connection/rfcConversation.js';
 import type { ILogger } from '../logger.js';
+import { legacyProvider } from './helpers/legacyProvider.js';
 import { onPremHttpTransport } from './helpers/onPrem.js';
 
 // Load env file — default to e19.env, override via SAP_ENV_FILE
@@ -64,7 +66,9 @@ function buildConfig(): SapConfig {
 function overRfc(config: SapConfig) {
   return new AdtOnPremConnector(
     config,
-    new BasicAuthProvider(config.username ?? '', config.password ?? ''),
+    legacyProvider(
+      new BasicAuthProvider(config.username ?? '', config.password ?? ''),
+    ),
     new RfcTransport(rfcConversationFrom(config), logger),
     logger,
   );
@@ -283,7 +287,7 @@ describeWhere(
   'SNC over RFC, through the Secure Login Client (integration)',
   sncUnavailable(),
   () => {
-    let conn: AdtOnPremConnector<SncLogonProvider, RfcTransport>;
+    let conn: AdtOnPremConnector<IAuthProvider, RfcTransport>;
 
     beforeAll(async () => {
       const config: SapConfig = {
@@ -293,12 +297,14 @@ describeWhere(
       };
       conn = new AdtOnPremConnector(
         config,
-        SncLogonProvider.forSecureLoginClient({
-          partnerName: process.env.SAP_SNC_PARTNERNAME as string,
-          qop: process.env.SAP_SNC_QOP || undefined,
-          sncLib: process.env.SAP_SNC_LIB || undefined,
-          myName: process.env.SAP_SNC_MYNAME || undefined,
-        }),
+        legacyProvider(
+          SncLogonProvider.forSecureLoginClient({
+            partnerName: process.env.SAP_SNC_PARTNERNAME as string,
+            qop: process.env.SAP_SNC_QOP || undefined,
+            sncLib: process.env.SAP_SNC_LIB || undefined,
+            myName: process.env.SAP_SNC_MYNAME || undefined,
+          }),
+        ),
         new RfcTransport(rfcConversationFrom(config), logger),
         logger,
       );

@@ -22,6 +22,7 @@ import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { RfcTransport } from '../../connection/RfcTransport.js';
+import { legacyProvider } from '../helpers/legacyProvider.js';
 import type { Connection, ConnectorFixture } from './contract.js';
 
 const config: SapConfig = {
@@ -119,7 +120,7 @@ export async function cloudFixture(): Promise<ConnectorFixture> {
       (transport as unknown as { instance: unknown }).instance = wire.send;
       const conn = new AdtCloudConnector(
         config,
-        TokenAuthProvider.fixed('a-token'),
+        legacyProvider(TokenAuthProvider.fixed('a-token')),
         transport,
         null,
       );
@@ -142,7 +143,7 @@ export async function onPremHttpFixture(): Promise<ConnectorFixture> {
       (transport as unknown as { instance: unknown }).instance = wire.send;
       const conn = new AdtOnPremConnector(
         config,
-        new BasicAuthProvider('u', 'p'),
+        legacyProvider(new BasicAuthProvider('u', 'p')),
         transport,
         null,
       );
@@ -191,7 +192,7 @@ export async function onPremRfcFixture(): Promise<ConnectorFixture> {
     build(): Connection {
       const conn = new AdtOnPremConnector(
         config,
-        new BasicAuthProvider('u', 'p'),
+        legacyProvider(new BasicAuthProvider('u', 'p')),
         new RfcTransport(() => conversation as never, null),
         null,
       );

@@ -66,7 +66,12 @@ The package uses a clean separation of concerns:
   - A `401` that survives the wire's own session recovery, or a refused logon, is
     put to the provider through `rejected`. If it answers Ok (a renewed token, say)
     the request gets exactly one more attempt; if it says no, or the retry is
-    refused too, you get an `AuthRefusedError` carrying the provider's own words
+    refused too, you get an `AuthRefusedError` carrying the provider's refusal —
+    an `IAuthProviderError` minted by `@mcp-abap-adt/auth-errors`, with a `kind`
+    to decide on and the `reason` / `hint` words to show
+  - Every answer is re-checked: a refusal that is not a minted error (a plain
+    `{ reason }` from a JavaScript provider) becomes "the credential provider
+    failed" (`connection` / `provider-threw`), and its text reaches no message
 
 - **Transports** (`OnPremHttpTransport`, `CloudHttpTransport`, `RfcTransport`):
   - What a request travels over, and everything that is true of that wire.
@@ -133,16 +138,18 @@ This package interacts with external packages **ONLY through interfaces**:
 - **Logger interface**: Uses `ILogger` interface for logging - does not know about concrete logger implementation
 - **No direct dependencies on auth packages**: All token-related operations are handled through configuration (`SapConfig`) passed by consumers
 
-The contracts themselves come from five packages, and are the only runtime
+The contracts themselves come from five packages, and with `@mcp-abap-adt/auth-errors`
+— the runtime that mints and classifies the auth errors — are the only runtime
 dependencies of this one besides `axios`, `commander` and `open`:
 
 | Package | What this package takes from it |
 |---|---|
 | `@mcp-abap-adt/interfaces-adt-connection` | `IAbapConnection`, `IAbapRequestOptions`, `IAdtWireResponse`, `ITimeoutConfig`, the capability atoms, `ADT_SESSION_ERROR` |
-| `@mcp-abap-adt/interfaces-auth` | `IAuthProvider`, `AuthOutcome`, `IAuthRefusal`, `IAuthRejection`, `ILogonTarget`, `IRequestTarget`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
+| `@mcp-abap-adt/interfaces-auth` (6.x) | `IAuthProvider`, `AuthOutcome`, `IAuthRefusal` (= `IAuthProviderError`), `IAuthRejection`, `ILogonTarget`, `IRequestTarget`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
 | `@mcp-abap-adt/interfaces-auth-sap` | `ISapConfig`, `SapAuthType`, `SapConnectionType`, `ICertificateMaterialLoader` |
 | `@mcp-abap-adt/interfaces-network` | `NETWORK_ERROR_CODES`, the WebSocket contracts |
 | `@mcp-abap-adt/interfaces-utils` | `ILogger` |
+| `@mcp-abap-adt/auth-errors` | `authError` (the builders: every refusal is minted here), `classifyOutcome` |
 
 Not `@mcp-abap-adt/interfaces`. That package is **deleted** as of its 52.0.0,
 which was never published: npm still serves 51.0.0 — every symbol re-exported and
@@ -154,6 +161,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 12.0.0](./docs/MIGRATION-12.0.md)** - refusals follow the auth error contract (interfaces-auth 6, auth-errors): `AuthRefusedError.refusal` is an `IAuthProviderError` — read its `kind`; a custom `ILogonTarget` mints its refusal; needs auth-providers 6.0.0
 - 🚚 **[Migration to 11.0.0](./docs/MIGRATION-11.0.md)** - the server certificate is verified by default; trust a self-signed system with `agentOptions.ca`, or opt out explicitly
 - 🚚 **[Migration to 10.0.0](./docs/MIGRATION-10.0.md)** - the credential providers moved to `@mcp-abap-adt/auth-providers`; the connection speaks `IAuthProvider` 3.0; `AuthRefusedError`; the RFC factory takes the logon parameters
 - 🚚 **[Migration to 9.0.0](./docs/MIGRATION-9.0.md)** - the contracts split out of `@mcp-abap-adt/interfaces`; which package each one moved to
@@ -187,6 +195,11 @@ longer brings them along:
 npm install @mcp-abap-adt/interfaces-adt-connection @mcp-abap-adt/interfaces-auth @mcp-abap-adt/interfaces-auth-sap
 ```
 
+A provider or a logon target of your own answers refusals minted by
+`@mcp-abap-adt/auth-errors` (`authError[kind](facts)`); install it too. Keep one
+`@mcp-abap-adt/interfaces-auth` major in the process (`npm ls
+@mcp-abap-adt/interfaces-auth`).
+
 The credential providers (`BasicAuthProvider`, `TokenAuthProvider`,
 `SamlAuthProvider`, `CertificateAuthProvider`) are not part of this package
 since 10.0.0. Install them from where they live:
@@ -194,6 +207,10 @@ since 10.0.0. Install them from where they live:
 ```bash
 npm install @mcp-abap-adt/auth-providers
 ```
+
+connection 12.x speaks interfaces-auth 6, so it needs auth-providers **6.0.0 or
+later**: the 5.x providers answer unbranded refusals and do not fit. See
+[Migration to 12.0.0](./docs/MIGRATION-12.0.md).
 
 For detailed installation instructions, see [Installation Guide](./docs/INSTALLATION.md).
 
@@ -469,8 +486,10 @@ See [MIGRATION-4.0.md](./docs/MIGRATION-4.0.md).
 Every request asks the provider first (`authorize`). A `401` that survives the
 wire's own session recovery, or a logon the system refused, is put to the
 provider (`rejected`); on Ok the request is sent once more, otherwise it fails
-with an `AuthRefusedError` carrying the provider's own words. A `403` is never
-put to the provider.
+with an `AuthRefusedError` carrying the provider's refusal. A `403` is never
+put to the provider. The refusal is an `IAuthProviderError`: decide on its
+`kind` and `facts`; `reason` and `hint` are the words to show, and the error's
+message is `reason — hint`. It is frozen — relay it, never copy it.
 
 ```typescript
 import { AuthRefusedError } from "@mcp-abap-adt/connection";
@@ -479,6 +498,9 @@ try {
   await connection.connect();
 } catch (error) {
   if (error instanceof AuthRefusedError) {
+    if (error.refusal.kind === "credential-refused") {
+      // the credential itself was refused: renew it, or ask the user
+    }
     console.error(error.refusal.reason, error.refusal.hint, error.at);
   }
   throw error;
