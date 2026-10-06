@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [12.0.0] - 2026-10-06
+
 ### Breaking
 
 - **Refusals follow the authentication error contract.** connection moves to
@@ -2246,7 +2248,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v11.0.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v12.0.0...HEAD
+[12.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v11.0.1...v12.0.0
 [11.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v11.0.0...v11.0.1
 [11.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.3...v11.0.0
 [10.0.3]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.2...v10.0.3
