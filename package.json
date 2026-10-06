@@ -39,7 +39,7 @@
     "chrono": "node scripts/version-stats.mjs",
     "clean": "node scripts/clean.mjs",
     "lint": "npx biome check --write src scripts",
-    "lint:check": "npx biome check src scripts",
+    "lint:check": "npx biome check src scripts && node tools/check-provider-shape.mjs --rules 4,5,6",
     "format": "npx biome format --write src scripts",
     "build": "npm run --silent clean && npx biome check src scripts --diagnostic-level=error && npx tsc -p tsconfig.json && npm run --silent typecheck:scripts",
     "build:fast": "npx tsc -p tsconfig.json",
