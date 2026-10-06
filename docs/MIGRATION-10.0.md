@@ -222,6 +222,7 @@ provider refuses, so a goodbye that authorizes catches it; the connection absorb
 a rejected close it dispatched, but a close that never throws is the contract.
 
 ```ts
+import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
   ILogonTarget,
@@ -239,7 +240,11 @@ async function logOn(
   const target: ILogonTarget = {
     tlsMaterial: (): AuthOutcome => ({
       ok: false,
-      refusal: { reason: 'this wire carries no TLS material (example wire)' },
+      // Since 12.0.0 a refusal is minted by @mcp-abap-adt/auth-errors.
+      refusal: authError['logon-target']({
+        wire: 'unknown',
+        refused: 'tls-material',
+      }),
     }),
     logonParameters: (offered): AuthOutcome => {
       parameters = { ...offered };

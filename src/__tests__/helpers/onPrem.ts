@@ -9,11 +9,13 @@
  * say it eight times.
  */
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import type { ILogger } from '../../logger.js';
+import { legacyProvider } from './legacyProvider.js';
 
 export function onPremHttpTransport(
   config: SapConfig,
@@ -33,10 +35,12 @@ export function onPrem(
   config: SapConfig,
   logger: ILogger | null = null,
   sessionId?: string,
-): AdtOnPremConnector<BasicAuthProvider, OnPremHttpTransport> {
+): AdtOnPremConnector<IAuthProvider, OnPremHttpTransport> {
   return new AdtOnPremConnector(
     config,
-    new BasicAuthProvider(config.username ?? '', config.password ?? ''),
+    legacyProvider(
+      new BasicAuthProvider(config.username ?? '', config.password ?? ''),
+    ),
     onPremHttpTransport(config, logger),
     logger,
     sessionId,

@@ -18,6 +18,7 @@ import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { IOnPremTransport } from '../connection/IAdtTransport.js';
+import { legacyProvider } from './helpers/legacyProvider.js';
 import { onPremHttpTransport } from './helpers/onPrem.js';
 import { holdsItsSession } from './helpers/transportStub.js';
 
@@ -61,7 +62,7 @@ describe('the transport a connection sends through', () => {
     const { transport, seen } = recordingTransport();
     const conn = new AdtOnPremConnector(
       config,
-      new BasicAuthProvider('u', 'p'),
+      legacyProvider(new BasicAuthProvider('u', 'p')),
       transport,
       null,
     );
@@ -76,7 +77,7 @@ describe('the transport a connection sends through', () => {
     const { transport, seen } = recordingTransport();
     const conn = new AdtOnPremConnector(
       config,
-      new BasicAuthProvider('u', 'p'),
+      legacyProvider(new BasicAuthProvider('u', 'p')),
       transport,
       null,
     );

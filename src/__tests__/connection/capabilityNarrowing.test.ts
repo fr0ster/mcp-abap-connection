@@ -20,6 +20,7 @@ import type {
 } from '@mcp-abap-adt/interfaces-adt-connection';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { RfcTransport } from '../../connection/RfcTransport.js';
+import { legacyProvider } from '../helpers/legacyProvider.js';
 import { onPremHttpTransport } from '../helpers/onPrem.js';
 
 const httpConfig = {
@@ -34,7 +35,7 @@ const httpConfig = {
 const onPremOverRfc = () =>
   new AdtOnPremConnector(
     rfcConfig,
-    new BasicAuthProvider('U', 'P'),
+    legacyProvider(new BasicAuthProvider('U', 'P')),
     new RfcTransport(() => ({}) as never, null),
     null,
     undefined,
@@ -80,7 +81,7 @@ function ownsSession(_conn: IAbapConnection & ISessionLifecycleAware): void {}
 ownsSession(
   new AdtOnPremConnector(
     httpConfig,
-    new BasicAuthProvider('U', 'P'),
+    legacyProvider(new BasicAuthProvider('U', 'P')),
     onPremHttpTransport(httpConfig, null),
     null,
   ),
@@ -105,7 +106,7 @@ describe('narrowing to a connection capability', () => {
     const conn: IAbapConnection & ISessionLifecycleAware =
       new AdtOnPremConnector(
         httpConfig,
-        new BasicAuthProvider('U', 'P'),
+        legacyProvider(new BasicAuthProvider('U', 'P')),
         onPremHttpTransport(httpConfig, null),
         null,
       );
@@ -132,7 +133,7 @@ describe('narrowing to a connection capability', () => {
   it('the predicate admits an HTTP connection', () => {
     const conn: IAbapConnection = new AdtOnPremConnector(
       httpConfig,
-      new BasicAuthProvider('U', 'P'),
+      legacyProvider(new BasicAuthProvider('U', 'P')),
       onPremHttpTransport(httpConfig, null),
       null,
     );
@@ -151,7 +152,7 @@ describe('narrowing to a connection capability', () => {
     const half = {
       ...(new AdtOnPremConnector(
         httpConfig,
-        new BasicAuthProvider('U', 'P'),
+        legacyProvider(new BasicAuthProvider('U', 'P')),
         onPremHttpTransport(httpConfig, null),
         null,
       ) as unknown as Record<string, unknown>),

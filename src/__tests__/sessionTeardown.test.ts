@@ -13,6 +13,7 @@ import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
+import { legacyProvider } from './helpers/legacyProvider.js';
 import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
 import { settled } from './helpers/settled.js';
 
@@ -109,7 +110,7 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
   it('cloud opens the session resource and gives it back by DELETE', async () => {
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      TokenAuthProvider.fixed('TOKEN'),
+      legacyProvider(TokenAuthProvider.fixed('TOKEN')),
       cloudHttpTransport(
         { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
         makeLogger(),
@@ -481,7 +482,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
     // preflight. On-prem opens nothing to leave behind.
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      TokenAuthProvider.fixed('TOKEN'),
+      legacyProvider(TokenAuthProvider.fixed('TOKEN')),
       cloudHttpTransport(
         { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
         makeLogger(),
@@ -508,7 +509,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
   it('says nothing when the preflight opened nothing', async () => {
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      TokenAuthProvider.fixed('TOKEN'),
+      legacyProvider(TokenAuthProvider.fixed('TOKEN')),
       cloudHttpTransport(
         { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
         makeLogger(),

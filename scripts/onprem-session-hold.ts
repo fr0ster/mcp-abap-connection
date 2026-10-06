@@ -30,6 +30,7 @@ import { OnPremHttpTransport } from '../dist/connection/OnPremHttpTransport';
 import { RfcTransport } from '../dist/connection/RfcTransport';
 import { rfcConversationFrom } from '../dist/connection/rfcConversation';
 import type { ILogger } from '../dist/logger';
+import { legacyProvider } from '../src/__tests__/helpers/legacyProvider.js';
 
 const stopFile = process.argv[2];
 const wire = (process.argv[3] ?? 'http').toLowerCase();
@@ -73,7 +74,9 @@ const config = {
 };
 
 async function main(): Promise<void> {
-  const credential = new BasicAuthProvider(config.username, config.password);
+  const credential = legacyProvider(
+    new BasicAuthProvider(config.username, config.password),
+  );
   const connection =
     wire === 'rfc'
       ? new AdtOnPremConnector(
