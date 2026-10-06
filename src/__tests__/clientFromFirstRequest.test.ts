@@ -213,6 +213,16 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
     > = [
       ['a sap-client params entry', { params: { 'sap-client': '100' } }],
       [
+        'a sap-usercontext cookie',
+        { headers: { Cookie: 'X=1; sap-usercontext=sap-client=100' } },
+      ],
+      [
+        'a sap-usercontext cookie under a lowercase cookie header',
+        {
+          headers: { cookie: 'sap-usercontext=sap-language=EN&sap-client=100' },
+        },
+      ],
+      [
         'an SAP-CLIENT params list with another client in it',
         { params: { 'SAP-CLIENT': ['200', '100'] } },
       ],
@@ -298,6 +308,42 @@ describe('a wire given no client', () => {
       }),
     ).rejects.toThrow(/client 200.*connection.*no client/);
     expect(icf.seen.length).toBe(before);
+
+    await conn.disconnect();
+  });
+
+  it('refuses a sap-usercontext cookie on its first request, before any jar', async () => {
+    const transport = new OnPremHttpTransport(() => ({}), null, {
+      baseUrl: icf.baseUrl,
+    });
+
+    await expect(
+      transport.send({
+        url: '/sap/bc/adt/core/discovery',
+        method: 'GET',
+        headers: { Cookie: 'sap-usercontext=sap-client=200' },
+      }),
+    ).rejects.toThrow(/client 200.*connection.*no client/);
+    expect(icf.seen).toHaveLength(0);
+  });
+
+  it('admits the client its jar holds — the connection’s own retries send it', async () => {
+    const config = { url: icf.baseUrl, authType: 'basic' } as SapConfig;
+    const conn = new AdtOnPremConnector(
+      config,
+      new BasicAuthProvider('USER', 'PASS'),
+      new OnPremHttpTransport(() => ({}), null, { baseUrl: icf.baseUrl }),
+      null,
+    );
+    await conn.connect();
+
+    await conn.makeAdtRequest({
+      url: '/sap/bc/adt/x',
+      method: 'GET',
+      timeout: 5000,
+      headers: { Cookie: `sap-usercontext=sap-client=${DEFAULT_CLIENT}` },
+    });
+    expect(icf.seen[icf.seen.length - 1].client).toBe(DEFAULT_CLIENT);
 
     await conn.disconnect();
   });

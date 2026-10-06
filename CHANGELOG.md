@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never addressing the client over HTTP; pass it to the transport's `client`
   option.
 - **A request cannot name another client.** A `sap-client` header, query
-  parameter or `params` entry, in any case, that differs from the transport's `client` — or
+  parameter, `params` entry or `sap-usercontext` cookie, in any case, that differs from the transport's `client` — or
   names one when the transport was given none — is refused with an error
   before anything is sent; naming the same client passes, and the header goes
   out once. Another client is another logon (its own user, password, session

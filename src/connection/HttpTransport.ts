@@ -550,8 +550,7 @@ export class HttpTransport implements IAdtTransport {
    * The client belongs to the connection. Another client is another logon —
    * its own user and password, its own session and CSRF token — so a caller
    * that names one in a `sap-client` header, query string or `params` entry, in
-   * any case,
-   * is refused before anything is sent: sending it would land the request in
+   * any case, or in a `sap-usercontext` cookie, is refused before anything is sent: sending it would land the request in
    * that client with the session and credential of this one. Naming the
    * connection's own client is harmless and passes.
    */
@@ -577,6 +576,32 @@ export class HttpTransport implements IAdtTransport {
         named.push(String(each));
       }
     }
+    // And the cookie ICF also reads: `sap-usercontext=sap-client=<n>` in a
+    // caller's `Cookie`. The connection's own CSRF and 401 retries put the
+    // whole jar there, so a wire given no client admits the client its jar
+    // holds — the one the system answered with — and nothing else.
+    const cookieOwn = own ?? this.jarClient();
+    const cookieNamed: string[] = [];
+    for (const [name, value] of Object.entries(request.headers ?? {})) {
+      if (name.toLowerCase() !== 'cookie') continue;
+      for (const pair of String(value).split(';')) {
+        const [cookieName, ...rest] = pair.split('=');
+        if (cookieName?.trim().toLowerCase() !== 'sap-usercontext') continue;
+        for (const [key, client] of new URLSearchParams(
+          rest.join('=').trim(),
+        )) {
+          if (key.toLowerCase() === 'sap-client') cookieNamed.push(client);
+        }
+      }
+    }
+    for (const client of cookieNamed) {
+      if (client === cookieOwn) continue;
+      throw new Error(
+        `the request names client ${client}, but the connection is ${
+          own ? `for client ${own}` : 'given no client'
+        }: the client belongs to the connection — another client is another connection, with its own credential`,
+      );
+    }
     for (const client of named) {
       if (client === own) continue;
       throw new Error(
@@ -585,6 +610,16 @@ export class HttpTransport implements IAdtTransport {
         }: the client belongs to the connection — another client is another connection, with its own credential`,
       );
     }
+  }
+
+  /** The client the jar's `sap-usercontext` names, as the system set it. */
+  private jarClient(): string | undefined {
+    const context = this.jar.get('sap-usercontext');
+    if (context === undefined) return undefined;
+    for (const [key, client] of new URLSearchParams(context)) {
+      if (key.toLowerCase() === 'sap-client') return client;
+    }
+    return undefined;
   }
 
   /** A path becomes an address; anything already absolute is left alone. */
