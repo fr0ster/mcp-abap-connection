@@ -11,6 +11,7 @@
  * cookies, so a 401 reaches the provider only when it comes twice.
  */
 
+import { authError } from '@mcp-abap-adt/auth-errors';
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
 import type {
   AuthOutcome,
@@ -20,20 +21,31 @@ import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import {
   AuthRefusedError,
-  PROVIDER_FAILED,
-  REFUSED_AGAIN,
   WireLogonError,
 } from '../../connection/authErrors.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { type SapStub, startSapStub } from '../helpers/sapStub.js';
 import { type StubScript, stubProvider } from '../helpers/stubProvider.js';
 
+/** connection's `provider-threw` (I3), whatever the moment. */
+const PROVIDER_FAILED = {
+  kind: 'connection',
+  facts: { problem: 'provider-threw' },
+  reason: 'the credential provider failed',
+};
+/** connection's `refused-after-renewal` (I4), whatever the moment. */
+const REFUSED_AGAIN = {
+  kind: 'connection',
+  facts: { problem: 'refused-after-renewal' },
+  reason: 'the credential was refused again after the provider renewed it',
+};
+
 const WORK = '/sap/bc/adt/work';
 const DISCOVERY = '/sap/bc/adt/core/discovery';
 const OK: AuthOutcome = { ok: true };
 const NO: AuthOutcome = {
   ok: false,
-  refusal: { reason: 'the stub says no', hint: 'ask it nicely' },
+  refusal: authError['credential-refused']({ credential: 'token' }),
 };
 
 let stub: SapStub;
@@ -155,7 +167,7 @@ describe('a 401 that survives the wire', () => {
 
     expect(error).toBeInstanceOf(AuthRefusedError);
     expect((error as AuthRefusedError).at).toBe('request');
-    expect((error as AuthRefusedError).refusal).toBe(PROVIDER_FAILED);
+    expect((error as AuthRefusedError).refusal).toMatchObject(PROVIDER_FAILED);
     expect((error as AuthRefusedError).cause).toBe(boom);
     expect(rejections()).toHaveLength(1);
     expect(stub.sentTo(WORK)).toHaveLength(2);
@@ -168,7 +180,7 @@ describe('a 401 that survives the wire', () => {
     const error = await get(conn).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toBe(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
     expect(statusOf((error as AuthRefusedError).cause)).toBe(401);
     expect(rejections()).toHaveLength(1);
   });
@@ -245,7 +257,7 @@ describe("the wire's own recovery", () => {
     const error = await post(conn).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toBe(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
     expect((error as AuthRefusedError).at).toBe('logon');
     expect(rejections()).toHaveLength(1);
   });
@@ -342,7 +354,7 @@ describe('the upfront token fetch before a mutation', () => {
     const error = await post(conn).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toBe(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
     expect(rejections()).toHaveLength(1);
     expect(stub.sentTo(WORK)).toHaveLength(0);
   });
@@ -356,7 +368,7 @@ describe('the upfront token fetch before a mutation', () => {
     const error = await post(conn).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toBe(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
     // Asked once, about the fetch — the POST's 401s spent nothing more.
     expect(rejections()).toHaveLength(1);
     expect(rejections()[0]).toMatchObject({ at: 'logon', status: 401 });
@@ -523,7 +535,7 @@ describe('many requests, and a critical section', () => {
     }
 
     expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toBe(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
     expect((error as AuthRefusedError).at).toBe('request');
     expect(rejections()).toHaveLength(1);
     // Still connected, on the session the lock was taken in.

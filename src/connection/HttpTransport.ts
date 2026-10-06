@@ -20,6 +20,7 @@
  */
 
 import { Agent, type AgentOptions } from 'node:https';
+import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
   ICertificateMaterial,
@@ -661,7 +662,10 @@ export class HttpTransport implements IAdtTransport {
       },
       logonParameters: (): AuthOutcome => ({
         ok: false,
-        refusal: { reason: 'this wire takes no logon parameters (HTTP)' },
+        refusal: authError['logon-target']({
+          wire: 'http',
+          refused: 'logon-parameters',
+        }),
       }),
     };
   }

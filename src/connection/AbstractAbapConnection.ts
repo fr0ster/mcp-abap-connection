@@ -30,7 +30,7 @@ import {
   AuthRefusedError,
   type GuardedAnswer,
   NO_CREDENTIAL_TO_RENEW,
-  REFUSED_AGAIN,
+  refusedAgain,
   WireLogonError,
 } from './authErrors.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
@@ -397,7 +397,11 @@ abstract class AbstractAbapConnection
           await this.establishAndCommit(baselineEpoch);
         } catch (again) {
           if (!(again instanceof WireLogonError)) throw again;
-          throw new AuthRefusedError(REFUSED_AGAIN, 'logon', again.cause);
+          throw new AuthRefusedError(
+            refusedAgain('logon'),
+            'logon',
+            again.cause,
+          );
         }
       }
     });
@@ -1541,12 +1545,12 @@ abstract class AbstractAbapConnection
         );
       }
       this.throwIfSessionDead(again, lease);
-      const refusedAgain = this.credentialRejection(again);
-      if (!refusedAgain) throw again;
+      const secondRejection = this.credentialRejection(again);
+      if (!secondRejection) throw again;
       throw new AuthRefusedError(
-        REFUSED_AGAIN,
-        refusedAgain.at,
-        refusedAgain.error,
+        refusedAgain(secondRejection.at),
+        secondRejection.at,
+        secondRejection.error,
       );
     }
   }
@@ -1610,7 +1614,11 @@ abstract class AbstractAbapConnection
     renewal: CredentialRenewal,
   ): Promise<void> {
     if (renewal.spent) {
-      throw new AuthRefusedError(REFUSED_AGAIN, rejection.at, rejection.error);
+      throw new AuthRefusedError(
+        refusedAgain(rejection.at),
+        rejection.at,
+        rejection.error,
+      );
     }
     renewal.spent = true;
     const answer = await this.credentialRejected(rejection);

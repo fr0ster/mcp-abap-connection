@@ -42,6 +42,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { authError } from '@mcp-abap-adt/auth-errors';
 import type { AuthOutcome, ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '../logger.js';
 import { WireLogonError } from './authErrors.js';
@@ -478,7 +479,10 @@ export class RfcTransport implements IOnPremTransport {
     return {
       tlsMaterial: (): AuthOutcome => ({
         ok: false,
-        refusal: { reason: 'this wire carries no TLS material (RFC)' },
+        refusal: authError['logon-target']({
+          wire: 'rfc',
+          refused: 'tls-material',
+        }),
       }),
       logonParameters: (written): AuthOutcome => {
         Object.assign(parameters, written);

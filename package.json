@@ -53,9 +53,10 @@
     "node": "^22 || ^24 || ^26"
   },
   "dependencies": {
+    "@mcp-abap-adt/auth-errors": "^1.0.0",
     "@mcp-abap-adt/interfaces-adt-connection": "^1.0.0",
-    "@mcp-abap-adt/interfaces-auth": "^3.0.0",
-    "@mcp-abap-adt/interfaces-auth-sap": "^2.0.0",
+    "@mcp-abap-adt/interfaces-auth": "^6.0.0",
+    "@mcp-abap-adt/interfaces-auth-sap": "^3.2.0",
     "@mcp-abap-adt/interfaces-network": "^2.0.0",
     "@mcp-abap-adt/interfaces-utils": "^1.1.0",
     "axios": "^1.16.0",

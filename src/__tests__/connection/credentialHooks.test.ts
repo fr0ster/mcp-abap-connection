@@ -2,15 +2,22 @@
  * The lifecycle's three credential hooks, on a connector holding a stub
  * provider, and the base class that has no credential at all.
  */
+import { authError } from '@mcp-abap-adt/auth-errors';
 import { AbstractAbapConnection } from '../../connection/AbstractAbapConnection.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import {
   AuthRefusedError,
   NO_CREDENTIAL_TO_RENEW,
-  PROVIDER_FAILED,
 } from '../../connection/authErrors.js';
 import { onPremHttpTransport } from '../helpers/onPrem.js';
 import { stubProvider } from '../helpers/stubProvider.js';
+
+/** connection's `provider-threw` (I3), whatever the moment. */
+const PROVIDER_FAILED = {
+  kind: 'connection',
+  facts: { problem: 'provider-threw' },
+  reason: 'the credential provider failed',
+};
 
 const config = {
   url: 'https://h:44300',
@@ -18,7 +25,10 @@ const config = {
   client: '100',
 } as any;
 
-const NO = { ok: false, refusal: { reason: 'no', hint: 'try yes' } } as const;
+const NO = {
+  ok: false,
+  refusal: authError['credential-refused']({ credential: 'token' }),
+} as const;
 
 function connectorOn(provider: ReturnType<typeof stubProvider>) {
   return new AdtOnPremConnector(
@@ -46,7 +56,7 @@ describe('the credential hooks on a connector', () => {
     expect(error).toBeInstanceOf(AuthRefusedError);
     expect(error.at).toBe('request');
     expect(error.refusal).toBe(NO.refusal);
-    expect(error.message).toBe('no — try yes');
+    expect(error.message).toBe('the token was refused — obtain a new token');
   });
 
   it('a prepare Oops is an AuthRefusedError at prepare', async () => {
@@ -82,7 +92,9 @@ describe('the credential hooks on a connector', () => {
     const conn = connectorOn(provider);
     const rejection = { at: 'request', status: 401, error: new Error('x') };
     const refused = await conn.credentialRejected(rejection);
-    expect(refused.outcome).toBe(NO);
+    // The answer re-checked by classifyOutcome: a new outcome, the same refusal.
+    expect(refused.outcome).toStrictEqual(NO);
+    expect(refused.outcome.refusal).toBe(NO.refusal);
     expect('thrown' in refused).toBe(false);
     expect(provider.calls[0].argument).toBe(rejection);
     expect(await conn.credentialRejected(rejection)).toEqual({
@@ -112,11 +124,18 @@ describe('the credential hooks on a connector', () => {
       const error = await call().catch((e: unknown) => e);
       expect(error).toBeInstanceOf(AuthRefusedError);
       expect(error.at).toBe(at);
-      expect(error.refusal).toBe(PROVIDER_FAILED);
+      expect(error.refusal).toMatchObject(PROVIDER_FAILED);
+      expect(error.refusal.facts.at).toBe(at);
       expect(error.cause).toBe(boom);
     }
     const answer = await conn.credentialRejected({ at: 'request', error: 1 });
-    expect(answer.outcome).toEqual({ ok: false, refusal: PROVIDER_FAILED });
+    expect(answer.outcome).toMatchObject({
+      ok: false,
+      refusal: {
+        ...PROVIDER_FAILED,
+        facts: { ...PROVIDER_FAILED.facts, at: 'request' },
+      },
+    });
     expect(answer.thrown).toBe(boom);
   });
 });

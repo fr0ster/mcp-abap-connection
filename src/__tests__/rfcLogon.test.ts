@@ -4,14 +4,11 @@
  * A fake conversation factory records the parameters of every open and refuses
  * chosen ones with a raw error; a stub provider writes the logon parameters.
  */
+import { authError } from '@mcp-abap-adt/auth-errors';
 import type { AuthOutcome, ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
-import {
-  AuthRefusedError,
-  REFUSED_AGAIN,
-  WireLogonError,
-} from '../connection/authErrors.js';
+import { AuthRefusedError, WireLogonError } from '../connection/authErrors.js';
 import type { IAdtSessionContext } from '../connection/IAdtTransport.js';
 import {
   type IRfcConversation,
@@ -19,6 +16,13 @@ import {
 } from '../connection/RfcTransport.js';
 import { rfcConversationFrom } from '../connection/rfcConversation.js';
 import { stubProvider } from './helpers/stubProvider.js';
+
+/** connection's `refused-after-renewal` (I4), whatever the moment. */
+const REFUSED_AGAIN = {
+  kind: 'connection',
+  facts: { problem: 'refused-after-renewal' },
+  reason: 'the credential was refused again after the provider renewed it',
+};
 
 const OK_RESPONSE = {
   RESPONSE: {
@@ -119,9 +123,25 @@ describe('the RFC wire opens with what the provider wrote', () => {
     expect(seen).toStrictEqual([
       {
         ok: false,
-        refusal: { reason: 'this wire carries no TLS material (RFC)' },
+        refusal: authError['logon-target']({
+          wire: 'rfc',
+          refused: 'tls-material',
+        }),
       },
     ]);
+    const [outcome] = seen;
+    if (outcome === undefined || outcome.ok) {
+      throw new Error('expected a refusal');
+    }
+    expect(outcome.refusal.kind).toBe('logon-target');
+    expect(outcome.refusal.facts).toStrictEqual({
+      wire: 'rfc',
+      refused: 'tls-material',
+    });
+    expect(outcome.refusal.reason).toBe(
+      'this wire carries no TLS material (RFC)',
+    );
+    expect(outcome.refusal.hint).toBeUndefined();
   });
 
   it('throws the raw error inside a WireLogonError when the open fails', async () => {
@@ -246,7 +266,9 @@ describe('through a connector', () => {
   });
 
   it('an Oops from rejected ends the connect in the provider’s words', async () => {
-    const refusal = { reason: 'the password is wrong', hint: 'change it' };
+    const refusal = authError['credential-refused']({
+      credential: 'user-password',
+    });
     const { conn } = connectorWith(() => RAW, {
       establish: [writesUser],
       rejected: [{ ok: false, refusal }],
@@ -266,7 +288,7 @@ describe('through a connector', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect((error as AuthRefusedError).refusal).toStrictEqual(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
     expect(rejections()).toHaveLength(1);
   });
 
@@ -300,7 +322,10 @@ describe('through a connector', () => {
   });
 
   it('an establish Oops ends the connect in its words; rejected is never asked', async () => {
-    const refusal = { reason: 'SNC only', hint: 'configure SNC' };
+    const refusal = authError['logon-target']({
+      wire: 'rfc',
+      refused: 'tls-material',
+    });
     const { conn, rejections } = connectorWith(() => undefined, {
       establish: [{ ok: false, refusal }],
     });

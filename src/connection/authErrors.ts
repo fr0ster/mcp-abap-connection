@@ -3,6 +3,7 @@
  * puts on a failure that is a refused logon.
  */
 
+import { authError, classifyOutcome } from '@mcp-abap-adt/auth-errors';
 import type { AuthOutcome, IAuthRefusal } from '@mcp-abap-adt/interfaces-auth';
 
 /** When in the connection's life the credential refused. */
@@ -12,8 +13,9 @@ export type AuthRefusalMoment = 'prepare' | 'logon' | 'request';
  * The credential said no, or the system refused it and the provider's answer
  * is final.
  *
- * `refusal` is the provider's own words; `cause` keeps the wire's error as it
- * arrived, so a network failure stays visible even when a provider words it as
+ * `refusal` is the provider's error as `@mcp-abap-adt/auth-errors` minted it
+ * (or the connection's own) — decide on its `kind` and `facts`; the message is
+ * its `reason — hint`. `cause` keeps the wire's error as it arrived, so a network failure stays visible even when a provider words it as
  * a credential problem — unless the provider threw instead of answering, when
  * it is that throw.
  */
@@ -52,23 +54,26 @@ export class WireLogonError extends Error {
   }
 }
 
-/** A provider threw instead of answering: a bug in the provider, not an answer. */
-export const PROVIDER_FAILED: IAuthRefusal = {
-  reason: 'the credential provider failed',
-};
+/**
+ * A provider threw instead of answering, or answered something that is not an
+ * outcome: a bug in the provider, not an answer.
+ */
+export function providerFailed(at: AuthRefusalMoment): IAuthRefusal {
+  return authError.connection({ problem: 'provider-threw', at });
+}
 
 /**
  * The provider said Ok to a rejection and the retry was refused too. The one
  * refusal the connection words itself, because the provider's last word was Ok.
  */
-export const REFUSED_AGAIN: IAuthRefusal = {
-  reason: 'the credential was refused again after the provider renewed it',
-};
+export function refusedAgain(at: AuthRefusalMoment): IAuthRefusal {
+  return authError.connection({ problem: 'refused-after-renewal', at });
+}
 
 /** A connection built without a credential has nothing to renew. */
-export const NO_CREDENTIAL_TO_RENEW: IAuthRefusal = {
-  reason: 'this connection has no credential to renew',
-};
+export const NO_CREDENTIAL_TO_RENEW: IAuthRefusal = authError.connection({
+  problem: 'no-credential',
+});
 
 /**
  * A provider's answer, and what it threw when the answer is a throw. `thrown`
@@ -81,18 +86,27 @@ export interface GuardedAnswer {
 }
 
 /**
- * Run one provider call so that a throw is an answer too.
+ * Run one provider call so that a throw is an answer too, and so that what
+ * the provider answered is an outcome the connection can trust.
  *
  * A consumer's provider may be buggy; the connection must not let that surface
  * as an unhandled rejection. The throw is kept beside the outcome, to become
  * the cause of whatever the caller then raises.
+ *
+ * A provider written in JavaScript can answer any object, and an
+ * `AuthRefusedError` built from it would carry its free text. So every answer
+ * goes through `classifyOutcome`: a refusal minted by this copy of
+ * `auth-errors` passes as the same object, another copy's is rebuilt from its
+ * kind and facts, and anything else is `provider-threw` at `at`.
  */
 export async function guarded(
   call: () => Promise<AuthOutcome>,
+  at: AuthRefusalMoment,
 ): Promise<GuardedAnswer> {
+  const fallback = providerFailed(at);
   try {
-    return { outcome: await call() };
+    return { outcome: classifyOutcome(await call(), fallback) };
   } catch (thrown) {
-    return { outcome: { ok: false, refusal: PROVIDER_FAILED }, thrown };
+    return { outcome: { ok: false, refusal: fallback }, thrown };
   }
 }
