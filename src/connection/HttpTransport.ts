@@ -495,15 +495,21 @@ export class HttpTransport implements IAdtTransport {
    * looking like it carried a session.
    */
   private dress(request: IAdtTransportRequest): Record<string, string> {
+    this.refuseAnotherClient(request);
     const headers = request.headers;
     const stateful = isStatefulRequest(request);
     const dressed: Record<string, string> = {
       ...this.affinityHeaders(),
-      ...this.clientHeaders(),
       ...this.sessionHeaders(),
       ...(stateful ? this.sessionTypeHeaders() : {}),
       ...headers,
     };
+    // The caller's spelling of the client goes; the wire's goes in last. It is
+    // the same value — refuseAnotherClient saw to that — said once.
+    for (const name of Object.keys(dressed)) {
+      if (name.toLowerCase() === 'sap-client') delete dressed[name];
+    }
+    Object.assign(dressed, this.clientHeaders());
     // Whatever the caller spelled the header as: HTTP does not tell `Cookie`
     // from `cookie`, and a lowercase one spread in above would bypass the
     // filter below.
@@ -538,6 +544,38 @@ export class HttpTransport implements IAdtTransport {
    */
   protected sessionTypeHeaders(): Record<string, string> {
     return { [SESSION_TYPE_HEADER]: 'stateful' };
+  }
+
+  /**
+   * The client belongs to the connection. Another client is another logon —
+   * its own user and password, its own session and CSRF token — so a caller
+   * that names one in a `sap-client` header or query parameter, in any case,
+   * is refused before anything is sent: sending it would land the request in
+   * that client with the session and credential of this one. Naming the
+   * connection's own client is harmless and passes.
+   */
+  private refuseAnotherClient(request: IAdtTransportRequest): void {
+    const own = this.options.client || undefined;
+    const named: string[] = [];
+    for (const [name, value] of Object.entries(request.headers ?? {})) {
+      if (name.toLowerCase() === 'sap-client') named.push(String(value));
+    }
+    const url = request.url ?? '';
+    const query = url.indexOf('?');
+    if (query !== -1) {
+      const params = new URLSearchParams(url.slice(query + 1));
+      for (const [name, value] of params) {
+        if (name.toLowerCase() === 'sap-client') named.push(value);
+      }
+    }
+    for (const client of named) {
+      if (client === own) continue;
+      throw new Error(
+        `the request names client ${client}, but the connection is ${
+          own ? `for client ${own}` : 'given no client'
+        }: the client belongs to the connection — another client is another connection, with its own credential`,
+      );
+    }
   }
 
   /** A path becomes an address; anything already absolute is left alone. */

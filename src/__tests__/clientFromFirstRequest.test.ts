@@ -192,7 +192,94 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
   },
 );
 
+/**
+ * The client belongs to the connection. Another client is another logon — its
+ * own user, password, session and CSRF token — so a caller's `sap-client` that
+ * names a different one is refused before anything is sent, rather than
+ * landing a request in one client with the session and credential of another.
+ */
+describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
+  'the %s wire keeps the client its connection was given',
+  (wire) => {
+    const CALLER_ADDRESSED: ReadonlyArray<
+      [string, { headers?: Record<string, string>; url?: string }]
+    > = [
+      ['a sap-client header', { headers: { 'sap-client': '100' } }],
+      ['a SAP-Client header', { headers: { 'SAP-Client': '100' } }],
+      ['a sap-client query parameter', { url: '/sap/bc/adt/x?sap-client=100' }],
+      [
+        'an SAP-CLIENT query parameter',
+        { url: '/sap/bc/adt/x?SAP-CLIENT=100' },
+      ],
+    ];
+
+    it.each(CALLER_ADDRESSED)(
+      'refuses %s naming another client, and sends nothing',
+      async (_label, request) => {
+        const conn = connectorFor(wire, icf.baseUrl, '200');
+        await conn.connect();
+        const before = icf.seen.length;
+
+        await expect(
+          conn.makeAdtRequest({
+            url: request.url ?? '/sap/bc/adt/x',
+            method: 'GET',
+            timeout: 5000,
+            ...(request.headers ? { headers: request.headers } : {}),
+          }),
+        ).rejects.toThrow(/client 100.*connection.*client 200/);
+        expect(icf.seen.length).toBe(before);
+        expect(icf.seen.some((seen) => seen.client === '100')).toBe(false);
+
+        await conn.disconnect();
+      },
+    );
+
+    it('lets a caller name the same client, and sends it once', async () => {
+      const conn = connectorFor(wire, icf.baseUrl, '200');
+      await conn.connect();
+
+      await conn.makeAdtRequest({
+        url: '/sap/bc/adt/x?sap-client=200',
+        method: 'GET',
+        timeout: 5000,
+        headers: { 'SAP-Client': '200' },
+      });
+
+      const last = icf.seen[icf.seen.length - 1];
+      expect(last.client).toBe('200');
+      expect(last.headers['sap-client']).toBe('200');
+
+      await conn.disconnect();
+    });
+  },
+);
+
 describe('a wire given no client', () => {
+  it('refuses a caller that names one: the client is the connection’s', async () => {
+    const config = { url: icf.baseUrl, authType: 'basic' } as SapConfig;
+    const conn = new AdtOnPremConnector(
+      config,
+      new BasicAuthProvider('USER', 'PASS'),
+      new OnPremHttpTransport(() => ({}), null, { baseUrl: icf.baseUrl }),
+      null,
+    );
+    await conn.connect();
+    const before = icf.seen.length;
+
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/x',
+        method: 'GET',
+        timeout: 5000,
+        headers: { 'sap-client': '200' },
+      }),
+    ).rejects.toThrow(/client 200.*connection.*no client/);
+    expect(icf.seen.length).toBe(before);
+
+    await conn.disconnect();
+  });
+
   it('says none, and the system picks its default', async () => {
     const config = { url: icf.baseUrl, authType: 'basic' } as SapConfig;
     const conn = new AdtOnPremConnector(
