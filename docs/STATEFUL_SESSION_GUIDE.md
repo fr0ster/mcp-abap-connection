@@ -189,7 +189,7 @@ credential — the second 401 ends the request as `AuthRefusedError` with the re
 verdict (`at: 'request'`), not `SESSION_REPLACED`, and the connection stays connected. Inside a
 critical section, treat that as a lost lock: `disconnect()`, `connect()`, and redo the work under
 a new lock.
-If the provider says no, or the retry is refused too, the caller gets an `AuthRefusedError`. A 403 is an authorization answer, not a credential one: it never goes to the
+If the provider says no, or the retry is refused too, the caller gets an `AuthRefusedError` (the refused-again verdict is `refusal.kind === 'connection'`, `facts.problem === 'refused-after-renewal'`). A 403 is an authorization answer, not a credential one: it never goes to the
 provider. See [When the credential is refused](./USAGE.md#when-the-credential-is-refused).
 
 A reconnect is a NEW session, so do it outside a lock window rather than inside one.

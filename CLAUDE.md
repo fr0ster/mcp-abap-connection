@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run build          # Clean + biome lint (error-level) + tsc compile
 npm run build:fast     # tsc only (skip clean and lint, for rapid iteration)
 npm run lint           # Biome auto-fix (src and scripts)
-npm run lint:check     # Biome read-only check (src and scripts)
+npm run lint:check     # Biome read-only check (src and scripts), then the auth shape check (rules 4,5,6)
 npm test               # Jest (all tests)
 npx jest --testPathPatterns=rfcTransport      # Run a single test file
 SAP_ENV_FILE=e19.env npx jest --testPathPatterns=rfc-connection  # live, needs an on-prem system
@@ -63,7 +63,7 @@ the RFC wire could not connect at all as a result.
   addressing it, establishing itself, and whatever session state it keeps.
   `HttpTransport` has a cookie jar, a CSRF token, affinity headers and axios;
   `RfcTransport` has a conversation that IS the session and none of the rest.
-- `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth` ^3.0.0) — the credential,
+- `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth` ^6.0.0) — the credential,
   including its own renewal. The connection calls `prepare()` once before the wire
   opens, `establish(logon)` at each logon (through `IAdtSessionContext.logon`),
   `authorize(request)` before every attempt (through
@@ -73,8 +73,25 @@ the RFC wire could not connect at all as a result.
   to the provider. The wire offers what it can carry (`ILogonTarget`: TLS material
   for HTTP, logon parameters for RFC), the provider writes, the connection decides
   the lifecycle. A wire marks a refused logon with `WireLogonError` and decides
-  nothing else. The connection guards every provider call: a throw is a refusal
-  with the reason "the credential provider failed".
+  nothing else. The connection guards every provider call (`guarded(call, at)`):
+  a throw, or an answer that is not a minted outcome, is the refusal
+  `connection` / `provider-threw` ("the credential provider failed"); every
+  answer passes through `classifyOutcome`, so a forged refusal's text reaches no
+  message.
+- **Refusals are minted, never written.** Every refusal is an
+  `IAuthProviderError` built by `@mcp-abap-adt/auth-errors` (`authError[kind]`):
+  the targets answer `logon-target`, connection's own are `connection`
+  (`providerFailed(at)`, `refusedAgain(at)`, `NO_CREDENTIAL_TO_RENEW` in
+  `authErrors.ts`). An object literal does not compile; no type assertion to a
+  contract type, no spread of an error, no diagnostics — `lint:check` runs the
+  contract's shape check (`tools/check-provider-shape.mjs --rules 4,5,6`, a
+  byte-identical copy of auth-errors' own, with empty site lists).
+- **The tests run auth-providers 5.x through an adapter** until auth-providers
+  6.0.0 is published: `src/__tests__/helpers/legacyProvider.ts` wraps each 5.x
+  provider, translates its refusal by a closed table to the builder call, and
+  fails a test that meets a 5.x refusal outside it. Wrap every provider a test
+  builds from `@mcp-abap-adt/auth-providers` in `legacyProvider(…)`; a new 5.x
+  refusal needs a table row. The adapter goes with the move to 6.0.0.
 - The connector — which session mechanism this system uses, and nothing else.
 
 **If you find yourself checking the transport's kind in the base, that is the
@@ -84,7 +101,8 @@ fact belongs on the transport instead.
 **Key design decisions:**
 - All external deps accessed through the contract packages —
   `@mcp-abap-adt/interfaces-adt`, `-auth`, `-auth-sap`, `-network`, `-utils` — no
-  direct coupling. NOT `@mcp-abap-adt/interfaces`: that umbrella is **deleted**
+  direct coupling; the one runtime beside them is `@mcp-abap-adt/auth-errors`,
+  which mints and classifies auth refusals. NOT `@mcp-abap-adt/interfaces`: that umbrella is **deleted**
   as of its 52.0.0, npm serves 51.0.0 to whoever is pinned to it, and this
   package does not depend on it
 - Logger is optional everywhere, all calls use `logger?.method()` pattern

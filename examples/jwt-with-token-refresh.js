@@ -9,7 +9,8 @@
  * 1. Calls tokenRefresher.refreshToken() to get a new token
  * 2. Answers Ok, so the connection authorizes the request again
  * 3. The request is sent exactly once more; a second refusal is an
- *    AuthRefusedError carrying the provider's words
+ *    AuthRefusedError with the connection's verdict, `refusal.kind`
+ *    'connection' / `facts.problem` 'refused-after-renewal'
  *
  * A **403** is left alone. It means the server authenticated you and refused
  * the action anyway — an authorization gap, not an expired credential — so it

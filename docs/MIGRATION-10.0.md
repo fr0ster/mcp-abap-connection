@@ -240,7 +240,9 @@ async function logOn(
   const target: ILogonTarget = {
     tlsMaterial: (): AuthOutcome => ({
       ok: false,
-      // Since 12.0.0 a refusal is minted by @mcp-abap-adt/auth-errors.
+      // Since 12.0.0 a refusal is minted by @mcp-abap-adt/auth-errors. A wire of
+      // your own is neither of connection's two, so `wire` is 'unknown' — 'http'
+      // and 'rfc' carry the words of connection's own wires. See MIGRATION-12.0.md.
       refusal: authError['logon-target']({
         wire: 'unknown',
         refused: 'tls-material',

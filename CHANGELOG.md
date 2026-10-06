@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- **Refusals follow the authentication error contract.** connection moves to
+  `@mcp-abap-adt/interfaces-auth` `^6.0.0` (from `^3.0.0`) and
+  `@mcp-abap-adt/interfaces-auth-sap` `^3.2.0` (from `^2.0.0`), and depends on
+  `@mcp-abap-adt/auth-errors` `^1.0.0`. A refusal is now an
+  `IAuthProviderError`: a deep-frozen object with a `kind`, `facts` from
+  closed allowlists, and `reason` / `hint` rendered from them, minted only by
+  `auth-errors`. See [MIGRATION-12.0.md](./docs/MIGRATION-12.0.md).
+- **`AuthRefusedError.refusal` is an `IAuthProviderError`.** Decide on
+  `refusal.kind` and `refusal.facts`. `reason`, `hint`, `at`, `cause` and the
+  `reason — hint` message are unchanged.
+- **A custom `ILogonTarget` builds its refusal through `auth-errors`**
+  (`authError['logon-target']({ wire, refused })`). An object literal no
+  longer compiles. A custom `IAuthProvider` answers minted refusals too.
+- **The providers of `@mcp-abap-adt/auth-providers` 5.x do not fit
+  interfaces-auth 6.0.0's `IAuthProvider`.** Use auth-providers 6.0.0 when it
+  is published.
+
+### Changed
+
+- connection's own refusals keep their words and gain a kind:
+  - the RFC wire's `this wire carries no TLS material (RFC)` is `logon-target`
+    `{ wire: 'rfc', refused: 'tls-material' }`
+  - the HTTP wire's `this wire takes no logon parameters (HTTP)` is
+    `logon-target` `{ wire: 'http', refused: 'logon-parameters' }`
+  - `the credential provider failed` is `connection` `provider-threw`
+  - `the credential was refused again after the provider renewed it` is
+    `connection` `refused-after-renewal`
+  - `this connection has no credential to renew` is `connection`
+    `no-credential`
+  - `facts.at` of the first two `connection` refusals is the moment of the
+    error that carries them
+- **The connection re-checks every provider answer** with `classifyOutcome`:
+  - a refusal minted by the same `auth-errors` passes as the same object
+  - one from another copy is rebuilt from its kind and facts
+  - anything else (a plain `{ reason }` from a JavaScript provider, a
+    non-outcome) is `provider-threw`, and its text reaches no message
+- **11.0.1 exported none of the refusal constants from its index.** Only
+  `AuthRefusedError`, `AuthRefusalMoment` and `WireLogonError` were exported,
+  and all three are unchanged. There is no `exports` map, so a deep import of
+  `dist/connection/authErrors.js` was possible. Such an import loses
+  `PROVIDER_FAILED` and `REFUSED_AGAIN`, which are now internal
+  `providerFailed(at)` / `refusedAgain(at)`; `NO_CREDENTIAL_TO_RENEW` is a
+  minted error; and `guarded(call, at)` takes the moment.
+- `lint:check` also runs the contract's shape check
+  (`tools/check-provider-shape.mjs --rules 4,5,6`, a byte-identical copy of
+  the one `auth-errors` publishes): no type assertion to a contract type, no
+  spread of an error, no diagnostics outside a listed site.
+
+### Unchanged
+
+- The lifecycle, the one credential retry per request, `WireLogonError`, and
+  11.0.1's guard against a request naming another SAP client.
+
+### Development
+
+- auth-providers 6.0.0 is not published yet, so the tests keep the
+  devDependency `@mcp-abap-adt/auth-providers` `^5.2.0`.
+  - They run its providers through a test-only adapter
+    (`src/__tests__/helpers/legacyProvider.ts`, never shipped). A closed table
+    translates each 5.x refusal the suites produce to its builder call, and a
+    test that meets any other 5.x refusal fails.
+  - Until the move to auth-providers 6.0.0, the dev tree holds a second,
+    nested `@mcp-abap-adt/interfaces-auth` 3.2.0 under auth-providers 5.2.0.
+    The production tree holds only 6.0.0.
+
 ## [11.0.1] - 2026-10-06
 
 ### Fixed
