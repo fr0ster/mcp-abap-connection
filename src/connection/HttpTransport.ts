@@ -507,7 +507,7 @@ export class HttpTransport implements IAdtTransport {
     // The caller's spelling of the client goes; the wire's goes in last. It is
     // the same value — refuseAnotherClient saw to that — said once.
     for (const name of Object.keys(dressed)) {
-      if (name.toLowerCase() === 'sap-client') delete dressed[name];
+      if (name.trim().toLowerCase() === 'sap-client') delete dressed[name];
     }
     Object.assign(dressed, this.clientHeaders());
     // Whatever the caller spelled the header as: HTTP does not tell `Cookie`
@@ -558,22 +558,23 @@ export class HttpTransport implements IAdtTransport {
     const own = this.options.client || undefined;
     const named: string[] = [];
     for (const [name, value] of Object.entries(request.headers ?? {})) {
-      if (name.toLowerCase() === 'sap-client') named.push(String(value));
+      if (name.trim().toLowerCase() === 'sap-client') named.push(String(value));
     }
-    const url = request.url ?? '';
-    const query = url.indexOf('?');
+    // The query as axios will send it — the URL's own and the structured
+    // `params`, serialised by axios itself (which trims and encodes names), so
+    // what is checked is what goes out. A name is compared trimmed and in any
+    // case, as ICF reads it.
+    const sent = axios.getUri({
+      url: request.url ?? '',
+      ...(request.params !== undefined ? { params: request.params } : {}),
+    });
+    const query = sent.indexOf('?');
     if (query !== -1) {
-      const params = new URLSearchParams(url.slice(query + 1));
-      for (const [name, value] of params) {
-        if (name.toLowerCase() === 'sap-client') named.push(value);
-      }
-    }
-    // The structured parameters too: axios serialises them into the same query
-    // string. A list is several values, each of which must be the client.
-    for (const [name, value] of Object.entries(request.params ?? {})) {
-      if (name.toLowerCase() !== 'sap-client' || value === undefined) continue;
-      for (const each of Array.isArray(value) ? value : [value]) {
-        named.push(String(each));
+      for (const [name, value] of new URLSearchParams(sent.slice(query + 1))) {
+        // A list goes out as `sap-client[]=…`; refused all the same.
+        if (/^sap-client(\[\])?$/.test(name.trim().toLowerCase())) {
+          named.push(value);
+        }
       }
     }
     // And the cookie ICF also reads: `sap-usercontext=sap-client=<n>` in a
@@ -590,7 +591,8 @@ export class HttpTransport implements IAdtTransport {
         for (const [key, client] of new URLSearchParams(
           rest.join('=').trim(),
         )) {
-          if (key.toLowerCase() === 'sap-client') cookieNamed.push(client);
+          if (key.trim().toLowerCase() === 'sap-client')
+            cookieNamed.push(client);
         }
       }
     }

@@ -213,6 +213,10 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
     > = [
       ['a sap-client params entry', { params: { 'sap-client': '100' } }],
       [
+        'a params key padded with spaces',
+        { params: { ' sap-client ': '100' } },
+      ],
+      [
         'a sap-usercontext cookie',
         { headers: { Cookie: 'X=1; sap-usercontext=sap-client=100' } },
       ],
@@ -305,6 +309,14 @@ describe('a wire given no client', () => {
         method: 'GET',
         timeout: 5000,
         params: { 'sap-client': '200' },
+      }),
+    ).rejects.toThrow(/client 200.*connection.*no client/);
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/x',
+        method: 'GET',
+        timeout: 5000,
+        params: { ' SAP-Client ': '200' },
       }),
     ).rejects.toThrow(/client 200.*connection.*no client/);
     expect(icf.seen.length).toBe(before);
