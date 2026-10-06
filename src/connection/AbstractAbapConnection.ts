@@ -936,15 +936,17 @@ abstract class AbstractAbapConnection
   }
 
   /**
-   * What every request carries: the client, then whatever the credential
-   * writes. On every path, the establishing call included.
+   * What every request carries from the credential. On every path, the
+   * establishing call included.
+   *
+   * Not the client. It used to be written here as `X-SAP-Client`, a header
+   * ABAP ignores; the client is the wire's to address — the HTTP wire with the
+   * `sap-client` header and the `sap-usercontext` cookie, the RFC wire at its
+   * logon — because how a system is told its client is a fact about the wire.
    */
   protected async credentialHeaders(
     headers: Record<string, string>,
   ): Promise<void> {
-    if (this.config.client) {
-      headers['X-SAP-Client'] = this.config.client;
-    }
     await this.authorizeRequest(headers);
   }
 

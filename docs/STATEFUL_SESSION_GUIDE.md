@@ -18,6 +18,7 @@ This document explains how `@mcp-abap-adt/connection` manages HTTP-level session
 
 - Fetch and cache CSRF token (per connection instance)
 - Store/reuse SAP cookies (`SAP_SESSIONID`, `sap-usercontext`, etc.)
+- Address the configured SAP client from the first request on (`sap-client` header and `sap-usercontext` cookie)
 - Track WHICH SAP session a connection is in, and refuse to work once it is lost
 
 The connection layer **does not** decide when to lock/unlock objects—that logic lives in the ADT clients. Instead it ensures every request shares the same HTTP session when desired.

@@ -745,7 +745,10 @@ describe('a request whose session is gone', () => {
     const error = await get(conn).catch((e: unknown) => e);
 
     expect(stub.sentTo(WORK)).toHaveLength(2);
-    expect(stub.sentTo(WORK)[0].headers.cookie).toBeUndefined();
+    // No session cookie — only the client the wire asserts on every request.
+    expect(stub.sentTo(WORK)[0].headers.cookie).toBe(
+      'sap-usercontext=sap-client=100',
+    );
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.SESSION_REPLACED);
     expect(conn.isConnected()).toBe(false);
   });

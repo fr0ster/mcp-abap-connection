@@ -247,6 +247,18 @@ const response = await connection.makeAdtRequest({
 });
 ```
 
+**The client is the wire's.** The transport's `client` option is what addresses
+the SAP client (mandant): an HTTP wire sends it as the `sap-client` header and
+the `sap-usercontext=sap-client=<n>` cookie on every request, the first one —
+which opens the session and earns the CSRF token — included. `config.client`
+alone does not reach the system over HTTP; pass the same value to the
+transport, as above. `X-SAP-Client` is not sent: ABAP ignores it. A request
+cannot name another client: a `sap-client` header, query parameter, `params`
+entry or `sap-usercontext` cookie (in any case) that differs from the connection's — or names one when the connection was
+given none — is refused before anything is sent. Another client is another
+logon, with its own user, password, session and CSRF token, so it is another
+connection.
+
 ### Cloud Usage (JWT/OAuth2)
 
 ```typescript

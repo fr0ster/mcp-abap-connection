@@ -178,10 +178,10 @@ export class HttpTransport implements IAdtTransport {
     private readonly agentOptions: () => AgentOptions = () => ({}),
     protected readonly logger: ILogger | null = null,
     /**
-     * `client` because SAP answers `sap-usercontext` with the system default
-     * rather than the client that was asked for, and later requests then route
-     * to a client the caller never named — on a read-only one, every write
-     * comes back 403.
+     * The SAP client (mandant) every request on this wire addresses, from the
+     * first one on: the establishing call is where the session and its CSRF
+     * token are issued, so a client applied any later is applied to a session
+     * that already lives in another one. See `clientHeaders()`.
      */
     private readonly options: { client?: string; baseUrl?: string } = {},
   ) {}
@@ -214,6 +214,10 @@ export class HttpTransport implements IAdtTransport {
       this.jar.set(trimmed, rest.join('=').trim());
     }
 
+    // SAP answers `sap-usercontext` with the system default rather than the
+    // client that was asked for; folded in as it came, later requests would
+    // route to a client the caller never named — on a read-only one, every
+    // write comes back 403.
     if (this.options.client) {
       this.jar.set('sap-usercontext', `sap-client=${this.options.client}`);
     }
@@ -270,6 +274,41 @@ export class HttpTransport implements IAdtTransport {
         ? { saplb: this.appServer, 'saplb-options': 'REDISPATCH_ON_SHUTDOWN' }
         : {}),
     };
+  }
+
+  /**
+   * The client, said the way ABAP hears it: the `sap-client` header.
+   *
+   * ICF takes the client from the `sap-client` header or query parameter, or
+   * from the `sap-usercontext` cookie — and NOT from `X-SAP-Client`, which it
+   * ignores. Measured against an on-prem system (client 100 the default),
+   * plain curl with basic auth on `/sap/bc/adt/core/discovery`:
+   * `X-SAP-Client: 999` answers 200 from client 100, `sap-client: 999` answers
+   * 401. Before this, the client reached the system only through the cookie,
+   * which the wire holds from the first response on — so the first request,
+   * the one that opens the session and earns the CSRF token, always landed in
+   * the default client, and a wrong client failed one request late.
+   *
+   * The header rather than the query parameter: it addresses the client
+   * without rewriting a URL the caller built, and it rides on the detached
+   * goodbye the same way it rides on everything else.
+   */
+  protected clientHeaders(): Record<string, string> {
+    return this.options.client ? { 'sap-client': this.options.client } : {};
+  }
+
+  /**
+   * The `sap-usercontext` cookie the client is asserted with, from the first
+   * request on — before any response could have set one.
+   *
+   * Added when a request is dressed rather than put in the jar: the jar is
+   * what the server issued, and a jar that held something before the first
+   * answer would read as a connection that holds a session.
+   */
+  private clientCookie(): string | undefined {
+    return this.options.client
+      ? `sap-usercontext=sap-client=${this.options.client}`
+      : undefined;
   }
 
   /**
@@ -456,6 +495,7 @@ export class HttpTransport implements IAdtTransport {
    * looking like it carried a session.
    */
   private dress(request: IAdtTransportRequest): Record<string, string> {
+    this.refuseAnotherClient(request);
     const headers = request.headers;
     const stateful = isStatefulRequest(request);
     const dressed: Record<string, string> = {
@@ -464,16 +504,28 @@ export class HttpTransport implements IAdtTransport {
       ...(stateful ? this.sessionTypeHeaders() : {}),
       ...headers,
     };
+    // The caller's spelling of the client goes; the wire's goes in last. It is
+    // the same value — refuseAnotherClient saw to that — said once.
+    for (const name of Object.keys(dressed)) {
+      if (name.trim().toLowerCase() === 'sap-client') delete dressed[name];
+    }
+    Object.assign(dressed, this.clientHeaders());
     // Whatever the caller spelled the header as: HTTP does not tell `Cookie`
     // from `cookie`, and a lowercase one spread in above would bypass the
     // filter below.
     let callerCookie: string | undefined;
     for (const name of Object.keys(dressed)) {
-      if (name.toLowerCase() !== 'cookie') continue;
+      if (name.trim().toLowerCase() !== 'cookie') continue;
       callerCookie = mergeCookieHeaders(callerCookie, dressed[name]);
       delete dressed[name];
     }
-    const merged = mergeCookieHeaders(callerCookie, this.combined ?? undefined);
+    // The client cookie last, so it wins: on the first request it is the only
+    // thing that names the client, and later the jar already holds the same
+    // value.
+    const merged = mergeCookieHeaders(
+      mergeCookieHeaders(callerCookie, this.combined ?? undefined),
+      this.clientCookie(),
+    );
     // Filtered on the merged header, not only on the jar: a caller's own
     // `Cookie` can carry the context too — the connection's CSRF and 401
     // retries put the whole jar there — and a non-stateful request must not
@@ -492,6 +544,92 @@ export class HttpTransport implements IAdtTransport {
    */
   protected sessionTypeHeaders(): Record<string, string> {
     return { [SESSION_TYPE_HEADER]: 'stateful' };
+  }
+
+  /**
+   * The client belongs to the connection. Another client is another logon —
+   * its own user and password, its own session and CSRF token — so a caller
+   * that names one in a `sap-client` header, query string or `params` entry, in
+   * any case, or in a `sap-usercontext` cookie, is refused before anything is sent: sending it would land the request in
+   * that client with the session and credential of this one. Naming the
+   * connection's own client is harmless and passes.
+   */
+  private refuseAnotherClient(request: IAdtTransportRequest): void {
+    const own = this.options.client || undefined;
+    const named: string[] = [];
+    for (const [name, value] of Object.entries(request.headers ?? {})) {
+      if (name.trim().toLowerCase() === 'sap-client') named.push(String(value));
+    }
+    // The query as axios will send it — the URL's own and the structured
+    // `params`, serialised by axios itself (which trims and encodes names), so
+    // what is checked is what goes out. A name is compared trimmed and in any
+    // case, as ICF reads it.
+    // The request is fixed by now (`fix`): its URL already holds the `params`,
+    // serialised once by axios.
+    const sent = axios.getUri({
+      url: request.url ?? '',
+      ...(request.params !== undefined ? { params: request.params } : {}),
+    });
+    // Then read the way Node's adapter addresses it: through a WHATWG URL,
+    // which drops tabs and line breaks anywhere in it — `sap-cl\nient` goes
+    // out as `sap-client`. A URL that does not parse is not sent either.
+    let search: URLSearchParams;
+    try {
+      search = new URL(sent, 'http://client.check.invalid').searchParams;
+    } catch {
+      search = new URLSearchParams();
+    }
+    for (const [name, value] of search) {
+      // A list goes out as `sap-client[]=…`; refused all the same.
+      if (/^sap-client(\[\])?$/.test(name.trim().toLowerCase())) {
+        named.push(value);
+      }
+    }
+    // And the cookie ICF also reads: `sap-usercontext=sap-client=<n>` in a
+    // caller's `Cookie`. The connection's own CSRF and 401 retries put the
+    // whole jar there, so a wire given no client admits the client its jar
+    // holds — the one the system answered with — and nothing else.
+    const cookieOwn = own ?? this.jarClient();
+    const cookieNamed: string[] = [];
+    for (const [name, value] of Object.entries(request.headers ?? {})) {
+      if (name.trim().toLowerCase() !== 'cookie') continue;
+      for (const pair of String(value).split(';')) {
+        const [cookieName, ...rest] = pair.split('=');
+        if (cookieName?.trim().toLowerCase() !== 'sap-usercontext') continue;
+        for (const [key, client] of new URLSearchParams(
+          rest.join('=').trim(),
+        )) {
+          if (key.trim().toLowerCase() === 'sap-client')
+            cookieNamed.push(client);
+        }
+      }
+    }
+    for (const client of cookieNamed) {
+      if (client === cookieOwn) continue;
+      throw new Error(
+        `the request names client ${client}, but the connection is ${
+          own ? `for client ${own}` : 'given no client'
+        }: the client belongs to the connection — another client is another connection, with its own credential`,
+      );
+    }
+    for (const client of named) {
+      if (client === own) continue;
+      throw new Error(
+        `the request names client ${client}, but the connection is ${
+          own ? `for client ${own}` : 'given no client'
+        }: the client belongs to the connection — another client is another connection, with its own credential`,
+      );
+    }
+  }
+
+  /** The client the jar's `sap-usercontext` names, as the system set it. */
+  private jarClient(): string | undefined {
+    const context = this.jar.get('sap-usercontext');
+    if (context === undefined) return undefined;
+    for (const [key, client] of new URLSearchParams(context)) {
+      if (key.toLowerCase() === 'sap-client') return client;
+    }
+    return undefined;
   }
 
   /** A path becomes an address; anything already absolute is left alone. */
@@ -579,7 +717,34 @@ export class HttpTransport implements IAdtTransport {
    * to add it.
    */
   async send(request: IAdtTransportRequest): Promise<IAdtTransportResponse> {
-    return this.dispatch(request, this.dress(request));
+    const fixed = this.fix(request);
+    return this.dispatch(fixed, this.dress(fixed));
+  }
+
+  /**
+   * The request read once, into plain values: what the client guard checks is
+   * then exactly what goes out. The headers are copied, and the URL and
+   * `params` are serialised here, once, by axios — the dispatch sends that URL
+   * and no `params`, so nothing the caller handed over is read a second time
+   * (a getter that answers differently on its second read changes nothing).
+   */
+  private fix(request: IAdtTransportRequest): IAdtTransportRequest {
+    const { headers, params, url, ...rest } = request;
+    const fixed: IAdtTransportRequest = {
+      ...rest,
+      url: axios.getUri({
+        url: url ?? '',
+        ...(params !== undefined ? { params } : {}),
+      }),
+    };
+    if (headers !== undefined) {
+      const copied: Record<string, string> = {};
+      for (const [name, value] of Object.entries(headers)) {
+        copied[name] = value;
+      }
+      fixed.headers = copied;
+    }
+    return fixed;
   }
 
   /**
