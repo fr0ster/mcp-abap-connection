@@ -289,6 +289,9 @@ describe('through a connector', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject({
+      facts: { at: 'logon' },
+    });
     expect(rejections()).toHaveLength(1);
   });
 

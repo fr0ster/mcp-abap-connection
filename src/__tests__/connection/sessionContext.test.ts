@@ -314,6 +314,9 @@ describe('a 401 while establishing', () => {
 
     expect(error).toBeInstanceOf(AuthRefusedError);
     expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject({
+      facts: { at: 'logon' },
+    });
     expect((error as AuthRefusedError).at).toBe('logon');
     expect(rejections()).toHaveLength(1);
     expect(conn.isConnected()).toBe(false);

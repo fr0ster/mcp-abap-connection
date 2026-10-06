@@ -181,6 +181,9 @@ describe('a 401 that survives the wire', () => {
 
     expect(error).toBeInstanceOf(AuthRefusedError);
     expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject({
+      facts: { at: 'request' },
+    });
     expect(statusOf((error as AuthRefusedError).cause)).toBe(401);
     expect(rejections()).toHaveLength(1);
   });
@@ -258,6 +261,9 @@ describe("the wire's own recovery", () => {
 
     expect(error).toBeInstanceOf(AuthRefusedError);
     expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject({
+      facts: { at: 'logon' },
+    });
     expect((error as AuthRefusedError).at).toBe('logon');
     expect(rejections()).toHaveLength(1);
   });
@@ -355,6 +361,9 @@ describe('the upfront token fetch before a mutation', () => {
 
     expect(error).toBeInstanceOf(AuthRefusedError);
     expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject({
+      facts: { at: 'logon' },
+    });
     expect(rejections()).toHaveLength(1);
     expect(stub.sentTo(WORK)).toHaveLength(0);
   });
@@ -369,6 +378,9 @@ describe('the upfront token fetch before a mutation', () => {
 
     expect(error).toBeInstanceOf(AuthRefusedError);
     expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject({
+      facts: { at: 'request' },
+    });
     // Asked once, about the fetch — the POST's 401s spent nothing more.
     expect(rejections()).toHaveLength(1);
     expect(rejections()[0]).toMatchObject({ at: 'logon', status: 401 });
@@ -536,6 +548,9 @@ describe('many requests, and a critical section', () => {
 
     expect(error).toBeInstanceOf(AuthRefusedError);
     expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
+    expect((error as AuthRefusedError).refusal).toMatchObject({
+      facts: { at: 'request' },
+    });
     expect((error as AuthRefusedError).at).toBe('request');
     expect(rejections()).toHaveLength(1);
     // Still connected, on the session the lock was taken in.
