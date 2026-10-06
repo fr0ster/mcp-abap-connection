@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { Agent } from 'node:https';
 import type {
   IAdtWireResponse,
   ICriticalSection,
@@ -11,11 +10,6 @@ import type {
   IAuthRejection,
   ILogonTarget,
 } from '@mcp-abap-adt/interfaces-auth';
-import axios, {
-  AxiosError,
-  type AxiosInstance,
-  type AxiosRequestConfig,
-} from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import {
@@ -451,12 +445,6 @@ abstract class AbstractAbapConnection
     // anything is queued, so a caller who has asked to disconnect cannot have
     // requests still going through while this waits its turn.
     this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-
-    // Captured before the transition and before anything is cleared: a
-    // concurrent disconnect JOINS the transition and its callback is never run
-    // for the joiner, so a joiner would otherwise learn nothing about what it
-    // asked to release.
-    const session = this.getSessionIdentity();
 
     await this.lifecycle.transition('disconnect', async () => {
       // DISPATCHED, not awaited. The goodbye carries no request timeout by
@@ -981,6 +969,10 @@ abstract class AbstractAbapConnection
     return { outcome: { ok: false, refusal: NO_CREDENTIAL_TO_RENEW } };
   }
 
+  // The defaults are IAbapConnection's (interfaces-adt-connection), which this
+  // implements: changing them here alone would type every caller's response
+  // differently from the contract it codes against. They change there first.
+  // biome-ignore lint/suspicious/noExplicitAny: mirrors IAbapConnection.makeAdtRequest
   async makeAdtRequest<T = any, D = any>(
     options: AbapRequestOptions,
   ): Promise<IAdtWireResponse<T, D>> {
@@ -997,7 +989,7 @@ abstract class AbstractAbapConnection
     }
   }
 
-  private async performRequest<T = any, D = any>(
+  private async performRequest<T, D>(
     options: AbapRequestOptions,
     lease: Pick<RequestLease, 'generation'>,
   ): Promise<IAdtWireResponse<T, D>> {
@@ -1035,7 +1027,7 @@ abstract class AbstractAbapConnection
     // The request's own headers: everything but the credential's, which is
     // written fresh onto a copy of these for every attempt (`authorizedFrom`).
     const requestHeaders: Record<string, string> = {};
-    if (!customHeaders || !customHeaders.Accept) {
+    if (!customHeaders?.Accept) {
       requestHeaders.Accept =
         'application/xml, application/json, text/plain, */*';
     }

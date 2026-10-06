@@ -226,7 +226,6 @@ describe('a session verdict raised during a retry', () => {
           statusText: 'Forbidden',
           data: 'CSRF token validation failed',
           headers: {},
-          // biome-ignore lint/suspicious/noExplicitAny: minimal shape
           config: {} as any,
         });
       }

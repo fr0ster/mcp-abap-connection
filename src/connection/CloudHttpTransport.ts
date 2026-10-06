@@ -17,7 +17,6 @@
  * taken the wrong one, and finds out rather than being silently downgraded.
  */
 
-import type { ILogger } from '../logger.js';
 import { mergeCookieHeaders } from '../utils/cookies.js';
 import { getTimeout } from '../utils/timeouts.js';
 import { AuthRefusedError } from './authErrors.js';

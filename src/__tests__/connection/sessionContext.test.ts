@@ -154,7 +154,6 @@ describe('the HTTP logon target', () => {
   });
 
   const agentOf = (transport: HttpTransport) =>
-    // biome-ignore lint/suspicious/noExplicitAny: reads the client under test
     (transport as any).client().defaults.httpsAgent as {
       options: Record<string, unknown>;
     };
@@ -215,28 +214,24 @@ describe('the HTTP logon target', () => {
     await logonWith(transport, (t) =>
       t.tlsMaterial({ pfx: Buffer.from('bytes'), passphrase: 'p' }),
     );
-    // biome-ignore lint/suspicious/noExplicitAny: reads the client under test
     const first = (transport as any).client();
 
     await logonWith(transport, (t) =>
       t.tlsMaterial({ pfx: Buffer.from('bytes'), passphrase: 'p' }),
     );
 
-    // biome-ignore lint/suspicious/noExplicitAny: reads the client under test
     expect((transport as any).client()).toBe(first);
   });
 
   it('rebuilds the client for different material, and the cookie jar survives', async () => {
     const transport = new HttpTransport();
     await logonWith(transport, (t) => t.tlsMaterial({ cert: 'ONE', key: 'K' }));
-    // biome-ignore lint/suspicious/noExplicitAny: reads the client under test
     const first = (transport as any).client();
     transport.ingest({ 'set-cookie': ['SAP_SESSIONID_X_100=S1; Path=/'] });
     transport.adoptCsrfToken('TOKEN');
 
     await logonWith(transport, (t) => t.tlsMaterial({ cert: 'TWO', key: 'K' }));
 
-    // biome-ignore lint/suspicious/noExplicitAny: reads the client under test
     const second = (transport as any).client();
     expect(second).not.toBe(first);
     expect(agentOf(transport).options.cert).toBe('TWO');

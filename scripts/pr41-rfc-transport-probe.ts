@@ -46,7 +46,6 @@ const logger: ILogger = {
 };
 
 function conversation() {
-  // biome-ignore lint/correctness/noNodejsModules: the SDK is optional by design
   const noderfc = require('@mcp-abap-adt/sap-rfc-lite');
   return new noderfc.Client({
     ashost: parsed.hostname,

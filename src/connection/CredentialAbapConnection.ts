@@ -12,7 +12,6 @@
  * chose the subclass, and is never worked out here.
  */
 
-import type { IAbapRequestOptions } from '@mcp-abap-adt/interfaces-adt-connection';
 import type {
   IAuthProvider,
   IAuthRejection,

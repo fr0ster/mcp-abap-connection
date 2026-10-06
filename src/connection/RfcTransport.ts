@@ -49,12 +49,21 @@ import { WireLogonError } from './authErrors.js';
 import type {
   IAdtEstablishContext,
   IAdtSessionContext,
-  IAdtTransport,
   IAdtTransportRequest,
   IAdtTransportResponse,
   IOnPremTransport,
 } from './IAdtTransport.js';
 import { isStatefulRequest } from './statefulRequest.js';
+
+/**
+ * The SDK answers with untyped structures: each level is read as a record and
+ * each field checked before use, rather than trusted as `any`.
+ */
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
 
 /** The slice of the native client this needs, so the SDK is not a hard dependency. */
 export interface IRfcConversation {
@@ -63,7 +72,7 @@ export interface IRfcConversation {
   call(
     fm: string,
     params: Record<string, unknown>,
-  ): Promise<Record<string, any>>;
+  ): Promise<Record<string, unknown>>;
   readonly alive: boolean;
   /**
    * Ends the ABAP session context and keeps the connection open
@@ -601,7 +610,7 @@ export class RfcTransport implements IOnPremTransport {
         'RFC transport was closed before the call was sent; nothing was sent.',
       );
     }
-    let raw: Record<string, any>;
+    let raw: Record<string, unknown>;
     try {
       raw = await conversation.call('SADT_REST_RFC_ENDPOINT', {
         REQUEST: {
@@ -621,26 +630,32 @@ export class RfcTransport implements IOnPremTransport {
       throw new Error(`RFC call to SADT_REST_RFC_ENDPOINT failed: ${msg}`);
     }
 
-    const answer = raw.RESPONSE ?? raw;
+    const answer = record(raw.RESPONSE) ?? raw;
+    const statusLine = record(answer.STATUS_LINE);
 
-    const rawCode = answer.STATUS_LINE?.STATUS_CODE ?? answer.STATUS_LINE?.CODE;
+    const rawCode = statusLine?.STATUS_CODE ?? statusLine?.CODE;
     let status =
       typeof rawCode === 'string'
         ? Number.parseInt(rawCode, 10)
-        : (rawCode ?? 0);
-    let statusText: string =
-      answer.STATUS_LINE?.REASON_PHRASE ?? answer.STATUS_LINE?.REASON ?? '';
+        : typeof rawCode === 'number'
+          ? rawCode
+          : 0;
+    const reason = statusLine?.REASON_PHRASE ?? statusLine?.REASON;
+    let statusText: string = typeof reason === 'string' ? reason : '';
 
-    const data = answer.MESSAGE_BODY
-      ? Buffer.isBuffer(answer.MESSAGE_BODY)
-        ? answer.MESSAGE_BODY.toString('utf-8')
-        : String(answer.MESSAGE_BODY)
+    const answered = answer.MESSAGE_BODY;
+    const data = answered
+      ? Buffer.isBuffer(answered)
+        ? answered.toString('utf-8')
+        : String(answered)
       : '';
 
     const headers: Record<string, unknown> = {};
-    for (const field of answer.HEADER_FIELDS ?? []) {
-      if (field.NAME && field.VALUE !== undefined) {
-        headers[String(field.NAME).toLowerCase()] = field.VALUE;
+    const fields = answer.HEADER_FIELDS;
+    for (const field of Array.isArray(fields) ? fields : []) {
+      const entry = record(field);
+      if (entry?.NAME && entry.VALUE !== undefined) {
+        headers[String(entry.NAME).toLowerCase()] = entry.VALUE;
       }
     }
 

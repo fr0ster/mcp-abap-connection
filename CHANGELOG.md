@@ -82,6 +82,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Until the move to auth-providers 6.0.0, the dev tree holds a second,
     nested `@mcp-abap-adt/interfaces-auth` 3.2.0 under auth-providers 5.2.0.
     The production tree holds only 6.0.0.
+- **Lint warnings are errors now.** `lint:check` runs Biome with
+  `--error-on-warnings`, and the tests are checked for unused imports and
+  variables too. The 25 warnings it had are gone, each fixed rather than
+  silenced:
+  - Unused suppressions, imports and two dead test helpers are removed.
+  - The session id `disconnect()` captured for a release record removed long
+    ago is removed.
+  - The RFC transport reads `SADT_REST_RFC_ENDPOINT`'s answer field by field
+    with type checks instead of as `any`.
+  - One suppression stays, explained: `makeAdtRequest<T = any, D = any>`
+    mirrors `IAbapConnection` in `@mcp-abap-adt/interfaces-adt-connection`,
+    whose defaults change there first.
 
 ## [11.0.1] - 2026-10-06
 
