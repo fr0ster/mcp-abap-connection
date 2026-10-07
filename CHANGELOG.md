@@ -2299,7 +2299,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v12.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v13.0.0...HEAD
+[13.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v12.0.0...v13.0.0
 [12.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v11.0.1...v12.0.0
 [11.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v11.0.0...v11.0.1
 [11.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.3...v11.0.0
