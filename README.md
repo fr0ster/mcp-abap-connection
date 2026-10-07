@@ -145,7 +145,7 @@ dependencies of this one besides `axios`, `commander` and `open`:
 | Package | What this package takes from it |
 |---|---|
 | `@mcp-abap-adt/interfaces-adt-connection` | `IAbapConnection`, `IAbapRequestOptions`, `IAdtWireResponse`, `ITimeoutConfig`, the capability atoms, `ADT_SESSION_ERROR` |
-| `@mcp-abap-adt/interfaces-auth` (6.x) | `IAuthProvider`, `AuthOutcome`, `IAuthRefusal` (= `IAuthProviderError`), `IAuthRejection`, `ILogonTarget`, `IRequestTarget`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
+| `@mcp-abap-adt/interfaces-auth` (7.x) | `IAuthProvider`, `AuthOutcome`, `IAuthRefusal` (= `IAuthProviderError`), `IAuthRejection`, `ILogonTarget`, `IRequestTarget`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
 | `@mcp-abap-adt/interfaces-auth-sap` | `ISapConfig`, `SapAuthType`, `SapConnectionType`, `ICertificateMaterialLoader` |
 | `@mcp-abap-adt/interfaces-network` | `NETWORK_ERROR_CODES`, the WebSocket contracts |
 | `@mcp-abap-adt/interfaces-utils` | `ILogger` |
@@ -161,6 +161,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 13.0.0](./docs/MIGRATION-13.0.md)** - interfaces-auth 7 and auth-errors 2; no behaviour change, one interfaces-auth major per process
 - 🚚 **[Migration to 12.0.0](./docs/MIGRATION-12.0.md)** - refusals follow the auth error contract (interfaces-auth 6, auth-errors): `AuthRefusedError.refusal` is an `IAuthProviderError` — read its `kind`; a custom `ILogonTarget` mints its refusal; needs auth-providers 6.0.0
 - 🚚 **[Migration to 11.0.0](./docs/MIGRATION-11.0.md)** - the server certificate is verified by default; trust a self-signed system with `agentOptions.ca`, or opt out explicitly
 - 🚚 **[Migration to 10.0.0](./docs/MIGRATION-10.0.md)** - the credential providers moved to `@mcp-abap-adt/auth-providers`; the connection speaks `IAuthProvider` 3.0; `AuthRefusedError`; the RFC factory takes the logon parameters
@@ -208,8 +209,9 @@ since 10.0.0. Install them from where they live:
 npm install @mcp-abap-adt/auth-providers
 ```
 
-connection 12.x speaks interfaces-auth 6, so it needs auth-providers **6.0.0 or
-later**: the 5.x providers answer unbranded refusals and do not fit. See
+connection 13.x speaks interfaces-auth 7, so it needs an auth-providers release
+built on it: the 5.x providers answer unbranded refusals and do not fit. See
+[Migration to 13.0.0](./docs/MIGRATION-13.0.md) and
 [Migration to 12.0.0](./docs/MIGRATION-12.0.md).
 
 For detailed installation instructions, see [Installation Guide](./docs/INSTALLATION.md).

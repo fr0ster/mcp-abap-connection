@@ -15,6 +15,7 @@ mcp-abap-connection/
 │   ├── INSTALLATION.md             # Setup and installation guide
 │   ├── USAGE.md                    # API documentation and examples
 │   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── MIGRATION-13.0.md           # interfaces-auth 7, auth-errors 2; no behaviour change
 │   ├── MIGRATION-12.0.md           # refusals follow the auth error contract (interfaces-auth 6, auth-errors)
 │   ├── MIGRATION-11.0.md           # the server certificate is verified by default
 │   ├── MIGRATION-10.0.md           # providers move to auth-providers; IAuthProvider 3.0; AuthRefusedError
@@ -49,6 +50,7 @@ mcp-abap-connection/
 - 🔑 [JWT Auth Tools](./JWT_AUTH_TOOLS.md) - CLI tool for browser-based authentication
 
 ### Upgrading
+- 🚚 [Migrating to 13.0.0](./MIGRATION-13.0.md) - interfaces-auth 7 and auth-errors 2; the connection's behaviour is unchanged, a consumer holds one interfaces-auth major and a provider that speaks it
 - 🚚 [Migrating to 12.0.0](./MIGRATION-12.0.md) - refusals follow the auth error contract: `AuthRefusedError.refusal` is an `IAuthProviderError` (read its `kind`), a custom `ILogonTarget` mints its refusal through `@mcp-abap-adt/auth-errors`, and the providers come from auth-providers 6.0.0
 - 🚚 [Migrating to 11.0.0](./MIGRATION-11.0.md) - the server certificate is verified by default; trust a self-signed system with `agentOptions.ca`, or opt out explicitly with `TLS_REJECT_UNAUTHORIZED=0`
 - 🚚 [Migrating to 10.0.0](./MIGRATION-10.0.md) - the credential providers moved to `@mcp-abap-adt/auth-providers`; the connection speaks `IAuthProvider` 3.0 and raises `AuthRefusedError`; the RFC factory takes the logon parameters

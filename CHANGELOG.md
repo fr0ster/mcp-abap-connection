@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [13.0.0]
+
+12.0.0 was published only on the `next` dist-tag; 13.0.0 is the release that
+reaches `latest`.
+
+### Breaking
+
+- **connection moves to `@mcp-abap-adt/interfaces-auth` `^7.0.0`** (from
+  `^6.0.0`), `@mcp-abap-adt/auth-errors` `^2.0.0` (from `^1.0.0`) and
+  `@mcp-abap-adt/interfaces-auth-sap` `^3.3.0` (from `^3.2.0`). A process holds
+  one interfaces-auth major, so a consumer on interfaces-auth 6 must move with
+  it. See [MIGRATION-13.0.md](./docs/MIGRATION-13.0.md).
+- interfaces-auth 7 adds the error kind `renewal-declined` and the
+  configuration case `invalid-value`, adds the operation `renewal-strategy`,
+  renames the operation `on-tokens-hook` to `persisting-tokens`, and removes the
+  interactive outcome `browser-launch-failed`,
+  `ITokenResult.refreshTokenDisposition` and `RefreshTokenDisposition`. A
+  consumer that switches on kinds or operations, or reads the removed members,
+  must follow.
+
+### Unchanged
+
+- Behaviour. connection mints and relays refusals of kinds `connection` and
+  `logon-target` exactly as in 12.0.0; no code in `src` switches on the
+  members that changed, reads `refreshTokenDisposition` or names the renamed
+  operation, so only the dependency ranges and the lockfile moved.
+- The lifecycle, the one credential retry per request, `WireLogonError`, and
+  the guard against a request naming another SAP client.
+
+### Changed
+
+- `tools/check-provider-shape.mjs` is refreshed to the byte-identical copy
+  `auth-errors` 2.0.0 publishes (the shape check's R1 test compares them).
+
+### Development
+
+- auth-providers 6.0.0 is not yet the test dependency; the tests keep the
+  devDependency `@mcp-abap-adt/auth-providers` `^5.2.0`.
+
 ## [12.0.0] - 2026-10-06
 
 ### Breaking

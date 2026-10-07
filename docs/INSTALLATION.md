@@ -208,7 +208,7 @@ actually use:
 
 ```bash
 npm install @mcp-abap-adt/interfaces-adt-connection # IAbapConnection, ITimeoutConfig, ADT_SESSION_ERROR
-npm install @mcp-abap-adt/interfaces-auth     # IAuthProvider, AuthOutcome, IAuthProviderError, ITokenRefresher (6.x)
+npm install @mcp-abap-adt/interfaces-auth     # IAuthProvider, AuthOutcome, IAuthProviderError, ITokenRefresher (7.x)
 npm install @mcp-abap-adt/auth-errors         # authError builders, classify — to mint a refusal of your own
 npm install @mcp-abap-adt/interfaces-auth-sap # ISapConfig, SapAuthType, ICertificateMaterialLoader
 npm install @mcp-abap-adt/interfaces-network  # NETWORK_ERROR_CODES, the WebSocket contracts
@@ -224,10 +224,11 @@ puts two copies of the same contract in your tree.
 
 The credential providers (`BasicAuthProvider`, `TokenAuthProvider`,
 `SamlAuthProvider`, `CertificateAuthProvider`) are no longer part of this
-package as of 10.0.0; install `@mcp-abap-adt/auth-providers` for them — 6.0.0
-or later with connection 12.x, whose interfaces-auth 6 the 5.x providers do not
-fit. See [Migration to 10.0.0](./MIGRATION-10.0.md) and
-[Migration to 12.0.0](./MIGRATION-12.0.md).
+package as of 10.0.0; install `@mcp-abap-adt/auth-providers` for them — a release
+built on interfaces-auth 7 with connection 13.x; the 5.x providers do not fit.
+See [Migration to 10.0.0](./MIGRATION-10.0.md),
+[Migration to 12.0.0](./MIGRATION-12.0.md) and
+[Migration to 13.0.0](./MIGRATION-13.0.md).
 
 ### Create `tsconfig.json`
 

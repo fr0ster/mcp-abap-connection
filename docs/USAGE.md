@@ -928,7 +928,7 @@ export class CloudSdkAbapConnection {
 ### The credential, and how a refusal is classified
 
 For SAP BTP cloud systems, hand `AdtCloudConnector` a token provider from
-`@mcp-abap-adt/auth-providers` (6.0.0 or later with connection 12.x): `TokenAuthProvider.fixed(token)` is a token with
+`@mcp-abap-adt/auth-providers` (a release built on interfaces-auth 7, with connection 13.x): `TokenAuthProvider.fixed(token)` is a token with
 nothing behind it, `TokenAuthProvider.from(refresher)` takes an `ITokenRefresher`
 and renews a token the system refused. Obtaining tokens in the first place is
 `@mcp-abap-adt/auth-broker`'s job, not this package's.

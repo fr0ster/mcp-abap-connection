@@ -63,7 +63,7 @@ the RFC wire could not connect at all as a result.
   addressing it, establishing itself, and whatever session state it keeps.
   `HttpTransport` has a cookie jar, a CSRF token, affinity headers and axios;
   `RfcTransport` has a conversation that IS the session and none of the rest.
-- `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth` ^6.0.0) — the credential,
+- `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth` ^7.0.0) — the credential,
   including its own renewal. The connection calls `prepare()` once before the wire
   opens, `establish(logon)` at each logon (through `IAdtSessionContext.logon`),
   `authorize(request)` before every attempt (through
