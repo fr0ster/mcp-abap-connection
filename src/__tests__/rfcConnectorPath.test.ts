@@ -29,7 +29,6 @@ import type {
   IAdtTransportResponse,
   IOnPremTransport,
 } from '../connection/IAdtTransport.js';
-import { legacyProvider } from './helpers/legacyProvider.js';
 import { holdsNoSession } from './helpers/transportStub.js';
 
 const config: SapConfig = {
@@ -40,9 +39,7 @@ const config: SapConfig = {
   client: '100',
 };
 
-const credential: IAuthProvider = legacyProvider(
-  new BasicAuthProvider('USER', 'PASS'),
-);
+const credential: IAuthProvider = new BasicAuthProvider('USER', 'PASS');
 
 /**
  * A transport that answers the way the real FM does: 200, a body, and the two

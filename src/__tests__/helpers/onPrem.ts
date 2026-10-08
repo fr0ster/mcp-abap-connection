@@ -15,7 +15,6 @@ import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import type { ILogger } from '../../logger.js';
-import { legacyProvider } from './legacyProvider.js';
 
 export function onPremHttpTransport(
   config: SapConfig,
@@ -38,9 +37,7 @@ export function onPrem(
 ): AdtOnPremConnector<IAuthProvider, OnPremHttpTransport> {
   return new AdtOnPremConnector(
     config,
-    legacyProvider(
-      new BasicAuthProvider(config.username ?? '', config.password ?? ''),
-    ),
+    new BasicAuthProvider(config.username ?? '', config.password ?? ''),
     onPremHttpTransport(config, logger),
     logger,
     sessionId,

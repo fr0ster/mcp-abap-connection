@@ -30,7 +30,8 @@ unbranded `{ reason, hint }` refusals of interfaces-auth 3–5, and those are no
 an `AuthOutcome` of 6.0.0, so handing a 5.x `BasicAuthProvider` (or any other
 5.x provider) to a connector no longer compiles. Move to
 `@mcp-abap-adt/auth-providers` 6.0.0, the release that adopts the same
-contract, when it is published. Until then, stay on connection 11.x.
+contract. It was published on interfaces-auth 7, so it fits connection
+**13.0.0**, not 12.x: take 13.0.0 with it ([Migration to 13.0](./MIGRATION-13.0.md)).
 
 ## Reading an `AuthRefusedError`
 
@@ -141,8 +142,8 @@ from `@mcp-abap-adt/auth-errors`. Its `guard(operation, body)` runs one
 moment so that a throw becomes a refusal and the answer is classified. A
 provider that still answers `{ ok: false, refusal: { reason } }` compiles no
 more in TypeScript. In JavaScript, the connection answers `provider-threw` for
-it, as described above. `@mcp-abap-adt/auth-providers` 6.0.0 ships
-`AuthProviderBase`, which owns the four moments for you.
+it, as described above. `@mcp-abap-adt/auth-providers` 6.0.0 (with connection
+13.x) ships `AuthProviderBase`, which owns the four moments for you.
 
 ## Deep imports
 

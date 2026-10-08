@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [13.0.0] - 2026-10-08
+
+12.0.0 was published only on the `next` dist-tag; 13.0.0 is the release that
+reaches `latest`.
+
+### Breaking
+
+- **connection moves to `@mcp-abap-adt/interfaces-auth` `^7.5.0`** (from
+  `^6.0.0`), `@mcp-abap-adt/auth-errors` `^2.1.1` (from `^1.0.0`) and
+  `@mcp-abap-adt/interfaces-auth-sap` `^3.3.0` (from `^3.2.0`). A process holds
+  one interfaces-auth major, so a consumer on interfaces-auth 6 must move with
+  it. See [MIGRATION-13.0.md](./docs/MIGRATION-13.0.md).
+- interfaces-auth 7 adds the error kind `renewal-declined` and the
+  configuration case `invalid-value`, adds the operation `renewal-strategy`,
+  renames the operation `on-tokens-hook` to `persisting-tokens`, and removes the
+  interactive outcome `browser-launch-failed`,
+  `ITokenResult.refreshTokenDisposition` and `RefreshTokenDisposition`. A
+  consumer that switches on kinds or operations, or reads the removed members,
+  must follow. 7.1–7.5 add only members of code lists and new types
+  (`IBrowser`, the authorization parts).
+- **The providers come from `@mcp-abap-adt/auth-providers` 6.0.0.** It is the
+  release built on interfaces-auth 7 and auth-errors 2, and the one this
+  release is tested with. 5.x does not fit (unbranded refusals), and no
+  auth-providers release fits connection 12.x.
+
+### Unchanged
+
+- Behaviour. connection mints and relays refusals of kinds `connection` and
+  `logon-target` exactly as in 12.0.0; no code in `src` switches on the
+  members that changed, reads `refreshTokenDisposition` or names the renamed
+  operation, so only the dependency ranges and the lockfile moved.
+- The lifecycle, the one credential retry per request, `WireLogonError`, and
+  the guard against a request naming another SAP client.
+
+### Changed
+
+- `tools/check-provider-shape.mjs` is the byte-identical copy `auth-errors`
+  publishes (2.0.0 through 2.1.1 ship the same file; the shape check's R1 test
+  compares them).
+
+### Development
+
+- The devDependency `@mcp-abap-adt/auth-providers` is `^6.0.0` (from
+  `^5.2.0`), and every suite runs the real 6.0.0 providers. The test-only 5.x
+  adapter (`src/__tests__/helpers/legacyProvider.ts`, its table and its
+  `afterEach`) is deleted, and so is its suite.
+- The hand-run live probes in `scripts/` (`pr41-onprem-verify`,
+  `pr41-rfc-headers-probe`, `pr41-rfc-lock`, `pr41-rfc-transport-probe`,
+  `onprem-session-hold`) are removed: only Jest suites stay in the
+  repository; the probes remain in the git history.
+  The dev tree now holds one `@mcp-abap-adt/interfaces-auth` (7.5.0) and one
+  `@mcp-abap-adt/auth-errors` (2.1.1).
+- Two tests met 6.0.0 for real; neither is a change in connection's code:
+  - `CertificateAuthProvider` 6.0.0 proves its material usable in `prepare()`,
+    so the placeholder strings the certificate cases loaded were refused there.
+    They load the throwaway `fixtures/tls` pair now.
+  - A teardown test replaced `getAuthHeaders`, which the logoff never calls,
+    and passed only because the adapter's extra awaits kept the logoff in
+    flight past the assertion. It now breaks the logoff's own path
+    (`credentialHeaders`) and waits for the dispatch.
+
 ## [12.0.0] - 2026-10-06
 
 ### Breaking
@@ -2260,7 +2321,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v12.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v13.0.0...HEAD
+[13.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v12.0.0...v13.0.0
 [12.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v11.0.1...v12.0.0
 [11.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v11.0.0...v11.0.1
 [11.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v10.0.3...v11.0.0

@@ -7,6 +7,9 @@
  * provider it is: a case is a provider, a wire and what should happen, and the
  * one body runs them all.
  */
+
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   BasicAuthProvider,
   CertificateAuthProvider,
@@ -23,10 +26,16 @@ import {
   type IRfcConversation,
   RfcTransport,
 } from '../../connection/RfcTransport.js';
-import { legacyProvider } from '../helpers/legacyProvider.js';
 import { type SapStub, startSapStub } from '../helpers/sapStub.js';
 
 const WORK = '/sap/bc/adt/work';
+
+// A real certificate and its key: CertificateAuthProvider proves its material
+// usable in prepare(), so placeholder strings are refused before any logon.
+// The throwaway pair of `fixtures/tls/README.md`.
+const tls = join(__dirname, '..', 'fixtures', 'tls');
+const CERT = readFileSync(join(tls, 'server.crt'), 'utf8');
+const KEY = readFileSync(join(tls, 'server.key'), 'utf8');
 
 // ── HTTP ────────────────────────────────────────────────────────────────────
 
@@ -68,14 +77,13 @@ const httpCases: {
 }[] = [
   {
     name: 'basic',
-    provider: () =>
-      legacyProvider(new BasicAuthProvider('DEVELOPER', 'secret')),
+    provider: () => new BasicAuthProvider('DEVELOPER', 'secret'),
     header: BASIC,
     refusal: 'the user or password was refused',
   },
   {
     name: 'a fixed token',
-    provider: () => legacyProvider(TokenAuthProvider.fixed('T-1')),
+    provider: () => TokenAuthProvider.fixed('T-1'),
     header: 'Bearer T-1',
     refusal: 'the token was refused',
   },
@@ -107,17 +115,15 @@ describe.each(httpCases)('over HTTP: $name', (c) => {
 
 describe('over HTTP: a certificate', () => {
   it('its material reaches the agent at logon', async () => {
-    const provider = legacyProvider(
-      new CertificateAuthProvider(
-        {
-          load: async () => ({
-            cert: 'THE-CERT',
-            key: 'THE-KEY',
-            passphrase: 'pp',
-          }),
-        },
-        {} as never,
-      ),
+    const provider = new CertificateAuthProvider(
+      {
+        load: async () => ({
+          cert: CERT,
+          key: KEY,
+          passphrase: 'pp',
+        }),
+      },
+      {} as never,
     );
 
     const { transport } = await overHttp(provider);
@@ -125,8 +131,8 @@ describe('over HTTP: a certificate', () => {
     const agent = (transport as any).client().defaults.httpsAgent as {
       options: Record<string, unknown>;
     };
-    expect(agent.options.cert).toBe('THE-CERT');
-    expect(agent.options.key).toBe('THE-KEY');
+    expect(agent.options.cert).toBe(CERT);
+    expect(agent.options.key).toBe(KEY);
     expect(agent.options.passphrase).toBe('pp');
   });
 });
@@ -135,16 +141,14 @@ describe('over HTTP: a token renewed through refreshToken', () => {
   it('asks the refresher once, and the one resend carries the new token', async () => {
     let current = 'OLD';
     let refreshes = 0;
-    const provider = legacyProvider(
-      TokenAuthProvider.from({
-        getToken: async () => current,
-        refreshToken: async () => {
-          refreshes += 1;
-          current = 'NEW';
-          return current;
-        },
-      }),
-    );
+    const provider = TokenAuthProvider.from({
+      getToken: async () => current,
+      refreshToken: async () => {
+        refreshes += 1;
+        current = 'NEW';
+        return current;
+      },
+    });
     const { conn } = await overHttp(provider);
     // The wire retries a GET 401 itself once, so two 401s reach the provider.
     stub.work(WORK, [401, 401]);
@@ -223,9 +227,7 @@ const wantsLogon = (logon: Record<string, string>) =>
 
 describe('over RFC', () => {
   it('basic: the open gets user and passwd', async () => {
-    const { conn, opens } = overRfc(
-      legacyProvider(new BasicAuthProvider('DEVELOPER', 'pw')),
-    );
+    const { conn, opens } = overRfc(new BasicAuthProvider('DEVELOPER', 'pw'));
 
     await conn.connect();
 
@@ -234,7 +236,7 @@ describe('over RFC', () => {
 
   it('basic: a refused open ends in “the user or password was refused”', async () => {
     const { conn } = overRfc(
-      legacyProvider(new BasicAuthProvider('DEVELOPER', 'wrong')),
+      new BasicAuthProvider('DEVELOPER', 'wrong'),
       () => LOGON_FAILURE,
     );
 
@@ -248,11 +250,9 @@ describe('over RFC', () => {
   });
 
   it('a certificate is refused at logon in its words: this wire carries no TLS material', async () => {
-    const provider = legacyProvider(
-      new CertificateAuthProvider(
-        { load: async () => ({ cert: 'C', key: 'K' }) },
-        {} as never,
-      ),
+    const provider = new CertificateAuthProvider(
+      { load: async () => ({ cert: CERT, key: KEY }) },
+      {} as never,
     );
     const { conn, opens } = overRfc(provider);
 
@@ -266,10 +266,7 @@ describe('over RFC', () => {
   });
 
   it('a bearer token: the open gets no parameters, and the connect ends in AuthRefusedError', async () => {
-    const { conn, opens } = overRfc(
-      legacyProvider(TokenAuthProvider.fixed('T-1')),
-      wantsLogon,
-    );
+    const { conn, opens } = overRfc(TokenAuthProvider.fixed('T-1'), wantsLogon);
 
     const error = await conn.connect().catch((e: unknown) => e);
 
@@ -279,14 +276,12 @@ describe('over RFC', () => {
   });
 
   it('SNC: the open gets the four keys, and snc_myname when given', async () => {
-    const provider = legacyProvider(
-      new SncLogonProvider({
-        partnerName: 'p:CN=SAP',
-        myName: 'p:CN=ME',
-        locator,
-        probes: [],
-      }),
-    );
+    const provider = new SncLogonProvider({
+      partnerName: 'p:CN=SAP',
+      myName: 'p:CN=ME',
+      locator,
+      probes: [],
+    });
     const { conn, opens } = overRfc(provider);
 
     await conn.connect();
@@ -301,14 +296,12 @@ describe('over RFC', () => {
   });
 
   it('SNC: without myName there is no snc_myname, and the qop given is passed', async () => {
-    const provider = legacyProvider(
-      new SncLogonProvider({
-        partnerName: 'p:CN=SAP',
-        qop: '3',
-        locator,
-        probes: [],
-      }),
-    );
+    const provider = new SncLogonProvider({
+      partnerName: 'p:CN=SAP',
+      qop: '3',
+      locator,
+      probes: [],
+    });
     const { conn, opens } = overRfc(provider);
 
     await conn.connect();
@@ -322,13 +315,11 @@ describe('over RFC', () => {
   });
 
   it('SNC: a refused open with A2200019 is explained in the provider’s words, from the raw SDK error', async () => {
-    const provider = legacyProvider(
-      new SncLogonProvider({
-        partnerName: 'p:CN=SAP',
-        locator,
-        probes: [],
-      }),
-    );
+    const provider = new SncLogonProvider({
+      partnerName: 'p:CN=SAP',
+      locator,
+      probes: [],
+    });
     const { conn } = overRfc(provider, () => NO_SNC_CREDENTIAL);
 
     const error = await conn.connect().catch((e: unknown) => e);

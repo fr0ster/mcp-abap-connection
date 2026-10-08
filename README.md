@@ -58,7 +58,7 @@ The package uses a clean separation of concerns:
 
 - **Auth providers** (an `IAuthProvider` from `@mcp-abap-adt/interfaces-auth`; the
   ready-made ones — `BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`,
-  `CertificateAuthProvider` — are in `@mcp-abap-adt/auth-providers`, not here):
+  `CertificateAuthProvider` — are in `@mcp-abap-adt/auth-providers` 6.0.0, not here):
   - What a connection authenticates with, passed in. The connection never asks
     what kind of provider it was given; it calls the same four methods on all of
     them: `prepare` once before the wire opens, `establish` at each logon,
@@ -145,7 +145,7 @@ dependencies of this one besides `axios`, `commander` and `open`:
 | Package | What this package takes from it |
 |---|---|
 | `@mcp-abap-adt/interfaces-adt-connection` | `IAbapConnection`, `IAbapRequestOptions`, `IAdtWireResponse`, `ITimeoutConfig`, the capability atoms, `ADT_SESSION_ERROR` |
-| `@mcp-abap-adt/interfaces-auth` (6.x) | `IAuthProvider`, `AuthOutcome`, `IAuthRefusal` (= `IAuthProviderError`), `IAuthRejection`, `ILogonTarget`, `IRequestTarget`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
+| `@mcp-abap-adt/interfaces-auth` (7.x) | `IAuthProvider`, `AuthOutcome`, `IAuthRefusal` (= `IAuthProviderError`), `IAuthRejection`, `ILogonTarget`, `IRequestTarget`, `ICertificateMaterial`, `ITokenRefresher`, `ITokenRefreshResult` |
 | `@mcp-abap-adt/interfaces-auth-sap` | `ISapConfig`, `SapAuthType`, `SapConnectionType`, `ICertificateMaterialLoader` |
 | `@mcp-abap-adt/interfaces-network` | `NETWORK_ERROR_CODES`, the WebSocket contracts |
 | `@mcp-abap-adt/interfaces-utils` | `ILogger` |
@@ -161,7 +161,8 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
-- 🚚 **[Migration to 12.0.0](./docs/MIGRATION-12.0.md)** - refusals follow the auth error contract (interfaces-auth 6, auth-errors): `AuthRefusedError.refusal` is an `IAuthProviderError` — read its `kind`; a custom `ILogonTarget` mints its refusal; needs auth-providers 6.0.0
+- 🚚 **[Migration to 13.0.0](./docs/MIGRATION-13.0.md)** - interfaces-auth 7 and auth-errors 2, and the providers from auth-providers 6.0.0; no behaviour change, one interfaces-auth major per process
+- 🚚 **[Migration to 12.0.0](./docs/MIGRATION-12.0.md)** - refusals follow the auth error contract (interfaces-auth 6, auth-errors): `AuthRefusedError.refusal` is an `IAuthProviderError` — read its `kind`; a custom `ILogonTarget` mints its refusal; no auth-providers release fits 12.x — take 13.0.0 with auth-providers 6.0.0
 - 🚚 **[Migration to 11.0.0](./docs/MIGRATION-11.0.md)** - the server certificate is verified by default; trust a self-signed system with `agentOptions.ca`, or opt out explicitly
 - 🚚 **[Migration to 10.0.0](./docs/MIGRATION-10.0.md)** - the credential providers moved to `@mcp-abap-adt/auth-providers`; the connection speaks `IAuthProvider` 3.0; `AuthRefusedError`; the RFC factory takes the logon parameters
 - 🚚 **[Migration to 9.0.0](./docs/MIGRATION-9.0.md)** - the contracts split out of `@mcp-abap-adt/interfaces`; which package each one moved to
@@ -205,11 +206,13 @@ The credential providers (`BasicAuthProvider`, `TokenAuthProvider`,
 since 10.0.0. Install them from where they live:
 
 ```bash
-npm install @mcp-abap-adt/auth-providers
+npm install @mcp-abap-adt/auth-providers@^6
 ```
 
-connection 12.x speaks interfaces-auth 6, so it needs auth-providers **6.0.0 or
-later**: the 5.x providers answer unbranded refusals and do not fit. See
+connection 13.x works with **auth-providers 6.0.0** (`^6.0.0`), the release
+built on interfaces-auth 7 and auth-errors 2, and is tested with it: the 5.x
+providers answer unbranded refusals and do not fit. See
+[Migration to 13.0.0](./docs/MIGRATION-13.0.md) and
 [Migration to 12.0.0](./docs/MIGRATION-12.0.md).
 
 For detailed installation instructions, see [Installation Guide](./docs/INSTALLATION.md).

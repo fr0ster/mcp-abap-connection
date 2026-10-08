@@ -118,7 +118,23 @@
  *     lowercase `basic` with no space after it (it is also an auth type's
  *     name), `toString(encoding)` with the encoding in a variable, a secret
  *     under a name the heuristic does not know, axios's `auth: { username,
- *     password }` option (axios writes that Basic header itself).
+ *     password }` option (axios writes that Basic header itself). Its crypto
+ *     boundary (a digest or signature ends secret derivation) is recognised
+ *     only for direct calls resolving to @types/node's crypto declarations:
+ *     a destructured function (`const { createHash } = crypto`) and WebCrypto
+ *     `subtle.digest` are reported — rewrite the call as a direct import, or
+ *     list the site; the boundary holds only for the closed grammar
+ *     `createHash|createHmac(…) [.update(…)]* .digest(…)`,
+ *     `createSign(…) [.update(…)]* .sign(…)` and `crypto.sign(…)`, so any
+ *     other member in the chain (`pipe`, `copy`, `write`, …) keeps secret
+ *     tracking; the boundary is granted only to a name rooted at an import
+ *     from `crypto` / `node:crypto` (or a `const` alias of one), so an injected
+ *     adapter (a parameter typed `Pick<typeof nodeCrypto, 'sign'>`), a
+ *     reassigned `let` or a property is reported whatever its type; a crypto object held in a `let`, `var`, parameter or
+ *     property keeps secret tracking (only a `const` is trusted: a later
+ *     assignment could replace it), so a `let` never reassigned is reported
+ *     too — a fail-closed false positive; a method replaced on a crypto object
+ *     (`hash.digest = …`) is not detected — hostile code is out of scope.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -144,7 +160,11 @@ const BRANDS = new Set([
 /** Rule 4: the files of auth-errors whose overloads are the builders' own. */
 const OVERLOAD_FILES = new Set(['src/builders.ts', 'src/mint.ts']);
 /** Rule 8: where it applies, and its two sites. */
-const BASIC_SCOPE = ['src/auth/', 'src/providers/'];
+const BASIC_SCOPE = [
+  'src/auth/',
+  'src/providers/',
+  'src/clientAuthentication/',
+];
 const BASIC_SITES = [
   { file: 'src/auth/tokenRequest.ts', function: 'legacyBasic' },
   {
@@ -152,6 +172,8 @@ const BASIC_SITES = [
     function: 'clientSecretBasic',
   },
 ];
+/** Rule 8: the modules whose imports are Node's crypto. */
+const CRYPTO_MODULES = new Set(['crypto', 'node:crypto']);
 const MAX_DEPTH = 8;
 
 // ---------------------------------------------------------------- arguments
@@ -655,8 +677,9 @@ function createRules(program, contractFile, baseFile, options, sites) {
     return undefined;
   }
 
-  /** The nearest enclosing named function of `node`. */
-  function functionOf(node) {
+  /** Every enclosing named function of `node`, nearest first. */
+  function namedFunctionsOf(node) {
+    const names = [];
     for (
       let current = node.parent;
       current !== undefined;
@@ -669,11 +692,11 @@ function createRules(program, contractFile, baseFile, options, sites) {
         ts.isSetAccessorDeclaration(current)
       ) {
         const name = nameOf(current.name);
-        if (name !== undefined) return name;
+        if (name !== undefined) names.push(name);
       }
-      if (ts.isConstructorDeclaration(current)) return 'constructor';
+      if (ts.isConstructorDeclaration(current)) names.push('constructor');
       if (ts.isFunctionExpression(current) || ts.isArrowFunction(current)) {
-        if (current.name !== undefined) return current.name.text;
+        if (current.name !== undefined) names.push(current.name.text);
         const holder = current.parent;
         if (
           (ts.isVariableDeclaration(holder) ||
@@ -682,11 +705,16 @@ function createRules(program, contractFile, baseFile, options, sites) {
           holder.initializer === current
         ) {
           const name = nameOf(holder.name);
-          if (name !== undefined) return name;
+          if (name !== undefined) names.push(name);
         }
       }
     }
-    return undefined;
+    return names;
+  }
+
+  /** The nearest enclosing named function of `node`. */
+  function functionOf(node) {
+    return namedFunctionsOf(node)[0];
   }
 
   function isSite(node, list) {
@@ -1320,8 +1348,13 @@ function createRules(program, contractFile, baseFile, options, sites) {
     return BASIC_SCOPE.some((prefix) => file.startsWith(prefix));
   }
 
+  /** A site's function, or any function inside it (`authenticate` in `clientSecretBasic`). */
   function isBasicSite(node) {
-    return isSite(node, BASIC_SITES);
+    const file = rel(options.root, node.getSourceFile().fileName);
+    const names = namedFunctionsOf(node);
+    return BASIC_SITES.some(
+      (site) => site.file === file && names.includes(site.function),
+    );
   }
 
   /**
@@ -1400,11 +1433,152 @@ function createRules(program, contractFile, baseFile, options, sites) {
     return subject;
   }
 
+  /**
+   * Whether `node` is rooted at a binding imported from `crypto` /
+   * `node:crypto` (named, namespace or default), or at a `const` alias of
+   * one, transitively. A parameter, `let`, `var`, property or destructured
+   * name is not: it may hold a stub whatever its type says.
+   */
+  function rootedAtCryptoImport(node, depth = 0) {
+    if (depth > MAX_DEPTH) return false;
+    const current = skipParentheses(node);
+    if (ts.isPropertyAccessExpression(current))
+      return rootedAtCryptoImport(current.expression, depth + 1);
+    if (!ts.isIdentifier(current)) return false;
+    const symbol = checker.getSymbolAtLocation(current);
+    return (symbol?.declarations ?? []).some((declaration) => {
+      if (
+        ts.isImportSpecifier(declaration) ||
+        ts.isNamespaceImport(declaration) ||
+        ts.isImportClause(declaration)
+      ) {
+        for (let up = declaration.parent; up !== undefined; up = up.parent) {
+          if (ts.isImportDeclaration(up))
+            return (
+              ts.isStringLiteralLike(up.moduleSpecifier) &&
+              CRYPTO_MODULES.has(up.moduleSpecifier.text)
+            );
+        }
+        return false;
+      }
+      return (
+        ts.isVariableDeclaration(declaration) &&
+        ts.isVariableDeclarationList(declaration.parent) &&
+        (declaration.parent.flags & ts.NodeFlags.Const) !== 0 &&
+        declaration.initializer !== undefined &&
+        rootedAtCryptoImport(declaration.initializer, depth + 1)
+      );
+    });
+  }
+
+  /**
+   * The Node `crypto` function `node` names — through the type checker,
+   * import aliases followed — or undefined: a declaration outside
+   * `@types/node`'s crypto module (a local function, a fake `crypto`
+   * object, a shadowing import) or an unresolved name is not Node's.
+   */
+  function nodeCryptoName(written) {
+    const node = followConstAlias(written);
+    if (!rootedAtCryptoImport(node)) return undefined;
+    const target = ts.isPropertyAccessExpression(node) ? node.name : node;
+    let symbol = checker.getSymbolAtLocation(target);
+    if (symbol !== undefined && symbol.flags & ts.SymbolFlags.Alias)
+      symbol = checker.getAliasedSymbol(symbol);
+    if (symbol === undefined) return undefined;
+    return declaredInSymbol(symbol) ? symbol.name : undefined;
+  }
+
+  /** The expression a `const` alias (transitively) is initialised with, else `node`. */
+  function followConstAlias(node, depth = 0) {
+    const current = skipParentheses(node);
+    if (depth > MAX_DEPTH || !ts.isIdentifier(current)) return current;
+    const declaration = checker
+      .getSymbolAtLocation(current)
+      ?.declarations?.find(ts.isVariableDeclaration);
+    return declaration !== undefined &&
+      ts.isVariableDeclarationList(declaration.parent) &&
+      (declaration.parent.flags & ts.NodeFlags.Const) !== 0 &&
+      declaration.initializer !== undefined
+      ? followConstAlias(declaration.initializer, depth + 1)
+      : current;
+  }
+
+  function declaredInSymbol(symbol) {
+    return (symbol.declarations ?? []).some((declaration) =>
+      /[\\/]node_modules[\\/]@types[\\/]node[\\/]crypto\.d\.ts$/.test(
+        declaration.getSourceFile().fileName,
+      ),
+    );
+  }
+
+  /** Whether the member name `node` is declared by `@types/node`'s crypto module. */
+  function declaredInNodeCrypto(node) {
+    const symbol = checker.getSymbolAtLocation(node);
+    return symbol !== undefined && declaredInSymbol(symbol);
+  }
+
+  /**
+   * Whether the chain `node` is built on a call of one of Node's `crypto`
+   * functions in `names` (`createHash(…).update(…)`), through local
+   * initialisers.
+   */
+  function chainRootsAt(node, names, depth = 0) {
+    if (depth > MAX_DEPTH) return false;
+    const current = skipParentheses(node);
+    if (ts.isCallExpression(current)) {
+      const callee = skipParentheses(current.expression);
+      const name = nodeCryptoName(callee);
+      if (name !== undefined && names.has(name)) return true;
+      // The closed grammar: factory(…) [.update(…)]* — `update` declared by
+      // Node's Hash / Hmac / Sign; any other member (`pipe`, `copy`, …) ends it.
+      return (
+        ts.isPropertyAccessExpression(callee) &&
+        callee.name.text === 'update' &&
+        declaredInNodeCrypto(callee.name) &&
+        chainRootsAt(callee.expression, names, depth + 1)
+      );
+    }
+    if (ts.isIdentifier(current)) {
+      const symbol = checker.getSymbolAtLocation(current);
+      return (symbol?.declarations ?? []).some(
+        (declaration) =>
+          ts.isVariableDeclaration(declaration) &&
+          ts.isVariableDeclarationList(declaration.parent) &&
+          (declaration.parent.flags & ts.NodeFlags.Const) !== 0 &&
+          declaration.initializer !== undefined &&
+          chainRootsAt(declaration.initializer, names, depth + 1),
+      );
+    }
+    return false;
+  }
+
+  /**
+   * An irreversible boundary ends secret derivation: a digest of Node's
+   * `createHash` / `createHmac`, or a signature of Node's `createSign` /
+   * `crypto.sign` — what is encoded after it is not the secret. Decided by
+   * the declaration the name resolves to, never by the name.
+   */
+  function isIrreversible(call) {
+    const callee = skipParentheses(call.expression);
+    if (nodeCryptoName(callee) === 'sign') return true;
+    if (!ts.isPropertyAccessExpression(callee)) return false;
+    const method = callee.name.text;
+    if (method === 'digest')
+      return chainRootsAt(
+        callee.expression,
+        new Set(['createHash', 'createHmac']),
+      );
+    if (method === 'sign')
+      return chainRootsAt(callee.expression, new Set(['createSign']));
+    return false;
+  }
+
   /** Whether `node` is built from something named a secret, following local initialisers. */
   function builtFromSecret(node) {
     const seen = new Set();
     const walk = (current, depth) => {
       if (current === undefined || depth > MAX_DEPTH) return false;
+      if (ts.isCallExpression(current) && isIrreversible(current)) return false;
       if (ts.isIdentifier(current) || ts.isPrivateIdentifier(current)) {
         if (isSecretName(current.text)) return true;
         const symbol = checker.getSymbolAtLocation(current);

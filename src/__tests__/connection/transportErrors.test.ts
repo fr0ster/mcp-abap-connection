@@ -17,7 +17,6 @@ import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { RfcTransport } from '../../connection/RfcTransport.js';
-import { legacyProvider } from '../helpers/legacyProvider.js';
 
 const config: SapConfig = {
   url: 'https://sap.example.com',
@@ -69,7 +68,7 @@ function conversation() {
 function overRfc(wire: ReturnType<typeof conversation>) {
   return new AdtOnPremConnector(
     config,
-    legacyProvider(new BasicAuthProvider('u', 'p')),
+    new BasicAuthProvider('u', 'p'),
     new RfcTransport(() => wire as never, null),
     null,
     undefined,

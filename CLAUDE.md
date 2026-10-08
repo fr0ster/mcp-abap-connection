@@ -39,7 +39,7 @@ AbstractAbapConnection ──┬── AdtOnPremConnector   IAuthProvider ──
 ```
 
 The providers (`BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`,
-`CertificateAuthProvider`) live in `@mcp-abap-adt/auth-providers`, which this
+`CertificateAuthProvider`) live in `@mcp-abap-adt/auth-providers` (6.0.0), which this
 package uses as a **dev** dependency only (tests). It has no runtime dependency
 on it, and nothing here may branch on which provider it was handed.
 
@@ -63,7 +63,7 @@ the RFC wire could not connect at all as a result.
   addressing it, establishing itself, and whatever session state it keeps.
   `HttpTransport` has a cookie jar, a CSRF token, affinity headers and axios;
   `RfcTransport` has a conversation that IS the session and none of the rest.
-- `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth` ^6.0.0) — the credential,
+- `IAuthProvider` (from `@mcp-abap-adt/interfaces-auth` ^7.5.0) — the credential,
   including its own renewal. The connection calls `prepare()` once before the wire
   opens, `establish(logon)` at each logon (through `IAdtSessionContext.logon`),
   `authorize(request)` before every attempt (through
@@ -86,12 +86,12 @@ the RFC wire could not connect at all as a result.
   contract type, no spread of an error, no diagnostics — `lint:check` runs the
   contract's shape check (`tools/check-provider-shape.mjs --rules 4,5,6`, a
   byte-identical copy of auth-errors' own, with empty site lists).
-- **The tests run auth-providers 5.x through an adapter** until auth-providers
-  6.0.0 is published: `src/__tests__/helpers/legacyProvider.ts` wraps each 5.x
-  provider, translates its refusal by a closed table to the builder call, and
-  fails a test that meets a 5.x refusal outside it. Wrap every provider a test
-  builds from `@mcp-abap-adt/auth-providers` in `legacyProvider(…)`; a new 5.x
-  refusal needs a table row. The adapter goes with the move to 6.0.0.
+- **The tests run the real auth-providers 6.0.0 providers** (devDependency
+  `^6.0.0`), handed to the connector unwrapped. A token provider needs
+  `renewal` (`refreshThenLogin()` / `refreshOnly()`); one that needs a browser
+  gets a fake `IBrowser` — no test starts a real browser or program.
+  `CertificateAuthProvider` checks its material in `prepare()`: load a real
+  pair (`src/__tests__/fixtures/tls`), never placeholder strings.
 - The connector — which session mechanism this system uses, and nothing else.
 
 **If you find yourself checking the transport's kind in the base, that is the

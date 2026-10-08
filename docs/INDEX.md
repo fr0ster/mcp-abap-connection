@@ -15,6 +15,7 @@ mcp-abap-connection/
 │   ├── INSTALLATION.md             # Setup and installation guide
 │   ├── USAGE.md                    # API documentation and examples
 │   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── MIGRATION-13.0.md           # interfaces-auth 7, auth-errors 2, auth-providers 6.0.0; no behaviour change
 │   ├── MIGRATION-12.0.md           # refusals follow the auth error contract (interfaces-auth 6, auth-errors)
 │   ├── MIGRATION-11.0.md           # the server certificate is verified by default
 │   ├── MIGRATION-10.0.md           # providers move to auth-providers; IAuthProvider 3.0; AuthRefusedError
@@ -49,7 +50,8 @@ mcp-abap-connection/
 - 🔑 [JWT Auth Tools](./JWT_AUTH_TOOLS.md) - CLI tool for browser-based authentication
 
 ### Upgrading
-- 🚚 [Migrating to 12.0.0](./MIGRATION-12.0.md) - refusals follow the auth error contract: `AuthRefusedError.refusal` is an `IAuthProviderError` (read its `kind`), a custom `ILogonTarget` mints its refusal through `@mcp-abap-adt/auth-errors`, and the providers come from auth-providers 6.0.0
+- 🚚 [Migrating to 13.0.0](./MIGRATION-13.0.md) - interfaces-auth 7 and auth-errors 2; the connection's behaviour is unchanged, a consumer holds one interfaces-auth major and takes the providers from auth-providers 6.0.0
+- 🚚 [Migrating to 12.0.0](./MIGRATION-12.0.md) - refusals follow the auth error contract: `AuthRefusedError.refusal` is an `IAuthProviderError` (read its `kind`), a custom `ILogonTarget` mints its refusal through `@mcp-abap-adt/auth-errors`, and no auth-providers release fits 12.x — auth-providers 6.0.0 goes with 13.0.0
 - 🚚 [Migrating to 11.0.0](./MIGRATION-11.0.md) - the server certificate is verified by default; trust a self-signed system with `agentOptions.ca`, or opt out explicitly with `TLS_REJECT_UNAUTHORIZED=0`
 - 🚚 [Migrating to 10.0.0](./MIGRATION-10.0.md) - the credential providers moved to `@mcp-abap-adt/auth-providers`; the connection speaks `IAuthProvider` 3.0 and raises `AuthRefusedError`; the RFC factory takes the logon parameters
 - 🚚 [Migrating to 9.0.0](./MIGRATION-9.0.md) - the contracts split into `interfaces-adt`, `-auth`, `-network` and `-utils`, and this package stopped depending on the umbrella; `interfaces-auth-sap` joined them in the release after, when authentication split into what is SAP's and what is not
@@ -85,7 +87,7 @@ mcp-abap-connection/
 - **Connection Interface**: [USAGE.md - API Reference](./USAGE.md#api-reference)
 - **Configuration Types**: [USAGE.md - Configuration Types](./USAGE.md#configuration-types)
 - **Connectors**: `AdtOnPremConnector`, `AdtCloudConnector`
-- **Credentials**: an `IAuthProvider` (`@mcp-abap-adt/interfaces-auth`); the ready-made providers live in `@mcp-abap-adt/auth-providers`
+- **Credentials**: an `IAuthProvider` (`@mcp-abap-adt/interfaces-auth`); the ready-made providers live in `@mcp-abap-adt/auth-providers` (6.0.0 with connection 13.x)
 - **Errors**: `AuthRefusedError` (its `refusal` an `IAuthProviderError` minted by `@mcp-abap-adt/auth-errors`), `WireLogonError`
 - **Transports**: `HttpTransport`, `RfcTransport` (+ `rfcConversationFrom()`)
 
