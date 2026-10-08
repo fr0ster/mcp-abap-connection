@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [13.0.0]
+## [13.0.0] - 2026-10-08
 
 12.0.0 was published only on the `next` dist-tag; 13.0.0 is the release that
 reaches `latest`.
@@ -52,7 +52,11 @@ reaches `latest`.
 - The devDependency `@mcp-abap-adt/auth-providers` is `^6.0.0` (from
   `^5.2.0`), and every suite runs the real 6.0.0 providers. The test-only 5.x
   adapter (`src/__tests__/helpers/legacyProvider.ts`, its table and its
-  `afterEach`) is deleted, and so are its suite and its use in `scripts/`.
+  `afterEach`) is deleted, and so is its suite.
+- The hand-run live probes in `scripts/` (`pr41-onprem-verify`,
+  `pr41-rfc-headers-probe`, `pr41-rfc-lock`, `pr41-rfc-transport-probe`,
+  `onprem-session-hold`) are removed: only Jest suites stay in the
+  repository; the probes remain in the git history.
   The dev tree now holds one `@mcp-abap-adt/interfaces-auth` (7.5.0) and one
   `@mcp-abap-adt/auth-errors` (2.1.1).
 - Two tests met 6.0.0 for real; neither is a change in connection's code:
