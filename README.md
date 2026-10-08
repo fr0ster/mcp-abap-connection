@@ -24,7 +24,6 @@ ABAP connection layer for MCP ABAP ADT server. Provides a unified interface for 
   - Generic `GenericWebSocketTransport` with pluggable WS factory
   - Reusable for debugger/traces and other event-driven flows
 - 📝 **Custom Logging**: Pluggable logger interface for integration with any logging system
-- 🛠️ **CLI Tool**: See [JWT Auth Tools](./docs/JWT_AUTH_TOOLS.md) for obtaining SAP BTP tokens
 - 📦 **TypeScript**: Full TypeScript support with type definitions included
 - ⚡ **Timeout Management**: Configurable timeouts for different operation types
 
@@ -140,7 +139,7 @@ This package interacts with external packages **ONLY through interfaces**:
 
 The contracts themselves come from five packages, and with `@mcp-abap-adt/auth-errors`
 — the runtime that mints and classifies the auth errors — are the only runtime
-dependencies of this one besides `axios`, `commander` and `open`:
+dependencies of this one besides `axios`:
 
 | Package | What this package takes from it |
 |---|---|
@@ -161,6 +160,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 14.0.0](./docs/MIGRATION-14.0.md)** - the `sap-abap-auth` CLI is removed, with its `open` and `commander` dependencies; use `@mcp-abap-adt/auth-broker-cli`; the library's API is unchanged
 - 🚚 **[Migration to 13.0.0](./docs/MIGRATION-13.0.md)** - interfaces-auth 7 and auth-errors 2, and the providers from auth-providers 6.0.0; no behaviour change, one interfaces-auth major per process
 - 🚚 **[Migration to 12.0.0](./docs/MIGRATION-12.0.md)** - refusals follow the auth error contract (interfaces-auth 6, auth-errors): `AuthRefusedError.refusal` is an `IAuthProviderError` — read its `kind`; a custom `ILogonTarget` mints its refusal; no auth-providers release fits 12.x — take 13.0.0 with auth-providers 6.0.0
 - 🚚 **[Migration to 11.0.0](./docs/MIGRATION-11.0.md)** - the server certificate is verified by default; trust a self-signed system with `agentOptions.ca`, or opt out explicitly
@@ -611,65 +611,6 @@ const connection = new AdtOnPremConnector(
 );
 ```
 
-## CLI Tool
-
-The package includes a CLI tool for authenticating with SAP BTP using service keys:
-
-### Installation Options
-
-- **Local project install**
-  ```bash
-  npm install @mcp-abap-adt/connection --save-dev
-  npx sap-abap-auth auth -k path/to/service-key.json
-  ```
-- **Global install**
-  ```bash
-  npm install -g @mcp-abap-adt/connection
-  sap-abap-auth auth -k path/to/service-key.json
-  ```
-- **On-demand (npx)**
-  ```bash
-  npx @mcp-abap-adt/connection sap-abap-auth auth -k path/to/service-key.json
-  ```
-
-### Usage
-
-```bash
-# Show help
-sap-abap-auth --help
-
-# Authenticate with service key
-sap-abap-auth auth -k service-key.json
-
-# Specify browser
-sap-abap-auth auth -k service-key.json --browser chrome
-
-# Custom output file
-sap-abap-auth auth -k service-key.json --output .env.production
-```
-
-### Options
-
-- `-k, --key <path>` - Path to service key JSON file (required)
-- `-b, --browser <name>` - Browser to open (chrome, edge, firefox, system, none)
-- `-o, --output <path>` - Path to output .env file (default: .env)
-- `-h, --help` - Show help message
-
-### Using via `npx` (without global install)
-
-If `@mcp-abap-adt/connection` is listed as a dependency in your project, you can invoke the CLI directly:
-
-```bash
-npx sap-abap-auth auth -k service-key.json
-```
-
-This works even when you do not install the package globally. For one-off usage, you can also run:
-
-```bash
-npx @mcp-abap-adt/connection sap-abap-auth auth -k service-key.json
-```
-
-This will download the package on demand and execute the CLI.
 ## API Reference
 
 ### Types

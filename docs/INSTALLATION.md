@@ -47,7 +47,7 @@ SAP_PASSWORD=your-password
 
 ### JWT Authentication (SAP BTP Cloud)
 
-When using the `sap-abap-auth` CLI tool, the generated `.env` file will include token expiry information:
+A `.env` file that carries a JWT can record its expiry as comments, for example:
 
 ```bash
 # Token Expiry Information (auto-generated)
@@ -97,42 +97,6 @@ const config = {
   // Token refresh is handled by @mcp-abap-adt/auth-broker
 };
 ```
-
-## CLI Tool Installation
-
-The package includes `sap-abap-auth` CLI tool for browser-based JWT authentication.
-
-### Global Installation
-
-```bash
-npm install -g @mcp-abap-adt/connection
-```
-
-Then use directly:
-
-```bash
-sap-abap-auth auth -k service-key.json
-```
-
-### Local Project Installation
-
-```bash
-npm install --save-dev @mcp-abap-adt/connection
-```
-
-Use via npx:
-
-```bash
-npx sap-abap-auth auth -k service-key.json
-```
-
-### On-Demand (No Installation)
-
-```bash
-npx @mcp-abap-adt/connection sap-abap-auth auth -k service-key.json
-```
-
-See [JWT_AUTH_TOOLS.md](./JWT_AUTH_TOOLS.md) for detailed CLI documentation.
 
 ## Verification
 
@@ -384,5 +348,5 @@ read and change the traffic, credentials included. See
 - 📚 Read [USAGE.md](./USAGE.md) for detailed usage examples
 - 🔄 Token refresh is handled by `@mcp-abap-adt/auth-broker` package
 - 💾 Session state persistence is handled by `@mcp-abap-adt/auth-broker` package
-- 🔑 Use [JWT auth CLI tool](./JWT_AUTH_TOOLS.md)
+- 🔑 Obtain tokens for SAP BTP with `@mcp-abap-adt/auth-broker-cli`
 - 📖 Review [CHANGELOG.md](../CHANGELOG.md) for version history

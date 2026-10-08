@@ -183,7 +183,7 @@ for (const file of [...markdown, ...examples]) {
 // ---------------------------------------------------------------- check 6 ---
 // A link can exist in the repo and still be broken for everyone who installed
 // the package: `files` decides what ships, and the README pointed at
-// docs/MIGRATION-2.0.md while `files` listed only dist, bin, README and LICENSE.
+// docs/MIGRATION-2.0.md while `files` listed only dist, README and LICENSE.
 // Check 3 sees the file on disk and passes. This one asks the other question —
 // does the target ship too.
 const published = JSON.parse(readFileSync('package.json', 'utf8')).files ?? [];

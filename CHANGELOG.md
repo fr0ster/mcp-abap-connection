@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.0.0]
+
+### Breaking
+
+- **The `sap-abap-auth` CLI is removed** (`bin/sap-abap-auth.js`, the `bin`
+  field and its `files` entry). It duplicated `@mcp-abap-adt/auth-broker-cli`
+  and was authentication logic in a package that does not authenticate. The
+  library's API is unchanged. See [MIGRATION-14.0.md](./docs/MIGRATION-14.0.md).
+
+### Removed
+
+- The CLI, and `docs/JWT_AUTH_TOOLS.md` with it.
+- The runtime dependencies only the CLI used: `open` and `commander`. The
+  remaining runtime dependencies are `axios` and the `@mcp-abap-adt` contract
+  packages.
+
 ## [13.0.0] - 2026-10-08
 
 12.0.0 was published only on the `next` dist-tag; 13.0.0 is the release that
@@ -2321,7 +2337,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v13.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.0...HEAD
+[14.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v13.0.0...v14.0.0
 [13.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v12.0.0...v13.0.0
 [12.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v11.0.1...v12.0.0
 [11.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v11.0.0...v11.0.1
