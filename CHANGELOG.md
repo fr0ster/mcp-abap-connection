@@ -14,8 +14,8 @@ reaches `latest`.
 
 ### Breaking
 
-- **connection moves to `@mcp-abap-adt/interfaces-auth` `^7.0.0`** (from
-  `^6.0.0`), `@mcp-abap-adt/auth-errors` `^2.0.0` (from `^1.0.0`) and
+- **connection moves to `@mcp-abap-adt/interfaces-auth` `^7.5.0`** (from
+  `^6.0.0`), `@mcp-abap-adt/auth-errors` `^2.1.1` (from `^1.0.0`) and
   `@mcp-abap-adt/interfaces-auth-sap` `^3.3.0` (from `^3.2.0`). A process holds
   one interfaces-auth major, so a consumer on interfaces-auth 6 must move with
   it. See [MIGRATION-13.0.md](./docs/MIGRATION-13.0.md).
@@ -25,7 +25,12 @@ reaches `latest`.
   interactive outcome `browser-launch-failed`,
   `ITokenResult.refreshTokenDisposition` and `RefreshTokenDisposition`. A
   consumer that switches on kinds or operations, or reads the removed members,
-  must follow.
+  must follow. 7.1–7.5 add only members of code lists and new types
+  (`IBrowser`, the authorization parts).
+- **The providers come from `@mcp-abap-adt/auth-providers` 6.0.0.** It is the
+  release built on interfaces-auth 7 and auth-errors 2, and the one this
+  release is tested with. 5.x does not fit (unbranded refusals), and no
+  auth-providers release fits connection 12.x.
 
 ### Unchanged
 
@@ -38,13 +43,26 @@ reaches `latest`.
 
 ### Changed
 
-- `tools/check-provider-shape.mjs` is refreshed to the byte-identical copy
-  `auth-errors` 2.0.0 publishes (the shape check's R1 test compares them).
+- `tools/check-provider-shape.mjs` is the byte-identical copy `auth-errors`
+  publishes (2.0.0 through 2.1.1 ship the same file; the shape check's R1 test
+  compares them).
 
 ### Development
 
-- auth-providers 6.0.0 is not yet the test dependency; the tests keep the
-  devDependency `@mcp-abap-adt/auth-providers` `^5.2.0`.
+- The devDependency `@mcp-abap-adt/auth-providers` is `^6.0.0` (from
+  `^5.2.0`), and every suite runs the real 6.0.0 providers. The test-only 5.x
+  adapter (`src/__tests__/helpers/legacyProvider.ts`, its table and its
+  `afterEach`) is deleted, and so are its suite and its use in `scripts/`.
+  The dev tree now holds one `@mcp-abap-adt/interfaces-auth` (7.5.0) and one
+  `@mcp-abap-adt/auth-errors` (2.1.1).
+- Two tests met 6.0.0 for real; neither is a change in connection's code:
+  - `CertificateAuthProvider` 6.0.0 proves its material usable in `prepare()`,
+    so the placeholder strings the certificate cases loaded were refused there.
+    They load the throwaway `fixtures/tls` pair now.
+  - A teardown test replaced `getAuthHeaders`, which the logoff never calls,
+    and passed only because the adapter's extra awaits kept the logoff in
+    flight past the assertion. It now breaks the logoff's own path
+    (`credentialHeaders`) and waits for the dispatch.
 
 ## [12.0.0] - 2026-10-06
 

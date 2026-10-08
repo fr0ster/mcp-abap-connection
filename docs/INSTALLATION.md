@@ -224,8 +224,9 @@ puts two copies of the same contract in your tree.
 
 The credential providers (`BasicAuthProvider`, `TokenAuthProvider`,
 `SamlAuthProvider`, `CertificateAuthProvider`) are no longer part of this
-package as of 10.0.0; install `@mcp-abap-adt/auth-providers` for them — a release
-built on interfaces-auth 7 with connection 13.x; the 5.x providers do not fit.
+package as of 10.0.0; install `@mcp-abap-adt/auth-providers` for them —
+connection 13.x works with auth-providers **6.0.0** (`^6.0.0`), built on
+interfaces-auth 7 and auth-errors 2; the 5.x providers do not fit.
 See [Migration to 10.0.0](./MIGRATION-10.0.md),
 [Migration to 12.0.0](./MIGRATION-12.0.md) and
 [Migration to 13.0.0](./MIGRATION-13.0.md).
