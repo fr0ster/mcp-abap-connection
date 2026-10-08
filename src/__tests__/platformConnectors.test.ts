@@ -20,7 +20,6 @@ import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
-import { legacyProvider } from './helpers/legacyProvider.js';
 import { cloudHttpTransport, onPremHttpTransport } from './helpers/onPrem.js';
 import { settled } from './helpers/settled.js';
 
@@ -93,7 +92,7 @@ describe('the consumer decides the session mechanism, by which connector it take
     const seen: Seen[] = [];
     const conn = new AdtOnPremConnector(
       config,
-      legacyProvider(TokenAuthProvider.fixed('a-token')),
+      TokenAuthProvider.fixed('a-token'),
       onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
@@ -115,7 +114,7 @@ describe('the consumer decides the session mechanism, by which connector it take
     const seen: Seen[] = [];
     const conn = new AdtCloudConnector(
       config,
-      legacyProvider(new BasicAuthProvider('u', 'p')),
+      new BasicAuthProvider('u', 'p'),
       cloudHttpTransport(config, makeLogger()),
       makeLogger(),
     );
@@ -146,7 +145,7 @@ describe('the credential is what it authenticates with, and nothing more', () =>
     const seen: Seen[] = [];
     const conn = new AdtOnPremConnector(
       config,
-      legacyProvider(new BasicAuthProvider('u', 'p')),
+      new BasicAuthProvider('u', 'p'),
       onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
@@ -175,9 +174,7 @@ describe('the credential is what it authenticates with, and nothing more', () =>
     const seen: Seen[] = [];
     const conn = new AdtOnPremConnector(
       config,
-      legacyProvider(
-        TokenAuthProvider.from({ getToken, refreshToken: getToken }),
-      ),
+      TokenAuthProvider.from({ getToken, refreshToken: getToken }),
       onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
@@ -236,9 +233,7 @@ describe('cookie credentials reach the wire', () => {
   ])('%s sends the SAML cookies on every request', async (_name, build) => {
     const seen: Seen[] = [];
     const conn = build(
-      legacyProvider(
-        new SamlAuthProvider('MYSAPSSO2=ticket; sap-usercontext=x'),
-      ),
+      new SamlAuthProvider('MYSAPSSO2=ticket; sap-usercontext=x'),
     );
     serverAnsweringEverything(conn, seen);
 
@@ -345,7 +340,7 @@ describe('the token provider is used the way its contract says', () => {
     const seen: Seen[] = [];
     const conn = new AdtOnPremConnector(
       config,
-      legacyProvider(TokenAuthProvider.from(refresher)),
+      TokenAuthProvider.from(refresher),
       onPremHttpTransport(config, makeLogger()),
       makeLogger(),
     );
@@ -407,15 +402,13 @@ describe('a request is built from one reading of the credential', () => {
     const seen: Seen[] = [];
     let reads = 0;
     const conn = build(
-      legacyProvider(
-        TokenAuthProvider.from({
-          getToken: async () => {
-            reads += 1;
-            return 'T';
-          },
-          refreshToken: async () => 'T',
-        }),
-      ),
+      TokenAuthProvider.from({
+        getToken: async () => {
+          reads += 1;
+          return 'T';
+        },
+        refreshToken: async () => 'T',
+      }),
     );
     serverAnsweringEverything(conn, seen);
 

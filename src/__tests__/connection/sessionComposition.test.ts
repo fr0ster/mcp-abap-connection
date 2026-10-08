@@ -16,7 +16,6 @@ import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
-import { legacyProvider } from '../helpers/legacyProvider.js';
 import { cloudHttpTransport, onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
@@ -227,17 +226,15 @@ describe('a credential refused while establishing', () => {
         authType: 'jwt',
         jwtToken: 'STALE',
       } as SapConfig,
-      legacyProvider(
-        TokenAuthProvider.from({
-          getToken: async () => (refreshed ? 'FRESH' : 'STALE'),
-          refreshToken: async () => {
-            refreshed += 1;
-            // The system accepts the renewed credential.
-            stub.rejectDiscovery = false;
-            return 'FRESH';
-          },
-        }),
-      ),
+      TokenAuthProvider.from({
+        getToken: async () => (refreshed ? 'FRESH' : 'STALE'),
+        refreshToken: async () => {
+          refreshed += 1;
+          // The system accepts the renewed credential.
+          stub.rejectDiscovery = false;
+          return 'FRESH';
+        },
+      }),
       cloudHttpTransport({ url: stub.baseUrl, client: '100' } as SapConfig),
       null,
     );

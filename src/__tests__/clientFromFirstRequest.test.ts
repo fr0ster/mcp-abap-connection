@@ -18,7 +18,6 @@ import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../connection/CloudHttpTransport.js';
 import { LegacyOnPremHttpTransport } from '../connection/LegacyOnPremHttpTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
-import { legacyProvider } from './helpers/legacyProvider.js';
 
 const DEFAULT_CLIENT = '100';
 const CLIENTS = new Set(['100', '200']);
@@ -116,7 +115,7 @@ type Wire = 'onprem' | 'legacy-onprem' | 'cloud';
 
 function connectorFor(wire: Wire, baseUrl: string, client: string) {
   const config = { url: baseUrl, client, authType: 'basic' } as SapConfig;
-  const credential = legacyProvider(new BasicAuthProvider('USER', 'PASS'));
+  const credential = new BasicAuthProvider('USER', 'PASS');
   const options = { client, baseUrl };
   if (wire === 'cloud') {
     return new AdtCloudConnector(
@@ -313,7 +312,7 @@ describe('a wire given no client', () => {
     const config = { url: icf.baseUrl, authType: 'basic' } as SapConfig;
     const conn = new AdtOnPremConnector(
       config,
-      legacyProvider(new BasicAuthProvider('USER', 'PASS')),
+      new BasicAuthProvider('USER', 'PASS'),
       new OnPremHttpTransport(() => ({}), null, { baseUrl: icf.baseUrl }),
       null,
     );
@@ -399,7 +398,7 @@ describe('a wire given no client', () => {
     const config = { url: icf.baseUrl, authType: 'basic' } as SapConfig;
     const conn = new AdtOnPremConnector(
       config,
-      legacyProvider(new BasicAuthProvider('USER', 'PASS')),
+      new BasicAuthProvider('USER', 'PASS'),
       new OnPremHttpTransport(() => ({}), null, { baseUrl: icf.baseUrl }),
       null,
     );
@@ -420,7 +419,7 @@ describe('a wire given no client', () => {
     const config = { url: icf.baseUrl, authType: 'basic' } as SapConfig;
     const conn = new AdtOnPremConnector(
       config,
-      legacyProvider(new BasicAuthProvider('USER', 'PASS')),
+      new BasicAuthProvider('USER', 'PASS'),
       new OnPremHttpTransport(() => ({}), null, { baseUrl: icf.baseUrl }),
       null,
     );

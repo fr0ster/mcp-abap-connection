@@ -20,7 +20,6 @@ import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { IOnPremTransport } from '../connection/IAdtTransport.js';
-import { legacyProvider } from './helpers/legacyProvider.js';
 import { cloudHttpTransport, onPremHttpTransport } from './helpers/onPrem.js';
 import { holdsNoSession } from './helpers/transportStub.js';
 
@@ -39,9 +38,7 @@ const transport: IOnPremTransport = {
   send: async () => ({ status: 200, headers: {}, data: '' }),
 };
 
-const credential: IAuthProvider = legacyProvider(
-  new BasicAuthProvider('u', 'p'),
-);
+const credential: IAuthProvider = new BasicAuthProvider('u', 'p');
 
 describe('the on-prem connector', () => {
   it('takes a transport, because on-prem is where that is a real choice', () => {
@@ -68,7 +65,7 @@ describe('the cloud connector', () => {
   it('takes a credential', () => {
     const conn = new AdtCloudConnector(
       config,
-      legacyProvider(TokenAuthProvider.fixed('t')),
+      TokenAuthProvider.fixed('t'),
       cloudHttpTransport(config, null),
       null,
     );

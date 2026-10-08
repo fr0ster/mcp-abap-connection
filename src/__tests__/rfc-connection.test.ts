@@ -39,7 +39,6 @@ import {
   rfcParamsFrom,
 } from '../connection/rfcConversation.js';
 import type { ILogger } from '../logger.js';
-import { legacyProvider } from './helpers/legacyProvider.js';
 
 // Load env file — default to e19.env, override via SAP_ENV_FILE
 const envFile = process.env.SAP_ENV_FILE || 'e19.env';
@@ -65,9 +64,7 @@ function buildConfig(): SapConfig {
 function overRfc(config: SapConfig) {
   return new AdtOnPremConnector(
     config,
-    legacyProvider(
-      new BasicAuthProvider(config.username ?? '', config.password ?? ''),
-    ),
+    new BasicAuthProvider(config.username ?? '', config.password ?? ''),
     new RfcTransport(rfcConversationFrom(config), logger),
     logger,
   );
@@ -296,14 +293,12 @@ describeWhere(
       };
       conn = new AdtOnPremConnector(
         config,
-        legacyProvider(
-          SncLogonProvider.forSecureLoginClient({
-            partnerName: process.env.SAP_SNC_PARTNERNAME as string,
-            qop: process.env.SAP_SNC_QOP || undefined,
-            sncLib: process.env.SAP_SNC_LIB || undefined,
-            myName: process.env.SAP_SNC_MYNAME || undefined,
-          }),
-        ),
+        SncLogonProvider.forSecureLoginClient({
+          partnerName: process.env.SAP_SNC_PARTNERNAME as string,
+          qop: process.env.SAP_SNC_QOP || undefined,
+          sncLib: process.env.SAP_SNC_LIB || undefined,
+          myName: process.env.SAP_SNC_MYNAME || undefined,
+        }),
         new RfcTransport(rfcConversationFrom(config), logger),
         logger,
       );
