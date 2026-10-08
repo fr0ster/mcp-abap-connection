@@ -1,12 +1,11 @@
 {
   "name": "@mcp-abap-adt/connection",
-  "version": "13.0.0",
+  "version": "14.0.0",
   "description": "ABAP connection layer for MCP ABAP ADT server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist",
-    "bin",
     "docs",
     "examples",
     "README.md",
@@ -14,9 +13,6 @@
     "LICENSE",
     "COPYING"
   ],
-  "bin": {
-    "sap-abap-auth": "./bin/sap-abap-auth.js"
-  },
   "keywords": [
     "abap",
     "sap",
@@ -59,9 +55,7 @@
     "@mcp-abap-adt/interfaces-auth-sap": "^3.3.0",
     "@mcp-abap-adt/interfaces-network": "^2.0.0",
     "@mcp-abap-adt/interfaces-utils": "^1.1.0",
-    "axios": "^1.16.0",
-    "commander": "^14.0.3",
-    "open": "^11.0.0"
+    "axios": "^1.16.0"
   },
   "optionalDependencies": {
     "@mcp-abap-adt/sap-rfc-lite": "^0.2.1"

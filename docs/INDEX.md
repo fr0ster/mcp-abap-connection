@@ -15,6 +15,7 @@ mcp-abap-connection/
 │   ├── INSTALLATION.md             # Setup and installation guide
 │   ├── USAGE.md                    # API documentation and examples
 │   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── MIGRATION-14.0.md           # the sap-abap-auth CLI, open and commander are removed
 │   ├── MIGRATION-13.0.md           # interfaces-auth 7, auth-errors 2, auth-providers 6.0.0; no behaviour change
 │   ├── MIGRATION-12.0.md           # refusals follow the auth error contract (interfaces-auth 6, auth-errors)
 │   ├── MIGRATION-11.0.md           # the server certificate is verified by default
@@ -24,13 +25,10 @@ mcp-abap-connection/
 │   ├── MIGRATION-6.0.md            # the factory and the per-credential classes go; RFC is a transport
 │   ├── MIGRATION-4.0.md            # JWT error classification: 401 refreshes, 403 propagates
 │   ├── SCOPE.md                    # What this package does and does not own
-│   ├── STATEFUL_SESSION_GUIDE.md   # Stateful requests and lock windows
-│   └── JWT_AUTH_TOOLS.md           # CLI tool for authentication
+│   └── STATEFUL_SESSION_GUIDE.md   # Stateful requests and lock windows
 ├── examples/               # Working code examples
 │   ├── README.md          # Examples overview
 │   └── basic-connection.js # Simple connection example
-├── bin/                   # CLI tools
-│   └── sap-abap-auth.js  # JWT authentication CLI
 └── src/                  # Source code
     ├── connection/       # Connection classes
     ├── config/          # Configuration utilities
@@ -46,10 +44,8 @@ mcp-abap-connection/
 - 📖 [Main README](../README.md) - Package overview and quick start
 - 🧭 [Scope and Boundaries](./SCOPE.md) - What this package does (and does not), sibling packages, and why there is no RFC to cloud
 
-### Core Features
-- 🔑 [JWT Auth Tools](./JWT_AUTH_TOOLS.md) - CLI tool for browser-based authentication
-
 ### Upgrading
+- 🚚 [Migrating to 14.0.0](./MIGRATION-14.0.md) - the `sap-abap-auth` CLI is removed; use `@mcp-abap-adt/auth-broker-cli`
 - 🚚 [Migrating to 13.0.0](./MIGRATION-13.0.md) - interfaces-auth 7 and auth-errors 2; the connection's behaviour is unchanged, a consumer holds one interfaces-auth major and takes the providers from auth-providers 6.0.0
 - 🚚 [Migrating to 12.0.0](./MIGRATION-12.0.md) - refusals follow the auth error contract: `AuthRefusedError.refusal` is an `IAuthProviderError` (read its `kind`), a custom `ILogonTarget` mints its refusal through `@mcp-abap-adt/auth-errors`, and no auth-providers release fits 12.x — auth-providers 6.0.0 goes with 13.0.0
 - 🚚 [Migrating to 11.0.0](./MIGRATION-11.0.md) - the server certificate is verified by default; trust a self-signed system with `agentOptions.ca`, or opt out explicitly with `TLS_REJECT_UNAUTHORIZED=0`
@@ -73,7 +69,7 @@ mcp-abap-connection/
 - **Basic Auth**: [USAGE.md - Basic Authentication](./USAGE.md#basic-authentication-on-premise)
 - **JWT/OAuth2**: [USAGE.md - JWT Authentication](./USAGE.md#jwt-authentication-cloudbtp)
 - **Token Refresh**: Handled by `@mcp-abap-adt/auth-broker` package (removed in 0.2.0)
-- **CLI Tool**: [JWT_AUTH_TOOLS.md](./JWT_AUTH_TOOLS.md)
+- **Obtaining tokens**: `@mcp-abap-adt/auth-broker-cli` (the CLI formerly bundled here was removed in 14.0.0)
 
 ### Session Management
 - **Overview**: [USAGE.md - Session Management](./USAGE.md#session-management)

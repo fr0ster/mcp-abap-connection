@@ -1091,5 +1091,4 @@ See [CHANGELOG.md](../CHANGELOG.md) for the version history.
 
 - Token refresh functionality is now in `@mcp-abap-adt/auth-broker` package
 - Session state persistence is now in `@mcp-abap-adt/auth-broker` package
-- See [JWT_AUTH_TOOLS.md](./JWT_AUTH_TOOLS.md) for CLI authentication tool
 - See [INSTALLATION.md](./INSTALLATION.md) for installation instructions
