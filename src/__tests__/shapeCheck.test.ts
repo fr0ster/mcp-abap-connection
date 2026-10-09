@@ -55,7 +55,7 @@ describe('the shape check', () => {
     [5, 'tools/__fixtures__/rule5.ts'],
     [6, 'tools/__fixtures__/rule6.ts'],
   ] as const)(
-    'refuses the rule %s fixture with rule %s alone',
+    'refuses the rule %s fixture (%s) with that rule alone',
     (rule, fixture) => {
       const findings = check(fixture);
 
@@ -80,4 +80,28 @@ describe('the shape check', () => {
       ),
     ).toEqual([]);
   }, 120_000);
+
+  describe('the publishing gate', () => {
+    const scripts: Record<string, string> = JSON.parse(
+      readFileSync(join(ROOT, 'package.json'), 'utf8'),
+    ).scripts;
+
+    it('test:shape runs this test file alone', () => {
+      expect(scripts['test:shape']).toBe(
+        'jest src/__tests__/shapeCheck.test.ts',
+      );
+    });
+
+    it('prepublishOnly runs the shape check through test:shape', () => {
+      expect(scripts.prepublishOnly?.split(' && ')).toContain(
+        'npm run test:shape',
+      );
+    });
+
+    it('lint:check is Biome alone: it names no checking script', () => {
+      for (const checking of ['node ', 'jest', 'test:shape', 'shape']) {
+        expect(scripts['lint:check']).not.toContain(checking);
+      }
+    });
+  });
 });
