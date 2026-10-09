@@ -49,7 +49,7 @@
     "node": "^22 || ^24 || ^26"
   },
   "dependencies": {
-    "@mcp-abap-adt/auth-errors": "^2.1.1",
+    "@mcp-abap-adt/auth-errors": "^2.2.0",
     "@mcp-abap-adt/interfaces-adt-connection": "^1.0.0",
     "@mcp-abap-adt/interfaces-auth": "^7.5.0",
     "@mcp-abap-adt/interfaces-auth-sap": "^3.3.0",

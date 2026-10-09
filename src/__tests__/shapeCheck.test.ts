@@ -1,35 +1,47 @@
 /**
- * The shape check of the auth error contract (rules 4, 5, 6), as `lint:check`
- * runs it: its copy is the canonical one, each fixture is refused by exactly
- * its own rule, a clean file and connection's own source pass.
+ * The shape check of the auth error contract (rules 4, 5, 6), run in-process
+ * through the module of @mcp-abap-adt/auth-errors: each fixture is refused by
+ * exactly its own rule, a clean file and connection's own source pass.
  */
-import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import {
+  checkProviderShape,
+  reportLines,
+  type ShapeCheckOptions,
+  type ShapeCheckReport,
+  type ShapeFinding,
+} from '@mcp-abap-adt/auth-errors/shape-check';
+import ts from 'typescript';
 
 const ROOT = resolve(__dirname, '../..');
-const SCRIPT = join(ROOT, 'tools', 'check-provider-shape.mjs');
 
-function check(...files: string[]) {
-  const run = spawnSync(
-    process.execPath,
-    [SCRIPT, '--rules', '4,5,6', ...files],
-    { cwd: ROOT, encoding: 'utf8' },
+/** The whole configuration of the check in this repository. */
+const SHAPE_CHECK = {
+  typescript: ts,
+  rules: [4, 5, 6],
+  root: ROOT,
+  project: join(ROOT, 'tsconfig.json'),
+  sites: join(ROOT, 'tools'),
+} as const satisfies ShapeCheckOptions;
+
+function findingsOf(report: ShapeCheckReport): readonly ShapeFinding[] {
+  if (report.status !== 'checked') {
+    throw new Error(`not checked: ${reportLines(report).join('\n')}`);
+  }
+  return report.findings;
+}
+
+function check(...files: string[]): readonly ShapeFinding[] {
+  return findingsOf(
+    checkProviderShape({
+      ...SHAPE_CHECK,
+      files: files.map((file) => join(ROOT, file)),
+    }),
   );
-  const findings = run.stdout.split(/\r?\n/).filter((line) => line.length > 0);
-  return { status: run.status, findings, stderr: run.stderr };
 }
 
 describe('the shape check', () => {
-  it('R1: tools/ holds a byte-identical copy of the one auth-errors publishes', () => {
-    const canonical = readFileSync(
-      require.resolve(
-        '@mcp-abap-adt/auth-errors/tools/check-provider-shape.mjs',
-      ),
-    );
-    expect(readFileSync(SCRIPT).equals(canonical)).toBe(true);
-  });
-
   it('the site lists are empty: connection asserts no contract type and passes no diagnostics', () => {
     for (const list of ['assertion-sites.json', 'diagnostic-sites.json']) {
       expect(
@@ -39,31 +51,33 @@ describe('the shape check', () => {
   });
 
   it.each([
-    ['4', 'tools/__fixtures__/rule4.ts'],
-    ['5', 'tools/__fixtures__/rule5.ts'],
-    ['6', 'tools/__fixtures__/rule6.ts'],
-  ])('refuses the rule %s fixture with rule %s alone', (rule, fixture) => {
-    const { status, findings, stderr } = check(fixture);
+    [4, 'tools/__fixtures__/rule4.ts'],
+    [5, 'tools/__fixtures__/rule5.ts'],
+    [6, 'tools/__fixtures__/rule6.ts'],
+  ] as const)(
+    'refuses the rule %s fixture with rule %s alone',
+    (rule, fixture) => {
+      const findings = check(fixture);
 
-    expect(stderr).toBe('');
-    expect(status).toBe(1);
-    expect(findings.length).toBeGreaterThan(0);
-    for (const finding of findings) {
-      expect(finding).toMatch(
-        new RegExp(`^${fixture}:\\d+:\\d+: rule ${rule}: `),
-      );
-    }
-  });
+      expect(findings.length).toBeGreaterThan(0);
+      for (const finding of findings) {
+        expect(finding.rule).toBe(rule);
+        expect(finding.file).toBe(fixture);
+      }
+    },
+  );
 
   it('passes a file that relays a minted error as it is', () => {
-    expect(check('tools/__fixtures__/clean.ts')).toStrictEqual({
-      status: 0,
-      findings: [],
-      stderr: '',
-    });
+    expect(check('tools/__fixtures__/clean.ts')).toStrictEqual([]);
   });
 
   it("passes connection's own source", () => {
-    expect(check()).toStrictEqual({ status: 0, findings: [], stderr: '' });
-  });
+    expect(
+      reportLines(
+        checkProviderShape({
+          ...SHAPE_CHECK,
+        }),
+      ),
+    ).toEqual([]);
+  }, 120_000);
 });
