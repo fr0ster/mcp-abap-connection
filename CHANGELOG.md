@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.0.1] - 2026-10-09
+
+Documentation and development only; the code is the same as 14.0.0.
+
+### Changed
+- Docs (README, INSTALLATION, USAGE, INDEX, the examples, the 12.0 migration):
+  connection 13.x and 14.x both work with auth-providers 6.0.0.
+- Development: the auth error contract's shape check runs as a Jest test from
+  `@mcp-abap-adt/auth-errors` 2.2.0 (`test:shape` in `prepublishOnly`); the
+  copied script is gone and `lint:check` is Biome alone.
+
 ## [14.0.0] - 2026-10-08
 
 ### Breaking
@@ -2337,7 +2348,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.1...HEAD
+[14.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.0...v14.0.1
 [14.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v13.0.0...v14.0.0
 [13.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v12.0.0...v13.0.0
 [12.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v11.0.1...v12.0.0
