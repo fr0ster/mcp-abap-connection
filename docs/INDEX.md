@@ -83,7 +83,7 @@ mcp-abap-connection/
 - **Connection Interface**: [USAGE.md - API Reference](./USAGE.md#api-reference)
 - **Configuration Types**: [USAGE.md - Configuration Types](./USAGE.md#configuration-types)
 - **Connectors**: `AdtOnPremConnector`, `AdtCloudConnector`
-- **Credentials**: an `IAuthProvider` (`@mcp-abap-adt/interfaces-auth`); the ready-made providers live in `@mcp-abap-adt/auth-providers` (6.0.0 with connection 13.x)
+- **Credentials**: an `IAuthProvider` (`@mcp-abap-adt/interfaces-auth`); the ready-made providers live in `@mcp-abap-adt/auth-providers` (6.0.0 with connection 13.x and 14.x)
 - **Errors**: `AuthRefusedError` (its `refusal` an `IAuthProviderError` minted by `@mcp-abap-adt/auth-errors`), `WireLogonError`
 - **Transports**: `HttpTransport`, `RfcTransport` (+ `rfcConversationFrom()`)
 

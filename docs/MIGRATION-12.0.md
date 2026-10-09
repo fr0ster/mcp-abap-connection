@@ -143,7 +143,7 @@ moment so that a throw becomes a refusal and the answer is classified. A
 provider that still answers `{ ok: false, refusal: { reason } }` compiles no
 more in TypeScript. In JavaScript, the connection answers `provider-threw` for
 it, as described above. `@mcp-abap-adt/auth-providers` 6.0.0 (with connection
-13.x) ships `AuthProviderBase`, which owns the four moments for you.
+13.x and 14.x) ships `AuthProviderBase`, which owns the four moments for you.
 
 ## Deep imports
 
