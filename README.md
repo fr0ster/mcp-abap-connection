@@ -209,8 +209,8 @@ since 10.0.0. Install them from where they live:
 npm install @mcp-abap-adt/auth-providers@^6
 ```
 
-connection 13.x works with **auth-providers 6.0.0** (`^6.0.0`), the release
-built on interfaces-auth 7 and auth-errors 2, and is tested with it: the 5.x
+connection 13.x and 14.x work with **auth-providers 6.0.0** (`^6.0.0`), the release
+built on interfaces-auth 7 and auth-errors 2, and are tested with it: the 5.x
 providers answer unbranded refusals and do not fit. See
 [Migration to 13.0.0](./docs/MIGRATION-13.0.md) and
 [Migration to 12.0.0](./docs/MIGRATION-12.0.md).
