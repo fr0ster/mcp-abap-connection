@@ -8,7 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run build          # Clean + biome lint (error-level) + tsc compile
 npm run build:fast     # tsc only (skip clean and lint, for rapid iteration)
 npm run lint           # Biome auto-fix (src and scripts)
-npm run lint:check     # Biome read-only check (src and scripts), then the auth shape check (rules 4,5,6)
+npm run lint:check     # Biome read-only check (src and scripts)
+npm run test:shape     # The auth contract's shape check (rules 4,5,6), as a Jest test
 npm test               # Jest (all tests)
 npx jest --testPathPatterns=rfcTransport      # Run a single test file
 SAP_ENV_FILE=e19.env npx jest --testPathPatterns=rfc-connection  # live, needs an on-prem system
@@ -83,9 +84,13 @@ the RFC wire could not connect at all as a result.
   the targets answer `logon-target`, connection's own are `connection`
   (`providerFailed(at)`, `refusedAgain(at)`, `NO_CREDENTIAL_TO_RENEW` in
   `authErrors.ts`). An object literal does not compile; no type assertion to a
-  contract type, no spread of an error, no diagnostics — `lint:check` runs the
-  contract's shape check (`tools/check-provider-shape.mjs --rules 4,5,6`, a
-  byte-identical copy of auth-errors' own, with empty site lists).
+  contract type, no spread of an error, no diagnostics — a Jest test
+  (`src/__tests__/shapeCheck.test.ts`) runs the contract's shape check (rules
+  4, 5, 6) through `@mcp-abap-adt/auth-errors/shape-check` over the whole
+  tree, with empty site lists, and each fixture under `tools/__fixtures__` is
+  refused by its rule alone. `npm test` runs it, and so does `npm run
+  test:shape`, which `prepublishOnly` names in the place `lint:check` once
+  ran the check; the test asserts both. There is no copy of the check here.
 - **The tests run the real auth-providers 6.0.0 providers** (devDependency
   `^6.0.0`), handed to the connector unwrapped. A token provider needs
   `renewal` (`refreshThenLogin()` / `refreshOnly()`); one that needs a browser
