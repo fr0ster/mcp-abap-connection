@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.0.1] - 2026-10-09
+
+Documentation and development only; the code is the same as 14.0.0.
+
+### Changed
+- Docs (README, INSTALLATION, USAGE, INDEX, the examples, the 12.0 migration):
+  connection 13.x and 14.x both work with auth-providers 6.0.0.
+- Development: the auth error contract's shape check runs as a Jest test from
+  `@mcp-abap-adt/auth-errors` 2.2.0 (`test:shape` in `prepublishOnly`); the
+  copied script is gone and `lint:check` is Biome alone.
+
 ## [14.0.0] - 2026-10-08
 
 ### Breaking
