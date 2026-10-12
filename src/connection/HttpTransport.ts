@@ -739,6 +739,13 @@ export class HttpTransport implements IAdtTransport {
       session: Record<string, string>;
     },
   ): Promise<void> {
+    // Nothing that logs on, whoever put it in the context: the goodbye carries
+    // the session's cookie and no credential.
+    const extra = Object.fromEntries(
+      Object.entries(context.extraHeaders ?? {}).filter(
+        ([name]) => name.trim().toLowerCase() !== 'authorization',
+      ),
+    );
     try {
       await this.sendDetached({
         method: 'GET',
@@ -748,7 +755,7 @@ export class HttpTransport implements IAdtTransport {
           // Detached, so not dressed: the client is said here in so many
           // words, as on every other request of this wire.
           ...this.clientHeaders(),
-          ...context.extraHeaders,
+          ...extra,
           ...snapshot.session,
           Accept: '*/*',
           'sap-adt-request-id': randomUUID().replace(/-/g, ''),

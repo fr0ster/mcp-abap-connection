@@ -952,7 +952,7 @@ never asks what kind it is:
 |---|---|
 | `prepare()` | once, in `connect()`, before the wire opens |
 | `establish(logon)` | at each logon the wire performs |
-| `authorize(request)` | before every attempt of every request — including the CSRF fetch, the cloud preflight, the logoff, and each resend |
+| `authorize(request)` | before every attempt of every request — including the CSRF fetch, the cloud preflight and each resend; not the logoff, which carries only the session's cookie |
 | `rejected(rejection)` | the system said no |
 
 **Each request asks the provider.** Nothing is cached by the connection, so a

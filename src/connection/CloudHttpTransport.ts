@@ -75,7 +75,7 @@ export class CloudHttpTransport
     return this.sessionEstablished() ? { 'x-sap-security-session': 'use' } : {};
   }
 
-  /** The logoff resource this server linked to beside our session — the close target. */
+  /** The logoff resource this server linked to beside our session, resolved — the close target. */
   private logoff: string | null = null;
 
   override async open(context: IAdtSessionContext): Promise<void> {
@@ -125,7 +125,10 @@ export class CloudHttpTransport
 
       // Published only while its ICF service is active; without it there is
       // nothing that ends this session, and the close says so.
-      this.logoff = this.linkHref(response.data, LOGOFF_REL) ?? null;
+      this.logoff = this.resolveLink(
+        this.linkHref(response.data, LOGOFF_REL),
+        `${context.baseUrl}${SESSIONS_PATH}`,
+      );
       this.logger?.debug(`Security session opened: ${resource}`);
     } catch (error) {
       // The provider will not authorize the preflight: its word, not a failed
@@ -166,17 +169,33 @@ export class CloudHttpTransport
       return;
     }
 
-    await this.sendLogoff(
-      context,
-      new URL(logoff, context.baseUrl).toString(),
-      {
-        cookies,
-        affinity,
-        // `x-sap-security-session: use`, as Eclipse sends it on the logoff: it
-        // names the session the logoff ends, like every other request here.
-        session,
-      },
-    );
+    await this.sendLogoff(context, logoff, {
+      cookies,
+      affinity,
+      // `x-sap-security-session: use`, as Eclipse sends it on the logoff: it
+      // names the session the logoff ends, like every other request here.
+      session,
+    });
+  }
+
+  /**
+   * An href resolved against the document that published it, as a link in an
+   * Atom document is. Resolved at open, so the close has nothing left that can
+   * throw: an href that is no URL is said once and leaves nothing to send.
+   */
+  private resolveLink(
+    href: string | undefined,
+    documentUrl: string,
+  ): string | null {
+    if (!href) return null;
+    try {
+      return new URL(href, documentUrl).toString();
+    } catch {
+      this.logger?.debug(
+        `The server published a logoff link that is no URL: ${href}`,
+      );
+      return null;
+    }
   }
 
   /**

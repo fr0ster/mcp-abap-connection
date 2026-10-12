@@ -81,7 +81,8 @@ export interface IAdtSessionContext {
   baseUrl: string;
   /**
    * Fill the credential into a request the wire itself originates — the CSRF
-   * fetch, the cloud preflight, the logoff. Asked per request, never held: a
+   * fetch, the cloud preflight. Not the logoff: it carries the session's cookie
+   * and no credential, as Eclipse sends it. Asked per request, never held: a
    * provider may renew behind the call. Throws `AuthRefusedError` when the
    * credential will not authorize it; the request is then not sent.
    */
