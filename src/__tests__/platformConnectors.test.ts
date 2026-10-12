@@ -127,16 +127,15 @@ describe('the consumer decides the session mechanism, by which connector it take
     const opened = seen.find((r) => r.url.includes('/core/http/sessions?'));
     expect(opened?.headers['x-sap-security-session']).toBe('create');
     expect(opened?.headers['sap-adt-purpose']).toBe('preflight_logon');
-    // Given back the cloud way, and never through the platform logoff.
+    // Given back through the logoff the session document links to, never by
+    // a DELETE on the session's own address.
     expect(
       seen.some(
         (r) =>
-          r.method === 'DELETE' && r.url.includes('/core/http/sessions/S-1'),
+          r.method === 'GET' && r.url.includes('/sap/public/bc/icf/logoff'),
       ),
     ).toBe(true);
-    expect(seen.some((r) => r.url.includes('/sap/public/bc/icf/logoff'))).toBe(
-      false,
-    );
+    expect(seen.some((r) => r.method === 'DELETE')).toBe(false);
   });
 });
 

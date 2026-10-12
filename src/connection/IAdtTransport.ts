@@ -155,7 +155,7 @@ export interface IAdtTransport {
    *
    * Never throws, and a repeat call finds nothing owed — this is reached from
    * `disconnect()`, which promises to settle. What it does is the wire's: a
-   * DELETE on the address the server published, the platform's logoff, or
+   * the logoff the cloud session document links to, the platform's logoff, or
    * closing the conversation.
    */
   close(context: IAdtSessionContext): Promise<void>;

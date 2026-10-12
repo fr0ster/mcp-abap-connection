@@ -80,8 +80,7 @@ on-prem system are both ordinary, and a design where the credential picked the
 system's session mechanism got one of them wrong whichever way it guessed.
 
 Nothing is detected. `/sap/bc/adt/core/http/sessions` answers on on-prem too,
-and its `DELETE` there leaves the session open while the platform logoff removes
-it — so asking the server would choose the mechanism that releases nothing.
+so its answer says nothing about which system this is.
 
 ### Basic Authentication (On-Premise)
 
@@ -768,8 +767,10 @@ class AdtCloudConnector<
 
 The difference is what each does with the session: on-prem takes it from the
 establishing call and gives it back with the platform's ICF logoff; cloud opens
-one at `/sap/bc/adt/core/http/sessions` and gives it back by `DELETE` on the
-address the server publishes.
+one at `/sap/bc/adt/core/http/sessions` and gives it back through the logoff
+resource the server links to in the same answer. Not by `DELETE` on the
+session's own address: from inside that session it answers `200` and ends
+nothing (measured on a BTP trial, 2026-10-12).
 
 **Both take a transport, and neither defaults one.** What differs is the CHOICE,
 and the type parameter is where that is said: `TTransport` is bound to

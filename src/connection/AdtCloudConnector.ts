@@ -3,8 +3,8 @@
  *
  * A session there is a **resource**: asked for at
  * `/sap/bc/adt/core/http/sessions` with `x-sap-security-session: create` and
- * `sap-adt-purpose: preflight_logon`, and given back by `DELETE` on the address
- * the server publishes in the answer. Reproduced from Eclipse ADT 3.60 and
+ * `sap-adt-purpose: preflight_logon`, and given back through the logoff resource
+ * the same answer links to. Reproduced from Eclipse ADT 3.60 and
  * measured against a BTP trial: without that request the same connection gets
  * `sap-usercontext` and `sap-XSRF_*` and no session for a lock to be bound to,
  * which is how "cloud issues no SAP_SESSIONID" came to be believed.

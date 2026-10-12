@@ -47,13 +47,13 @@ The package uses a clean separation of concerns:
 
 - **`AdtCloudConnector`** (concrete, exported):
   - An ABAP Cloud system: a session is a resource, opened at
-    `/sap/bc/adt/core/http/sessions` and given back by `DELETE` on the address it publishes
+    `/sap/bc/adt/core/http/sessions` and given back through the logoff resource its answer
+    links to (a `DELETE` on the session's own address answers `200` and ends nothing)
   - Takes an auth provider, same as above
 
   **Which one you take is how you say where you are dialling.** Nothing is probed:
-  the session resource answers on on-prem too, and its `DELETE` there leaves the
-  session open while the logoff removes it — so asking the server would pick the
-  mechanism that releases nothing.
+  the session resource answers on on-prem too, so its answer says nothing about which
+  system this is.
 
 - **Auth providers** (an `IAuthProvider` from `@mcp-abap-adt/interfaces-auth`; the
   ready-made ones — `BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`,

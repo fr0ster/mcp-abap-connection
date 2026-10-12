@@ -708,8 +708,8 @@ export class HttpTransport implements IAdtTransport {
   /**
    * Nothing to give back at this level.
    *
-   * The two concrete wires override it — the cloud one DELETEs the session
-   * resource, the on-prem one sends the platform logoff. A bare HTTP wire has
+   * The two concrete wires override it — the cloud one sends the logoff its
+   * session document links to, the on-prem one the platform logoff. A bare HTTP wire has
    * neither, and says so by doing nothing.
    */
   async close(_context: IAdtSessionContext): Promise<void> {}

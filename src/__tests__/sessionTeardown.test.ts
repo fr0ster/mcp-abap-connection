@@ -106,13 +106,49 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     ).toBe(true);
   });
 
-  it('cloud opens the session resource and gives it back by DELETE', async () => {
+  it('cloud opens the session resource and gives it back through the logoff it links to', async () => {
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
       TokenAuthProvider.fixed('TOKEN'),
       cloudHttpTransport(
         { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
         makeLogger(),
+      ),
+      makeLogger(),
+    );
+    const seen: Seen[] = [];
+    attachMockAxios(conn as never, seen, async () => ({
+      status: 200,
+      data: '<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom"><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/><atom:link href="/sap/public/bc/icf/logoff" rel="http://www.sap.com/adt/categories/core/http/sessions/logoff"/></http:session>',
+      headers: {
+        'x-csrf-token': 'TOKEN',
+        'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+      },
+    }));
+
+    await conn.connect();
+    await conn.disconnect();
+    await settled();
+
+    expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(true);
+    const goodbye = seen.find((r) =>
+      r.url.includes('/sap/public/bc/icf/logoff'),
+    );
+    expect(goodbye?.method).toBe('GET');
+    expect(goodbye?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
+    // Never the DELETE on the session's own address: from inside that session
+    // it answers 200 and ends nothing (measured on a BTP trial, 2026-10-12).
+    expect(seen.some((r) => r.method === 'DELETE')).toBe(false);
+  });
+
+  it('cloud sends nothing to end a session the server linked no logoff for', async () => {
+    const logger = makeLogger();
+    const conn = new AdtCloudConnector(
+      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      TokenAuthProvider.fixed('TOKEN'),
+      cloudHttpTransport(
+        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+        logger,
       ),
       makeLogger(),
     );
@@ -127,13 +163,14 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     }));
 
     await conn.connect();
+    const before = seen.length;
     await conn.disconnect();
     await settled();
 
-    expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(true);
-    expect(seen.some((r) => r.method === 'DELETE')).toBe(true);
-    // And never the platform logoff: that is the other system's mechanism.
-    expect(seen.some((r) => r.url.includes('/icf/logoff'))).toBe(false);
+    expect(seen.length).toBe(before);
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining('published no logoff resource'),
+    );
   });
 });
 
@@ -460,8 +497,8 @@ describe('a session opened before a failed connect is not abandoned', () => {
           headers: { 'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'] },
         };
       }
-      // The DELETE that says goodbye.
-      if (String(cfg.url).includes('/core/http/sessions/')) {
+      // The logoff that says goodbye.
+      if (String(cfg.url).includes('/icf/logoff')) {
         return { status: 200, data: '', headers: {} };
       }
       // Establishing then fails, as it can on a credential the preflight did
@@ -497,7 +534,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
     await new Promise((r) => setTimeout(r, 20));
 
     const goodbye = seen.find(
-      (r) => r.method === 'DELETE' && r.url.includes('/core/http/sessions/S-1'),
+      (r) => r.method === 'GET' && r.url.includes('/sap/public/bc/icf/logoff'),
     );
     expect(goodbye).toBeDefined();
     // With the cookie that is the whole permission to close it, taken before
