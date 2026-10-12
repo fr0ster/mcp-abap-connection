@@ -704,10 +704,14 @@ abstract class AbstractAbapConnection
       // finished with something we never had sends a request nobody asked for
       // — into the middle of an authentication exchange, in the case that found
       // this.
-      // Whether there is anything to say is the wire's to know: a cloud
-      // session has an address or it does not, and an on-prem one was
-      // established or the cookie is debris from the refusal. The connection
-      // asks, and each wire answers by doing nothing when it has nothing.
+      // Whether there is anything to say is the wire's to know, and both
+      // shipped wires answer by one rule: a logoff iff they hold a non-empty
+      // SAP_SESSIONID they received, whatever the status that brought it — a
+      // 404/403 at logon carries one (a live security session), a 401's
+      // debris cookie does not. Reached only when connect() as a whole failed:
+      // a 404 on core discovery is not that, its fallback runs in the same
+      // session. The connection asks, and each wire answers by doing nothing
+      // when it has nothing.
       // Its failure is absorbed, a synchronous throw included: a wire's
       // close() may reject — its context.authorize throws when the provider
       // refuses — and nobody awaits this one. A throw that escaped here would
@@ -788,13 +792,12 @@ abstract class AbstractAbapConnection
       // preflight may have opened a session — on cloud it does — and this path
       // is about to drop the cookies that are the only permission to close it.
       // Refusing to connect must not leak the session the refusal is about.
-      // Written before connect() rejects, as above, when the wire sends one:
-      // on-prem whenever the establishment left any cookie, on cloud when the
-      // preflight opened an HTTP security session. Without SAP_SESSIONID the
-      // logoff ends nothing on SAP's side — CL_HTTP_SERVER_NET->
-      // if_http_server~logoff terminates the security session only when that
-      // cookie is present (E19's ABAP code) — so a goodbye carrying
-      // `sap-XSRF_*` alone is harmless. Its answer is not waited for, and a close that throws or
+      // Written before connect() rejects, as above, when the wire sends one.
+      // A shipped wire sends none here: this path means the wire holds no
+      // SAP_SESSIONID, and without it the logoff would end nothing —
+      // CL_HTTP_SERVER_NET->if_http_server~logoff terminates the security
+      // session only when that cookie is present (E19's ABAP code). A custom
+      // wire's close() may still send one, and is waited for. Its answer is not waited for, and a close that throws or
       // rejects is logged and absorbed.
       const goodbye = this.dispatchGoodbye(this.sessionContext());
       this.invalidateSession();

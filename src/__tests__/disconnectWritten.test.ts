@@ -25,8 +25,13 @@ import { Duplex } from 'node:stream';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
+import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import type { ILogger } from '../logger.js';
-import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
+import {
+  cloudHttpTransport,
+  onPrem,
+  onPremHttpTransport,
+} from './helpers/onPrem.js';
 
 const SESSION_DOCUMENT =
   '<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom">' +
@@ -38,6 +43,10 @@ interface StandIn {
   baseUrl: string;
   /** Settles when the logoff request has reached the server. */
   logoffArrived: Promise<IncomingMessage>;
+  /** How many logoff requests reached the server. */
+  logoffs: () => number;
+  /** The `Cookie` header of each request to the fallback discovery. */
+  fallbackCookies: () => string[];
   /** The socket the establishment came on. */
   establishedOn: () => Socket | undefined;
   /** Sends the held answer to the logoff. */
@@ -57,6 +66,13 @@ async function standIn(
     logoffStatus?: number;
     /** Answers the establishment with this status instead of a token. */
     discoveryStatus?: number;
+    /** The cookies every answer but the logoff's sets, instead of the default. */
+    cookies?: string[];
+    /**
+     * Answers `/sap/bc/adt/core/discovery` with `discoveryStatus` and the
+     * fallback `/sap/bc/adt/discovery` with this one (200: a token).
+     */
+    fallbackStatus?: number;
   } = {},
 ): Promise<StandIn> {
   const sessionCookie = options.sessionCookie ?? true;
@@ -66,12 +82,17 @@ async function standIn(
   });
   let held: ServerResponse | undefined;
   let establishment: Socket | undefined;
-  const cookies = sessionCookie
-    ? ['SAP_SESSIONID_STUB_100=S1; Path=/']
-    : ['sap-XSRF_STUB_100=X1; Path=/'];
+  const cookies =
+    options.cookies ??
+    (sessionCookie
+      ? ['SAP_SESSIONID_STUB_100=S1; Path=/']
+      : ['sap-XSRF_STUB_100=X1; Path=/']);
+  let logoffs = 0;
+  const fallbackCookies: string[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? '';
     if (url.includes('/logoff')) {
+      logoffs += 1;
       arrived(req);
       if (options.logoffStatus !== undefined) {
         res.writeHead(options.logoffStatus, { location: '/goodbye' });
@@ -90,8 +111,17 @@ async function standIn(
       return;
     }
     establishment = req.socket;
-    if (options.discoveryStatus !== undefined) {
-      res.writeHead(options.discoveryStatus, { 'content-type': 'text/plain' });
+    const fallback = !url.includes('/core/');
+    if (fallback) fallbackCookies.push(String(req.headers.cookie ?? ''));
+    const status =
+      fallback && options.fallbackStatus !== undefined
+        ? options.fallbackStatus
+        : options.discoveryStatus;
+    if (status !== undefined && status !== 200) {
+      res.writeHead(status, {
+        'content-type': 'text/plain',
+        'set-cookie': cookies,
+      });
       res.end('refused');
       return;
     }
@@ -108,6 +138,8 @@ async function standIn(
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     logoffArrived,
+    logoffs: () => logoffs,
+    fallbackCookies: () => fallbackCookies,
     establishedOn: () => establishment,
     answerLogoff: () => {
       held?.writeHead(200, { 'content-type': 'text/html' });
@@ -298,22 +330,45 @@ describe('disconnect() resolves once the logoff is written', () => {
   });
 
   describe('a failed connect() rejects only once its own goodbye is written', () => {
-    it('authenticated, no ABAP session', async () => {
-      server = await standIn({ sessionCookie: false });
-      const conn = onPrem(configFor(server.baseUrl), null);
-      const wire = bytesNeverTaken(conn.transport);
+    it('no session, through a custom wire whose close() does send: connect() rejects once that goodbye is written', async () => {
+      server = await standIn();
+      const { holdsNoSession } = await import('./helpers/transportStub.js');
+      const { AdtOnPremConnector } = await import(
+        '../connection/AdtOnPremConnector.js'
+      );
+      const { BasicAuthProvider } = await import(
+        '@mcp-abap-adt/auth-providers'
+      );
+      let write!: () => void;
+      const writing = new Promise<void>((resolve) => {
+        write = resolve;
+      });
+      const transport = {
+        ...holdsNoSession,
+        kind: 'custom',
+        system: 'onprem' as const,
+        send: async () => ({ status: 200, headers: {}, data: '' }),
+        // Its own rule: it has something to say goodbye to, and says it.
+        close: async (_context: unknown, written?: () => void) => {
+          await writing;
+          written?.();
+          await new Promise<never>(() => undefined);
+        },
+      };
+      const conn = new AdtOnPremConnector(
+        configFor(server.baseUrl),
+        new BasicAuthProvider('u', 'p'),
+        transport as never,
+        null,
+      );
 
       const connecting = conn.connect();
       const settled = watched(connecting);
-      await wire.requested;
       await turns(20);
-      // Refused, and still writing the goodbye to what the server did open.
       expect(settled()).toBe(false);
 
-      wire.fail();
+      write();
       await expect(connecting).rejects.toThrow(/opened no ABAP session/);
-      // The caller's `finally`: its first disconnect() of this life.
-      await expect(conn.disconnect()).resolves.toBeUndefined();
     });
 
     it('the establishment failing after the cloud preflight opened a session', async () => {
@@ -341,6 +396,204 @@ describe('disconnect() resolves once the logoff is written', () => {
       wire.fail();
       await expect(connecting).rejects.toBeDefined();
     });
+  });
+
+  describe('the logoff is sent if and only if the wire holds a SAP_SESSIONID it received', () => {
+    // The establishment retries a refused GET, with its own delay between
+    // attempts: these take a few seconds of the wire's retries.
+    const RETRIES = 30_000;
+
+    it.each([404, 403])(
+      'connect() answered %i after logon, with SAP_SESSIONID: the logoff is sent, and connect() rejects once it is written',
+      async (status) => {
+        server = await standIn({ discoveryStatus: status });
+        const conn = onPrem(configFor(server.baseUrl), null);
+
+        await expect(conn.connect()).rejects.toBeDefined();
+        // It rejected after the write: the logoff is on its way or arrived.
+        const logoff = await server.logoffArrived;
+        expect(logoff.headers.cookie).toContain('SAP_SESSIONID_STUB_100=S1');
+        expect(server.logoffs()).toBe(1);
+        server.answerLogoff();
+      },
+      RETRIES,
+    );
+
+    it(
+      'core discovery 404 with SAP_SESSIONID, fallback 200: connect() resolves, no logoff, the fallback ran in the same session',
+      async () => {
+        server = await standIn({ discoveryStatus: 404, fallbackStatus: 200 });
+        const conn = onPrem(configFor(server.baseUrl), null);
+
+        await expect(conn.connect()).resolves.toBeUndefined();
+        expect(server.logoffs()).toBe(0);
+        expect(server.fallbackCookies()[0]).toContain(
+          'SAP_SESSIONID_STUB_100=S1',
+        );
+
+        // The normal path: nothing until disconnect().
+        await conn.disconnect();
+        await server.logoffArrived;
+        expect(server.logoffs()).toBe(1);
+        server.answerLogoff();
+      },
+      RETRIES,
+    );
+
+    it(
+      'core discovery 404 and fallback 404, both with SAP_SESSIONID: one logoff, then connect() rejects',
+      async () => {
+        server = await standIn({ discoveryStatus: 404, fallbackStatus: 404 });
+        const conn = onPrem(configFor(server.baseUrl), null);
+
+        await expect(conn.connect()).rejects.toBeDefined();
+        await server.logoffArrived;
+        expect(server.logoffs()).toBe(1);
+        expect(server.fallbackCookies().length).toBeGreaterThan(0);
+        server.answerLogoff();
+      },
+      RETRIES,
+    );
+
+    it('connect() answered 401 with a debris cookie: nothing is sent', async () => {
+      server = await standIn({
+        discoveryStatus: 401,
+        cookies: ['sap-XSRF_STUB_100=X1; Path=/'],
+      });
+      const conn = onPrem(configFor(server.baseUrl), null);
+
+      await expect(conn.connect()).rejects.toBeDefined();
+      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await turns(5);
+      expect(server.logoffs()).toBe(0);
+    });
+
+    it('connect() answered 200 with only sap-XSRF_* (no session): nothing is sent, on connect() nor on disconnect()', async () => {
+      server = await standIn({ sessionCookie: false });
+      const conn = onPrem(configFor(server.baseUrl), null);
+
+      await expect(conn.connect()).rejects.toThrow(/opened no ABAP session/);
+      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await turns(5);
+      expect(server.logoffs()).toBe(0);
+    });
+
+    it('a deleting Set-Cookie (expiry in the past, or Max-Age=0) removes SAP_SESSIONID: no session, nothing is sent', async () => {
+      server = await standIn();
+      const transport = onPremHttpTransport(configFor(server.baseUrl));
+      const context = {
+        baseUrl: server.baseUrl,
+        authorize: async () => {},
+        logon: async () => {},
+        observe: () => {},
+      };
+      for (const deletion of [
+        // Exactly what SAP's logoff answers with (E19, 2026-10-13): a
+        // one-character value and an expiry in 1980.
+        'SAP_SESSIONID_STUB_100=X; path=/; expires=Tue, 01-Jan-1980 00:00:01 GMT',
+        'SAP_SESSIONID_STUB_100=S1; Max-Age=0; Path=/',
+        'SAP_SESSIONID_STUB_100=S1; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/',
+      ]) {
+        transport.ingest({
+          'set-cookie': ['SAP_SESSIONID_STUB_100=S1; Path=/'],
+        });
+        expect(transport.sessionEstablished()).toBe(true);
+        transport.ingest({ 'set-cookie': [deletion] });
+        expect(transport.sessionFingerprint().size).toBe(0);
+        expect(transport.sessionEstablished()).toBe(false);
+        // Nor does the deleted cookie ride on the next request.
+        expect(transport.cookies() ?? '').not.toContain('SAP_SESSIONID');
+        await transport.close(context);
+      }
+      // A wire with no client asserts no cookie of its own: the deletion
+      // leaves it holding nothing, and it says so.
+      const bare = new OnPremHttpTransport(() => ({}), null, {
+        baseUrl: server.baseUrl,
+      });
+      bare.ingest({ 'set-cookie': ['SAP_SESSIONID_STUB_100=S1; Path=/'] });
+      bare.ingest({
+        'set-cookie': [
+          'SAP_SESSIONID_STUB_100=X; path=/; expires=Tue, 01-Jan-1980 00:00:01 GMT',
+        ],
+      });
+      expect(bare.cookies()).toBeNull();
+      await turns(5);
+      expect(server.logoffs()).toBe(0);
+    });
+
+    it("SAP's whole logoff answer deletes every cookie it set", () => {
+      const transport = onPremHttpTransport(configFor('http://saphost:8000'));
+      transport.ingest({
+        'set-cookie': [
+          'SAP_SESSIONID_STUB_100=0123456789012345678901234567890123456789012345; path=/; HttpOnly',
+          'sap-contextid=CTX; path=/sap/bc/adt; HttpOnly',
+          'sap-usercontext=sap-client=100; path=/',
+        ],
+      });
+      expect(transport.sessionEstablished()).toBe(true);
+      const gone = 'expires=Tue, 01-Jan-1980 00:00:01 GMT';
+      transport.ingest({
+        'set-cookie': [
+          `sap-contextid=X; path=/sap/bc/adt; ${gone}`,
+          `sap-usercontext=X; path=/; ${gone}`,
+          `SAP_SESSIONID_STUB_100=X; path=/; ${gone}`,
+          `sap-XSRF_STUB_100=X; path=/; ${gone}`,
+          `SPNegoTokenRequested=X; path=/; ${gone}`,
+          `OIDCTokenRequested=X; path=/; ${gone}`,
+        ],
+      });
+      expect(transport.sessionEstablished()).toBe(false);
+      const sent = transport.cookies() ?? '';
+      expect(sent).not.toContain('SAP_SESSIONID');
+      expect(sent).not.toContain('sap-contextid');
+    });
+
+    it('an empty SAP_SESSIONID value names no session: nothing is sent', async () => {
+      server = await standIn();
+      const transport = onPremHttpTransport(configFor(server.baseUrl));
+      transport.ingest({ 'set-cookie': ['SAP_SESSIONID_STUB_100=; Path=/'] });
+      expect(transport.sessionEstablished()).toBe(false);
+      await transport.close({
+        baseUrl: server.baseUrl,
+        authorize: async () => {},
+        logon: async () => {},
+        observe: () => {},
+      });
+      await turns(5);
+      expect(server.logoffs()).toBe(0);
+    });
+
+    it('cloud: a preflight session document without SAP_SESSIONID: nothing is sent', async () => {
+      server = await standIn({ sessionCookie: false });
+      const config = {
+        ...configFor(server.baseUrl),
+        authType: 'jwt',
+        jwtToken: 'TOKEN',
+      } as SapConfig;
+      const conn = new AdtCloudConnector(
+        config,
+        TokenAuthProvider.fixed('TOKEN'),
+        cloudHttpTransport(config, null),
+        null,
+      );
+
+      await expect(conn.connect()).rejects.toThrow(/opened no ABAP session/);
+      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await turns(5);
+      expect(server.logoffs()).toBe(0);
+    });
+
+    it("the failing answer's cookie is the one the goodbye carries, snapshot before the clearing", async () => {
+      server = await standIn({ discoveryStatus: 404 });
+      const conn = onPrem(configFor(server.baseUrl), null);
+
+      await expect(conn.connect()).rejects.toBeDefined();
+      // Cleared by now: the goodbye took its cookie before that.
+      expect(conn.transport.cookies()).toBeNull();
+      const logoff = await server.logoffArrived;
+      expect(logoff.headers.cookie).toContain('SAP_SESSIONID_STUB_100=S1');
+      server.answerLogoff();
+    }, 30_000);
   });
 
   it('goes out on a connection of its own, closed after it', async () => {

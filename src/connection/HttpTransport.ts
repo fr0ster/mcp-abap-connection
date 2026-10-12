@@ -48,6 +48,29 @@ import {
 } from './IAdtTransport.js';
 import { isStatefulRequest, SESSION_TYPE_HEADER } from './statefulRequest.js';
 
+/**
+ * Whether a `Set-Cookie`'s attributes delete it: `Max-Age` of zero or less, or
+ * an `Expires` already in the past — SAP's own deletions are the latter
+ * (`expires=Tue, 01-Jan-1980 00:00:01 GMT`, a one-character value). Read by
+ * splitting, not by pattern; `Date.parse` reads the date.
+ */
+function deletesCookie(attributes: string[]): boolean {
+  for (const attribute of attributes) {
+    const [rawName, ...rawValue] = attribute.split('=');
+    const name = rawName?.trim().toLowerCase();
+    const value = rawValue.join('=').trim();
+    if (name === 'max-age') {
+      const seconds = Number(value);
+      if (value !== '' && Number.isFinite(seconds) && seconds <= 0) return true;
+    }
+    if (name === 'expires') {
+      const at = Date.parse(value);
+      if (Number.isFinite(at) && at <= Date.now()) return true;
+    }
+  }
+  return false;
+}
+
 /** The cookie that names a stateful ABAP context. */
 const CONTEXT_COOKIE = 'sap-contextid';
 
@@ -214,11 +237,20 @@ export class HttpTransport implements IAdtTransport {
     if (!setCookie) return;
     for (const entry of Array.isArray(setCookie) ? setCookie : [setCookie]) {
       if (typeof entry !== 'string') continue;
-      const [nameValue] = entry.split(';');
+      const [nameValue, ...attributes] = entry.split(';');
       if (!nameValue) continue;
       const [name, ...rest] = nameValue.split('=');
       const trimmed = name?.trim();
       if (!trimmed) continue;
+      // A deletion removes the cookie, and is told by its expiry, not its
+      // value: SAP's logoff deletes every cookie with a one-character value
+      // and `expires=Tue, 01-Jan-1980 00:00:01 GMT` (E19, 2026-10-13). Kept,
+      // a deleted `SAP_SESSIONID` would read as a session the server has
+      // just ended.
+      if (deletesCookie(attributes)) {
+        this.jar.delete(trimmed);
+        continue;
+      }
       this.jar.set(trimmed, rest.join('=').trim());
     }
 
@@ -230,11 +262,11 @@ export class HttpTransport implements IAdtTransport {
       this.jar.set('sap-usercontext', `sap-client=${this.options.client}`);
     }
 
-    if (this.jar.size === 0) return;
+    // Recomputed from what the jar holds now, deletions included.
     const combined = Array.from(this.jar.entries())
       .map(([name, value]) => (value ? `${name}=${value}` : name))
       .join('; ');
-    if (combined) this.combined = combined;
+    this.combined = combined || null;
   }
 
   /** What to put on the `Cookie` header, or nothing if the jar is empty. */
@@ -252,9 +284,30 @@ export class HttpTransport implements IAdtTransport {
   sessionFingerprint(): Map<string, string> {
     const fingerprint = new Map<string, string>();
     for (const [name, value] of this.jar) {
-      if (name.startsWith('SAP_SESSIONID')) fingerprint.set(name, value);
+      // Non-empty only: an empty value names no session.
+      if (name.startsWith('SAP_SESSIONID') && value !== '') {
+        fingerprint.set(name, value);
+      }
     }
     return fingerprint;
+  }
+
+  /**
+   * Whether this wire holds a non-empty `SAP_SESSIONID_*` cookie it received —
+   * the one condition under which a logoff is sent.
+   *
+   * Read from the jar, never from `sessionEstablished()`, which a wire may
+   * answer otherwise (BASIS 7.40 says yes with no such cookie). The evidence,
+   * on E19 (ABAP code and measurement): `CL_HTTP_SERVER_NET->send_response`
+   * sets `SAP_SESSIONID_<SID>_<CLIENT>` only when that request created a
+   * security session (`m_security_session_created`), whatever the status — a
+   * 404 or 403 after logon carried it and the session was alive; and the ICF
+   * logoff ends a session only when that cookie is present. So a logoff
+   * without it ends nothing, and one with it is owed whatever the status that
+   * brought it.
+   */
+  protected holdsSessionCookie(): boolean {
+    return this.sessionFingerprint().size > 0;
   }
 
   /**

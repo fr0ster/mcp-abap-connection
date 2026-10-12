@@ -159,9 +159,11 @@ export class CloudHttpTransport
     // this session, not whichever one the wire is pinned to when it goes out.
     const affinity = this.affinityHeaders();
     const session = this.sessionHeaders();
-    if (!cookies) {
-      // No cookie to prove the session is ours — holding the cookie is the
-      // whole permission to end one.
+    if (!cookies || !this.holdsSessionCookie()) {
+      // The same rule as on-prem: a logoff only for a non-empty
+      // `SAP_SESSIONID_*` this wire received — here the security session the
+      // preflight created. Holding that cookie is the whole permission to end
+      // one, and without it the ICF logoff ends nothing.
       return;
     }
     if (!logoff) {

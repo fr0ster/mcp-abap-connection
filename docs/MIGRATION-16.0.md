@@ -72,9 +72,25 @@ signal, and it does not need SAP's answer.
         `CL_HTTP_SERVER_NET->if_http_server~logoff`) ends it only when that
         cookie is present: `terminate_security_session` deletes
         `SECURITY_CONTEXT`.
-      - The on-prem wire sends its logoff whenever the establishment left any
-        cookie. A logoff without `SAP_SESSIONID` ends nothing on SAP's side
-        (from the ABAP code).
+      - **The rule:** the logoff is sent if and only if the wire holds a
+        non-empty `SAP_SESSIONID_*` cookie it received, whatever the status
+        of the answer that brought it. This applies on-prem and on cloud.
+        - A 404 or 403 at logon carries the cookie, so it gets a logoff.
+        - A 401's debris cookie, or a 200 with only `sap-XSRF_*` (the session
+          limit), carries none, so nothing is sent. A logoff then would end
+          nothing (ABAP code).
+        - Until 16.0.0 the on-prem rule was "established and holding any
+          cookie". It was inverted in both cases above.
+      - **Deletions count.** A `Set-Cookie` with an expiry in the past, or
+        `Max-Age=0`, removes the cookie.
+        - SAP's logoff deletes every cookie with a one-character value and
+          `expires=Tue, 01-Jan-1980 00:00:01 GMT` (E19 wire trace,
+          2026-10-13).
+        - So a deleted `SAP_SESSIONID` is no session.
+      - **A 404 on `/sap/bc/adt/core/discovery` is not a failed `connect()`.**
+        The fallback to `/sap/bc/adt/discovery` runs in the same session, with
+        the same `SAP_SESSIONID`. No logoff is sent until `connect()` as a
+        whole fails.
     - **The ABAP (application) session.** This is where the stateful context
       and the ENQUEUE locks live; it is addressed by `sap-contextid`.
       - That the logoff ends it rests on two things. One is the comment on the

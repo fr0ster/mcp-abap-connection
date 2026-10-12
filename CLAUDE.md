@@ -153,7 +153,16 @@ fact belongs on the transport instead.
   live `SAP_SESSIONID`; ABAP code: `CL_HTTP_SERVER_NET->authentication`
   creates it before any handler, `send_response` sets the cookie whatever the
   status), and the ICF logoff ends it only when `SAP_SESSIONID` is present
-  (ABAP code) — so the on-prem wire's "any cookie" rule is harmless. The
+  (ABAP code). Hence the rule, on both wires (`HttpTransport.
+  holdsSessionCookie`, read from the jar, never from the overridable
+  `sessionEstablished()`): the logoff is sent iff the wire holds a non-empty
+  `SAP_SESSIONID_*` it received, whatever the status — a 404/403 at logon
+  gets one, a 401's debris or a 200 with only `sap-XSRF_*` gets none. The jar
+  drops a cookie whose `Set-Cookie` has a past `expires` or `Max-Age=0` (SAP's
+  logoff deletes with a one-character value and a 1980 expiry, E19 trace
+  2026-10-13). A core-discovery 404 is not a failed connect: the fallback
+  runs in the same session, and the goodbye goes only when connect() as a
+  whole fails. The
   **ABAP session** (`sap-contextid`, stateful context, ENQUEUE locks) ending
   with it rests on the kernel module `LocalSessionTermination`'s comment and
   the measured lock release; a failed stateful request leaving one rests only

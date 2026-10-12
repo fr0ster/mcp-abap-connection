@@ -62,9 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     whenever that flag is true, whatever the status. The ICF logoff
     (`CL_HTTP_EXT_LOGOFF` → `CL_HTTP_SERVER_NET->if_http_server~logoff`)
     ends it only when that cookie is present (`terminate_security_session`
-    deletes `SECURITY_CONTEXT`). The on-prem wire sends its logoff whenever
-    the establishment left any cookie; a logoff without `SAP_SESSIONID` ends
-    nothing on SAP's side (ABAP code), so that rule is harmless.
+    deletes `SECURITY_CONTEXT`). The logoff is sent if and only if the
+    wire holds a non-empty `SAP_SESSIONID_*` cookie it received, whatever the
+    status of the answer that brought it — on-prem and cloud alike (it was
+    "established and holding any cookie" on-prem, which sent nothing after a
+    404/403 at logon and sent a logoff that ended nothing after a 200 with only
+    `sap-XSRF_*`). A 401's debris cookie names no session and gets no logoff.
   - **ABAP (application) session** — where the stateful context and ENQUEUE
     locks live, addressed by `sap-contextid`. That the logoff ends it rests on
     the comment of the kernel module `LocalSessionTermination`, which
@@ -75,6 +78,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     leaves an ABAP session rests only on the `sap-contextid` cookie seen in
     the 404/403 answers; no ABAP code was read for it. A failed `connect()`
     takes no lock.
+- **The cookie jar honours deletions**: a `Set-Cookie` whose `expires` is past
+  or whose `Max-Age` is `0` removes the cookie, so a deleted `SAP_SESSIONID`
+  no longer counts as a session. SAP's logoff deletes every cookie with a
+  one-character value and `expires=Tue, 01-Jan-1980 00:00:01 GMT` (E19 wire
+  trace, 2026-10-13) — the value is not empty, the expiry is what deletes. An
+  empty `SAP_SESSIONID` value names no session either.
+- **A 404 on `/sap/bc/adt/core/discovery` is not a failed `connect()`**: the
+  fallback to `/sap/bc/adt/discovery` runs in the same session (the 404's
+  `SAP_SESSIONID` is kept and carried), and no logoff is sent then — one
+  would end the session the fallback needs. The goodbye goes only when
+  `connect()` as a whole fails, after the fallback.
 - **The logoff goes out on a connection of its own** (`agent: false` over plain
   HTTP; the wire's own TLS agent or a proxy's is kept), so "written" is not a
   write to a pooled socket the server already closed. It no longer follows a
