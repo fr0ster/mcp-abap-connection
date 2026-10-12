@@ -143,11 +143,11 @@ abstract class AbstractAbapConnection
    */
   private goodbye: Promise<void> = Promise.resolve();
   /**
-   * The last goodbye WRITTEN — what `disconnect()` resolves at. Kept here, not
-   * in the call, because a concurrent `disconnect()` joins the transition
-   * without running its callback and must wait for the same write.
+   * Whether `disconnect()` was called since the last `connect()`. A second
+   * call rejects: `disconnect()` is called once, and a caller that calls it
+   * twice is told so rather than handed a success that waited for nothing.
    */
-  private goodbyeWritten: Promise<void> = Promise.resolve();
+  private disconnectCalled = false;
 
   private inCriticalSection = false;
   /** Reference count for nested beginCriticalSection()/endCriticalSection() pairs. */
@@ -370,6 +370,8 @@ abstract class AbstractAbapConnection
     // against itself would let the connect publish a session the caller had
     // asked to stop. The baseline is "when the caller asked to connect".
     const baselineEpoch = this.lifecycle.teardownEpoch;
+    // A new connection life: its own disconnect() is owed once.
+    this.disconnectCalled = false;
     await this.lifecycle.transition('connect', async () => {
       if (this.lifecycle.connected) return;
 
@@ -437,6 +439,12 @@ abstract class AbstractAbapConnection
    * fails, and that failure is logged, not thrown. Finishing chains and
    * releasing locks stay the caller's to do BEFORE calling.
    *
+   * **Called once per `connect()`.** A second call — while the first is still
+   * writing, or after it — rejects with `ADT_SESSION_ERROR.NOT_CONNECTED`; the
+   * first call is unaffected. A goodbye a failed `connect()` sent is written
+   * before that `connect()` rejects, so a caller's `disconnect()` in its
+   * `finally` is the first of that life and has nothing of it to wait for.
+   *
    * **Requests already in flight are not waited for, and the logoff ends the
    * session they are running on** — so they will start failing against a
    * session that no longer exists. That is the caller having asked to
@@ -453,9 +461,21 @@ abstract class AbstractAbapConnection
    * answer.
    */
   async disconnect(): Promise<void> {
-    // Nothing here throws. This method's place is a `finally` — a connection
-    // that was connected must be disconnected — and an exception raised there
-    // replaces the error that sent the caller into it.
+    // Called once. A second call — while the first is writing its logoff, or
+    // after — rejects, in fixed words: it has nothing to end and nothing to
+    // wait for, and resolving would tell a caller about to exit that a logoff
+    // it never waited for has left. The first call is unaffected.
+    if (this.disconnectCalled) {
+      throw sessionError(
+        ADT_SESSION_ERROR.NOT_CONNECTED,
+        'disconnect() was already called for this connection; call it once per connect()',
+      );
+    }
+    this.disconnectCalled = true;
+    // Beyond that, nothing here throws. This method's place is a `finally` — a
+    // connection that was connected must be disconnected — and an exception
+    // raised there replaces the error that sent the caller into it.
+    let written: Promise<void> = Promise.resolve();
 
     // Synchronous, at the call: admission shuts and the generation moves before
     // anything is queued, so a caller who has asked to disconnect cannot have
@@ -476,15 +496,14 @@ abstract class AbstractAbapConnection
       // the transport already logs what went wrong.
       const goodbye = this.dispatchGoodbye(context);
       this.goodbye = goodbye.answered;
-      this.goodbyeWritten = goodbye.written;
+      written = goodbye.written;
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
     // The point this resolves at: the logoff written. Awaited after the
     // transition, so the transition queue — a later connect() — is not held
-    // by the write; and read from the connection, so a call that joined the
-    // transition waits for the same write.
-    await this.goodbyeWritten;
+    // by the write.
+    await written;
   }
 
   /**
@@ -689,7 +708,7 @@ abstract class AbstractAbapConnection
       // close() may reject — its context.authorize throws when the provider
       // refuses — and nobody awaits this one. A throw that escaped here would
       // replace the establishment error and skip the clearing below.
-      const goodbye = this.dispatchGoodbye(this.sessionContext()).answered;
+      const goodbye = this.dispatchGoodbye(this.sessionContext());
       this.invalidateSession();
       // And the identity with it. The rejecting response was still observed, so
       // its cookie was recorded as a session that had just been established —
@@ -697,10 +716,11 @@ abstract class AbstractAbapConnection
       // isConnected() says false. Two answers to one question is worse than
       // either.
       this.lifecycle.markDisconnected();
-      // Not awaited, for the same reason a teardown does not wait: the caller
-      // is owed the establishment error now, not after a round trip nobody is
-      // waiting on. Its rejection was absorbed above, so nothing goes unhandled.
-      void goodbye;
+      // The goodbye is the connector's own, so connect() rejects only once it
+      // is WRITTEN: a caller that exits on the error must not lose it. Its
+      // answer is not waited for, as a teardown does not wait for one; its
+      // failure was absorbed above, so nothing goes unhandled.
+      await goodbye.written;
       throw error;
     }
 
@@ -756,12 +776,13 @@ abstract class AbstractAbapConnection
       // preflight may have opened a session — on cloud it does — and this path
       // is about to drop the cookies that are the only permission to close it.
       // Refusing to connect must not leak the session the refusal is about.
-      // Dispatched, not awaited; a close that throws or rejects is logged and
-      // absorbed, never left unhandled.
-      void this.dispatchGoodbye(this.sessionContext()).answered;
+      // Written before connect() rejects, as above; its answer is not waited
+      // for, and a close that throws or rejects is logged and absorbed.
+      const goodbye = this.dispatchGoodbye(this.sessionContext());
       this.invalidateSession();
       this.lifecycle.forgetIdentity();
       this.lifecycle.markDisconnected();
+      await goodbye.written;
       throw sessionError(
         ADT_SESSION_ERROR.NOT_CONNECTED,
         `The server authenticated the request but opened no ABAP session: the ${this.transport.kind} wire reports it is on none, so there is nothing for a lock to be bound to. The wire itself is fine — the request was carried and answered — which is why this is not a transport failure and does not look like one. ` +

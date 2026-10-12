@@ -129,13 +129,15 @@ export function describeConnectorContract(
       ).rejects.toThrow(/ADT_NOT_CONNECTED/);
     });
 
-    it('settles a repeat disconnect(), with nothing left owed', async () => {
+    it('rejects a repeat disconnect(): it is called once per connect()', async () => {
       const conn = fixture.build();
       await conn.connect();
 
       await conn.disconnect();
 
-      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await expect(conn.disconnect()).rejects.toMatchObject({
+        code: 'ADT_NOT_CONNECTED',
+      });
     });
 
     it('settles disconnect() on a connection that never connected', async () => {

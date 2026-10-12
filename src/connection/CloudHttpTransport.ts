@@ -149,10 +149,11 @@ export class CloudHttpTransport
   ): Promise<void> {
     const logoff = this.logoff;
     this.logoff = null;
-    // Read SYNCHRONOUSLY, before the first await. A close is dispatched
-    // without being awaited, so the teardown's `forgetSession()` runs while
-    // this is suspended — and a goodbye assembled afterwards would carry no
-    // cookie, which is the one thing that proves the session is ours to end.
+    // Read SYNCHRONOUSLY, before the first await. The teardown's
+    // `forgetSession()` runs as soon as the close is dispatched — the
+    // connection waits for its write only after the transition — so a
+    // goodbye assembled after an await would carry no cookie, which is the
+    // one thing that proves the session is ours to end.
     const cookies = this.cookies();
     // Snapshotted for the same reason: the logoff must reach the server holding
     // this session, not whichever one the wire is pinned to when it goes out.

@@ -665,7 +665,7 @@ by address, which is an empty mechanism, not an absent lifecycle:
 
 ```typescript
 // ISessionLifecycleAware
-disconnect(): Promise<void>;         // never throws; resolves once the logoff is written
+disconnect(): Promise<void>;         // resolves once the logoff is written; call it once (a second call rejects)
 isConnected(): boolean;
 getSessionIdentity(): string | null; // WHICH SAP session; null is not "disconnected"
 ```

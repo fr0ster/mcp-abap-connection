@@ -35,6 +35,31 @@ signal, and it does not need SAP's answer.
   to the socket over HTTP, or the close call has returned over RFC. It still
   does not wait for SAP's answer, and it still never throws. Waiting for the
   answer remains the job of `flushGoodbye()`.
+  - **Call it once per `connect()`.** A second call rejects with
+    `ADT_SESSION_ERROR.NOT_CONNECTED` ("disconnect() was already called for
+    this connection; call it once per connect()"), whether it comes while the
+    first is still writing or after it has settled. Before 16.0 a repeat call
+    resolved, and one made while an earlier logoff was still unwritten
+    resolved before that logoff left. The first call is unaffected.
+  - **A failed `connect()` rejects only after its own goodbye is written.** It
+    says goodbye to what the server opened before refusing, for example a
+    cloud preflight's session, or a session that authenticated but opened no
+    ABAP session. A caller that exits on that error does not lose the
+    goodbye.
+  - **"Written" means handed to the operating system, not delivered.** Over
+    HTTP the logoff goes out on a connection of its own, never on a pooled
+    keep-alive socket the server may already have closed. Over HTTPS this holds
+    only while your `agentOptions` leave `keepAlive` off. Once the bytes are
+    with the operating system, a process that exits leaves the delivery to the
+    kernel.
+  - **Over RFC, the close waits for a call still running on its
+    conversation.** In `@mcp-abap-adt/sap-rfc-lite` (0.2.2), a call holds the
+    client's invocation mutex until it returns, and `close()` takes the same
+    mutex. So `disconnect()` over RFC resolves only after the running call has
+    finished. Over HTTP, the logoff leaves at once.
+  - **A redirect answering the logoff counts as an answer.** It is not
+    followed, because that would carry the session's cookie on to wherever the
+    server points, and it is not logged as a failure.
 - No timer bounds the write. A server that never accepts the bytes holds
   `disconnect()` open until the socket fails. That failure is logged, not
   thrown, and `disconnect()` then resolves.
@@ -43,6 +68,11 @@ signal, and it does not need SAP's answer.
   the close settling.
 
 ## What a consumer must do
+
+- **Call `disconnect()` once.** If more than one path in your code can end a
+  connection, such as a `finally` and a signal handler, let one of them own
+  the call, or catch the second call's rejection. A rejection means
+  `disconnect()` was already called; it is not a failure of the teardown.
 
 - **Drop `signal`** from the options passed to `makeAdtRequest`, and drop any
   check for `ADT_REQUEST_ERROR` or `'ADT_REQUEST_ABORTED'`. A request you no

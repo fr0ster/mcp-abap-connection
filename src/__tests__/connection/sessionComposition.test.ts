@@ -178,7 +178,7 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
   // Joining shares the answer, not just the execution. Building the report
   // outside the transition leaves every caller but the first reporting an empty
   // teardown — abandoned locks announced to nobody.
-  it('tears down once for concurrent disconnects', async () => {
+  it('tears down once; a concurrent second disconnect() is refused', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
@@ -192,11 +192,13 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
         realClear();
       };
 
-    await Promise.all([conn.disconnect(), conn.disconnect()]);
+    const first = conn.disconnect();
+    // disconnect() is called once; a second call is told so.
+    await expect(conn.disconnect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
+    await first;
 
-    // Callers of one kind join the tail, so the body runs once. There is no
-    // report to share any more — a teardown that waits for nothing has nothing
-    // to tell anyone.
     expect(cleared).toBe(1);
     expect(conn.isConnected()).toBe(false);
   });

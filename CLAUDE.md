@@ -138,7 +138,10 @@ fact belongs on the transport instead.
   option; over RFC, once the close call returned — never on SAP's answer,
   which SAP queues behind a request still running in the session.
   `IAdtTransport.close(context, written?)` reports it; a settled close is past
-  the write. `flushGoodbye()` is the wait for the answer. Tests:
+  the write. `flushGoodbye()` is the wait for the answer. `disconnect()` is
+  called once per `connect()`: a second call rejects `NOT_CONNECTED` (a
+  consumer that calls it twice is told, not engineered around); a failed
+  `connect()` rejects only after its own goodbye is written. Tests:
   `disconnectWritten` (a real stand-in server that holds its answer; a socket
   that never takes the bytes; RFC)
 

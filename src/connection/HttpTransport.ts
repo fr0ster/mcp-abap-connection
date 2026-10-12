@@ -761,6 +761,11 @@ export class HttpTransport implements IAdtTransport {
       await this.sendDetached(
         {
           method: 'GET',
+          // A redirect is an answer like any other: the logoff has arrived,
+          // and its answer is not read. Not followed — that would send the
+          // session's cookie on to wherever the server points — and not
+          // reported as a failure to say goodbye.
+          validateStatus: (status: number) => status >= 200 && status < 400,
           url,
           headers: {
             ...snapshot.affinity,
@@ -877,7 +882,20 @@ export class HttpTransport implements IAdtTransport {
                 options: RequestOptions,
                 onResponse: (response: IncomingMessage) => void,
               ) => {
-                const outgoing = this.logoffRequest(options, onResponse);
+                // A socket of its own: with no agent of the wire's (plain
+                // `http:` — the TLS material's agent and a proxy's are kept),
+                // node would take a pooled keep-alive socket, whose write can
+                // succeed after the server closed it, losing the logoff after
+                // `finish`. `agent: false` opens a fresh connection, and node
+                // sends `Connection: close` on it. Over `https:` the wire's
+                // own agent keeps no socket alive unless the caller's
+                // `agentOptions` say `keepAlive: true`.
+                const outgoing = this.logoffRequest(
+                  options.agent === undefined
+                    ? { ...options, agent: false }
+                    : options,
+                  onResponse,
+                );
                 outgoing.once('finish', written);
                 return outgoing;
               },

@@ -439,7 +439,7 @@ await connection.disconnect();   // the logoff has left
 await connection.flushGoodbye(); // only if you need SAP's answer too
 ```
 
-It never throws. **It resolves once the logoff is written** — its bytes handed
+It never throws, except on a second call (below). **It resolves once the logoff is written** — its bytes handed
 to the socket; over RFC, once the close call has returned — **not when SAP
 answers it**, and it does not wait for requests in flight or anything you hold.
 Deciding when to disconnect is yours, and so is preparing for it.
@@ -455,7 +455,16 @@ exit awaits `disconnect()`; one that needs the server's answer awaits
 
 Nothing bounds the write with a timer: a server that never takes the bytes
 holds `disconnect()` until the socket fails, and that failure is logged, not
-thrown.
+thrown. "Written" means handed to the operating system, on a connection of
+the logoff's own.
+
+**Call it once per `connect()`.** A second call, while the first is still
+writing or after it, rejects with `ADT_SESSION_ERROR.NOT_CONNECTED`; the
+first call is unaffected. A failed `connect()` rejects only after its own
+goodbye is written, so the `disconnect()` in your `finally` is the first one
+of that life. Over RFC the close waits for a call still running on its
+conversation (sap-rfc-lite serialises them), so there it resolves after that
+call.
 
 Requests already in flight run to completion untouched; nothing is aborted. What
 the connection guarantees is that their results can no longer reach it: a

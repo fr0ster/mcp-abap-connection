@@ -262,7 +262,6 @@ describe('the cloud logoff link', () => {
       response: { clear: jest.fn() },
     };
     (transport as any).instance = instance;
-    reportableLogoff(transport);
     const authorize = jest.fn();
 
     await transport.close({
@@ -386,7 +385,6 @@ describe('every session of a reconnect cycle is released', () => {
     };
     (conn as any).transport.instance = instance;
     reportableLogoff((conn as any).transport);
-    reportableLogoff((conn as any).transport);
   }
 
   /**
@@ -453,7 +451,7 @@ describe('every session of a reconnect cycle is released', () => {
    * this passes either way.
    */
 
-  it('does not re-send a release already on its way for the same session', async () => {
+  it('refuses a repeat disconnect() and does not re-send the release', async () => {
     const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     surviving(conn, seen, async (cfg) => {
@@ -472,9 +470,11 @@ describe('every session of a reconnect cycle is released', () => {
 
     await conn.connect();
     await conn.disconnect();
-    // Nothing reconnected, so there is no second session to close: the repeat
-    // joins the release already going rather than asking twice.
-    await conn.disconnect();
+    // Nothing reconnected, so there is no second session to close: the
+    // repeat is refused — disconnect() is called once — and asks nothing.
+    await expect(conn.disconnect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
     await settled();
 
     expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
@@ -621,8 +621,6 @@ describe('a session opened before a failed connect is not abandoned', () => {
       response: { clear: jest.fn() },
     };
     (conn as any).transport.instance = instance;
-    reportableLogoff((conn as any).transport);
-    reportableLogoff((conn as any).transport);
   }
 
   it('says goodbye to it when establishing fails afterwards', async () => {
@@ -684,8 +682,6 @@ describe('a session opened before a failed connect is not abandoned', () => {
       response: { clear: jest.fn() },
     };
     (conn as any).transport.instance = instance;
-    reportableLogoff((conn as any).transport);
-    reportableLogoff((conn as any).transport);
     // The debris: a cookie left behind by the response that rejected us. It
     // looks exactly like a session and is not one, which is why "there are
     // cookies" cannot be the test for whether to say goodbye.
@@ -798,19 +794,21 @@ describe('disconnect ends the server session', () => {
    * change exists to prevent, reintroduced by the parameter meant to bound it.
    */
 
-  it('sends nothing on a repeat call when the first logoff succeeded', async () => {
+  it('refuses a repeat call and sends nothing when the first logoff succeeded', async () => {
     const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen);
 
     await conn.connect();
     await conn.disconnect();
-    await conn.disconnect();
+    await expect(conn.disconnect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
 
     expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
   });
 
-  it('joins a release still in flight instead of opening a second', async () => {
+  it('refuses a repeat call while the release is still in flight, and opens no second', async () => {
     const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     let releaseLogoff: (() => void) | undefined;
@@ -833,7 +831,9 @@ describe('disconnect ends the server session', () => {
     await conn.connect();
     // Detaches while the logoff is still on its way.
     await conn.disconnect();
-    await conn.disconnect();
+    await expect(conn.disconnect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
 
     expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
     releaseLogoff?.();

@@ -32,6 +32,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server that never takes the bytes holds `disconnect()` until the socket
   fails, and that failure is logged, not thrown. The transition queue is not
   held by the write.
+- **`disconnect()` is called once per `connect()`.** A second call, made while
+  the first is still writing or after it, rejects with
+  `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed words. It used to resolve, and one
+  made in its own transition resolved before the first logoff had left. The
+  first call is unaffected.
+- **A failed `connect()` rejects only after its own goodbye is written** (the
+  goodbye it sends to a session the server opened before the refusal), so a
+  caller that exits on the error does not lose it.
+- **The logoff goes out on a connection of its own** (`agent: false` over plain
+  HTTP; the wire's own TLS agent or a proxy's is kept), so "written" is not a
+  write to a pooled socket the server already closed. It no longer follows a
+  redirect: a 3xx is its answer, not a failure to say goodbye.
+- **Over RFC the close waits for a running call**: sap-rfc-lite 0.2.2's
+  `close()` takes the invocation mutex a call holds until it returns.
 - **`IAdtTransport.close(context, written?)`**: a wire calls `written` once its
   goodbye has left; `disconnect()` resolves at the first of that and the close
   settling. A custom wire whose close stays pending after its goodbye has left
