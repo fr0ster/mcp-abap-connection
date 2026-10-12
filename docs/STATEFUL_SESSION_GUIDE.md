@@ -81,7 +81,7 @@ is what every stateless call cost with `sap-rfc-lite` 0.1.x (and with 0.2.0,
 whose npm package lacks the reset), and why 9.4.2 requires 0.2.1. Direct connector users must mark
 LOCK and UNLOCK stateful to retain their conversation. If disconnect occurs
 while a temporary conversation is logging on, it is closed without sending
-the request; reconnect does not revive that pending request.
+the request; a new connection does not revive that pending request.
 
 ## Enabling Stateful Sessions
 
@@ -187,21 +187,25 @@ before the provider is asked — so hold a lock inside `beginCriticalSection()` 
 the SAME session cookie (no `Set-Cookie`), the connection cannot tell it from a refused
 credential — the second 401 ends the request as `AuthRefusedError` with the refused-again
 verdict (`at: 'request'`), not `SESSION_REPLACED`, and the connection stays connected. Inside a
-critical section, treat that as a lost lock: `disconnect()`, `connect()`, and redo the work under
-a new lock.
+critical section, treat that as a lost lock: `disconnect()`, create a new connection, and redo the
+work under a new lock there.
 If the provider says no, or the retry is refused too, the caller gets an `AuthRefusedError` (the refused-again verdict is `refusal.kind === 'connection'`, `facts.problem === 'refused-after-renewal'`). A 403 is an authorization answer, not a credential one: it never goes to the
 provider. See [When the credential is refused](./USAGE.md#when-the-credential-is-refused).
 
-A reconnect is a NEW session, so do it outside a lock window rather than inside one.
+**One connection instance is one session.** After `disconnect()`, or a logoff the connection
+sent on its own, the instance is spent and `connect()` on it rejects `NOT_CONNECTED`. A new
+session is a new instance, created by the consumer (its own factory, or `createConnection`), and
+outside a lock window rather than inside one.
 
 **Wait for the goodbye before opening the next one.** `disconnect()` resolves once the logoff is
-written, not answered, so a reconnect otherwise opens the next session while the previous one's
-goodbye is still unanswered, and the server keeps both:
+written, not answered, so a new connection otherwise opens the next session while the previous
+one's goodbye is still unanswered, and the server keeps both:
 
 ```typescript
 await conn.disconnect();
 await conn.flushGoodbye();   // wait for the goodbye's answer; flushGoodbye(ms) bounds it
-await conn.connect();
+const next = createYourConnection(); // a new instance for the new session
+await next.connect();
 ```
 
 Measured on E19 through a harness that recycled the session after each test: a new ABAP session
@@ -238,7 +242,7 @@ The link to the ABAP session is not guaranteed, and that is the whole problem:
 Both are reported, neither is worked around. `connect()` fails with the reason
 when no session was opened; a session lost afterwards surfaces as
 `ADT_SESSION_REPLACED` rather than a request quietly continuing somewhere it
-does not belong. What to do about either — wait, retry, reconnect, release
+does not belong. What to do about either — wait, retry, create a new connection, release
 sessions the user still holds, carry on read-only — is the caller's decision,
 made with the cookies and the answers in hand.
 
@@ -340,7 +344,8 @@ you get by asking — `getSessionIdentity()` for which session you are in, and
 ## Troubleshooting
 
 - **CSRF token errors**: discard the session and establish a new one. That is
-  `disconnect()` followed by `connect()` — there is no local-only discard, because
+  `disconnect()`, then a NEW connection's `connect()` — one instance is one
+  session — and there is no local-only discard, because
   dropping the cookie leaves the ABAP session open on the server. Both live on
   the HTTP connection classes and are **not** on the `IAbapConnection` type
   a bare `IAbapConnection` carries — reach them through a connector type, or
@@ -352,7 +357,8 @@ import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
   const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
   await connection.disconnect(); // ends the session on the server, then clears
-  await connection.connect(); // a new session, explicitly
+  const next = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
+  await next.connect(); // a new session is a new instance
   ```
 - **Session expired**: reauthenticate to obtain a new session.
 - **Multiple connections**: each connector holds its own wire, and the wire holds the cookie jar; share the instance if you need continuity.

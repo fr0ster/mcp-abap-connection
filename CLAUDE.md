@@ -175,8 +175,14 @@ fact belongs on the transport instead.
   old lock unreachable), a first-issued or deleted one is not — and the
   connection then logs the security session off at once, before forgetting
   the cookies (`ownGoodbye`; the caller's `disconnect()` waits for its write,
-  `flushGoodbye()` for its answer, and a reconnect waits for its write before
-  establishing). The logoff never carries `sap-contextid`
+  `flushGoodbye()` for its answer). One instance is one SAP session: after
+  `disconnect()`, a `SESSION_REPLACED` logoff, or a failed `connect()` that
+  logged a received session off, the instance is `spent` and `connect()`
+  rejects `NOT_CONNECTED` ("create a new connection"); a failed connect that
+  sent nothing may be retried. Creating the new instance is the consumer's
+  (its factory, or `createConnection`). Tests needing a next session on one
+  instance lose it without a logoff (`helpers/session.loseSessionForTest`,
+  the dead-session / changed-`SAP_SESSIONID` path). The logoff never carries `sap-contextid`
   (`logoffCookies`): measured on E19 2026-10-13, a logoff without it ended
   the context and freed the lock, one with a stale one got 400. After an
   UNLOCK the stateful context lives on, lockless, until the logoff or a

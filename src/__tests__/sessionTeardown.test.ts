@@ -15,6 +15,7 @@ import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
 import { reportableLogoff, wroteIt } from './helpers/logoffWrite.js';
 import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
+import { loseSessionForTest } from './helpers/session.js';
 import { settled } from './helpers/settled.js';
 
 const baseConfig: SapConfig = {
@@ -393,7 +394,7 @@ describe('every session of a reconnect cycle is released', () => {
    * that "a release already on its way is the release still owed", left the
    * second session never released at all.
    */
-  it('sends a logoff for the second session while the first still hangs', async () => {
+  it('a reconnect on a disconnected instance is refused: its one logoff carries its own session', async () => {
     const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     // A server issues ONE session and keeps handing back the same id until it
@@ -420,16 +421,15 @@ describe('every session of a reconnect cycle is released', () => {
 
     await conn.connect();
     await conn.disconnect();
-    await conn.connect();
-    await conn.disconnect();
+    // One instance is one session: a second session is a new instance.
+    await expect(conn.connect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
     await settled();
 
     const logoffs = seen.filter((r) => r.url.includes('/logoff'));
-    expect(logoffs).toHaveLength(2);
-    // Each carried its own session, which is what proves they are two releases
-    // and not the same one sent twice.
+    expect(logoffs).toHaveLength(1);
     expect(logoffs[0].headers.Cookie).toContain('S1');
-    expect(logoffs[1].headers.Cookie).toContain('S2');
   });
 
   /**
@@ -563,7 +563,10 @@ describe('requests stay on the server the session lives on', () => {
     pinning(conn, seen, 'appserver-c5zhg');
 
     await conn.connect();
-    await conn.disconnect();
+    // Lost without a logoff (a dead session, a changed SAP_SESSIONID): the
+    // instance stays usable, and its next session must not inherit the old
+    // one's server.
+    await loseSessionForTest(conn);
     await settled();
     const before = seen.length;
     await conn.connect();

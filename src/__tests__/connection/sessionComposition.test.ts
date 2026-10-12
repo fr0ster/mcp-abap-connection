@@ -163,15 +163,19 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
     expect(conn.getSessionIdentity()).toBeNull();
   });
 
-  it('connects again after a disconnect, on a fresh session', async () => {
+  it('refuses to connect again after a disconnect; a new instance opens the next session', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     await conn.disconnect();
 
-    await conn.connect();
+    await expect(conn.connect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
+    expect(stub.sessions).toStrictEqual(['S1']);
 
-    expect(conn.isConnected()).toBe(true);
-    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S2');
+    const next = onPrem(configFor(stub.baseUrl), null);
+    await next.connect();
+    expect(next.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S2');
     expect(stub.sessions).toStrictEqual(['S1', 'S2']);
   });
 
@@ -416,8 +420,6 @@ describe('a teardown requested during establishment', () => {
   // already asked to close.
   it('does not publish a connect that finished after a disconnect was requested', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
-    await conn.connect();
-    await conn.disconnect();
 
     const { release, started } = stallEstablishment(conn);
     const connecting = conn.connect();

@@ -96,14 +96,15 @@ describe('a logoff still in flight when the next session opens', () => {
     await conn.connect();
     expect(conn.getSessionIdentity()).toContain('S1');
 
-    // Dispatched, not awaited — so the reconnect below overtakes it while the
-    // goodbye is still assembling.
+    // Dispatched — and since 16.0.0 a disconnected instance is spent: a
+    // reconnect cannot overtake the goodbye on the same instance at all.
     slow = true;
     await conn.disconnect();
 
     slow = false;
-    await conn.connect();
-    expect(conn.getSessionIdentity()).toContain('S2');
+    await expect(conn.connect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
 
     await w.logoffReached;
     await new Promise((r) => setTimeout(r, 60));

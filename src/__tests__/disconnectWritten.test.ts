@@ -330,15 +330,64 @@ describe('disconnect() resolves once the logoff is written', () => {
 
       await expect(conn.disconnect()).rejects.toMatchObject(NOT_CONNECTED);
     });
+  });
 
-    it('a connect() starts a new life: its disconnect() is owed once again', async () => {
+  describe('one instance is one session', () => {
+    const SPENT = {
+      code: 'ADT_NOT_CONNECTED',
+      message:
+        "This connection's SAP session has ended (it was disconnected or logged off); one connection instance is one session. Create a new connection for a new session.",
+    };
+
+    it('connect() after disconnect() is refused, and nothing is sent', async () => {
       server = await standIn();
       const conn = onPrem(configFor(server.baseUrl), null);
       await conn.connect();
+      const establishments = server.establishments();
       await conn.disconnect();
-      await conn.connect();
-      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await server.logoffArrived;
+
+      await expect(conn.connect()).rejects.toMatchObject(SPENT);
+      expect(server.establishments()).toBe(establishments);
+      expect(server.logoffs()).toBe(1);
       server.answerLogoff();
+    });
+
+    it('connect() after disconnect() on an instance that never connected is refused too', async () => {
+      server = await standIn();
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await conn.disconnect();
+      await expect(conn.connect()).rejects.toMatchObject(SPENT);
+      expect(server.establishments()).toBe(0);
+    });
+
+    it('connect() after a failed connect() that logged off is refused', async () => {
+      server = await standIn({ discoveryStatus: 404, fallbackStatus: 404 });
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await expect(conn.connect()).rejects.toBeDefined();
+      await server.logoffArrived;
+      const establishments = server.establishments();
+
+      await expect(conn.connect()).rejects.toMatchObject(SPENT);
+      expect(server.establishments()).toBe(establishments);
+      server.answerLogoff();
+    }, 30_000);
+
+    it('connect() after a failed connect() that sent no logoff (401) may be retried', async () => {
+      // A 401 creates no security session, so it carries no SAP_SESSIONID.
+      server = await standIn({
+        discoveryStatus: 401,
+        cookies: ['sap-XSRF_STUB_100=X1; Path=/'],
+      });
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await expect(conn.connect()).rejects.toBeDefined();
+      expect(server.logoffs()).toBe(0);
+      const establishments = server.establishments();
+
+      // Retried: it asks the server again rather than refusing.
+      await expect(conn.connect()).rejects.toBeDefined();
+      expect(server.establishments()).toBeGreaterThan(establishments);
+      await conn.disconnect();
     });
   });
 
@@ -744,49 +793,22 @@ describe('disconnect() resolves once the logoff is written', () => {
       return { conn, wire };
     }
 
-    it('a reconnect does not establish until the previous logoff is written', async () => {
+    it('connect() after SESSION_REPLACED is refused; the old logoff is still awaited by disconnect()', async () => {
       const { conn, wire } = await replacedWithHeldLogoff();
-      const before = server.establishments();
+      const establishments = server.establishments();
 
-      const reconnecting = conn.connect();
-      const reconnected = watched(reconnecting);
-      await turns(20);
-      expect(reconnected()).toBe(false);
-      expect(server.establishments()).toBe(before);
-
-      wire.fail();
-      await expect(reconnecting).resolves.toBeUndefined();
-      expect(server.establishments()).toBeGreaterThan(before);
-      // The wire's own logoff request again, for the new session's goodbye.
-      delete (conn.transport as unknown as { logoffRequest?: unknown })
-        .logoffRequest;
-      await conn.disconnect();
-      server.answerLogoff();
-    });
-
-    it('replacement, held logoff, a reconnect that fails, then disconnect(): nothing resolves before the logoff has left', async () => {
-      const { stubProvider } = await import('./helpers/stubProvider.js');
-      // Ready once, then refusing: the reconnect fails in prepare().
-      const provider = stubProvider({
-        prepare: [
-          { ok: true },
-          () => {
-            throw new Error('no credential this time');
-          },
-        ],
+      // Codex's sequences need a reconnect on this instance; there is none.
+      await expect(conn.connect()).rejects.toMatchObject({
+        code: 'ADT_NOT_CONNECTED',
       });
-      const { conn, wire } = await replacedWithHeldLogoff(provider);
+      expect(server.establishments()).toBe(establishments);
 
-      const reconnecting = conn.connect();
-      const reconnected = watched(reconnecting);
+      const disconnected = watched(conn.disconnect());
       await turns(20);
-      // Still waiting for the old logoff's write, not failed past it.
-      expect(reconnected()).toBe(false);
-
+      expect(disconnected()).toBe(false);
       wire.fail();
-      await expect(reconnecting).rejects.toBeDefined();
-      await expect(conn.disconnect()).resolves.toBeUndefined();
-      expect(server.logoffs()).toBe(0);
+      await turns(20, disconnected);
+      expect(disconnected()).toBe(true);
     });
 
     it("the caller's disconnect() resolves only once that logoff is written", async () => {

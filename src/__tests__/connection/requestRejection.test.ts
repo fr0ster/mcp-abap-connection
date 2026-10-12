@@ -25,6 +25,7 @@ import {
 } from '../../connection/authErrors.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { type SapStub, startSapStub } from '../helpers/sapStub.js';
+import { loseSessionForTest } from '../helpers/session.js';
 import { type StubScript, stubProvider } from '../helpers/stubProvider.js';
 
 /** connection's `provider-threw` (I3), whatever the moment. */
@@ -581,7 +582,7 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     // The new session's wire holds no token either, so a loop that went on
     // would fetch one for it.
@@ -620,7 +621,7 @@ describe('a request whose session is gone', () => {
 
     const request = get(conn).catch((e: unknown) => e);
     await asked;
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     release();
     const error = await request;
@@ -641,7 +642,7 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     const discoveries = stub.sentTo(DISCOVERY).length;
     release();
@@ -665,7 +666,7 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     const discoveries = stub.sentTo(DISCOVERY).length;
     release();
@@ -688,7 +689,7 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     transport.adoptCsrfToken(null);
     const discoveries = stub.sentTo(DISCOVERY).length;
@@ -711,7 +712,7 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     transport.adoptCsrfToken(null);
     const discoveries = stub.sentTo(DISCOVERY).length;
@@ -746,7 +747,7 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await inFlight;
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     release();
     const error = await request;
@@ -812,7 +813,7 @@ describe('an answer that arrives after its session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await fetch.inFlight;
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     const jar = transport.cookies();
     const token = transport.csrfToken();
@@ -840,7 +841,7 @@ describe('an answer that arrives after its session is gone', () => {
 
     const request = get(conn).catch((e: unknown) => e);
     await resend.inFlight;
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     resend.release();
     const error = await request;
@@ -877,7 +878,7 @@ describe('a stale request meets its credential', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     release();
     const error = await request;
@@ -911,7 +912,7 @@ describe('a stale request meets its credential', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     release();
     const error = await request;
@@ -972,7 +973,7 @@ describe("a provider's Oops that arrives after the session went away", () => {
 
     const request = send(conn).catch((e: unknown) => e);
     await asked;
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     release();
     const error = await request;

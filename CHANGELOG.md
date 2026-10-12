@@ -39,6 +39,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server that never takes the bytes holds `disconnect()` until the socket
   fails, and that failure is logged, not thrown. The transition queue is not
   held by the write.
+- **One connection instance is one SAP session.** After `disconnect()`, after
+  `SESSION_REPLACED` (which sends its own logoff), or after a failed
+  `connect()` that logged off a session it had received, the instance is
+  spent: `connect()` rejects with `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed
+  words, telling the caller to create a new connection. A failed `connect()`
+  that sent nothing (401, network, no session cookie) may be retried. Each
+  instance sends at most one logoff. A new session is a new instance, created
+  by the consumer (its own factory, or `createConnection`). Before 16.0.0 a
+  disconnected instance could `connect()` again.
 - **`flushGoodbye(timeoutMs?)` has no default bound.** Without an argument it
   waits for SAP's answer to the logoff as long as it takes, and creates no
   timer; the 5 s the library chose before is gone (no timeouts of the

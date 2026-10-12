@@ -14,6 +14,7 @@ import { createServer, type Server } from 'node:http';
 import type { SapConfig } from '../../config/sapConfig.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { onPrem } from '../helpers/onPrem.js';
+import { loseSessionForTest } from '../helpers/session.js';
 
 interface Stub {
   baseUrl: string;
@@ -137,7 +138,7 @@ describe('a request that settles after its session was replaced', () => {
       .catch((e) => e);
 
     await new Promise((r) => setTimeout(r, 10));
-    await conn.disconnect();
+    await loseSessionForTest(conn);
     await conn.connect();
     expect(stub.sessions).toStrictEqual(['S1', 'S2']);
 

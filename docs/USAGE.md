@@ -668,11 +668,25 @@ connection.setSessionType('stateless');
 
 There is no local-only reset. Discarding the cookie does not end the ABAP
 session — the server keeps it until its own timeout, and sessions are limited
-per user — so starting over means telling the server, then connecting again:
+per user — so starting over means telling the server, then connecting a NEW
+instance. One connection instance is one session: after `disconnect()` (or a
+logoff the connection sent on its own) `connect()` on it rejects
+`NOT_CONNECTED`. Creating the new instance is yours — your own factory, or
+`createConnection` — as mcp-abap-adt's server does with `createAbapConnection`
+per connection:
 
 ```typescript
 await connection.disconnect(); // ends the session on the server too
-await connection.connect(); // a new one, explicitly
+const next = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger,
+);
+await next.connect(); // a new session is a new instance
 ```
 
 A connection that was connected must be disconnected, which is why this belongs
@@ -1076,7 +1090,7 @@ with the same session cookie and no `Set-Cookie`: the 401 comes back a second
 time, and the request ends as `AuthRefusedError` with the refused-again verdict
 (`at: 'request'`), not `SESSION_REPLACED`. The connection stays connected on
 that session. If you get this inside a critical section, treat the lock as lost:
-`disconnect()`, `connect()`, and redo the work under a new lock. That is the
+`disconnect()`, create a new connection, and redo the work under a new lock there. That is the
 intended trade-off — a renewal must not discard a lock the session still holds.
 
 One credential retry per request: the upfront token fetch before a mutation and

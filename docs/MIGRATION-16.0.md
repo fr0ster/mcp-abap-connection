@@ -184,10 +184,19 @@ Measured on E19 with bare HTTP on 2026-10-13, unless marked otherwise.
   the old one with its locks. The caller's `disconnect()` that follows is the
   first of that life: it resolves once that logoff is written and sends
   nothing more, and `flushGoodbye()` waits for the logoff's answer.
-- **A reconnect after `SESSION_REPLACED` waits for the previous logoff to be
-  written.** `connect()` waits for the write, not the answer, before it
-  starts a new session. So a reconnect that fails cannot lose that logoff,
-  and neither can a process that exits after it.
+- **One connection instance is one SAP session.** Once a session has
+  ended, the instance is spent. That happens after `disconnect()`, after
+  `SESSION_REPLACED` (which sends its own logoff), and after a failed
+  `connect()` that logged off a session it had received.
+  - On a spent instance, `connect()` rejects with
+    `ADT_SESSION_ERROR.NOT_CONNECTED`: "This connection's SAP session has
+    ended (it was disconnected or logged off); one connection instance is one
+    session. Create a new connection for a new session."
+  - A failed `connect()` that sent no logoff (a 401, a network error, no
+    session cookie) leaves the instance usable, and `connect()` may be
+    retried on it.
+  - Each instance therefore sends at most one logoff, and nothing can
+    overtake it on the same instance.
 
 ## What a consumer must do
 
@@ -212,12 +221,19 @@ Measured on E19 with bare HTTP on 2026-10-13, unless marked otherwise.
   longer gives up after 5 s. If you need a bound, pass one yourself, for
   example `flushGoodbye(5000)`. With a budget it returns at that point
   without throwing, as before.
+- **A new session is a new instance, and creating it is yours.** Use your
+  own factory, or `createConnection`; mcp-abap-adt's server already calls its
+  `createAbapConnection` once per connection. Anywhere you called `connect()`
+  again on an instance after `disconnect()` or a `SESSION_REPLACED`, create a
+  new connection instead.
 - **Await `flushGoodbye()` as well if SAP's answer matters**, for example
-  before `connect()` again, so that the server never holds two sessions:
+  before a new connection connects, so that the server never holds two
+  sessions:
   ```typescript
   await connection.disconnect();
   await connection.flushGoodbye();
-  await connection.connect();
+  const next = createYourConnection();
+  await next.connect();
   ```
 - **A custom transport** (`IAdtTransport`) changes in two places.
   - It must implement `abapContext(): string | null`. This returns the ABAP
