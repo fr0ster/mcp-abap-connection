@@ -40,6 +40,7 @@ import {
   type IAdtTransportResponse,
   refusalOf,
 } from './IAdtTransport.js';
+import { requestAborted } from './requestAbort.js';
 import { isStatefulRequest, SESSION_TYPE_HEADER } from './statefulRequest.js';
 
 /** The cookie that names a stateful ABAP context. */
@@ -364,6 +365,10 @@ export class HttpTransport implements IAdtTransport {
           // Authorized per attempt: a provider may renew behind the call.
           const auth: Record<string, string> = {};
           await context.authorize(auth);
+          // The last point before the wire: the exchange's request was
+          // aborted in a turn since its authorize answered. Fatal to the
+          // exchange through `isFatal`, like the abort `authorize` raises.
+          if (context.signal?.aborted) throw requestAborted();
           const response = await this.send({
             method: 'GET',
             url,

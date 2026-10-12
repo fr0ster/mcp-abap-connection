@@ -172,6 +172,15 @@ Every ADT request issued through `makeAdtRequest` automatically:
 
 This logic is transparent to callers (Builders, handlers, CLI scripts).
 
+A request carrying a `signal` stops at the first of these steps that would send
+something after its caller aborted: the upfront token fetch, the send itself,
+the CSRF retry, the cookie retry of a GET and the provider's renewal below. Each
+wait in between — the provider's `authorize()` and `rejected()`, a logon, the
+token exchange, an RFC conversation's `open()` — ends for that caller at the
+abort, with `ADT_REQUEST_ABORTED`; the session's token and cookies are left as
+they are, for the requests still running on them. A request already on the wire
+is not recalled. See [USAGE.md — Cancelling a request](./USAGE.md#cancelling-a-request).
+
 A 401 that survives the wire's own CSRF recovery is put to the provider (`rejected`). On Ok the
 request is sent once more, always under the same lease and generation as the attempt it repeats,
 so stale-request fencing applies. After a rejection at `'request'` that resend goes out on the

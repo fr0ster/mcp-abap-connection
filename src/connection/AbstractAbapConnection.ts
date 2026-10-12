@@ -34,6 +34,11 @@ import {
   type IAdtTransportRequest,
   refusalOf,
 } from './IAdtTransport.js';
+import {
+  isRequestAborted,
+  throwIfAborted,
+  untilAborted,
+} from './requestAbort.js';
 
 /**
  * Declares the capabilities explicitly rather than satisfying them by accident.
@@ -999,8 +1004,13 @@ abstract class AbstractAbapConnection
       data,
       params,
       headers: customHeaders,
+      signal,
     } = options;
     const normalizedMethod = method.toUpperCase();
+
+    // Before the first send: a request its caller has already given up on
+    // asks the provider nothing and sends nothing.
+    throwIfAborted(signal);
 
     // The PATH, not an address. Which server it belongs in front of — or
     // whether it belongs in front of one at all — is the wire's to say.
@@ -1020,7 +1030,7 @@ abstract class AbstractAbapConnection
     // exchange itself does not stop the request — the CSRF recovery below
     // handles a token that is missing — but a refused credential does.
     if (mutation && !this.transport.csrfToken()) {
-      await this.readyWireUpfront(renewal, lease);
+      await this.readyWireUpfront(renewal, lease, signal);
     }
 
     // The request's own headers: everything but the credential's, which is
@@ -1120,7 +1130,7 @@ abstract class AbstractAbapConnection
       // the request's content negotiation outrank it (`authorizedFrom`).
       // A provider that answers after the session went away answers for a
       // request that no longer has one.
-      headers: await this.authorizedFrom(requestHeaders).catch(
+      headers: await this.authorizedFrom(requestHeaders, signal).catch(
         (error: unknown) => {
           throw this.staleOr(error, lease);
         },
@@ -1130,6 +1140,9 @@ abstract class AbstractAbapConnection
       // transports serialise a query differently and both need the pairs.
       params: params as Record<string, unknown> | undefined,
       stateful: this.sessionMode === 'stateful',
+      // For the waits the wire makes on this request's behalf — over RFC, the
+      // logon and the open of a conversation of its own.
+      ...(signal ? { signal } : {}),
     };
 
     if (data !== undefined) {
@@ -1157,6 +1170,8 @@ abstract class AbstractAbapConnection
 
       return response;
     } catch (error) {
+      // The wire ended one of its waits for this request: nothing to recover.
+      if (isRequestAborted(error)) throw error;
       let survived: unknown;
       try {
         return await this.recoverOnWire<T, D>(
@@ -1164,6 +1179,7 @@ abstract class AbstractAbapConnection
           requestConfig,
           requestHeaders,
           lease,
+          signal,
         );
       } catch (failure) {
         survived = failure;
@@ -1174,6 +1190,7 @@ abstract class AbstractAbapConnection
         requestHeaders,
         lease,
         renewal,
+        signal,
       );
     }
   }
@@ -1197,6 +1214,10 @@ abstract class AbstractAbapConnection
         'The session this request was admitted to is gone; nothing was sent',
       );
     }
+    // The last point before the wire, for the same reason: a raced wait that
+    // answered still leaves turns before this one, and an abort in any of
+    // them must stop the send. Covers the first send and every resend.
+    throwIfAborted(requestConfig.signal);
     const response = await this.transport.send(requestConfig);
     this.observeResponse(
       response.headers as Record<string, unknown>,
@@ -1223,9 +1244,12 @@ abstract class AbstractAbapConnection
    */
   private async authorizedFrom(
     base: Record<string, string>,
+    signal?: AbortSignal,
   ): Promise<Record<string, string>> {
     const headers = { ...base };
-    await this.credentialHeaders(headers);
+    // The provider's answer is waited for by this request alone: an abort
+    // ends the wait at once, and the provider runs on for whoever shares it.
+    await untilAborted(signal, this.credentialHeaders(headers));
     for (const name of OUTRANK_THE_CREDENTIAL) {
       const own = Object.keys(base).filter((key) => key.toLowerCase() === name);
       if (own.length === 0) continue;
@@ -1258,6 +1282,7 @@ abstract class AbstractAbapConnection
     requestConfig: IAdtTransportRequest,
     requestHeaders: Record<string, string>,
     lease: Pick<RequestLease, 'generation'>,
+    signal?: AbortSignal,
   ): Promise<IAdtWireResponse<T, D>> {
     const requestUrl = requestConfig.url;
     const normalizedMethod = requestConfig.method;
@@ -1365,6 +1390,11 @@ abstract class AbstractAbapConnection
         },
       );
 
+      // Before the CSRF recovery and its resend. The session's token and
+      // cookies are every caller's: an aborted request neither discards them
+      // nor earns new ones.
+      throwIfAborted(signal);
+
       if (isCachedTokenStale) {
         this.invalidateSession();
         delete requestHeaders.Cookie;
@@ -1373,7 +1403,10 @@ abstract class AbstractAbapConnection
 
       try {
         this.setCsrfToken(
-          await this.fetchCsrfToken(requestUrl, 5, 2000, lease),
+          await untilAborted(
+            signal,
+            this.fetchCsrfToken(requestUrl, 5, 2000, lease, signal),
+          ),
         );
         const refreshedToken = this.getCsrfToken();
         if (refreshedToken) {
@@ -1385,7 +1418,10 @@ abstract class AbstractAbapConnection
         }
 
         // Re-authorized: a provider may have renewed since the first attempt.
-        requestConfig.headers = await this.authorizedFrom(requestHeaders);
+        requestConfig.headers = await this.authorizedFrom(
+          requestHeaders,
+          signal,
+        );
         return await this.sendObserved<T, D>(requestConfig, lease);
       } catch (retryError) {
         // The session went away while the retry was out: nothing it met —
@@ -1417,6 +1453,8 @@ abstract class AbstractAbapConnection
     // on actually holding some, so a wire that issues no cookies — RFC —
     // never takes it.
     if (refusalOf(error)?.status === 401 && normalizedMethod === 'GET') {
+      // Before the resend, and before the token fetch that would earn it.
+      throwIfAborted(signal);
       // If we already have cookies from error response, retry immediately
       const afterError = this.transport.cookies();
       if (afterError) {
@@ -1426,7 +1464,10 @@ abstract class AbstractAbapConnection
         requestHeaders.Cookie = afterError;
 
         try {
-          requestConfig.headers = await this.authorizedFrom(requestHeaders);
+          requestConfig.headers = await this.authorizedFrom(
+            requestHeaders,
+            signal,
+          );
           return await this.sendObserved<T, D>(requestConfig, lease);
         } catch (resendError) {
           throw this.staleOr(resendError, lease);
@@ -1440,7 +1481,10 @@ abstract class AbstractAbapConnection
       try {
         // Try to get CSRF token (this will also get cookies)
         this.setCsrfToken(
-          await this.fetchCsrfToken(requestUrl, 3, 1000, lease),
+          await untilAborted(
+            signal,
+            this.fetchCsrfToken(requestUrl, 3, 1000, lease, signal),
+          ),
         );
         const afterCsrf = this.transport.cookies();
         if (afterCsrf) {
@@ -1449,7 +1493,10 @@ abstract class AbstractAbapConnection
             `Retrying GET request with cookies from CSRF fetch`,
           );
 
-          requestConfig.headers = await this.authorizedFrom(requestHeaders);
+          requestConfig.headers = await this.authorizedFrom(
+            requestHeaders,
+            signal,
+          );
           return await this.sendObserved<T, D>(requestConfig, lease);
         }
       } catch (csrfError) {
@@ -1491,6 +1538,7 @@ abstract class AbstractAbapConnection
     requestHeaders: Record<string, string>,
     lease: Pick<RequestLease, 'generation'>,
     renewal: CredentialRenewal,
+    signal?: AbortSignal,
   ): Promise<IAdtWireResponse<T, D>> {
     // A resend inside the wire's recovery that met a dead session.
     this.throwIfSessionDead(failure, lease);
@@ -1500,15 +1548,17 @@ abstract class AbstractAbapConnection
     if (!rejection) throw failure;
     if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(failure);
 
-    await this.renewCredential(rejection, renewal).catch((error: unknown) => {
-      throw this.staleOr(error, lease);
-    });
+    await this.renewCredential(rejection, renewal, signal).catch(
+      (error: unknown) => {
+        throw this.staleOr(error, lease);
+      },
+    );
     if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(failure);
 
     try {
       if (rejection.at === 'logon') {
         this.transport.adoptCsrfToken(null);
-        await this.ensureWireReady(lease);
+        await this.ensureWireReady(lease, signal);
         const token = this.transport.csrfToken();
         if (token && ['POST', 'PUT', 'DELETE'].includes(requestConfig.method)) {
           requestHeaders['x-csrf-token'] = token;
@@ -1516,7 +1566,7 @@ abstract class AbstractAbapConnection
         const cookies = this.transport.cookies();
         if (cookies) requestHeaders.Cookie = cookies;
       }
-      requestConfig.headers = await this.authorizedFrom(requestHeaders);
+      requestConfig.headers = await this.authorizedFrom(requestHeaders, signal);
       return await this.sendObserved<T, D>(requestConfig, lease);
     } catch (again) {
       // A verdict about the session outranks everything: it is already the
@@ -1577,7 +1627,8 @@ abstract class AbstractAbapConnection
    * NOT_CONNECTED, because it is about a session the request no longer holds.
    */
   private staleVerdict(error: unknown): unknown {
-    if (this.isSessionVerdict(error)) return error;
+    // The caller's abort is its own answer, whichever session is current.
+    if (this.isSessionVerdict(error) || isRequestAborted(error)) return error;
     return sessionError(
       ADT_SESSION_ERROR.NOT_CONNECTED,
       'The session this request was admitted to is gone',
@@ -1603,6 +1654,8 @@ abstract class AbstractAbapConnection
   private async renewCredential(
     rejection: IAuthRejection,
     renewal: CredentialRenewal,
+    /** The request's; `connect()` has none. */
+    signal?: AbortSignal,
   ): Promise<void> {
     if (renewal.spent) {
       throw new AuthRefusedError(
@@ -1611,8 +1664,15 @@ abstract class AbstractAbapConnection
         rejection.error,
       );
     }
+    // Before rejected(): an aborted request asks the provider nothing.
+    throwIfAborted(signal);
     renewal.spent = true;
-    const answer = await this.credentialRejected(rejection);
+    // After it: the renewal is the provider's, shared with whoever else was
+    // refused; this request stops waiting for it at its abort.
+    const answer = await untilAborted(
+      signal,
+      this.credentialRejected(rejection),
+    );
     if (!answer.outcome.ok) {
       throw new AuthRefusedError(
         answer.outcome.refusal,
@@ -1647,6 +1707,7 @@ abstract class AbstractAbapConnection
   private outranksOriginal(retryError: unknown): boolean {
     return (
       this.isSessionVerdict(retryError) ||
+      isRequestAborted(retryError) ||
       retryError instanceof AuthRefusedError ||
       this.credentialRejection(retryError) !== null
     );
@@ -1663,12 +1724,15 @@ abstract class AbstractAbapConnection
   private async readyWireUpfront(
     renewal: CredentialRenewal,
     lease: Pick<RequestLease, 'generation'>,
+    signal?: AbortSignal,
   ): Promise<void> {
     for (;;) {
       try {
-        await this.ensureWireReady(lease);
+        await this.ensureWireReady(lease, signal);
         return;
       } catch (error) {
+        // The caller's abort is not a failed exchange to shrug off.
+        if (isRequestAborted(error)) throw error;
         // The session the request was admitted to is gone: nothing more of it
         // is sent, the provider is not asked, and what the caller gets is the
         // session verdict — never the wire's error, nor the provider's, about
@@ -1682,7 +1746,7 @@ abstract class AbstractAbapConnection
           return;
         }
         const rejection = this.credentialRejection(error) as IAuthRejection;
-        await this.renewCredential(rejection, renewal).catch(
+        await this.renewCredential(rejection, renewal, signal).catch(
           (refused: unknown) => {
             throw this.staleOr(refused, lease);
           },
@@ -1719,6 +1783,11 @@ abstract class AbstractAbapConnection
      * Omitted during connect(), which has no lease.
      */
     fence?: number | Pick<RequestLease, 'generation'>,
+    /**
+     * The request's signal: the exchange's own attempts stop once it aborts.
+     * Omitted during connect(), whose exchange is nobody's single request.
+     */
+    signal?: AbortSignal,
   ): Promise<string> {
     // Dropped first, because this is only ever reached to REPLACE one: the
     // establishment is idempotent and would hand back the very token the
@@ -1726,12 +1795,13 @@ abstract class AbstractAbapConnection
     this.transport.adoptCsrfToken(null);
     await this.transport.establish({
       ...(typeof fence === 'number'
-        ? this.leasedContext(undefined, fence)
-        : this.leasedContext(fence)),
+        ? this.leasedContext(undefined, fence, signal)
+        : this.leasedContext(fence, fence?.generation, signal)),
       retries: retryCount,
       retryDelayMs: retryDelay,
       timeoutMs: getTimeout('csrf'),
       isFatal: (error) => this.endsTheExchange(error),
+      ...(signal ? { signal } : {}),
     });
 
     const token = this.transport.csrfToken();
@@ -1783,11 +1853,19 @@ abstract class AbstractAbapConnection
   private async ensureWireReady(
     /** The request's lease: fences what is sent and the response effects. */
     lease: Pick<RequestLease, 'generation'>,
+    /** The request's signal: its wait ends at the abort, the exchange runs on. */
+    signal?: AbortSignal,
   ): Promise<void> {
-    await this.transport.establish({
-      ...this.leasedContext(lease),
-      isFatal: (error) => this.endsTheExchange(error),
-    });
+    // Raced: an exchange already sent is not recalled, and what it earns is
+    // the wire's, for every caller — but this request stops waiting for it.
+    await untilAborted(
+      signal,
+      this.transport.establish({
+        ...this.leasedContext(lease, lease.generation, signal),
+        isFatal: (error) => this.endsTheExchange(error),
+        ...(signal ? { signal } : {}),
+      }),
+    );
   }
 
   /**
@@ -1809,11 +1887,17 @@ abstract class AbstractAbapConnection
   private leasedContext(
     lease?: Pick<RequestLease, 'generation'>,
     generation: number | undefined = lease?.generation,
+    /**
+     * The request's signal. Each attempt of the exchange is authorized
+     * raced against it, so an exchange whose request was aborted sends
+     * nothing more: the abort ends the exchange (`endsTheExchange`).
+     */
+    signal?: AbortSignal,
   ): IAdtSessionContext {
     return {
       baseUrl: this.baseUrl,
       authorize: async (headers) => {
-        await this.credentialHeaders(headers);
+        await untilAborted(signal, this.credentialHeaders(headers));
         if (lease && !this.lifecycle.isCurrent(lease)) {
           throw sessionError(
             ADT_SESSION_ERROR.NOT_CONNECTED,
@@ -1821,7 +1905,9 @@ abstract class AbstractAbapConnection
           );
         }
       },
-      logon: (target) => this.logon(target),
+      // A wire that logs on inside a request's own exchange: the logon is
+      // the request's wait like any other, and the exchange stops with it.
+      logon: (target) => untilAborted(signal, this.logon(target)),
       extraHeaders: { 'sap-adt-connection-id': this.sessionId ?? '' },
       // An answer that arrives after the lease went stale belongs to a session
       // that is gone. Refused with the session verdict, which every wire hands
@@ -1841,11 +1927,15 @@ abstract class AbstractAbapConnection
 
   /**
    * What stops a token exchange at once, past its retries: a session verdict,
-   * or the provider's refusal to authorize it — asking again would only ask
-   * the provider again.
+   * the provider's refusal to authorize it — asking again would only ask
+   * the provider again — or the abort of the request it was made for.
    */
   protected endsTheExchange(error: unknown): boolean {
-    return this.isSessionVerdict(error) || error instanceof AuthRefusedError;
+    return (
+      this.isSessionVerdict(error) ||
+      isRequestAborted(error) ||
+      error instanceof AuthRefusedError
+    );
   }
 
   /**

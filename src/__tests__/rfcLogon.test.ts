@@ -340,3 +340,21 @@ describe('through a connector', () => {
     expect(rejections()).toHaveLength(0);
   });
 });
+
+describe('an open() that throws instead of rejecting', () => {
+  it('is a refused logon, like one that rejects', async () => {
+    const transport = new RfcTransport(
+      () =>
+        ({
+          alive: false,
+          open: () => {
+            throw new Error('the SDK threw at once');
+          },
+          close: async () => {},
+          call: async () => ({}),
+        }) as never,
+      null,
+    );
+    await expect(transport.open()).rejects.toBeInstanceOf(WireLogonError);
+  });
+});
