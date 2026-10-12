@@ -441,9 +441,10 @@ abstract class AbstractAbapConnection
    *
    * **Called once per `connect()`.** A second call — while the first is still
    * writing, or after it — rejects with `ADT_SESSION_ERROR.NOT_CONNECTED`; the
-   * first call is unaffected. A goodbye a failed `connect()` sent is written
-   * before that `connect()` rejects, so a caller's `disconnect()` in its
-   * `finally` is the first of that life and has nothing of it to wait for.
+   * first call is unaffected. A goodbye a failed `connect()` dispatched — in
+   * practice the cloud preflight's session — is written before that
+   * `connect()` rejects, so a caller's `disconnect()` in its `finally` is the
+   * first of that life and has nothing of it to wait for.
    *
    * **Requests already in flight are not waited for, and the logoff ends the
    * session they are running on** — so they will start failing against a
@@ -717,9 +718,13 @@ abstract class AbstractAbapConnection
       // either.
       this.lifecycle.markDisconnected();
       // The goodbye is the connector's own, so connect() rejects only once it
-      // is WRITTEN: a caller that exits on the error must not lose it. Its
-      // answer is not waited for, as a teardown does not wait for one; its
-      // failure was absorbed above, so nothing goes unhandled.
+      // is WRITTEN: a caller that exits on the error must not lose it. When
+      // the wire dispatches none (nothing to end), this resolves at once.
+      // The case that sends one is the cloud preflight's session (measured on
+      // a BTP trial); an establishment failing after a successful preflight
+      // is a code path, not observed on a live system. The answer is not
+      // waited for, as a teardown does not wait for one; its failure was
+      // absorbed above, so nothing goes unhandled.
       await goodbye.written;
       throw error;
     }
@@ -776,8 +781,12 @@ abstract class AbstractAbapConnection
       // preflight may have opened a session — on cloud it does — and this path
       // is about to drop the cookies that are the only permission to close it.
       // Refusing to connect must not leak the session the refusal is about.
-      // Written before connect() rejects, as above; its answer is not waited
-      // for, and a close that throws or rejects is logged and absorbed.
+      // Written before connect() rejects, as above, when the wire sends one:
+      // on-prem only if the establishment left a cookie in the jar (E19 left
+      // `sap-XSRF_*` when it opened no session — measured; what the logoff
+      // ends then is not), on cloud when the preflight opened a session. Its
+      // answer is not waited for, and a close that throws or rejects is
+      // logged and absorbed.
       const goodbye = this.dispatchGoodbye(this.sessionContext());
       this.invalidateSession();
       this.lifecycle.forgetIdentity();

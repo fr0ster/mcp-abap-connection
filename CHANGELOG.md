@@ -37,9 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed words. It used to resolve, and one
   made in its own transition resolved before the first logoff had left. The
   first call is unaffected.
-- **A failed `connect()` rejects only after its own goodbye is written** (the
-  goodbye it sends to a session the server opened before the refusal), so a
-  caller that exits on the error does not lose it.
+- **A failed `connect()` rejects only after its own goodbye is written, when
+  it dispatched one**, so a caller that exits on the error does not lose it.
+  In practice that is the cloud wire: its preflight opens a security session
+  (measured on a BTP trial, 2026-10-12), and an establishment that fails after
+  it says goodbye to that session. A failure after a successful preflight is
+  a code path, not observed on a live system. On-prem, a connect refused for
+  opening no ABAP session (E19 answered with `sap-XSRF_*` instead of
+  `SAP_SESSIONID`, measured) sends the logoff only when the establishment left
+  a cookie in the jar: the wire's rule is "established and holding a cookie",
+  not "holding `SAP_SESSIONID`". What that logoff ends on SAP's side is not
+  measured.
 - **The logoff goes out on a connection of its own** (`agent: false` over plain
   HTTP; the wire's own TLS agent or a proxy's is kept), so "written" is not a
   write to a pooled socket the server already closed. It no longer follows a

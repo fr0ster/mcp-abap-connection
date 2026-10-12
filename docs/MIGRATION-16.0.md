@@ -41,11 +41,21 @@ signal, and it does not need SAP's answer.
     first is still writing or after it has settled. Before 16.0 a repeat call
     resolved, and one made while an earlier logoff was still unwritten
     resolved before that logoff left. The first call is unaffected.
-  - **A failed `connect()` rejects only after its own goodbye is written.** It
-    says goodbye to what the server opened before refusing, for example a
-    cloud preflight's session, or a session that authenticated but opened no
-    ABAP session. A caller that exits on that error does not lose the
+  - **A failed `connect()` rejects only after its own goodbye is written, when
+    it dispatched one.** A caller that exits on that error does not lose the
     goodbye.
+    - In practice this is the cloud wire. Its preflight opens a security
+      session (measured on a BTP trial, 2026-10-12), and an establishment that
+      fails afterwards says goodbye to that session. A failure after a
+      successful preflight is a code path; it has not been observed on a live
+      system.
+    - On-prem, a `connect()` refused because SAP opened no ABAP session
+      (measured on E19: it answered with `sap-XSRF_*` instead of
+      `SAP_SESSIONID`) sends a logoff only if the establishment left a cookie
+      in the jar. The wire's rule is "established and holding any cookie",
+      not "holding `SAP_SESSIONID`". What that logoff ends on SAP's side has
+      not been measured.
+    - When no goodbye is dispatched, `connect()` rejects at once, as before.
   - **"Written" means handed to the operating system, not delivered.** Over
     HTTP the logoff goes out on a connection of its own, never on a pooled
     keep-alive socket the server may already have closed. Over HTTPS this holds

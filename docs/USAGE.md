@@ -460,9 +460,11 @@ the logoff's own.
 
 **Call it once per `connect()`.** A second call, while the first is still
 writing or after it, rejects with `ADT_SESSION_ERROR.NOT_CONNECTED`; the
-first call is unaffected. A failed `connect()` rejects only after its own
-goodbye is written, so the `disconnect()` in your `finally` is the first one
-of that life. Over RFC the close waits for a call still running on its
+first call is unaffected. A failed `connect()` that dispatched a goodbye — in
+practice the cloud preflight's security session (measured on a BTP trial); a
+failure after a successful preflight is a code path, not observed live —
+rejects only after that goodbye is written. Either way the `disconnect()` in
+your `finally` is the first one of that life. Over RFC the close waits for a call still running on its
 conversation (sap-rfc-lite serialises them), so there it resolves after that
 call.
 

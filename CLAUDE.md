@@ -141,7 +141,11 @@ fact belongs on the transport instead.
   the write. `flushGoodbye()` is the wait for the answer. `disconnect()` is
   called once per `connect()`: a second call rejects `NOT_CONNECTED` (a
   consumer that calls it twice is told, not engineered around); a failed
-  `connect()` rejects only after its own goodbye is written. Tests:
+  `connect()` that dispatched a goodbye rejects only after it is written — in
+  practice the cloud preflight's session (measured, BTP trial); the failure
+  after a successful preflight is a code path, not observed live; on-prem the
+  wire sends one only when the establishment left a cookie (any, `sap-XSRF_*`
+  included). Tests:
   `disconnectWritten` (a real stand-in server that holds its answer; a socket
   that never takes the bytes; RFC)
 
