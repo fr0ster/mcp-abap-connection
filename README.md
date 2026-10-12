@@ -160,6 +160,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 15.0.0](./docs/MIGRATION-15.0.md)** - on `@mcp-abap-adt/interfaces-adt-connection` 2: `makeAdtRequest`'s answer is `unknown` unless its type is named; nothing changes at run time
 - 🚚 **[Migration to 14.0.0](./docs/MIGRATION-14.0.md)** - the `sap-abap-auth` CLI is removed, with its `open` and `commander` dependencies; use `@mcp-abap-adt/auth-broker-cli`; the library's API is unchanged
 - 🚚 **[Migration to 13.0.0](./docs/MIGRATION-13.0.md)** - interfaces-auth 7 and auth-errors 2, and the providers from auth-providers 6.0.0; no behaviour change, one interfaces-auth major per process
 - 🚚 **[Migration to 12.0.0](./docs/MIGRATION-12.0.md)** - refusals follow the auth error contract (interfaces-auth 6, auth-errors): `AuthRefusedError.refusal` is an `IAuthProviderError` — read its `kind`; a custom `ILogonTarget` mints its refusal; no auth-providers release fits 12.x — take 13.0.0 with auth-providers 6.0.0
@@ -639,12 +640,15 @@ type SapConfig = {
 Main interface for ABAP connections.
 
 ```typescript
-import { AbapRequestOptions } from '@mcp-abap-adt/connection';
-import type { AxiosResponse } from 'axios';
+import type { AbapRequestOptions } from '@mcp-abap-adt/connection';
+import type { IAdtWireResponse } from '@mcp-abap-adt/interfaces-adt-connection';
 // The shared contract (IAbapConnection), what every connection provides:
 interface AbapConnection {
   connect(): Promise<void>; // REQUIRED before any request; rejects on failure
-  makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
+  // An answer whose type is not named is `unknown` (interfaces-adt-connection 2).
+  makeAdtRequest<T = unknown, D = unknown>(
+    options: AbapRequestOptions,
+  ): Promise<IAdtWireResponse<T, D>>;
   getBaseUrl(): Promise<string>;
   setSessionType(type: "stateless" | "stateful"): void; // Switch session type
   getSessionId(): string | null; // Client-side conversation id

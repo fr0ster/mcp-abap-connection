@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [15.0.0] - 2026-10-12
+
+### Breaking
+- **On `@mcp-abap-adt/interfaces-adt-connection` 2.0.0** (was `^1.0.0`).
+  `makeAdtRequest` mirrors the contract's `IAbapConnection.makeAdtRequest`,
+  whose defaults 2.0.0 made `unknown`: `makeAdtRequest<T = unknown, D =
+  unknown>`. An answer whose type is not named is `unknown`, so reading a field
+  off it no longer compiles until the type is named or checked. Nothing changes
+  at run time. 14.x declared the contract's 1.x while it was at 2.0.0, so a
+  consumer on 2.x installed two copies; 15.0 holds one. See
+  [MIGRATION-15.0.md](./docs/MIGRATION-15.0.md).
+
+### Changed
+- README and USAGE: the contract's `makeAdtRequest` is shown as it is
+  (`IAdtWireResponse<T, D>` with `unknown` defaults), not as an
+  `AxiosResponse`; the GET example names its XML body's type.
+
 ## [14.1.0] - 2026-10-12
 
 ### Fixed
@@ -2373,7 +2390,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.1.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.0...HEAD
+[15.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.1.0...v15.0.0
 [14.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.1...v14.1.0
 [14.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.0...v14.0.1
 [14.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v13.0.0...v14.0.0
