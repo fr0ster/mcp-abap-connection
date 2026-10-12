@@ -445,13 +445,17 @@ answers it**, and it does not wait for requests in flight or anything you hold.
 Deciding when to disconnect is yours, and so is preparing for it.
 
 Why the write and not the answer (measured on E19, 2026-10-12): with a long
-request still running in the same stateful session, SAP queues the logoff
+request still running in the same stateful ABAP session, SAP queues the logoff
 behind it and answers only afterwards — about 96 s in one run, nothing in six
-minutes in another — yet once the logoff has arrived the session's locks go
+minutes in another — yet once the logoff has arrived the ENQUEUE locks go
 with it, even if the client is killed while the answer is pending. A
-connection dropped *without* a logoff keeps its locks. So a process about to
-exit awaits `disconnect()`; one that needs the server's answer awaits
-`flushGoodbye()` as well.
+connection dropped *without* a logoff keeps its locks. Checked against 16.0.0
+on E19 on 2026-10-13: LOCK, a long where-used in the same stateful session,
+`await disconnect()`, and the process exiting at once — the lock was still
+held 1 s later and free ~70 s after the exit, long before the 30-minute idle
+timeout: ICM ran the queued logoff after the connection had closed. So a
+process about to exit awaits `disconnect()`; one that needs the server's
+answer awaits `flushGoodbye()` as well.
 
 Nothing bounds the write with a timer: a server that never takes the bytes
 holds `disconnect()` until the socket fails, and that failure is logged, not
@@ -462,12 +466,16 @@ the logoff's own.
 writing or after it, rejects with `ADT_SESSION_ERROR.NOT_CONNECTED`; the
 first call is unaffected. A failed `connect()` that dispatched a goodbye
 rejects only after that goodbye is written. A connect that fails after
-authentication leaves a live session on cloud and on-prem alike: the cloud
+authentication leaves a live **HTTP security session** (ICF, cookie
+`SAP_SESSIONID_<SID>_<CLIENT>`) on cloud and on-prem alike: the cloud
 preflight opens one (BTP trial, 2026-10-12), and on E19 an authenticated
-request answered 404 or 403 still set a live `SAP_SESSIONID` (2026-10-13;
-`CL_HTTP_SERVER_NET` creates the security session at logon, before any
-handler). The ICF logoff ends it only when that cookie is present. Either way the `disconnect()` in
-your `finally` is the first one of that life. Over RFC the close waits for a call still running on its
+request answered 404 or 403 still set a live `SAP_SESSIONID` (measured
+2026-10-13; `CL_HTTP_SERVER_NET->authentication` creates the security session
+at logon, before any handler). The ICF logoff ends it only when that cookie is
+present (ABAP code). That a failed stateful request also leaves an **ABAP
+session** (`sap-contextid`) rests only on that cookie in the 404/403 answers;
+a failed `connect()` takes no lock. Either way the `disconnect()` in your
+`finally` is the first one of that life. Over RFC the close waits for a call still running on its
 conversation (sap-rfc-lite serialises them), so there it resolves after that
 call.
 
@@ -481,8 +489,13 @@ turned out to be unbounded — a request whose caller chose no timeout could hol
 teardown open forever, and since lifecycle transitions are serialized, every
 later `connect()` queued behind it.
 
-**The logoff releases the session, and its locks with it** — once it has
-arrived, whether or not you wait for the answer. Still unlock what you locked
+**The logoff releases the locks** — once it has arrived, whether or not you
+wait for the answer. It ends the HTTP security session (ABAP code: the ICF
+logoff deletes `SECURITY_CONTEXT`), and with it the ABAP sessions where the
+stateful context and the ENQUEUE locks live — that part rests on the kernel
+module `LocalSessionTermination`'s comment ("terminates all taskhandler
+(application) sessions associated with the security context") and on the
+measured release of the lock. Still unlock what you locked
 first: the logoff is the backstop, not the way to finish your work.
 
 ### Uninterruptible spans

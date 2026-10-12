@@ -132,23 +132,33 @@ fact belongs on the transport instead.
   deadline is the caller's choice and is honoured only by the HTTP wire — RFC
   is a synchronous call with nothing to cancel. There is no per-request
   signal (15.1.0 had one; 16.0.0 removed it): ABAP neither cancels nor rolls
-  back, and the logoff is what releases a session's locks
+  back, and the logoff is what releases the ENQUEUE locks
 - `disconnect()` resolves once the logoff is WRITTEN — the node request's
   `finish`, seen through `HttpTransport.logoffRequest` and axios's `transport`
   option; over RFC, once the close call returned — never on SAP's answer,
-  which SAP queues behind a request still running in the session.
+  which SAP queues behind a request still running in the stateful ABAP
+  session. Live check on E19 (2026-10-13, this build): LOCK + a long
+  where-used, `await disconnect()`, exit at once — lock held 1 s later, free
+  ~70 s after the exit: ICM ran the queued logoff after the connection
+  closed.
   `IAdtTransport.close(context, written?)` reports it; a settled close is past
   the write. `flushGoodbye()` is the wait for the answer. `disconnect()` is
   called once per `connect()`: a second call rejects `NOT_CONNECTED` (a
   consumer that calls it twice is told, not engineered around); a failed
-  `connect()` that dispatched a goodbye rejects only after it is written. A
-  connect failing after authentication leaves a live session on both wires
-  (cloud preflight: BTP trial 2026-10-12; on-prem: E19 2026-10-13, an
-  authenticated 404/403 still set a live `SAP_SESSIONID` —
-  `CL_HTTP_SERVER_NET->authentication` creates it before any handler, and
-  `send_response` sets the cookie whatever the status). The ICF logoff ends a
-  session only when `SAP_SESSIONID` is present; the on-prem wire sends one
-  whenever any cookie is in the jar, which is harmless. Tests:
+  `connect()` that dispatched a goodbye rejects only after it is written.
+  Name the session: the **HTTP security session** (ICF, `SECURITY_CONTEXT`,
+  `SAP_SESSIONID_<SID>_<CLIENT>`) is what a connect failing after
+  authentication leaves alive on both wires (cloud preflight: BTP trial
+  2026-10-12; on-prem: E19 2026-10-13, an authenticated 404/403 still set a
+  live `SAP_SESSIONID`; ABAP code: `CL_HTTP_SERVER_NET->authentication`
+  creates it before any handler, `send_response` sets the cookie whatever the
+  status), and the ICF logoff ends it only when `SAP_SESSIONID` is present
+  (ABAP code) — so the on-prem wire's "any cookie" rule is harmless. The
+  **ABAP session** (`sap-contextid`, stateful context, ENQUEUE locks) ending
+  with it rests on the kernel module `LocalSessionTermination`'s comment and
+  the measured lock release; a failed stateful request leaving one rests only
+  on the `sap-contextid` cookie seen. A failed `connect()` takes no lock.
+  Tests:
   `disconnectWritten` (a real stand-in server that holds its answer; a socket
   that never takes the bytes; RFC)
 

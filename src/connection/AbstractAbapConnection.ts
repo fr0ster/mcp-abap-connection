@@ -428,10 +428,12 @@ abstract class AbstractAbapConnection
    * **Resolves once the logoff is WRITTEN, not answered.** The logoff's bytes
    * handed to the socket (over RFC: the close call returned) is the point a
    * caller needs: SAP queues a logoff behind a request still running in the
-   * same stateful session and answers it only after — ~96 s in one
-   * measurement, never in another — yet once it has arrived the session's
-   * locks go with it, even if the client is killed while waiting for the
-   * answer (measured on E19, 2026-10-12). A connection dropped WITHOUT a
+   * same stateful ABAP session and answers it only after — ~96 s in one
+   * measurement, never in another — yet once it has arrived the ENQUEUE locks
+   * go with it, even if the client is killed while waiting for the answer
+   * (measured on E19, 2026-10-12; checked against 16.0.0 on 2026-10-13 with
+   * the process exiting right after this resolved: the lock was free ~70 s
+   * later, long before the idle timeout). A connection dropped WITHOUT a
    * logoff keeps its locks. So a caller about to exit awaits this, and one
    * that needs the answer awaits `flushGoodbye()` as well. The answer itself
    * is not waited for here, and nothing bounds the write with a timer of its
@@ -441,8 +443,9 @@ abstract class AbstractAbapConnection
    *
    * **Called once per `connect()`.** A second call — while the first is still
    * writing, or after it — rejects with `ADT_SESSION_ERROR.NOT_CONNECTED`; the
-   * first call is unaffected. A goodbye a failed `connect()` dispatched — in
-   * practice the cloud preflight's session — is written before that
+   * first call is unaffected. A goodbye a failed `connect()` dispatched — to
+   * the HTTP security session a connect failing after authentication leaves
+   * alive — is written before that
    * `connect()` rejects, so a caller's `disconnect()` in its `finally` is the
    * first of that life and has nothing of it to wait for.
    *
@@ -720,12 +723,13 @@ abstract class AbstractAbapConnection
       // The goodbye is the connector's own, so connect() rejects only once it
       // is WRITTEN: a caller that exits on the error must not lose it. When
       // the wire dispatches none (nothing to end), this resolves at once.
-      // A failure after authentication leaves a live session on both wires:
-      // the cloud preflight opens one (BTP trial, 2026-10-12), and on-prem an
-      // authenticated error answer still sets a live SAP_SESSIONID (E19,
-      // 2026-10-13: 404 and 403 each did; CL_HTTP_SERVER_NET->authentication
-      // creates the security session before any handler runs, and
-      // send_response sets the cookie whatever the status). The answer is not
+      // A failure after authentication leaves a live HTTP security session
+      // (ICF, SAP_SESSIONID) on both wires: the cloud preflight opens one
+      // (BTP trial, 2026-10-12), and on-prem an authenticated error answer
+      // still sets a live SAP_SESSIONID (measured on E19, 2026-10-13: 404 and
+      // 403 each did; ABAP code: CL_HTTP_SERVER_NET->authentication creates
+      // it before any handler runs, send_response sets the cookie whatever
+      // the status). A failed connect() takes no ENQUEUE lock. The answer is not
       // waited for, as a teardown does not wait for one; its failure was
       // absorbed above, so nothing goes unhandled.
       await goodbye.written;
@@ -786,11 +790,11 @@ abstract class AbstractAbapConnection
       // Refusing to connect must not leak the session the refusal is about.
       // Written before connect() rejects, as above, when the wire sends one:
       // on-prem whenever the establishment left any cookie, on cloud when the
-      // preflight opened a session. Without SAP_SESSIONID the logoff ends
-      // nothing on SAP's side — CL_HTTP_SERVER_NET->if_http_server~logoff
-      // terminates the security session only when that cookie is present
-      // (E19's ABAP code) — so a goodbye carrying `sap-XSRF_*` alone is
-      // harmless. Its answer is not waited for, and a close that throws or
+      // preflight opened an HTTP security session. Without SAP_SESSIONID the
+      // logoff ends nothing on SAP's side — CL_HTTP_SERVER_NET->
+      // if_http_server~logoff terminates the security session only when that
+      // cookie is present (E19's ABAP code) — so a goodbye carrying
+      // `sap-XSRF_*` alone is harmless. Its answer is not waited for, and a close that throws or
       // rejects is logged and absorbed.
       const goodbye = this.dispatchGoodbye(this.sessionContext());
       this.invalidateSession();

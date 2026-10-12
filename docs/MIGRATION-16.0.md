@@ -11,13 +11,21 @@ Both follow from what was measured on an on-premise system (BASIS 816, E19,
 - ABAP neither cancels a request that has reached it nor rolls back across
   requests, and a connection is never shared between threads. A signal could
   therefore only stop what had not been sent yet, which protects nothing.
-- A session closed with a logoff releases its locks. Suppose a long request is
-  still running in the same stateful session. SAP queues the logoff behind it
+- A logoff releases the ENQUEUE locks. Suppose a long request is still
+  running in the same stateful ABAP session. SAP queues the logoff behind it
   and answers only afterwards: about 96 s through the connector, and no answer
   in six minutes when sent raw from a second thread. Yet once the logoff has
   arrived, the lock is gone, even when the client was killed with the answer
   still pending.
 - A connection dropped without a logoff keeps its locks.
+- Checked against the 16.0.0 build on E19 on 2026-10-13:
+  - The sequence was a LOCK, then a long where-used in the same stateful
+    session, then `await disconnect()`, then the process exiting at once.
+    `disconnect()` had resolved with the logoff written, and the logoff
+    carried `sap-cancel-on-close: true`.
+  - The lock was still held 1 s later, and free about 70 s after the exit,
+    long before the 30-minute idle timeout.
+  - So ICM ran the queued logoff after the client's connection had closed.
 
 So what a consumer needs at its end is the logoff, sent. It does not need a
 signal, and it does not need SAP's answer.
@@ -44,27 +52,41 @@ signal, and it does not need SAP's answer.
   - **A failed `connect()` rejects only after its own goodbye is written, when
     it dispatched one.** A caller that exits on that error does not lose the
     goodbye.
-    - A `connect()` that fails after authentication leaves a live session, on
-      cloud and on-prem alike, which is why the connector says goodbye to it.
-      - Cloud: the preflight opens a security session (measured on a BTP
-        trial, 2026-10-12).
+    - Two sessions are involved, and what each claim rests on differs.
+    - **The HTTP security session.** This is the ICF session, held in
+      `SECURITY_CONTEXT` and named by the cookie
+      `SAP_SESSIONID_<SID>_<CLIENT>`. A `connect()` that fails after
+      authentication leaves one alive, on cloud and on-prem alike, which is
+      why the connector says goodbye to it.
+      - Cloud: the preflight opens one (measured on a BTP trial, 2026-10-12).
       - On-prem, measured on E19 (BASIS 816, 2026-10-13): authenticated
         requests that SAP answered with an error each set
         `SAP_SESSIONID_E19_100`. These were a 404 for an unknown ADT
         resource, a 404 for an unknown class and a 403 for `DELETE` on
-        discovery. That cookie alone then got 200 on discovery, so the
-        session was alive.
+        discovery. That cookie alone then got 200 on discovery.
       - In E19's ABAP code, `CL_HTTP_SERVER_NET` method `authentication`
-        creates the security session on a successful logon, before any
-        handler runs. `send_response` then sets the
-        `SAP_SESSIONID_<SYSID>_<CLIENT>` cookie whenever a session was
-        created, whatever the status.
-    - The ICF logoff (`CL_HTTP_EXT_LOGOFF`) ends the session only when that
-      cookie is present. It reaches `CL_HTTP_SERVER_NET->if_http_server~logoff`
-      → `terminate_security_session`, which ends every application session of
-      the context through the same kernel path as the inactivity timeout. The
-      on-prem wire sends its logoff whenever the establishment left any
-      cookie, so a logoff without `SAP_SESSIONID` ends nothing on SAP's side.
+        creates it on a successful logon, before any handler runs.
+        `send_response` sets the cookie whenever a session was created,
+        whatever the status.
+      - The ICF logoff (`CL_HTTP_EXT_LOGOFF` →
+        `CL_HTTP_SERVER_NET->if_http_server~logoff`) ends it only when that
+        cookie is present: `terminate_security_session` deletes
+        `SECURITY_CONTEXT`.
+      - The on-prem wire sends its logoff whenever the establishment left any
+        cookie. A logoff without `SAP_SESSIONID` ends nothing on SAP's side
+        (from the ABAP code).
+    - **The ABAP (application) session.** This is where the stateful context
+      and the ENQUEUE locks live; it is addressed by `sap-contextid`.
+      - That the logoff ends it rests on two things. One is the comment on the
+        kernel module `LocalSessionTermination`, which
+        `terminate_security_session` calls: "terminates all taskhandler
+        (application) sessions associated with the security context" (in
+        `CL_HTTP_SECURITY_SESSION`; the inactivity timeout uses the same
+        path). The other is the measurement that the lock is released.
+      - That a failed stateful request leaves an ABAP session rests only on the
+        `sap-contextid` cookie seen in the 404/403 answers. No ABAP code was
+        read for it.
+      - A failed `connect()` takes no lock.
     - When no goodbye is dispatched, `connect()` rejects at once, as before.
   - **"Written" means handed to the operating system, not delivered.** Over
     HTTP the logoff goes out on a connection of its own, never on a pooled

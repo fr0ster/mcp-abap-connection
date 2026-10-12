@@ -163,8 +163,9 @@ export interface IAdtTransport {
    * — its bytes handed to the socket, not answered — and the returned promise
    * settles when the close is over, answer included. `disconnect()` resolves
    * at the first: SAP queues a logoff behind a request still running in the
-   * same session and answers it only after, yet the session's locks go with
-   * it once it arrives (measured on E19, 2026-10-12), so a caller about to
+   * same stateful ABAP session and answers it only after, yet the ENQUEUE
+   * locks go once it arrives (measured on E19, 2026-10-12 and 2026-10-13), so
+   * a caller about to
    * exit needs it sent, not answered. A wire that sends nothing, or whose
    * close is over at once (RFC: when the close call has returned), need not
    * call it: a settled close is past the write.

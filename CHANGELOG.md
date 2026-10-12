@@ -18,16 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the transport seam. Measured on E19 (BASIS 816, 2026-10-12): ABAP
   neither cancels a request that reached it nor rolls back across requests,
   a connection is never shared between threads, and a logoff releases the
-  session's locks — so the signal protected nothing. Requests behave as in
-  15.0.1.
+  locks — it ends the HTTP security session and with it the ABAP sessions
+  that hold them (see below) — so the signal protected nothing. Requests
+  behave as in 15.0.1.
 - **`disconnect()` resolves once the logoff is WRITTEN** — its bytes handed to
   the socket (the node request's `finish`); over RFC, once the close call has
   returned — not when SAP answers, and not at once as before. With a long
-  request running in the same stateful session SAP queues the logoff behind
-  it (answered ~96 s later through the connector; no answer in six minutes
-  raw from a second thread), and the lock is gone afterwards even when the
-  client was killed with the answer pending; a connection dropped without a
-  logoff keeps its locks. So a caller about to exit awaits `disconnect()`;
+  request running in the same stateful ABAP session SAP queues the logoff
+  behind it (answered ~96 s later through the connector; no answer in six
+  minutes raw from a second thread), and the ENQUEUE lock is gone afterwards
+  even when the client was killed with the answer pending; a connection
+  dropped without a logoff keeps its locks (E19, 2026-10-12). Checked against
+  this build on E19 on 2026-10-13: LOCK, then a long where-used in the same
+  stateful session, `await disconnect()` (the logoff written, carrying
+  `sap-cancel-on-close: true`) and the process exiting at once — the lock was
+  still held 1 s later and free ~70 s after the exit, long before the 30-min
+  idle timeout: ICM ran the queued logoff after the client's connection had
+  closed. So a caller about to exit awaits `disconnect()`;
   `flushGoodbye()` still waits for the answer. No timer bounds the write: a
   server that never takes the bytes holds `disconnect()` until the socket
   fails, and that failure is logged, not thrown. The transition queue is not
@@ -39,30 +46,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first call is unaffected.
 - **A failed `connect()` rejects only after its own goodbye is written, when
   it dispatched one**, so a caller that exits on the error does not lose it.
-  A `connect()` that fails AFTER authentication leaves a live session, on
-  cloud and on-prem alike, so the connector's own goodbye is required:
-  - Cloud: the preflight opens a security session (measured on a BTP trial,
-    2026-10-12).
-  - On-prem, measured on E19 (BASIS 816, 2026-10-13): authenticated requests
-    answered with an error (404 for an unknown ADT resource, 404 for an
-    unknown class, 403 for DELETE on discovery) each set
-    `SAP_SESSIONID_E19_100`, and that cookie alone then got 200 on
-    discovery: the session was alive.
-  - On-prem, in the ABAP code on E19: `CL_HTTP_SERVER_NET` method
-    `authentication` creates the security session on a successful logon
-    (`set_core_authenticate`, `m_security_session_created = abap_true`)
-    before any handler runs, and `send_response` sets the
-    `SAP_SESSIONID_<SYSID>_<CLIENT>` cookie whenever that flag is true,
-    whatever the status.
-
-  The ICF logoff (`CL_HTTP_EXT_LOGOFF` → `CL_HTTP_SERVER_NET->
-  if_http_server~logoff`) ends the security session only when that cookie is
-  present: `terminate_security_session` deletes `SECURITY_CONTEXT` and calls
-  the kernel's `LocalSessionTermination`, which ends every application
-  session of the context (the inactivity timeout's path). The on-prem wire
-  sends its logoff whenever the establishment left any cookie in the jar. A
-  logoff without `SAP_SESSIONID` therefore ends nothing on SAP's side, and
-  that rule is harmless.
+  Two sessions are involved, and what each claim rests on differs:
+  - **HTTP security session** (ICF; `SECURITY_CONTEXT`; cookie
+    `SAP_SESSIONID_<SID>_<CLIENT>`). A `connect()` that fails AFTER
+    authentication leaves one alive, on cloud and on-prem alike, so the
+    connector's own goodbye is required. Cloud: the preflight opens one
+    (measured on a BTP trial, 2026-10-12). On-prem, measured on E19
+    (BASIS 816, 2026-10-13): authenticated requests answered with an error
+    (404 for an unknown ADT resource, 404 for an unknown class, 403 for
+    DELETE on discovery) each set `SAP_SESSIONID_E19_100`, and that cookie
+    alone then got 200 on discovery. ABAP code on E19:
+    `CL_HTTP_SERVER_NET` method `authentication` creates it on a successful
+    logon (`set_core_authenticate`, `m_security_session_created =
+    abap_true`) before any handler runs, and `send_response` sets the cookie
+    whenever that flag is true, whatever the status. The ICF logoff
+    (`CL_HTTP_EXT_LOGOFF` → `CL_HTTP_SERVER_NET->if_http_server~logoff`)
+    ends it only when that cookie is present (`terminate_security_session`
+    deletes `SECURITY_CONTEXT`). The on-prem wire sends its logoff whenever
+    the establishment left any cookie; a logoff without `SAP_SESSIONID` ends
+    nothing on SAP's side (ABAP code), so that rule is harmless.
+  - **ABAP (application) session** — where the stateful context and ENQUEUE
+    locks live, addressed by `sap-contextid`. That the logoff ends it rests on
+    the comment of the kernel module `LocalSessionTermination`, which
+    `terminate_security_session` calls (in `CL_HTTP_SECURITY_SESSION`:
+    "terminates all taskhandler (application) sessions associated with the
+    security context" — the inactivity timeout's path), and on the
+    measurement that the lock is released. That a failed stateful request
+    leaves an ABAP session rests only on the `sap-contextid` cookie seen in
+    the 404/403 answers; no ABAP code was read for it. A failed `connect()`
+    takes no lock.
 - **The logoff goes out on a connection of its own** (`agent: false` over plain
   HTTP; the wire's own TLS agent or a proxy's is kept), so "written" is not a
   write to a pooled socket the server already closed. It no longer follows a
@@ -77,7 +89,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Docs: USAGE's "disconnect() resolves once the logoff is written" (it was
   "waits for nothing", and claimed an HTTP disconnect releases no locks — the
-  logoff releases them), README, STATEFUL_SESSION_GUIDE, CLAUDE.md.
+  logoff releases them, see above), README, STATEFUL_SESSION_GUIDE,
+  CLAUDE.md.
 - Tests: "nothing is left unhandled" is proven under plain node
   (`src/__tests__/helpers/plainNode`), where the real process reports it —
   Jest's sandboxed `process` never does; `dispatchedGoodbye` runs there.
