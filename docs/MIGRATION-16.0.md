@@ -184,6 +184,10 @@ Measured on E19 with bare HTTP on 2026-10-13, unless marked otherwise.
   the old one with its locks. The caller's `disconnect()` that follows is the
   first of that life: it resolves once that logoff is written and sends
   nothing more, and `flushGoodbye()` waits for the logoff's answer.
+- **A reconnect after `SESSION_REPLACED` waits for the previous logoff to be
+  written.** `connect()` waits for the write, not the answer, before it
+  starts a new session. So a reconnect that fails cannot lose that logoff,
+  and neither can a process that exits after it.
 
 ## What a consumer must do
 

@@ -45,6 +45,8 @@ interface StandIn {
   logoffArrived: Promise<IncomingMessage>;
   /** How many logoff requests reached the server. */
   logoffs: () => number;
+  /** How many establishing (discovery) requests reached the server. */
+  establishments: () => number;
   /** The `Cookie` header of each request to the fallback discovery. */
   fallbackCookies: () => string[];
   /** The socket the establishment came on. */
@@ -90,6 +92,7 @@ async function standIn(
       ? ['SAP_SESSIONID_STUB_100=S1; Path=/']
       : ['sap-XSRF_STUB_100=X1; Path=/']);
   let logoffs = 0;
+  let establishments = 0;
   const fallbackCookies: string[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? '';
@@ -119,6 +122,7 @@ async function standIn(
       return;
     }
     establishment = req.socket;
+    establishments += 1;
     const fallback = !url.includes('/core/');
     if (fallback) fallbackCookies.push(String(req.headers.cookie ?? ''));
     const status =
@@ -147,6 +151,7 @@ async function standIn(
     baseUrl: `http://127.0.0.1:${address.port}`,
     logoffArrived,
     logoffs: () => logoffs,
+    establishments: () => establishments,
     fallbackCookies: () => fallbackCookies,
     establishedOn: () => establishment,
     answerLogoff: () => {
@@ -695,6 +700,93 @@ describe('disconnect() resolves once the logoff is written', () => {
       server.answerLogoff();
       await conn.flushGoodbye(60_000);
       conn.endCriticalSection();
+    });
+
+    /** Connected, in a lock window, the context replaced; the logoff's bytes held. */
+    async function replacedWithHeldLogoff(provider?: unknown) {
+      server = await standIn({
+        routes: {
+          '/sap/bc/adt/lock': ['sap-contextid=A; path=/sap/bc/adt'],
+          '/sap/bc/adt/write': ['sap-contextid=B; path=/sap/bc/adt'],
+        },
+      });
+      const { AdtOnPremConnector } = await import(
+        '../connection/AdtOnPremConnector.js'
+      );
+      const { BasicAuthProvider } = await import(
+        '@mcp-abap-adt/auth-providers'
+      );
+      const conn = new AdtOnPremConnector(
+        configFor(server.baseUrl),
+        (provider ?? new BasicAuthProvider('u', 'p')) as never,
+        onPremHttpTransport(configFor(server.baseUrl)),
+        null,
+      );
+      await conn.connect();
+      const wire = bytesNeverTaken(conn.transport);
+      conn.beginCriticalSection();
+      conn.setSessionType('stateful');
+      await conn.makeAdtRequest({
+        url: '/sap/bc/adt/lock',
+        method: 'POST',
+        timeout: 5000,
+      });
+      await expect(
+        conn.makeAdtRequest({
+          url: '/sap/bc/adt/write',
+          method: 'PUT',
+          data: 'x',
+          timeout: 5000,
+        }),
+      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+      conn.endCriticalSection();
+      conn.setSessionType('stateless');
+      return { conn, wire };
+    }
+
+    it('a reconnect does not establish until the previous logoff is written', async () => {
+      const { conn, wire } = await replacedWithHeldLogoff();
+      const before = server.establishments();
+
+      const reconnecting = conn.connect();
+      const reconnected = watched(reconnecting);
+      await turns(20);
+      expect(reconnected()).toBe(false);
+      expect(server.establishments()).toBe(before);
+
+      wire.fail();
+      await expect(reconnecting).resolves.toBeUndefined();
+      expect(server.establishments()).toBeGreaterThan(before);
+      // The wire's own logoff request again, for the new session's goodbye.
+      delete (conn.transport as unknown as { logoffRequest?: unknown })
+        .logoffRequest;
+      await conn.disconnect();
+      server.answerLogoff();
+    });
+
+    it('replacement, held logoff, a reconnect that fails, then disconnect(): nothing resolves before the logoff has left', async () => {
+      const { stubProvider } = await import('./helpers/stubProvider.js');
+      // Ready once, then refusing: the reconnect fails in prepare().
+      const provider = stubProvider({
+        prepare: [
+          { ok: true },
+          () => {
+            throw new Error('no credential this time');
+          },
+        ],
+      });
+      const { conn, wire } = await replacedWithHeldLogoff(provider);
+
+      const reconnecting = conn.connect();
+      const reconnected = watched(reconnecting);
+      await turns(20);
+      // Still waiting for the old logoff's write, not failed past it.
+      expect(reconnected()).toBe(false);
+
+      wire.fail();
+      await expect(reconnecting).rejects.toBeDefined();
+      await expect(conn.disconnect()).resolves.toBeUndefined();
+      expect(server.logoffs()).toBe(0);
     });
 
     it("the caller's disconnect() resolves only once that logoff is written", async () => {

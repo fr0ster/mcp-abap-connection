@@ -379,9 +379,17 @@ abstract class AbstractAbapConnection
     // against itself would let the connect publish a session the caller had
     // asked to stop. The baseline is "when the caller asked to connect".
     const baselineEpoch = this.lifecycle.teardownEpoch;
+    // A goodbye the connection sent on its own (a replaced ABAP session) and
+    // not yet WRITTEN is the previous session's last word: no new session
+    // starts before it has left — not its answer, its write — so a reconnect
+    // that then fails cannot lose it, and a caller that exits after it does
+    // not either. Awaited after the baseline is taken: a disconnect() asked
+    // for meanwhile still abandons this connect.
+    const outstanding = this.ownGoodbye;
+    if (outstanding) await outstanding.written;
     // A new connection life: its own disconnect() is owed once.
     this.disconnectCalled = false;
-    this.ownGoodbye = null;
+    if (this.ownGoodbye === outstanding) this.ownGoodbye = null;
     await this.lifecycle.transition('connect', async () => {
       if (this.lifecycle.connected) return;
 

@@ -137,7 +137,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the security session, the old one with its locks (measured above). The
   caller's `disconnect()` that follows is its first of that life: it resolves
   once that logoff is written and sends nothing more; `flushGoodbye()` waits
-  for its answer.
+  for its answer. A reconnect after it waits for that logoff to be WRITTEN
+  before it starts a new session, so a reconnect that fails cannot lose it.
 - **`IAdtTransport.abapContext()`** (required): the ABAP session the wire
   addresses — over HTTP the `sap-contextid` cookie — or `null`; RFC answers
   `null` (its conversation is the session).

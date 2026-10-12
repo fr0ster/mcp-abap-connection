@@ -538,7 +538,8 @@ What was measured on E19 with bare HTTP (2026-10-13):
 - On a replacement inside a lock window, the connection logs the security
   session off at once, ending the old context and its locks too.
   `disconnect()` then resolves once that logoff is written, sending nothing
-  more, and `flushGoodbye()` waits for its answer.
+  more, and `flushGoodbye()` waits for its answer. A `connect()` after it
+  waits for that logoff's write before starting a new session.
 
 ### Uninterruptible spans
 
