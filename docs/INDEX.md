@@ -15,6 +15,7 @@ mcp-abap-connection/
 │   ├── INSTALLATION.md             # Setup and installation guide
 │   ├── USAGE.md                    # API documentation and examples
 │   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── MIGRATION-15.0.md           # interfaces-adt-connection 2: makeAdtRequest answers unknown
 │   ├── MIGRATION-14.0.md           # the sap-abap-auth CLI, open and commander are removed
 │   ├── MIGRATION-13.0.md           # interfaces-auth 7, auth-errors 2, auth-providers 6.0.0; no behaviour change
 │   ├── MIGRATION-12.0.md           # refusals follow the auth error contract (interfaces-auth 6, auth-errors)
@@ -45,6 +46,7 @@ mcp-abap-connection/
 - 🧭 [Scope and Boundaries](./SCOPE.md) - What this package does (and does not), sibling packages, and why there is no RFC to cloud
 
 ### Upgrading
+- 🚚 [Migrating to 15.0.0](./MIGRATION-15.0.md) - on `@mcp-abap-adt/interfaces-adt-connection` 2: `makeAdtRequest`'s answer is `unknown` unless its type is named
 - 🚚 [Migrating to 14.0.0](./MIGRATION-14.0.md) - the `sap-abap-auth` CLI is removed; use `@mcp-abap-adt/auth-broker-cli`
 - 🚚 [Migrating to 13.0.0](./MIGRATION-13.0.md) - interfaces-auth 7 and auth-errors 2; the connection's behaviour is unchanged, a consumer holds one interfaces-auth major and takes the providers from auth-providers 6.0.0
 - 🚚 [Migrating to 12.0.0](./MIGRATION-12.0.md) - refusals follow the auth error contract: `AuthRefusedError.refusal` is an `IAuthProviderError` (read its `kind`), a custom `ILogonTarget` mints its refusal through `@mcp-abap-adt/auth-errors`, and no auth-providers release fits 12.x — auth-providers 6.0.0 goes with 13.0.0
