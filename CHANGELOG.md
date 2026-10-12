@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.1.0] - 2026-10-12
+
 ### Fixed
 - **A cloud connection's `disconnect()` now ends its security session.** The
   close sent `DELETE` on the session's own address, and the server ends a
@@ -2371,7 +2373,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.1.0...HEAD
+[14.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.1...v14.1.0
 [14.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.0...v14.0.1
 [14.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v13.0.0...v14.0.0
 [13.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v12.0.0...v13.0.0
