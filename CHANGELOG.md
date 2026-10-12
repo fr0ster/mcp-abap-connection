@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [15.0.1] - 2026-10-12
+
+The code is the same as 15.0.0.
+
+### Changed
+- The contract ranges are their current releases, as the auth stack (auth-providers 6.0.2,
+  auth-stores 5.0.1, auth-broker 5.0.6) declares them: `@mcp-abap-adt/interfaces-utils`
+  `^1.1.1` (was `^1.1.0`), `@mcp-abap-adt/interfaces-network` `^2.0.1` (was `^2.0.0`),
+  `@mcp-abap-adt/auth-errors` `^2.2.1` (was `^2.2.0`); the optional
+  `@mcp-abap-adt/sap-rfc-lite` `^0.2.2` (was `^0.2.1`). Their APIs are unchanged.
+- Development: the dev dependency `@mcp-abap-adt/auth-providers` is `^6.0.2` (was `^6.0.0`);
+  the lockfile is refreshed from the registry.
+- README, INSTALLATION and USAGE: connection 13.x to 15.x work with auth-providers 6.
+
 ## [15.0.0] - 2026-10-12
 
 ### Breaking
@@ -2390,7 +2404,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.1...HEAD
+[15.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.0...v15.0.1
 [15.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.1.0...v15.0.0
 [14.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.1...v14.1.0
 [14.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.0...v14.0.1
