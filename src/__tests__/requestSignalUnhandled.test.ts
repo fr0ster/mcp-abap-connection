@@ -6,23 +6,10 @@
  * leaves one unhandled on purpose, so a scenario that reports none is a
  * process that would have seen one.
  */
-import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { runScenario } from './helpers/plainNode/run.js';
 
-const here = join(__dirname, 'helpers', 'plainNode');
-
-function run(env: Record<string, string> = {}) {
-  const out = execFileSync(
-    process.execPath,
-    ['-r', join(here, 'register.cjs'), join(here, 'abortScenario.ts')],
-    { env: { ...process.env, ...env }, encoding: 'utf8' },
-  );
-  return JSON.parse(out.trim().split('\n').pop() ?? '{}') as {
-    results?: Record<string, string>;
-    unhandled?: string[];
-    failed?: string;
-  };
-}
+const run = (env: Record<string, string> = {}) =>
+  runScenario<{ results?: Record<string, string> }>('abortScenario.ts', env);
 
 describe('an aborted request leaves nothing unhandled', () => {
   it('sees an unhandled rejection when there is one (the control)', () => {

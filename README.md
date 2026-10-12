@@ -685,8 +685,10 @@ See [docs/USAGE.md — Session Lifecycle](./docs/USAGE.md#session-lifecycle).
 first send, not a resend, not the CSRF recovery, not a renewal — and the call
 rejects at once with `code: 'ADT_REQUEST_ABORTED'` (`ADT_REQUEST_ERROR.ABORTED`
 from `@mcp-abap-adt/interfaces-adt-connection`), over HTTP and RFC alike. A
-request already sent is not recalled, and the shared work a wait was on (a
-provider's renewal, the token exchange) runs on for the other requests. See
+request already sent is not recalled, and a provider's renewal it was waiting
+on runs on for the other requests. A token exchange the request started makes
+no further attempt; the one already on the wire is not recalled, and the token
+it earns is the session's. See
 [docs/USAGE.md — Cancelling a request](./docs/USAGE.md#cancelling-a-request).
 
 **Session Management:**

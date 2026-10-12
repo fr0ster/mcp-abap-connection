@@ -140,8 +140,10 @@ fact belongs on the transport instead.
   to axios or the SDK: a request already sent is not recalled. The suites are
   `requestSignalHttp`, `requestSignalRfc` (two callers, one aborted at each
   boundary) and `requestSignalUnhandled`, which runs a scenario under plain
-  node (`helpers/plainNode/register.cjs`) — Jest's sandboxed `process` never
-  sees an `unhandledRejection`, so a listener inside a Jest test proves nothing
+  node (`helpers/plainNode/run.ts`, `register.cjs`) — Jest's sandboxed
+  `process` never sees an `unhandledRejection`, so a listener inside a Jest
+  test proves nothing; `dispatchedGoodbye` runs on the same harness. Each
+  scenario has a control run that leaves one rejection unhandled on purpose
 
 **Taking the RFC wire** needs the SAP NW RFC SDK on the machine and
 `@mcp-abap-adt/sap-rfc-lite` installed; `rfcConversationFrom(config)` derives

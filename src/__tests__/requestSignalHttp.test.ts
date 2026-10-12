@@ -10,6 +10,7 @@
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import {
   ABORTED,
+  afterMicrotasks,
   httpConfig as config,
   DISCOVERY,
   deferred,
@@ -99,26 +100,26 @@ describe('HTTP: the request signal at every send boundary', () => {
       conn.makeAdtRequest(request('/a', 'POST', controller.signal)),
     );
     await drained();
+    // B, in flight beside it, waits on the same authorize for its own
+    // exchange.
+    const b = conn.makeAdtRequest(request('/b', 'POST'));
+    await drained();
+    expect(exchanges).toHaveLength(2);
     controller.abort();
     await drained();
     expect(a.state()).toBe('rejected');
     expect(a.error()).toMatchObject(ABORTED);
 
     gate.resolve();
+    await expect(b).resolves.toMatchObject({ status: 200 });
     await drained();
-    await drained();
-    // A's exchange was not sent after its abort, and its request never was.
-    expect(wire.sends(DISCOVERY)).toBe(discoveryBefore);
+    // B's exchange was sent; A's was not, after its abort, nor its request.
+    expect(wire.sends(DISCOVERY)).toBe(discoveryBefore + 1);
     expect(wire.sends('/a')).toBe(0);
-    // The abort ended the exchange, past its retries.
-    expect(exchanges).toHaveLength(1);
+    // The abort ended A's exchange, past its retries.
     expect(exchanges[0].state()).toBe('rejected');
     expect(exchanges[0].error()).toMatchObject(ABORTED);
-
-    provider.gates.authorize = undefined;
-    await expect(
-      conn.makeAdtRequest(request('/b', 'POST')),
-    ).resolves.toMatchObject({ status: 200 });
+    expect(exchanges[1].state()).toBe('resolved');
   });
 
   it('after the logon (establish()) a wire makes in the exchange: the exchange stops for an aborted caller', async () => {
@@ -142,26 +143,25 @@ describe('HTTP: the request signal at every send boundary', () => {
     const a = watched(
       conn.makeAdtRequest(request('/a', 'POST', controller.signal)),
     );
+    const b = conn.makeAdtRequest(request('/b', 'POST'));
     await drained();
+    expect(provider.counts.establish).toBe(3);
     controller.abort();
     await drained();
     expect(a.state()).toBe('rejected');
     expect(a.error()).toMatchObject(ABORTED);
 
     gate.resolve();
+    await expect(b).resolves.toMatchObject({ status: 200 });
     await drained();
-    await drained();
-    // The exchange ended at the logon: nothing after it was asked or sent.
-    expect(provider.counts.authorize).toBe(asked);
-    expect(wire.sends(DISCOVERY)).toBe(discoveryBefore);
+    // A's exchange ended at the logon: B's exchange and B's request were
+    // authorized and B's exchange sent; nothing of A's after its logon.
+    expect(provider.counts.authorize).toBe(asked + 2);
+    expect(wire.sends(DISCOVERY)).toBe(discoveryBefore + 1);
     expect(wire.sends('/a')).toBe(0);
-
-    await expect(
-      conn.makeAdtRequest(request('/b', 'POST')),
-    ).resolves.toMatchObject({ status: 200 });
   });
 
-  it('the token exchange before a mutation: the wait ends at the abort, the exchange runs on', async () => {
+  it('the token exchange before a mutation: the wait ends at the abort; the exchange already sent is not recalled', async () => {
     const { conn, provider, wire } = await connected();
     wire.transport.adoptCsrfToken(null);
     const held = wire.hold(DISCOVERY);
@@ -172,12 +172,16 @@ describe('HTTP: the request signal at every send boundary', () => {
       conn.makeAdtRequest(request('/a', 'POST', controller.signal)),
     );
     await drained();
+    // B, in flight beside it: its own exchange is answered at once.
+    const b = conn.makeAdtRequest(request('/b', 'POST'));
+    await expect(b).resolves.toMatchObject({ status: 200 });
     controller.abort();
     await drained();
     expect(a.state()).toBe('rejected');
     expect(a.error()).toMatchObject(ABORTED);
-    // The exchange's one authorize; the request itself was never authorized.
-    expect(provider.counts.authorize).toBe(asked + 1);
+    // A's exchange's one authorize, B's exchange and B's request: A's request
+    // itself was never authorized.
+    expect(provider.counts.authorize).toBe(asked + 3);
 
     // The exchange already sent is not recalled: its answer is the wire's.
     held.resolve({
@@ -189,10 +193,6 @@ describe('HTTP: the request signal at every send boundary', () => {
     await drained();
     expect(wire.transport.csrfToken()).toBe('EARNED');
     expect(wire.sends('/a')).toBe(0);
-
-    await expect(
-      conn.makeAdtRequest(request('/b', 'POST')),
-    ).resolves.toMatchObject({ status: 200 });
   });
 
   it('before rejected(): an answer that came back after the abort asks the provider nothing', async () => {
@@ -257,20 +257,17 @@ describe('HTTP: the request signal at every send boundary', () => {
     const discoveryBefore = wire.sends(DISCOVERY);
 
     const a = conn.makeAdtRequest(request('/a', 'POST', controller.signal));
+    const b = conn.makeAdtRequest(request('/b', 'POST'));
     await drained();
     controller.abort();
     held.reject(refused(403, 'CSRF token validation failed'));
 
     await expect(a).rejects.toMatchObject(ABORTED);
+    await expect(b).resolves.toMatchObject({ status: 200 });
     // The session's token is everyone's: an aborted caller does not drop it.
     expect(wire.transport.csrfToken()).toBe('TOKEN');
     expect(wire.sends(DISCOVERY)).toBe(discoveryBefore);
     expect(wire.sends('/a')).toBe(1);
-
-    await expect(
-      conn.makeAdtRequest(request('/b', 'POST')),
-    ).resolves.toMatchObject({ status: 200 });
-    expect(wire.sends(DISCOVERY)).toBe(discoveryBefore);
   });
 
   it('before the resend of a GET the cookies would cure: nothing more is asked or sent', async () => {
@@ -304,6 +301,8 @@ describe('HTTP: the request signal at every send boundary', () => {
     );
     await drained();
     expect(wire.sends('/a')).toBe(1);
+    // B, in flight while A's recovery exchange is out.
+    const b = conn.makeAdtRequest(request('/b', 'POST'));
     controller.abort();
     await drained();
     expect(a.state()).toBe('rejected');
@@ -318,9 +317,7 @@ describe('HTTP: the request signal at every send boundary', () => {
     });
     await drained();
     expect(wire.sends('/a')).toBe(1);
-    await expect(
-      conn.makeAdtRequest(request('/b', 'POST')),
-    ).resolves.toMatchObject({ status: 200 });
+    await expect(b).resolves.toMatchObject({ status: 200 });
   });
 
   it('a session that went away while the caller waited: the caller still gets its abort', async () => {
@@ -344,6 +341,37 @@ describe('HTTP: the request signal at every send boundary', () => {
     gate.resolve();
     await drained();
     expect(wire.sends('/a')).toBe(0);
+  });
+
+  it('an abort in any turn after authorize() answered: the mutation is not sent once aborted', async () => {
+    const lateSends: number[] = [];
+    for (let hops = 0; hops <= 60; hops += 1) {
+      const { conn, provider, wire } = await connected();
+      const gate = deferred();
+      provider.gates.authorize = gate.promise;
+      const controller = new AbortController();
+      const send = wire.transport.send.bind(wire.transport);
+      wire.transport.send = (request) => {
+        if (request.url.endsWith('/a') && controller.signal.aborted) {
+          lateSends.push(hops);
+        }
+        return send(request);
+      };
+
+      const a = conn
+        .makeAdtRequest(request('/a', 'POST', controller.signal))
+        .catch((error: unknown) => error);
+      const b = conn.makeAdtRequest(request('/b', 'POST'));
+      await drained();
+      gate.resolve();
+      await afterMicrotasks(hops);
+      controller.abort();
+      const outcome = await a;
+      await expect(b).resolves.toMatchObject({ status: 200 });
+      // Sent before the abort, the answer is A's; aborted first, nothing is.
+      if (wire.sends('/a') === 0) expect(outcome).toMatchObject(ABORTED);
+    }
+    expect(lateSends).toEqual([]);
   });
 
   it('a request already sent is not recalled: its answer is the caller’s', async () => {

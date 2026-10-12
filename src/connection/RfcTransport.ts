@@ -53,7 +53,11 @@ import type {
   IAdtTransportResponse,
   IOnPremTransport,
 } from './IAdtTransport.js';
-import { isRequestAborted, untilAborted } from './requestAbort.js';
+import {
+  isRequestAborted,
+  requestAborted,
+  untilAborted,
+} from './requestAbort.js';
 import { isStatefulRequest } from './statefulRequest.js';
 
 /**
@@ -542,6 +546,9 @@ export class RfcTransport implements IOnPremTransport {
     } catch (e) {
       if (isRequestAborted(e)) {
         // A failed open has nothing to close, and its failure is nobody's.
+        // What would have become the kept conversation is closed too, not
+        // kept: the next call pays a logon, and no session outlives a call
+        // its caller gave up on.
         opening.then(
           () => this.closeQuietly(conversation),
           () => {},
@@ -645,6 +652,11 @@ export class RfcTransport implements IOnPremTransport {
         'RFC transport was closed before the call was sent; nothing was sent.',
       );
     }
+    // And the caller's abort, here for the same reason: the logon and the
+    // open answered turns ago, and an abort since must stop the call. A
+    // conversation opened for this call alone is closed by its caller's
+    // `finally`; the kept one is reset and stays kept.
+    if (request.signal?.aborted) throw requestAborted();
     let raw: Record<string, unknown>;
     try {
       raw = await conversation.call('SADT_REST_RFC_ENDPOINT', {

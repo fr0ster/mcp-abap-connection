@@ -21,9 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aborts, nothing more of the request is sent, and the call rejects at once
   with `code: ADT_REQUEST_ERROR.ABORTED` (`'ADT_REQUEST_ABORTED'`) in fixed
   words: nothing of the request, the signal's reason or a server's text in
-  them. A wait ends for that caller only — the shared work behind it (a
-  provider's renewal, the token exchange) runs on for every other request, and
-  what it answers late is handled and dropped. A conversation an RFC call
+  them. A wait ends for that caller only — a provider's renewal behind it runs
+  on for every other request, and what it answers late is handled and
+  dropped. A token exchange the request started makes no further attempt; one
+  already on the wire is not recalled, and the token it earns is the
+  session's. The signal is checked once more right before every send and every
+  RFC call, so an abort that lands after a wait answered still stops it. A
+  conversation an RFC call
   opened for itself alone is closed when its `open()` answers. An aborted
   request leaves the session's CSRF token and cookies as they are.
 - `IAdtTransportRequest.signal`: the caller's signal, handed to the wire for

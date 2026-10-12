@@ -11,6 +11,7 @@
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import {
   ABORTED,
+  afterMicrotasks,
   rfcAnswer as answer,
   rfcConfig as config,
   rfcConversations as conversations,
@@ -149,31 +150,29 @@ describe('RFC: the request signal at every send boundary', () => {
 
   it('after open(), the kept conversation: the wait ends at the abort, and it is closed, not kept', async () => {
     const { conn, rfc } = await connected();
+    // A takes the kept conversation's open, held; B, in flight beside it,
+    // takes a throwaway one.
     const aOpen = rfc.holdOpen();
+    rfc.openAtOnce();
     const controller = new AbortController();
     const a = watched(
       conn.makeAdtRequest(request('/a', 'PUT', controller.signal)),
     );
     await drained();
     expect(rfc.opened).toHaveLength(2);
+    const b = conn.makeAdtRequest(request('/b', 'PUT'));
 
     controller.abort();
     await drained();
     expect(a.state()).toBe('rejected');
     expect(a.error()).toMatchObject(ABORTED);
+    await expect(b).resolves.toMatchObject({ status: 200 });
 
     aOpen.resolve();
     await drained();
     const aConversation = rfc.opened[1];
     expect(aConversation.closes).toBe(1);
     expect(aConversation.called).toEqual([]);
-
-    // The next call opens a kept conversation of its own.
-    rfc.openAtOnce();
-    await expect(
-      conn.makeAdtRequest(request('/b', 'PUT')),
-    ).resolves.toMatchObject({ status: 200 });
-    expect(rfc.opened).toHaveLength(3);
     expect(rfc.opened[2].called).toEqual(['/b']);
   });
 
@@ -185,15 +184,14 @@ describe('RFC: the request signal at every send boundary', () => {
 
     const a = conn.makeAdtRequest(request('/a', 'PUT', controller.signal));
     await drained();
+    const b = conn.makeAdtRequest(request('/b', 'PUT'));
     controller.abort();
     held.resolve(answer(401, ''));
 
     await expect(a).rejects.toMatchObject(ABORTED);
+    await expect(b).resolves.toMatchObject({ status: 200 });
     expect(provider.counts.rejected).toBe(0);
     expect(rfc.called('/a')).toBe(1);
-    await expect(
-      conn.makeAdtRequest(request('/b', 'PUT')),
-    ).resolves.toMatchObject({ status: 200 });
   });
 
   it("after rejected(): the caller's wait ends at the abort, the shared renewal runs on", async () => {
@@ -222,5 +220,45 @@ describe('RFC: the request signal at every send boundary', () => {
     await drained();
     expect(rfc.called('/b')).toBe(2);
     expect(rfc.called('/a')).toBe(1);
+  });
+  it('an abort in any turn after open() answered: the mutation is not called once aborted, its conversation closed', async () => {
+    const lateCalls: number[] = [];
+    for (let hops = 0; hops <= 60; hops += 1) {
+      const controller = new AbortController();
+      const provider = gatedProvider();
+      const rfc = conversations((uri) => {
+        if (uri === '/a' && controller.signal.aborted) lateCalls.push(hops);
+      });
+      const conn = new AdtOnPremConnector(
+        config,
+        provider,
+        rfc.transport,
+        null,
+      );
+      await conn.connect();
+      // B holds the kept conversation in its call; A opens a throwaway one.
+      rfc.openAtOnce();
+      const bCall = rfc.holdCall('/b');
+      const b = conn.makeAdtRequest(request('/b', 'PUT'));
+      await drained();
+      const aOpen = rfc.holdOpen();
+      const a = conn
+        .makeAdtRequest(request('/a', 'PUT', controller.signal))
+        .catch((error: unknown) => error);
+      await drained();
+
+      aOpen.resolve();
+      await afterMicrotasks(hops);
+      controller.abort();
+      const outcome = await a;
+      bCall.resolve(answer(200));
+      await expect(b).resolves.toMatchObject({ status: 200 });
+      await drained();
+      const aConversation = rfc.opened[2];
+      if (rfc.called('/a') === 0) expect(outcome).toMatchObject(ABORTED);
+      // Opened for A alone: closed whether A was called or not.
+      expect(aConversation.closes).toBe(1);
+    }
+    expect(lateCalls).toEqual([]);
   });
 });

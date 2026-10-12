@@ -85,6 +85,16 @@ export function gatedProvider(): IAuthProvider & {
   };
 }
 
+/**
+ * Resolves after `hops` turns of the microtask queue — for an abort that must
+ * land in a particular turn after a wait answered.
+ */
+export function afterMicrotasks(hops: number): Promise<void> {
+  let chain = Promise.resolve();
+  for (let i = 0; i < hops; i += 1) chain = chain.then(() => {});
+  return chain;
+}
+
 /** Lets every queued turn run, timers of zero delay included. */
 export const drained = (): Promise<void> =>
   new Promise<void>((resolve) => setImmediate(resolve));
@@ -241,7 +251,10 @@ export interface StubConversation extends IRfcConversation {
  * conversation can reset, so the first free non-stateful call takes the kept
  * one.
  */
-export function rfcConversations() {
+export function rfcConversations(
+  /** Told of every call as it is made, before it answers. */
+  onCall?: (uri: string) => void,
+) {
   const opened: StubConversation[] = [];
   const opens: Array<() => Promise<void>> = [];
   const calls = new Map<string, Array<() => Promise<RfcAnswer>>>();
@@ -267,6 +280,7 @@ export function rfcConversations() {
           .REQUEST_LINE;
         const uri = String(line.URI);
         conversation.called.push(uri);
+        onCall?.(uri);
         const next = calls.get(uri)?.shift();
         return next ? next() : rfcAnswer(200);
       },

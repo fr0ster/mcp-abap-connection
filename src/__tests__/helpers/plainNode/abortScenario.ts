@@ -20,13 +20,9 @@ import {
   rfcConversations,
   scriptedWire,
 } from '../requestSignal.js';
+import { recordUnhandled } from './run.js';
 
-const unhandled: string[] = [];
-process.on('unhandledRejection', (reason) => {
-  unhandled.push(
-    reason instanceof Error ? reason.message : String(reason ?? 'unknown'),
-  );
-});
+const unhandled = recordUnhandled();
 
 const request = (url: string, method: string, signal?: AbortSignal) => ({
   url,
@@ -84,9 +80,6 @@ async function abortedThenFailed(
 }
 
 async function main() {
-  if (process.env.INJECT_UNHANDLED === '1') {
-    void Promise.reject(new Error('injected'));
-  }
   const results: Record<string, string> = {};
 
   {

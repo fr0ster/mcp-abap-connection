@@ -1214,6 +1214,10 @@ abstract class AbstractAbapConnection
         'The session this request was admitted to is gone; nothing was sent',
       );
     }
+    // The last point before the wire, for the same reason: a raced wait that
+    // answered still leaves turns before this one, and an abort in any of
+    // them must stop the send. Covers the first send and every resend.
+    throwIfAborted(requestConfig.signal);
     const response = await this.transport.send(requestConfig);
     this.observeResponse(
       response.headers as Record<string, unknown>,

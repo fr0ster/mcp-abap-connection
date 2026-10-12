@@ -262,11 +262,12 @@ What it does not do:
 - **It does not recall a request already sent.** The server may act on it, and
   its answer — success or failure — is still the caller's. Only what would
   follow it (a resend, a renewal) is not sent.
-- **It ends a wait for this caller only.** The work behind it runs on: a
-  provider shares one renewal among every request it refused, and the token
-  exchange earns a token for every request on the session. Whatever that work
-  answers late is handled and dropped. A conversation an RFC call opened for
-  itself alone is closed when its `open()` answers.
+- **It ends a wait for this caller only.** A provider's work behind it runs
+  on: a provider shares one renewal among every request it refused. Whatever
+  that work answers late is handled and dropped. A token exchange the request
+  started makes no further attempt once it aborts; one already on the wire is
+  not recalled, and the token it earns is the session's. A conversation an
+  RFC call opened for itself alone is closed when its `open()` answers.
 - **It is not the deadline.** `timeout` still bounds a request on the HTTP wire;
   the signal is the caller saying it no longer needs the answer.
 
