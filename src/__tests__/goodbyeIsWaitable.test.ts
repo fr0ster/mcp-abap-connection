@@ -74,6 +74,48 @@ describe('flushGoodbye', () => {
     expect(flushed).toBe(true);
   });
 
+  it('without a budget waits for the answer as long as it takes, and creates no timer', async () => {
+    const connection = onPrem(config);
+    seedCookies(connection, 'SAP_SESSIONID_E19_100=nobudget');
+    markConnectedForTest(connection);
+    const goodbye = suspendedClose(
+      connection as unknown as { transport: unknown },
+    );
+    await connection.disconnect();
+
+    const timers = jest.spyOn(global, 'setTimeout');
+    let flushed = false;
+    const waiting = connection.flushGoodbye().then(() => {
+      flushed = true;
+    });
+    // No bound of the library's own choosing: nothing was scheduled.
+    expect(timers).not.toHaveBeenCalled();
+    timers.mockRestore();
+
+    for (let turn = 0; turn < 10; turn += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect(flushed).toBe(false);
+
+    goodbye.release();
+    await waiting;
+    expect(flushed).toBe(true);
+  });
+
+  it("with the caller's budget, schedules exactly that bound", async () => {
+    const connection = onPrem(config);
+    seedCookies(connection, 'SAP_SESSIONID_E19_100=budget');
+    markConnectedForTest(connection);
+    suspendedClose(connection as unknown as { transport: unknown });
+    await connection.disconnect();
+
+    const timers = jest.spyOn(global, 'setTimeout');
+    const waiting = connection.flushGoodbye(50);
+    expect(timers).toHaveBeenCalledWith(expect.any(Function), 50);
+    timers.mockRestore();
+    await expect(waiting).resolves.toBeUndefined();
+  });
+
   it('gives up on its own budget rather than hanging', async () => {
     const connection = onPrem(config);
     seedCookies(connection, 'SAP_SESSIONID_E19_100=second');

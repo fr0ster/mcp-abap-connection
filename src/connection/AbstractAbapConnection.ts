@@ -538,21 +538,29 @@ abstract class AbstractAbapConnection
   }
 
   /**
-   * Wait for the last dispatched goodbye, bounded.
+   * Wait for SAP's answer to the last dispatched goodbye.
    *
    * For the caller who ends a session and immediately opens another. Without
    * it the two overlap and the server keeps both; with it the previous session
    * is gone — or known not to be going — before the next one is asked for.
    *
-   * Bounded because the goodbye deliberately carries no request timeout: a
-   * server that never answers must not hold a teardown open, and it must not
-   * hold this open either. On expiry this returns rather than throwing, since
-   * "the goodbye has not arrived yet" is not a failure of the caller's next
-   * step — and the session it addressed will fall to the idle timeout anyway.
+   * **The bound is the caller's, and optional.** Without `timeoutMs` this waits
+   * for the answer as long as it takes, and creates no timer: a timeout of the
+   * library's own choosing is not one. With it, this waits at most that long
+   * and then returns rather than throwing — "the goodbye has not answered yet"
+   * is not a failure of the caller's next step. SAP answers a logoff queued
+   * behind a running request only once that request is done (~96 s in one
+   * measurement, never in another), so a caller that cannot wait that long
+   * passes a budget.
    *
-   * Safe to call at any time: with nothing dispatched it returns immediately.
+   * Never rejects: a failed goodbye is absorbed. Safe to call at any time:
+   * with nothing dispatched it returns immediately.
    */
-  async flushGoodbye(timeoutMs = 5000): Promise<void> {
+  async flushGoodbye(timeoutMs?: number): Promise<void> {
+    if (timeoutMs === undefined) {
+      await this.goodbye;
+      return;
+    }
     let timer: NodeJS.Timeout | undefined;
     try {
       await Promise.race([

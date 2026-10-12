@@ -142,7 +142,9 @@ fact belongs on the transport instead.
   ~70 s after the exit: ICM ran the queued logoff after the connection
   closed.
   `IAdtTransport.close(context, written?)` reports it; a settled close is past
-  the write. `flushGoodbye()` is the wait for the answer. `disconnect()` is
+  the write. `flushGoodbye(timeoutMs?)` is the wait for the answer: no
+  default bound and no timer without an argument (the 5 s default is gone),
+  the caller's budget when given. `disconnect()` is
   called once per `connect()`: a second call rejects `NOT_CONNECTED` (a
   consumer that calls it twice is told, not engineered around); a failed
   `connect()` that dispatched a goodbye rejects only after it is written.

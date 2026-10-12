@@ -200,14 +200,15 @@ goodbye is still unanswered, and the server keeps both:
 
 ```typescript
 await conn.disconnect();
-await conn.flushGoodbye();   // give the goodbye its budget to finish first
+await conn.flushGoodbye();   // wait for the goodbye's answer; flushGoodbye(ms) bounds it
 await conn.connect();
 ```
 
 Measured on E19 through a harness that recycled the session after each test: a new ABAP session
 every one to two seconds for a whole run, none released, each living to its own thirty-minute idle
-timeout. The budget bounds the waiting, not the overlap — if the goodbye finishes in time there is
-none, and if it does not you proceed while it stays outstanding. Calling `disconnect()` again is not
+timeout. Without an argument `flushGoodbye()` waits for the answer as long as SAP takes; a budget
+you pass bounds the waiting, not the overlap — if the goodbye finishes in time there is none, and if
+it does not you proceed while it stays outstanding. Calling `disconnect()` again is not
 a substitute: a repeat call does not wait either.
 
 ---

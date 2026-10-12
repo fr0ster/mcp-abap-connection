@@ -207,6 +207,11 @@ Measured on E19 with bare HTTP on 2026-10-13, unless marked otherwise.
   await connection.disconnect();
   process.exit(0);
   ```
+- **`flushGoodbye()` no longer has a default bound.** Called without an
+  argument, it waits for the logoff's answer for as long as SAP takes; it no
+  longer gives up after 5 s. If you need a bound, pass one yourself, for
+  example `flushGoodbye(5000)`. With a budget it returns at that point
+  without throwing, as before.
 - **Await `flushGoodbye()` as well if SAP's answer matters**, for example
   before `connect()` again, so that the server never holds two sessions:
   ```typescript

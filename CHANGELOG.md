@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server that never takes the bytes holds `disconnect()` until the socket
   fails, and that failure is logged, not thrown. The transition queue is not
   held by the write.
+- **`flushGoodbye(timeoutMs?)` has no default bound.** Without an argument it
+  waits for SAP's answer to the logoff as long as it takes, and creates no
+  timer; the 5 s the library chose before is gone (no timeouts of the
+  library's own choosing — a bound is the caller's). With `timeoutMs` it waits
+  at most that long and returns without throwing, as before. SAP answers a
+  logoff queued behind a running request only when that request is done.
 - **`disconnect()` is called once per `connect()`.** A second call, made while
   the first is still writing or after it, rejects with
   `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed words. It used to resolve, and one

@@ -436,7 +436,8 @@ documentation of what your code actually needs.
 
 ```typescript
 await connection.disconnect();   // the logoff has left
-await connection.flushGoodbye(); // only if you need SAP's answer too
+await connection.flushGoodbye(); // only if you need SAP's answer too; no bound
+// await connection.flushGoodbye(5000); // a bound of your own, if you need one
 ```
 
 It never throws, except on a second call (below). **It resolves once the logoff is written** — its bytes handed
@@ -455,7 +456,8 @@ on E19 on 2026-10-13: LOCK, a long where-used in the same stateful session,
 held 1 s later and free ~70 s after the exit, long before the 30-minute idle
 timeout: ICM ran the queued logoff after the connection had closed. So a
 process about to exit awaits `disconnect()`; one that needs the server's
-answer awaits `flushGoodbye()` as well.
+answer awaits `flushGoodbye()` as well — without an argument it waits as long
+as SAP takes and sets no timer; `flushGoodbye(ms)` bounds the wait.
 
 Nothing bounds the write with a timer: a server that never takes the bytes
 holds `disconnect()` until the socket fails, and that failure is logged, not
