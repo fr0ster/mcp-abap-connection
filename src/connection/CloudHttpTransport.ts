@@ -143,7 +143,10 @@ export class CloudHttpTransport
     }
   }
 
-  override async close(context: IAdtSessionContext): Promise<void> {
+  override async close(
+    context: IAdtSessionContext,
+    written?: () => void,
+  ): Promise<void> {
     const logoff = this.logoff;
     this.logoff = null;
     // Read SYNCHRONOUSLY, before the first await. A close is dispatched
@@ -169,13 +172,18 @@ export class CloudHttpTransport
       return;
     }
 
-    await this.sendLogoff(context, logoff, {
-      cookies,
-      affinity,
-      // `x-sap-security-session: use`, as Eclipse sends it on the logoff: it
-      // names the session the logoff ends, like every other request here.
-      session,
-    });
+    await this.sendLogoff(
+      context,
+      logoff,
+      {
+        cookies,
+        affinity,
+        // `x-sap-security-session: use`, as Eclipse sends it on the logoff: it
+        // names the session the logoff ends, like every other request here.
+        session,
+      },
+      written,
+    );
   }
 
   /**

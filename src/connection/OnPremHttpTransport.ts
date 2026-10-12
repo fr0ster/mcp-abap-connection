@@ -63,7 +63,10 @@ export class OnPremHttpTransport
    * decision that is now this class's, below.
    */
 
-  override async close(context: IAdtSessionContext): Promise<void> {
+  override async close(
+    context: IAdtSessionContext,
+    written?: () => void,
+  ): Promise<void> {
     // Read synchronously, for the same reason as the cloud wire: the teardown
     // clears the jar while this is suspended on its first await.
     const cookies = this.cookies();
@@ -81,10 +84,15 @@ export class OnPremHttpTransport
       return;
     }
 
-    await this.sendLogoff(context, `${context.baseUrl}${ICF_LOGOFF_PATH}`, {
-      cookies,
-      affinity,
-      session: {},
-    });
+    await this.sendLogoff(
+      context,
+      `${context.baseUrl}${ICF_LOGOFF_PATH}`,
+      {
+        cookies,
+        affinity,
+        session: {},
+      },
+      written,
+    );
   }
 }

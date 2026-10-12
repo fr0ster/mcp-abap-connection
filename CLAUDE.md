@@ -130,7 +130,17 @@ fact belongs on the transport instead.
   `SAP_TIMEOUT_LONG` configure `getTimeout()`, which is exported for callers to
   pass back in `makeAdtRequest`; nothing in `src/` reads either. A per-request
   deadline is the caller's choice and is honoured only by the HTTP wire — RFC
-  is a synchronous call with nothing to cancel
+  is a synchronous call with nothing to cancel. There is no per-request
+  signal (15.1.0 had one; 16.0.0 removed it): ABAP neither cancels nor rolls
+  back, and the logoff is what releases a session's locks
+- `disconnect()` resolves once the logoff is WRITTEN — the node request's
+  `finish`, seen through `HttpTransport.logoffRequest` and axios's `transport`
+  option; over RFC, once the close call returned — never on SAP's answer,
+  which SAP queues behind a request still running in the session.
+  `IAdtTransport.close(context, written?)` reports it; a settled close is past
+  the write. `flushGoodbye()` is the wait for the answer. Tests:
+  `disconnectWritten` (a real stand-in server that holds its answer; a socket
+  that never takes the bytes; RFC)
 
 **Taking the RFC wire** needs the SAP NW RFC SDK on the machine and
 `@mcp-abap-adt/sap-rfc-lite` installed; `rfcConversationFrom(config)` derives

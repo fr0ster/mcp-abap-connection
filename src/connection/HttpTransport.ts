@@ -20,7 +20,13 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { Agent, type AgentOptions } from 'node:https';
+import {
+  type ClientRequest,
+  request as httpRequest,
+  type IncomingMessage,
+  type RequestOptions,
+} from 'node:http';
+import { Agent, type AgentOptions, request as httpsRequest } from 'node:https';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
@@ -713,7 +719,10 @@ export class HttpTransport implements IAdtTransport {
    * session document links to, the on-prem one the platform logoff. A bare HTTP wire has
    * neither, and says so by doing nothing.
    */
-  async close(_context: IAdtSessionContext): Promise<void> {}
+  async close(
+    _context: IAdtSessionContext,
+    _written?: () => void,
+  ): Promise<void> {}
 
   /**
    * The logoff, sent as Eclipse ADT 3.60.3 sends it when a project is closed.
@@ -738,6 +747,8 @@ export class HttpTransport implements IAdtTransport {
       affinity: Record<string, string>;
       session: Record<string, string>;
     },
+    /** Called once the logoff's bytes are on the socket; see `close()`. */
+    written?: () => void,
   ): Promise<void> {
     // Nothing that logs on, whoever put it in the context: the goodbye carries
     // the session's cookie and no credential.
@@ -747,22 +758,25 @@ export class HttpTransport implements IAdtTransport {
       ),
     );
     try {
-      await this.sendDetached({
-        method: 'GET',
-        url,
-        headers: {
-          ...snapshot.affinity,
-          // Detached, so not dressed: the client is said here in so many
-          // words, as on every other request of this wire.
-          ...this.clientHeaders(),
-          ...extra,
-          ...snapshot.session,
-          Accept: '*/*',
-          'sap-adt-request-id': randomUUID().replace(/-/g, ''),
-          'sap-cancel-on-close': 'true',
-          Cookie: snapshot.cookies,
+      await this.sendDetached(
+        {
+          method: 'GET',
+          url,
+          headers: {
+            ...snapshot.affinity,
+            // Detached, so not dressed: the client is said here in so many
+            // words, as on every other request of this wire.
+            ...this.clientHeaders(),
+            ...extra,
+            ...snapshot.session,
+            Accept: '*/*',
+            'sap-adt-request-id': randomUUID().replace(/-/g, ''),
+            'sap-cancel-on-close': 'true',
+            Cookie: snapshot.cookies,
+          },
         },
-      });
+        written,
+      );
       this.logger?.debug('Told the server the session is finished');
     } catch (error) {
       this.logger?.debug(
@@ -811,9 +825,10 @@ export class HttpTransport implements IAdtTransport {
   /**
    * Send EXACTLY these headers, with nothing of the wire's live state mixed in.
    *
-   * For a goodbye, and only for a goodbye. `disconnect()` dispatches the logoff
-   * without awaiting it, so the request is still being assembled while the
-   * connection is already free to `connect()` again — and by the time it goes
+   * For a goodbye, and only for a goodbye. `disconnect()` releases the
+   * transition queue before the logoff is even written, so the request is
+   * still being assembled while the connection is already free to `connect()`
+   * again — and by the time it goes
    * out, the jar can hold a different session. Dressing it then merges the LIVE
    * `SAP_SESSIONID` over the snapshot, and `mergeCookieHeaders` lets the later
    * value win on a repeated name, so the goodbye for the old session arrives
@@ -824,15 +839,51 @@ export class HttpTransport implements IAdtTransport {
    */
   protected async sendDetached(
     request: IAdtTransportRequest,
+    /** Called once the request's bytes are on the socket. */
+    written?: () => void,
   ): Promise<IAdtTransportResponse> {
-    return this.dispatch(request, { ...request.headers });
+    return this.dispatch(request, { ...request.headers }, written);
+  }
+
+  /**
+   * The node request a logoff goes out on — the seam where its write is seen.
+   *
+   * A test replaces it to hold a request's socket shut; the wire uses node's
+   * own `http` / `https`, as axios would with redirects off. The logoff's
+   * answer is not read, so not following a redirect changes nothing.
+   */
+  protected logoffRequest(
+    options: RequestOptions,
+    onResponse: (response: IncomingMessage) => void,
+  ): ClientRequest {
+    return options.protocol === 'https:'
+      ? httpsRequest(options, onResponse)
+      : httpRequest(options, onResponse);
   }
 
   private async dispatch(
     request: IAdtTransportRequest,
     headers: Record<string, string>,
+    written?: () => void,
   ): Promise<IAdtTransportResponse> {
     const response = await this.client()({
+      // The write is the point `disconnect()` resolves at: the request's
+      // `finish`, emitted once its bytes are handed to the socket — not when
+      // the server answers, which it may do minutes later or never.
+      ...(written !== undefined
+        ? {
+            transport: {
+              request: (
+                options: RequestOptions,
+                onResponse: (response: IncomingMessage) => void,
+              ) => {
+                const outgoing = this.logoffRequest(options, onResponse);
+                outgoing.once('finish', written);
+                return outgoing;
+              },
+            },
+          }
+        : {}),
       method: request.method,
       // The connection hands over a PATH; putting a server in front of it is
       // this wire's job. RFC's is to write the same path into the request line

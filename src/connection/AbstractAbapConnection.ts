@@ -129,10 +129,11 @@ abstract class AbstractAbapConnection
   /**
    * The last goodbye this connection dispatched, so a caller can wait for it.
    *
-   * `disconnect()` sends the logoff without awaiting it, for the reason stated
-   * there. That is right for a teardown and wrong for a caller who is about to
-   * `connect()` again: the next session opens while the previous one's goodbye
-   * is still being assembled, and a caller who recycles in a loop leaves one
+   * `disconnect()` waits for the logoff to be written, not answered, for the
+   * reason stated there. That is right for a teardown and wrong for a caller
+   * who is about to `connect()` again: the next session opens while the
+   * previous one's goodbye is still unanswered, and a caller who recycles in a
+   * loop leaves one
    * abandoned session per iteration. Measured against E19 from
    * `@mcp-abap-adt/adt-clients`: a session every 1-2 seconds for a whole test
    * run, none of them released, each surviving to its 30-minute idle timeout.
@@ -141,6 +142,12 @@ abstract class AbstractAbapConnection
    * before this, the promise was created and dropped on the floor.
    */
   private goodbye: Promise<void> = Promise.resolve();
+  /**
+   * The last goodbye WRITTEN — what `disconnect()` resolves at. Kept here, not
+   * in the call, because a concurrent `disconnect()` joins the transition
+   * without running its callback and must wait for the same write.
+   */
+  private goodbyeWritten: Promise<void> = Promise.resolve();
 
   private inCriticalSection = false;
   /** Reference count for nested beginCriticalSection()/endCriticalSection() pairs. */
@@ -416,12 +423,19 @@ abstract class AbstractAbapConnection
    * request cannot use, so the leak surfaces as a half-written object rather
    * than as anything about sessions.
    *
-   * **Nothing is waited for.** The logoff is dispatched, not awaited: this
-   * method notifies, and whether the server has acted on the notice is not
-   * something it reports. Finishing chains and releasing locks stay the
-   * caller's to do BEFORE calling — waiting here on a request that carries no
-   * timeout by design is what made a teardown unbounded, which blocks every
-   * later transition on the serialized tail.
+   * **Resolves once the logoff is WRITTEN, not answered.** The logoff's bytes
+   * handed to the socket (over RFC: the close call returned) is the point a
+   * caller needs: SAP queues a logoff behind a request still running in the
+   * same stateful session and answers it only after — ~96 s in one
+   * measurement, never in another — yet once it has arrived the session's
+   * locks go with it, even if the client is killed while waiting for the
+   * answer (measured on E19, 2026-10-12). A connection dropped WITHOUT a
+   * logoff keeps its locks. So a caller about to exit awaits this, and one
+   * that needs the answer awaits `flushGoodbye()` as well. The answer itself
+   * is not waited for here, and nothing bounds the write with a timer of its
+   * own: a server that never takes the bytes holds this until the socket
+   * fails, and that failure is logged, not thrown. Finishing chains and
+   * releasing locks stay the caller's to do BEFORE calling.
    *
    * **Requests already in flight are not waited for, and the logoff ends the
    * session they are running on** — so they will start failing against a
@@ -430,11 +444,13 @@ abstract class AbstractAbapConnection
    * dropped the cookie. Generation fencing (see `SessionLifecycle.isCurrent`)
    * keeps their results from reaching this connection either way.
    *
-   * **Nothing to wait for.** This TELLS the server the session is finished and
-   * does not act on the answer — whether and when the session is freed is the
-   * server's affair. Waiting for a reply nobody reads was also the one thing
-   * that could make a teardown unbounded, since the goodbye carries no request
-   * timeout by design.
+   * **The answer is not waited for.** This TELLS the server the session is
+   * finished and does not act on the answer — whether and when the session is
+   * freed is the server's affair, and with a request still running in it SAP
+   * answers the logoff only once that request is done. Waiting for a reply
+   * nobody reads would make a teardown as long as the longest request; the
+   * write is what a caller needs, and `flushGoodbye()` is the wait for the
+   * answer.
    */
   async disconnect(): Promise<void> {
     // Nothing here throws. This method's place is a `finally` — a connection
@@ -447,11 +463,9 @@ abstract class AbstractAbapConnection
     this.lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
 
     await this.lifecycle.transition('disconnect', async () => {
-      // DISPATCHED, not awaited. The goodbye carries no request timeout by
-      // design — a server that never answers must not hold a teardown open —
-      // and nothing bounds it here either, because there is nothing to bound:
-      // awaiting an unbounded request is precisely what would make every
-      // teardown unbounded.
+      // Dispatched here; awaited below only until it is WRITTEN. The goodbye
+      // carries no request timeout by design — a server that never answers
+      // must not hold a teardown open — and its answer is not waited for.
       //
       // The context is taken now, while the session is still true: the clear
       // below runs while the close is suspended on its first await.
@@ -460,10 +474,17 @@ abstract class AbstractAbapConnection
       // reconnect waits for it. Rejections are absorbed here so that holding
       // the promise never turns a failed goodbye into an unhandled rejection —
       // the transport already logs what went wrong.
-      this.goodbye = this.dispatchGoodbye(context);
+      const goodbye = this.dispatchGoodbye(context);
+      this.goodbye = goodbye.answered;
+      this.goodbyeWritten = goodbye.written;
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
+    // The point this resolves at: the logoff written. Awaited after the
+    // transition, so the transition queue — a later connect() — is not held
+    // by the write; and read from the connection, so a call that joined the
+    // transition waits for the same write.
+    await this.goodbyeWritten;
   }
 
   /**
@@ -512,18 +533,32 @@ abstract class AbstractAbapConnection
    * and every caller clears them right after this returns. A deferred call
    * would send the goodbye without the session it is ending.
    */
-  private dispatchGoodbye(context: IAdtSessionContext): Promise<void> {
+  private dispatchGoodbye(context: IAdtSessionContext): {
+    /** The close over, answer included. Never rejects. */
+    answered: Promise<void>;
+    /** The goodbye written — or the close over, whichever comes first. */
+    written: Promise<void>;
+  } {
+    let wroteIt!: () => void;
+    const written = new Promise<void>((resolve) => {
+      wroteIt = resolve;
+    });
     let closing: Promise<void>;
     try {
-      closing = Promise.resolve(this.transport.close(context));
+      closing = Promise.resolve(this.transport.close(context, () => wroteIt()));
     } catch (error) {
       closing = Promise.reject(error);
     }
-    return closing.catch((error: unknown) => {
+    const answered = closing.catch((error: unknown) => {
       this.logger?.debug(
         `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
+    // A close that is over is past its write: it sent nothing, it failed to
+    // send — logged above, and reported by `answered` settling — or its wire
+    // does not tell the write apart (RFC, a custom wire).
+    void answered.then(wroteIt);
+    return { answered, written };
   }
 
   isConnected(): boolean {
@@ -654,7 +689,7 @@ abstract class AbstractAbapConnection
       // close() may reject — its context.authorize throws when the provider
       // refuses — and nobody awaits this one. A throw that escaped here would
       // replace the establishment error and skip the clearing below.
-      const goodbye = this.dispatchGoodbye(this.sessionContext());
+      const goodbye = this.dispatchGoodbye(this.sessionContext()).answered;
       this.invalidateSession();
       // And the identity with it. The rejecting response was still observed, so
       // its cookie was recorded as a session that had just been established —
@@ -723,7 +758,7 @@ abstract class AbstractAbapConnection
       // Refusing to connect must not leak the session the refusal is about.
       // Dispatched, not awaited; a close that throws or rejects is logged and
       // absorbed, never left unhandled.
-      void this.dispatchGoodbye(this.sessionContext());
+      void this.dispatchGoodbye(this.sessionContext()).answered;
       this.invalidateSession();
       this.lifecycle.forgetIdentity();
       this.lifecycle.markDisconnected();

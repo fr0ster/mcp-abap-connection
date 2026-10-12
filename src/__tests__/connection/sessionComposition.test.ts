@@ -26,12 +26,18 @@ interface Stub {
   rejectDiscovery: boolean;
   /** How many times /discovery was asked, refusals included. */
   readonly discoveryAttempts: number;
+  /** Settles when a request to /slow has reached the server. */
+  slowArrived: Promise<void>;
   close(): Promise<void>;
 }
 
 async function startStub(): Promise<Stub> {
   const sessions: string[] = [];
   const state = { rejectDiscovery: false, discoveryAttempts: 0 };
+  let arrived!: () => void;
+  const slowArrived = new Promise<void>((resolve) => {
+    arrived = resolve;
+  });
   const server: Server = createServer((req, res) => {
     const url = req.url ?? '';
     if (url.includes('/discovery')) {
@@ -59,6 +65,7 @@ async function startStub(): Promise<Stub> {
     // claim rather than the absence of I/O in disconnect(): every route used to
     // answer instantly, which made the ordering hold for the wrong reason.
     if (url.includes('/slow')) {
+      arrived();
       setTimeout(() => {
         res.writeHead(200, { 'content-type': 'text/plain' });
         res.end('');
@@ -77,6 +84,7 @@ async function startStub(): Promise<Stub> {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     sessions,
+    slowArrived,
     get rejectDiscovery() {
       return state.rejectDiscovery;
     },
@@ -352,6 +360,9 @@ describe('explicit connect is required', () => {
       .makeAdtRequest({ url: '/sap/bc/adt/slow', method: 'GET', timeout: 5000 })
       .then(() => order.push('request'))
       .catch(() => order.push('request'));
+    // In flight for real: on the server, its answer still to come. A request
+    // not yet sent is refused at the fence instead, faster than any logoff.
+    await stub.slowArrived;
     const teardown = conn.disconnect().then(() => order.push('teardown'));
 
     await teardown;

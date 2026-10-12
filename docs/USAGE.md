@@ -432,15 +432,30 @@ than on a concrete class where you can: an `IAbapConnection` may come from
 somewhere that implements only the minimum, so the atom you require is also the
 documentation of what your code actually needs.
 
-### disconnect() waits for nothing
+### disconnect() resolves once the logoff is written
 
 ```typescript
-await connection.disconnect();   // Promise<void>
+await connection.disconnect();   // the logoff has left
+await connection.flushGoodbye(); // only if you need SAP's answer too
 ```
 
-It never throws, and it always settles. **It waits for nothing** — not for
-requests in flight, not for anything you hold. Deciding when to disconnect is
-yours, and so is preparing for it.
+It never throws. **It resolves once the logoff is written** — its bytes handed
+to the socket; over RFC, once the close call has returned — **not when SAP
+answers it**, and it does not wait for requests in flight or anything you hold.
+Deciding when to disconnect is yours, and so is preparing for it.
+
+Why the write and not the answer (measured on E19, 2026-10-12): with a long
+request still running in the same stateful session, SAP queues the logoff
+behind it and answers only afterwards — about 96 s in one run, nothing in six
+minutes in another — yet once the logoff has arrived the session's locks go
+with it, even if the client is killed while the answer is pending. A
+connection dropped *without* a logoff keeps its locks. So a process about to
+exit awaits `disconnect()`; one that needs the server's answer awaits
+`flushGoodbye()` as well.
+
+Nothing bounds the write with a timer: a server that never takes the bytes
+holds `disconnect()` until the socket fails, and that failure is logged, not
+thrown.
 
 Requests already in flight run to completion untouched; nothing is aborted. What
 the connection guarantees is that their results can no longer reach it: a
@@ -452,9 +467,9 @@ turned out to be unbounded — a request whose caller chose no timeout could hol
 teardown open forever, and since lifecycle transitions are serialized, every
 later `connect()` queued behind it.
 
-**Over HTTP it does not release locks.** The ABAP session lives on until its
-timeout, along with whatever it held. Unlock first; disconnecting is not a way to
-clean up after yourself.
+**The logoff releases the session, and its locks with it** — once it has
+arrived, whether or not you wait for the answer. Still unlock what you locked
+first: the logoff is the backstop, not the way to finish your work.
 
 ### Uninterruptible spans
 

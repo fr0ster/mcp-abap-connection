@@ -13,6 +13,7 @@ import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
+import { reportableLogoff, wroteIt } from './helpers/logoffWrite.js';
 import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
 import { settled } from './helpers/settled.js';
 
@@ -59,6 +60,7 @@ function attachMockAxios(
       headers: cfg.headers ?? {},
       timeout: cfg.timeout,
     });
+    wroteIt(cfg);
     return answer(cfg);
   };
   // clearSessionState() detaches interceptors before dropping the instance, so
@@ -68,6 +70,7 @@ function attachMockAxios(
     response: { clear: jest.fn() },
   };
   (conn as any).transport.instance = instance;
+  reportableLogoff((conn as any).transport);
 }
 
 /**
@@ -259,6 +262,7 @@ describe('the cloud logoff link', () => {
       response: { clear: jest.fn() },
     };
     (transport as any).instance = instance;
+    reportableLogoff(transport);
     const authorize = jest.fn();
 
     await transport.close({
@@ -373,6 +377,7 @@ describe('every session of a reconnect cycle is released', () => {
         headers: cfg.headers ?? {},
         timeout: cfg.timeout,
       });
+      wroteIt(cfg);
       return answer(cfg);
     };
     (instance as any).interceptors = {
@@ -380,6 +385,8 @@ describe('every session of a reconnect cycle is released', () => {
       response: { clear: jest.fn() },
     };
     (conn as any).transport.instance = instance;
+    reportableLogoff((conn as any).transport);
+    reportableLogoff((conn as any).transport);
   }
 
   /**
@@ -614,6 +621,8 @@ describe('a session opened before a failed connect is not abandoned', () => {
       response: { clear: jest.fn() },
     };
     (conn as any).transport.instance = instance;
+    reportableLogoff((conn as any).transport);
+    reportableLogoff((conn as any).transport);
   }
 
   it('says goodbye to it when establishing fails afterwards', async () => {
@@ -675,6 +684,8 @@ describe('a session opened before a failed connect is not abandoned', () => {
       response: { clear: jest.fn() },
     };
     (conn as any).transport.instance = instance;
+    reportableLogoff((conn as any).transport);
+    reportableLogoff((conn as any).transport);
     // The debris: a cookie left behind by the response that rejected us. It
     // looks exactly like a session and is not one, which is why "there are
     // cookies" cannot be the test for whether to say goodbye.

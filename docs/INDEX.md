@@ -15,6 +15,7 @@ mcp-abap-connection/
 │   ├── INSTALLATION.md             # Setup and installation guide
 │   ├── USAGE.md                    # API documentation and examples
 │   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── MIGRATION-16.0.md           # the request signal removed; disconnect() resolves once the logoff is written
 │   ├── MIGRATION-15.0.md           # interfaces-adt-connection 2: makeAdtRequest answers unknown
 │   ├── MIGRATION-14.0.md           # the sap-abap-auth CLI, open and commander are removed
 │   ├── MIGRATION-13.0.md           # interfaces-auth 7, auth-errors 2, auth-providers 6.0.0; no behaviour change
@@ -46,6 +47,7 @@ mcp-abap-connection/
 - 🧭 [Scope and Boundaries](./SCOPE.md) - What this package does (and does not), sibling packages, and why there is no RFC to cloud
 
 ### Upgrading
+- 🚚 [Migrating to 16.0.0](./MIGRATION-16.0.md) - the per-request `signal` and `ADT_REQUEST_ABORTED` are removed; `disconnect()` resolves once the logoff is written; `flushGoodbye()` waits for the answer
 - 🚚 [Migrating to 15.0.0](./MIGRATION-15.0.md) - on `@mcp-abap-adt/interfaces-adt-connection` 2: `makeAdtRequest`'s answer is `unknown` unless its type is named
 - 🚚 [Migrating to 14.0.0](./MIGRATION-14.0.md) - the `sap-abap-auth` CLI is removed; use `@mcp-abap-adt/auth-broker-cli`
 - 🚚 [Migrating to 13.0.0](./MIGRATION-13.0.md) - interfaces-auth 7 and auth-errors 2; the connection's behaviour is unchanged, a consumer holds one interfaces-auth major and takes the providers from auth-providers 6.0.0

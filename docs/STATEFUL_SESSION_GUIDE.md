@@ -194,9 +194,9 @@ provider. See [When the credential is refused](./USAGE.md#when-the-credential-is
 
 A reconnect is a NEW session, so do it outside a lock window rather than inside one.
 
-**Wait for the goodbye before opening the next one.** `disconnect()` dispatches the logoff and does
-not await it, so a reconnect otherwise opens the next session while the previous one's goodbye is
-still being assembled, and the server keeps both:
+**Wait for the goodbye before opening the next one.** `disconnect()` resolves once the logoff is
+written, not answered, so a reconnect otherwise opens the next session while the previous one's
+goodbye is still unanswered, and the server keeps both:
 
 ```typescript
 await conn.disconnect();

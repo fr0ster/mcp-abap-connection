@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [16.0.0] - 2026-10-13
+
+### Breaking
+- **The per-request signal is removed** (added in 15.1.0), on
+  `@mcp-abap-adt/interfaces-adt-connection` `^3.0.0` (was `^2.1.0`), which
+  drops `IAbapRequestOptions.signal`, `ADT_REQUEST_ERROR` and
+  `AdtRequestErrorCode`. No request rejects with `ADT_REQUEST_ABORTED`;
+  `IAdtTransportRequest.signal` and `IAdtEstablishContext.signal` are gone
+  from the transport seam. Measured on E19 (BASIS 816, 2026-10-12): ABAP
+  neither cancels a request that reached it nor rolls back across requests,
+  a connection is never shared between threads, and a logoff releases the
+  session's locks — so the signal protected nothing. Requests behave as in
+  15.0.1.
+- **`disconnect()` resolves once the logoff is WRITTEN** — its bytes handed to
+  the socket (the node request's `finish`); over RFC, once the close call has
+  returned — not when SAP answers, and not at once as before. With a long
+  request running in the same stateful session SAP queues the logoff behind
+  it (answered ~96 s later through the connector; no answer in six minutes
+  raw from a second thread), and the lock is gone afterwards even when the
+  client was killed with the answer pending; a connection dropped without a
+  logoff keeps its locks. So a caller about to exit awaits `disconnect()`;
+  `flushGoodbye()` still waits for the answer. No timer bounds the write: a
+  server that never takes the bytes holds `disconnect()` until the socket
+  fails, and that failure is logged, not thrown. The transition queue is not
+  held by the write.
+- **`IAdtTransport.close(context, written?)`**: a wire calls `written` once its
+  goodbye has left; `disconnect()` resolves at the first of that and the close
+  settling. A custom wire whose close stays pending after its goodbye has left
+  should call it. See [MIGRATION-16.0.md](./docs/MIGRATION-16.0.md).
+
+### Changed
+- Docs: USAGE's "disconnect() resolves once the logoff is written" (it was
+  "waits for nothing", and claimed an HTTP disconnect releases no locks — the
+  logoff releases them), README, STATEFUL_SESSION_GUIDE, CLAUDE.md.
+- Tests: "nothing is left unhandled" is proven under plain node
+  (`src/__tests__/helpers/plainNode`), where the real process reports it —
+  Jest's sandboxed `process` never does; `dispatchedGoodbye` runs there.
+
 ## [15.1.0] - 2026-10-12
 
 ### Added
@@ -2446,7 +2484,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.1.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v16.0.0...HEAD
+[16.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.1.0...v16.0.0
 [15.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.1...v15.1.0
 [15.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.0...v15.0.1
 [15.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.1.0...v15.0.0

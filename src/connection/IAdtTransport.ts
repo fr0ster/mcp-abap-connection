@@ -158,8 +158,18 @@ export interface IAdtTransport {
    * `disconnect()`, which promises to settle. What it does is the wire's: a
    * the logoff the cloud session document links to, the platform's logoff, or
    * closing the conversation.
+   *
+   * **Two points, told apart.** `written` is called once the goodbye has left
+   * — its bytes handed to the socket, not answered — and the returned promise
+   * settles when the close is over, answer included. `disconnect()` resolves
+   * at the first: SAP queues a logoff behind a request still running in the
+   * same session and answers it only after, yet the session's locks go with
+   * it once it arrives (measured on E19, 2026-10-12), so a caller about to
+   * exit needs it sent, not answered. A wire that sends nothing, or whose
+   * close is over at once (RFC: when the close call has returned), need not
+   * call it: a settled close is past the write.
    */
-  close(context: IAdtSessionContext): Promise<void>;
+  close(context: IAdtSessionContext, written?: () => void): Promise<void>;
 
   /**
    * Issue one request.

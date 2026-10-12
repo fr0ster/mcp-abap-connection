@@ -160,6 +160,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 16.0.0](./docs/MIGRATION-16.0.md)** - the per-request `signal` (15.1.0) and `ADT_REQUEST_ABORTED` are removed; `disconnect()` resolves once the logoff is written, not answered — a process about to exit awaits it; `flushGoodbye()` when the answer matters
 - 🚚 **[Migration to 15.0.0](./docs/MIGRATION-15.0.md)** - on `@mcp-abap-adt/interfaces-adt-connection` 2: `makeAdtRequest`'s answer is `unknown` unless its type is named; nothing changes at run time
 - 🚚 **[Migration to 14.0.0](./docs/MIGRATION-14.0.md)** - the `sap-abap-auth` CLI is removed, with its `open` and `commander` dependencies; use `@mcp-abap-adt/auth-broker-cli`; the library's API is unchanged
 - 🚚 **[Migration to 13.0.0](./docs/MIGRATION-13.0.md)** - interfaces-auth 7 and auth-errors 2, and the providers from auth-providers 6.0.0; no behaviour change, one interfaces-auth major per process
@@ -664,7 +665,7 @@ by address, which is an empty mechanism, not an absent lifecycle:
 
 ```typescript
 // ISessionLifecycleAware
-disconnect(): Promise<void>;         // never throws, and waits for nothing
+disconnect(): Promise<void>;         // never throws; resolves once the logoff is written
 isConnected(): boolean;
 getSessionIdentity(): string | null; // WHICH SAP session; null is not "disconnected"
 ```

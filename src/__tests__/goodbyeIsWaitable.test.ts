@@ -1,9 +1,9 @@
 /**
  * A caller that ends a session and opens another can wait for the goodbye.
  *
- * `disconnect()` dispatches the logoff without awaiting it, which is right for
- * a teardown — a server that never answers must not hold one open — and wrong
- * for a caller who reconnects immediately: the next session is asked for while
+ * `disconnect()` resolves once the logoff is written, not answered, which is
+ * right for a teardown — a server that never answers must not hold one open —
+ * and wrong for a caller who reconnects immediately: the next session is asked for while
  * the previous one's goodbye is still being assembled, so the server keeps
  * both. Measured against E19 from `@mcp-abap-adt/adt-clients`, whose test
  * harness recycles per test: one abandoned session every 1-2 seconds for the
@@ -26,7 +26,10 @@ const config: SapConfig = {
   client: '100',
 };
 
-/** A close that settles only when the test says so. */
+/**
+ * A close whose logoff has left — it reports the write at once — and whose
+ * answer arrives only when the test says so.
+ */
 function suspendedClose(connection: { transport: unknown }) {
   let release!: () => void;
   const arrived = new Promise<void>((resolve) => {
@@ -34,8 +37,9 @@ function suspendedClose(connection: { transport: unknown }) {
   });
   let started = false;
   const transport = connection.transport as { close: unknown };
-  transport.close = jest.fn(async () => {
+  transport.close = jest.fn(async (_context: unknown, written?: () => void) => {
     started = true;
+    written?.();
     await arrived;
   });
   return { release, started: () => started };
@@ -52,8 +56,8 @@ describe('flushGoodbye', () => {
     );
 
     await connection.disconnect();
-    // disconnect() has returned while the logoff is still in flight — that is
-    // the behaviour, not the defect.
+    // disconnect() has returned once the logoff was written, its answer still
+    // to come — that is the behaviour, not the defect.
     expect(goodbye.started()).toBe(true);
 
     let flushed = false;
