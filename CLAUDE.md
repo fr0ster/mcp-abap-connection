@@ -131,6 +131,17 @@ fact belongs on the transport instead.
   pass back in `makeAdtRequest`; nothing in `src/` reads either. A per-request
   deadline is the caller's choice and is honoured only by the HTTP wire — RFC
   is a synchronous call with nothing to cancel
+- The request's `signal` (`requestAbort.ts`) is a boundary, not a cancel: it is
+  checked before each send, resend and `rejected()`, and every wait of the
+  request — `authorize()`, `rejected()`, a logon, the token exchange, an RFC
+  call's own logon and `open()` — is raced against it (`untilAborted`), for
+  that caller only; the work runs on and its late answer is dropped. An abort
+  rejects `ADT_REQUEST_ERROR.ABORTED` in fixed words. Nothing hands the signal
+  to axios or the SDK: a request already sent is not recalled. The suites are
+  `requestSignalHttp`, `requestSignalRfc` (two callers, one aborted at each
+  boundary) and `requestSignalUnhandled`, which runs a scenario under plain
+  node (`helpers/plainNode/register.cjs`) — Jest's sandboxed `process` never
+  sees an `unhandledRejection`, so a listener inside a Jest test proves nothing
 
 **Taking the RFC wire** needs the SAP NW RFC SDK on the machine and
 `@mcp-abap-adt/sap-rfc-lite` installed; `rfcConversationFrom(config)` derives

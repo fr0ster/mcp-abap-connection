@@ -53,6 +53,7 @@ import type {
   IAdtTransportResponse,
   IOnPremTransport,
 } from './IAdtTransport.js';
+import { isRequestAborted, untilAborted } from './requestAbort.js';
 import { isStatefulRequest } from './statefulRequest.js';
 
 /**
@@ -367,7 +368,7 @@ export class RfcTransport implements IOnPremTransport {
     const generation = this.generation;
     return isStatefulRequest(request)
       ? this.carry(request, this.conversation, generation)
-      : this.carryOnItsOwn(request, generation);
+      : this.carryOnItsOwn(request, generation, request.signal);
   }
 
   /**
@@ -387,21 +388,23 @@ export class RfcTransport implements IOnPremTransport {
   private async carryOnItsOwn(
     request: IAdtTransportRequest,
     generation: number,
+    signal: AbortSignal | undefined,
   ): Promise<IAdtTransportResponse> {
     if (this.canReset !== false && !this.statelessBusy) {
-      return this.carryOnKept(request, generation);
+      return this.carryOnKept(request, generation, signal);
     }
-    return this.carryOnThrowaway(request, generation);
+    return this.carryOnThrowaway(request, generation, signal);
   }
 
   private async carryOnKept(
     request: IAdtTransportRequest,
     generation: number,
+    signal: AbortSignal | undefined,
   ): Promise<IAdtTransportResponse> {
     this.statelessBusy = true;
     try {
       if (!this.stateless?.alive) {
-        const opened = await this.openOwn(generation);
+        const opened = await this.openOwn(generation, signal);
         // Checked again after the await: close() may have run since openOwn()
         // checked, and a conversation of a closed wire must not become the
         // kept one of the next.
@@ -451,8 +454,9 @@ export class RfcTransport implements IOnPremTransport {
   private async carryOnThrowaway(
     request: IAdtTransportRequest,
     generation: number,
+    signal: AbortSignal | undefined,
   ): Promise<IAdtTransportResponse> {
-    const own = await this.openOwn(generation);
+    const own = await this.openOwn(generation, signal);
     this.logger?.debug('RFC conversation opened for one stateless call');
     try {
       return await this.carry(request, own, generation);
@@ -466,8 +470,11 @@ export class RfcTransport implements IOnPremTransport {
    * wire was closed meanwhile, the conversation is closed again and nothing is
    * sent — not a PUT, not a DELETE — on a wire already given back.
    */
-  private async openOwn(generation: number): Promise<IRfcConversation> {
-    const own = await this.loggedOn();
+  private async openOwn(
+    generation: number,
+    signal: AbortSignal | undefined,
+  ): Promise<IRfcConversation> {
+    const own = await this.loggedOn(signal);
     if (generation !== this.generation || !this.conversation?.alive) {
       await this.closeQuietly(own);
       throw new Error(
@@ -504,15 +511,43 @@ export class RfcTransport implements IOnPremTransport {
    * A new conversation, logged on: the provider is asked what to open with,
    * every time, and a failed open is a refused logon whose cause is the SDK's
    * own error, untouched — a provider reads its `key` and message.
+   *
+   * With a request's signal — a call that opens a conversation of its own —
+   * both waits are that request's: the provider's logon and the open. An
+   * abort ends either for this request at once. A logon it stopped waiting
+   * for opens nothing; an open it stopped waiting for runs on, and the
+   * conversation it opens — this request's alone — is closed when it does.
    */
-  private async loggedOn(): Promise<IRfcConversation> {
+  private async loggedOn(signal?: AbortSignal): Promise<IRfcConversation> {
     const parameters: Record<string, string> = {};
-    await this.context?.logon(this.logonTarget(parameters));
+    if (this.context) {
+      await untilAborted(
+        signal,
+        this.context.logon(this.logonTarget(parameters)),
+      );
+    }
     const conversation = this.connect(parameters);
+    // An `open()` that throws instead of rejecting is a refused logon too.
+    let opened: Promise<void>;
     try {
-      await conversation.open();
+      opened = Promise.resolve(conversation.open());
     } catch (e) {
+      opened = Promise.reject(e);
+    }
+    const opening = opened.catch((e: unknown) => {
       throw new WireLogonError(e);
+    });
+    try {
+      await untilAborted(signal, opening);
+    } catch (e) {
+      if (isRequestAborted(e)) {
+        // A failed open has nothing to close, and its failure is nobody's.
+        opening.then(
+          () => this.closeQuietly(conversation),
+          () => {},
+        );
+      }
+      throw e;
     }
     return conversation;
   }

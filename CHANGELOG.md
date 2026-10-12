@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [15.1.0] - 2026-10-12
+
+### Added
+- **The request's signal, at every send boundary, on HTTP and RFC.**
+  `makeAdtRequest({ …, signal })` honours `IAbapRequestOptions.signal`
+  (`@mcp-abap-adt/interfaces-adt-connection` `^2.1.0`, was `^2.0.0`). It is
+  checked before the first send, before every resend (the CSRF recovery and the
+  cookie retry of a GET included) and before the provider's `rejected()`; and
+  every wait of the request races it — the provider's `authorize()` and
+  `rejected()`, a logon (`establish()`), the token exchange, and over RFC the
+  logon and `open()` of a conversation of its own, kept or throwaway. Once it
+  aborts, nothing more of the request is sent, and the call rejects at once
+  with `code: ADT_REQUEST_ERROR.ABORTED` (`'ADT_REQUEST_ABORTED'`) in fixed
+  words: nothing of the request, the signal's reason or a server's text in
+  them. A wait ends for that caller only — the shared work behind it (a
+  provider's renewal, the token exchange) runs on for every other request, and
+  what it answers late is handled and dropped. A conversation an RFC call
+  opened for itself alone is closed when its `open()` answers. An aborted
+  request leaves the session's CSRF token and cookies as they are.
+- `IAdtTransportRequest.signal`: the caller's signal, handed to the wire for
+  the waits it makes on the request's behalf before it sends. `RfcTransport`
+  races its per-call logon and `open()` against it; no wire hands it to its
+  client, because a request already sent is not recalled.
+
+### Unchanged
+- A request already sent is not recalled: the server may act on it, and its
+  answer is the caller's. `timeout` still bounds an HTTP request.
+- Without a signal, a request behaves exactly as in 15.0.1. `disconnect()`, its
+  logoff and `flushGoodbye()` are not a caller's request and take no signal.
+
 ## [15.0.1] - 2026-10-12
 
 The code is the same as 15.0.0.
@@ -2404,7 +2434,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.1.0...HEAD
+[15.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.1...v15.1.0
 [15.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.0...v15.0.1
 [15.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.1.0...v15.0.0
 [14.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.1...v14.1.0

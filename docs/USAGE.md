@@ -227,6 +227,51 @@ await connection.makeAdtRequest({
 });
 ```
 
+### Cancelling a request
+
+A request takes the caller's `AbortSignal` as `signal`. It is checked at every
+point where the request would send something — before the first send, before
+every resend (the CSRF recovery's included) and before the provider is asked to
+renew — and every wait the request makes races it: the provider's `authorize()`
+and `rejected()`, a logon (`establish()`), the token exchange and, over RFC, the
+`open()` of a conversation of its own. Once it aborts, nothing more of the
+request is sent and the call rejects at once with `code: 'ADT_REQUEST_ABORTED'`
+(`ADT_REQUEST_ERROR.ABORTED` from `@mcp-abap-adt/interfaces-adt-connection`),
+in fixed words.
+
+```typescript
+import { ADT_REQUEST_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
+import { getTimeout } from '@mcp-abap-adt/connection';
+const controller = new AbortController();
+try {
+  await connection.makeAdtRequest<string>({
+    method: 'GET',
+    url: '/sap/bc/adt/repository/nodestructure',
+    timeout: getTimeout('default'),
+    signal: controller.signal,
+  });
+} catch (error) {
+  if ((error as { code?: unknown }).code === ADT_REQUEST_ERROR.ABORTED) {
+    // Nothing more of it was sent. What was already sent may have been acted on.
+  }
+}
+```
+
+What it does not do:
+
+- **It does not recall a request already sent.** The server may act on it, and
+  its answer — success or failure — is still the caller's. Only what would
+  follow it (a resend, a renewal) is not sent.
+- **It ends a wait for this caller only.** The work behind it runs on: a
+  provider shares one renewal among every request it refused, and the token
+  exchange earns a token for every request on the session. Whatever that work
+  answers late is handled and dropped. A conversation an RFC call opened for
+  itself alone is closed when its `open()` answers.
+- **It is not the deadline.** `timeout` still bounds a request on the HTTP wire;
+  the signal is the caller saying it no longer needs the answer.
+
+Without a signal a request behaves exactly as before.
+
 ## Session Management
 
 ### Stateless Mode (Default)

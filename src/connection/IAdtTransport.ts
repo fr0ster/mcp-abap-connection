@@ -52,6 +52,14 @@ export interface IAdtTransportRequest {
    * `HttpTransport.dress`.
    */
   stateful?: boolean;
+  /**
+   * The caller's signal, for the waits a wire makes on this request's behalf
+   * before it sends — over RFC, the logon and the open of a conversation of
+   * its own. An abort ends such a wait for this request only; whatever it
+   * opened for this request alone is given back. Not a cancel: a request
+   * already sent is not recalled, so no wire hands it to its client.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 /** What came back, in the terms every transport can produce. */
