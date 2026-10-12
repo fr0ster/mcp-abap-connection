@@ -366,8 +366,13 @@ describe('the wire’s establishment', () => {
   });
 });
 
+/**
+ * The logoff carries the session's cookie and nothing that logs on, as Eclipse
+ * ADT 3.60.3 sends it: the service answers `sap-authenticated: not required`,
+ * so a credential would only be handed to a public endpoint that ignores it.
+ */
 describe('the goodbye', () => {
-  it('is authorized', async () => {
+  it('carries the cookie, not the credential, and does not ask the provider', async () => {
     const { conn, provider } = onPremWith();
     await conn.connect();
     const before = provider.calls.filter(
@@ -378,13 +383,14 @@ describe('the goodbye', () => {
     await conn.flushGoodbye();
 
     expect(stub.sentTo(LOGOFF)).toHaveLength(1);
-    expect(stub.sentTo(LOGOFF)[0].headers.authorization).toBe('Stub 0');
-    expect(
-      provider.calls.filter((c) => c.method === 'authorize').length,
-    ).toBeGreaterThan(before);
+    expect(stub.sentTo(LOGOFF)[0].headers.authorization).toBeUndefined();
+    expect(stub.sentTo(LOGOFF)[0].headers.cookie).toContain('SAP_SESSIONID');
+    expect(provider.calls.filter((c) => c.method === 'authorize').length).toBe(
+      before,
+    );
   });
 
-  it('stays silent when the provider will not authorize it', async () => {
+  it('goes out even when the provider would not authorize a request', async () => {
     const { conn } = onPremWith({
       authorize: [{ ok: true }, NO],
     });
@@ -393,7 +399,7 @@ describe('the goodbye', () => {
     await expect(conn.disconnect()).resolves.toBeUndefined();
     await expect(conn.flushGoodbye()).resolves.toBeUndefined();
 
-    expect(stub.sentTo(LOGOFF)).toHaveLength(0);
+    expect(stub.sentTo(LOGOFF)).toHaveLength(1);
   });
 });
 

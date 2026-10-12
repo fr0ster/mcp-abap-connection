@@ -136,6 +136,11 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     );
     expect(goodbye?.method).toBe('GET');
     expect(goodbye?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
+    expect(goodbye?.headers['x-sap-security-session']).toBe('use');
+    expect(goodbye?.headers.Authorization).toBeUndefined();
+    expect(goodbye?.headers.Accept).toBe('*/*');
+    expect(goodbye?.headers['sap-cancel-on-close']).toBe('true');
+    expect(goodbye?.headers['sap-adt-request-id']).toMatch(/^[0-9a-f]{32}$/);
     // Never the DELETE on the session's own address: from inside that session
     // it answers 200 and ends nothing (measured on a BTP trial, 2026-10-12).
     expect(seen.some((r) => r.method === 'DELETE')).toBe(false);
@@ -600,6 +605,14 @@ describe('disconnect ends the server session', () => {
     );
     expect(logoff).toBeDefined();
     expect(logoff?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
+    // As Eclipse sends it: the cookie and nothing that logs on — the service
+    // answers `sap-authenticated: not required`.
+    expect(logoff?.headers.Authorization).toBeUndefined();
+    expect(logoff?.headers.Accept).toBe('*/*');
+    expect(logoff?.headers['sap-cancel-on-close']).toBe('true');
+    expect(logoff?.headers['sap-adt-request-id']).toMatch(/^[0-9a-f]{32}$/);
+    // On-prem names no security session: its session arrives with the logon.
+    expect(logoff?.headers['x-sap-security-session']).toBeUndefined();
   });
 
   it('disconnects anyway when the logoff fails', async () => {
@@ -736,18 +749,33 @@ describe('disconnect ends the server session', () => {
     attachMockAxios(conn, seen);
 
     await conn.connect();
-    // What the goodbye asks of the credential: the session context's
-    // `authorize`, which is `credentialHeaders` — not `getAuthHeaders`, which
-    // the goodbye never calls.
-    (conn as any).credentialHeaders = async () => {
-      throw new Error('no credential to build a header from');
+    // Building the request throws, as a certificate connection's agent can.
+    (conn as any).transport.client = () => {
+      throw new Error('no material to build the agent from');
     };
 
     await expect(conn.disconnect()).resolves.toBeUndefined();
     await settled();
     expect(conn.isConnected()).toBe(false);
     expect(conn.getSessionIdentity()).toBeNull();
-    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(0);
+  });
+
+  it('asks nothing of the credential to say goodbye', async () => {
+    const conn = onPrem(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    attachMockAxios(conn, seen);
+
+    await conn.connect();
+    // The session context's `authorize` is `credentialHeaders`: the logoff
+    // never reaches it, so a credential that cannot build a header any more
+    // does not keep the session open.
+    (conn as any).credentialHeaders = async () => {
+      throw new Error('no credential to build a header from');
+    };
+
+    await expect(conn.disconnect()).resolves.toBeUndefined();
+    await settled();
+    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
   });
 
   it('sends nothing when there is no session to end', async () => {

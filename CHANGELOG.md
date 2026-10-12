@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server links no logoff resource, nothing is sent and the debug log says
   so.
 
+### Changed
+- **The logoff is sent as Eclipse ADT 3.60.3 sends it, on both wires**: the
+  session's cookie and no credential, with `Accept: */*`,
+  `sap-adt-request-id` and `sap-cancel-on-close: true`, and on the cloud
+  `x-sap-security-session: use`. The service answers `sap-authenticated: not
+  required`, so the credential the goodbye carried was handed to a public
+  endpoint that ignored it; the provider is no longer asked, and a provider
+  that refuses no longer keeps the session open. Measured 2026-10-12 on a BTP
+  trial and on premise (BASIS 816): after `disconnect()` the session's cookie
+  alone is refused with `401` at once and 10 s later.
+
 ## [14.0.1] - 2026-10-09
 
 Documentation and development only; the code is the same as 14.0.0.

@@ -151,6 +151,7 @@ export class CloudHttpTransport
     // Snapshotted for the same reason: the logoff must reach the server holding
     // this session, not whichever one the wire is pinned to when it goes out.
     const affinity = this.affinityHeaders();
+    const session = this.sessionHeaders();
     if (!cookies) {
       // No cookie to prove the session is ours — holding the cookie is the
       // whole permission to end one.
@@ -165,33 +166,17 @@ export class CloudHttpTransport
       return;
     }
 
-    try {
-      const auth: Record<string, string> = {};
-      await context.authorize(auth);
-      // Its answer is not read: it is the same `200` and the same goodbye page
-      // for a live session, one already ended and no cookie at all (measured on
-      // a BTP trial, 2026-10-12), so it says nothing about THIS session; and
-      // when the logoff cannot end one, the reason is an error message whose
-      // status the ICF kernel picks, which no ABAP source shows.
-      await this.sendDetached({
-        method: 'GET',
-        url: new URL(logoff, context.baseUrl).toString(),
-        headers: {
-          ...affinity,
-          // Detached, so not dressed: the client is said here in so many
-          // words, as on every other request of this wire.
-          ...this.clientHeaders(),
-          ...auth,
-          ...context.extraHeaders,
-          Cookie: mergeCookieHeaders(auth.Cookie, cookies),
-        },
-      });
-      this.logger?.debug('Told the server the security session is finished');
-    } catch (error) {
-      this.logger?.debug(
-        `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    await this.sendLogoff(
+      context,
+      new URL(logoff, context.baseUrl).toString(),
+      {
+        cookies,
+        affinity,
+        // `x-sap-security-session: use`, as Eclipse sends it on the logoff: it
+        // names the session the logoff ends, like every other request here.
+        session,
+      },
+    );
   }
 
   /**
