@@ -25,15 +25,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on for every other request, and what it answers late is handled and
   dropped. A token exchange the request started makes no further attempt; one
   already on the wire is not recalled, and the token it earns is the
-  session's. The signal is checked once more right before every send and every
-  RFC call, so an abort that lands after a wait answered still stops it. A
+  session's. The signal is checked once more right before every send, every
+  send of the request's own token exchange and every RFC call, so an abort
+  that lands after a wait answered still stops it. A
   conversation an RFC call
   opened for itself alone is closed when its `open()` answers. An aborted
   request leaves the session's CSRF token and cookies as they are.
 - `IAdtTransportRequest.signal`: the caller's signal, handed to the wire for
   the waits it makes on the request's behalf before it sends. `RfcTransport`
-  races its per-call logon and `open()` against it; no wire hands it to its
-  client, because a request already sent is not recalled.
+  races its per-call logon and `open()` against it, and checks it before the
+  call; no wire hands it to its client, because a request already sent is
+  not recalled.
+- `IAdtEstablishContext.signal`: the signal of the one request a token
+  exchange is made for (its upfront fetch, its CSRF recovery); absent for
+  `connect()`'s. `HttpTransport.establish` checks it immediately before each
+  send of the exchange. The exchange is that request's alone, so stopping it
+  takes nothing from another caller. A custom wire's `establish()` should do
+  the same.
 
 ### Unchanged
 - A request already sent is not recalled: the server may act on it, and its

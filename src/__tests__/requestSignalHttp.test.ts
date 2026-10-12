@@ -109,6 +109,8 @@ describe('HTTP: the request signal at every send boundary', () => {
     await drained();
     expect(a.state()).toBe('rejected');
     expect(a.error()).toMatchObject(ABORTED);
+    // A's exchange ended at the abort, while its authorize was still out.
+    expect(exchanges[0].state()).toBe('rejected');
 
     gate.resolve();
     await expect(b).resolves.toMatchObject({ status: 200 });
@@ -372,6 +374,132 @@ describe('HTTP: the request signal at every send boundary', () => {
       if (wire.sends('/a') === 0) expect(outcome).toMatchObject(ABORTED);
     }
     expect(lateSends).toEqual([]);
+  });
+
+  describe('an abort in any turn after the exchange was authorized', () => {
+    /**
+     * The token exchange sends past `sendObserved`, from inside the wire. A
+     * send of the aborted caller's exchange made after its abort is recorded
+     * by the `Authorization` its own authorize wrote.
+     */
+    function watchSends(
+      wire: ReturnType<typeof scriptedWire>,
+      aborted: () => boolean,
+      mine: () => string | undefined,
+    ) {
+      const late: string[] = [];
+      const send = wire.transport.send.bind(wire.transport);
+      wire.transport.send = (request) => {
+        const authorization = request.headers?.Authorization;
+        if (
+          aborted() &&
+          authorization !== undefined &&
+          authorization === mine()
+        ) {
+          late.push(request.url);
+        }
+        return send(request);
+      };
+      return late;
+    }
+
+    it('the sole caller: nothing of its exchange is sent after the abort', async () => {
+      const late: Array<[number, string[]]> = [];
+      for (let hops = 0; hops <= 60; hops += 1) {
+        const { conn, provider, wire } = await connected();
+        wire.transport.adoptCsrfToken(null);
+        const gate = deferred();
+        provider.gates.authorize = gate.promise;
+        const controller = new AbortController();
+        let aCall: string | undefined;
+        const sent = watchSends(
+          wire,
+          () => controller.signal.aborted,
+          () => aCall,
+        );
+        const a = conn
+          .makeAdtRequest(request('/a', 'POST', controller.signal))
+          .catch((error: unknown) => error);
+        await drained();
+        aCall = `Gated ${provider.counts.authorize}`;
+        gate.resolve();
+        await afterMicrotasks(hops);
+        controller.abort();
+        await a;
+        await drained();
+        if (sent.length > 0) late.push([hops, sent]);
+      }
+      expect(late).toEqual([]);
+    });
+
+    it("two callers, one aborted: the other caller's exchange is sent and it succeeds", async () => {
+      const late: Array<[number, string[]]> = [];
+      for (let hops = 0; hops <= 60; hops += 1) {
+        const { conn, provider, wire } = await connected();
+        wire.transport.adoptCsrfToken(null);
+        const gate = deferred();
+        provider.gates.authorize = gate.promise;
+        const controller = new AbortController();
+        let aCall: string | undefined;
+        const sent = watchSends(
+          wire,
+          () => controller.signal.aborted,
+          () => aCall,
+        );
+        const discoveryBefore = wire.sends(DISCOVERY);
+        const a = conn
+          .makeAdtRequest(request('/a', 'POST', controller.signal))
+          .catch((error: unknown) => error);
+        await drained();
+        aCall = `Gated ${provider.counts.authorize}`;
+        const b = conn.makeAdtRequest(request('/b', 'POST'));
+        await drained();
+        gate.resolve();
+        await afterMicrotasks(hops);
+        controller.abort();
+        await a;
+        await expect(b).resolves.toMatchObject({ status: 200 });
+        await drained();
+        if (sent.length > 0) late.push([hops, sent]);
+        // B's exchange went out; A's, at most when it beat the abort.
+        expect(wire.sends(DISCOVERY)).toBeGreaterThanOrEqual(
+          discoveryBefore + 1,
+        );
+      }
+      expect(late).toEqual([]);
+    });
+
+    it("the CSRF recovery: nothing of the aborted caller's recovery is sent after the abort", async () => {
+      const late: Array<[number, string[]]> = [];
+      for (let hops = 0; hops <= 60; hops += 1) {
+        const { conn, provider, wire } = await connected();
+        const held = wire.hold('/a');
+        const controller = new AbortController();
+        let aCall: string | undefined;
+        const sent = watchSends(
+          wire,
+          () => controller.signal.aborted,
+          () => aCall,
+        );
+        const a = conn
+          .makeAdtRequest(request('/a', 'POST', controller.signal))
+          .catch((error: unknown) => error);
+        await drained();
+        // The recovery's exchange waits on this gate.
+        const gate = deferred();
+        provider.gates.authorize = gate.promise;
+        held.reject(refused(403, 'CSRF token validation failed'));
+        await drained();
+        aCall = `Gated ${provider.counts.authorize}`;
+        gate.resolve();
+        await afterMicrotasks(hops);
+        controller.abort();
+        await a;
+        await drained();
+        if (sent.length > 0) late.push([hops, sent]);
+      }
+      expect(late).toEqual([]);
+    });
   });
 
   it('a request already sent is not recalled: its answer is the caller’s', async () => {

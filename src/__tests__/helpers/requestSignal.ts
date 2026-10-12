@@ -73,8 +73,11 @@ export function gatedProvider(): IAuthProvider & {
     },
     authorize: async (request: IRequestTarget) => {
       counts.authorize += 1;
+      // Numbered by call, so a send can be told apart by whose authorize
+      // wrote it.
+      const call = counts.authorize;
       if (gates.authorize) await gates.authorize;
-      request.header('Authorization', 'Gated');
+      request.header('Authorization', `Gated ${call}`);
       return OK;
     },
     rejected: async (_rejection: IAuthRejection) => {

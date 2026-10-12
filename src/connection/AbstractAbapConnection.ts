@@ -1801,6 +1801,7 @@ abstract class AbstractAbapConnection
       retryDelayMs: retryDelay,
       timeoutMs: getTimeout('csrf'),
       isFatal: (error) => this.endsTheExchange(error),
+      ...(signal ? { signal } : {}),
     });
 
     const token = this.transport.csrfToken();
@@ -1862,6 +1863,7 @@ abstract class AbstractAbapConnection
       this.transport.establish({
         ...this.leasedContext(lease, lease.generation, signal),
         isFatal: (error) => this.endsTheExchange(error),
+        ...(signal ? { signal } : {}),
       }),
     );
   }

@@ -132,7 +132,9 @@ fact belongs on the transport instead.
   deadline is the caller's choice and is honoured only by the HTTP wire — RFC
   is a synchronous call with nothing to cancel
 - The request's `signal` (`requestAbort.ts`) is a boundary, not a cancel: it is
-  checked before each send, resend and `rejected()`, and every wait of the
+  checked before each send, resend and `rejected()` — and in the same turn as
+  the send: `sendObserved`, `RfcTransport.carry`, and `HttpTransport.establish`
+  through `IAdtEstablishContext.signal` — and every wait of the
   request — `authorize()`, `rejected()`, a logon, the token exchange, an RFC
   call's own logon and `open()` — is raced against it (`untilAborted`), for
   that caller only; the work runs on and its late answer is dropped. An abort

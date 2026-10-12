@@ -134,6 +134,16 @@ export interface IAdtEstablishContext extends IAdtSessionContext {
    * apart, so it asks.
    */
   isFatal?: (error: unknown) => boolean;
+  /**
+   * The signal of the one request this exchange is made for — its upfront
+   * token fetch, its CSRF recovery. Absent for `connect()`'s establishment,
+   * which is nobody's single request. A wire checks it immediately before
+   * each send of the exchange, in the same turn, and sends nothing once it
+   * has fired: the answer to an earlier `authorize` leaves turns in between.
+   * The exchange is that request's alone — no other request waits on it —
+   * so stopping it takes nothing from another caller.
+   */
+  signal?: AbortSignal | undefined;
 }
 
 export interface IAdtTransport {
