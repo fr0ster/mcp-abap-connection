@@ -163,6 +163,27 @@ Measured on E19 with bare HTTP on 2026-10-13, unless marked otherwise.
   value is not empty.
 - **A request carrying a stale (deleted) `sap-contextid` gets a 400**, and so
   does a logoff that carries one; that logoff then closes nothing.
+- **A logoff without `sap-contextid` ends the context and releases its
+  lock.** The steps were:
+  - LOCK in a stateful context. An independent probe got 403 "currently
+    editing".
+  - Logoff carrying `SAP_SESSIONID_E19_100` and `sap-usercontext`, but no
+    `sap-contextid`. It got 200, and SAP deleted `SAP_SESSIONID`.
+  - An independent session then got the LOCK (200).
+
+  So **the logoff never carries `sap-contextid`**, on-prem or cloud. It
+  carries only `SAP_SESSIONID_*`, `sap-usercontext` and the affinity it
+  needs.
+- **After an UNLOCK, the stateful ABAP context lives on**, without locks,
+  until the logoff or until a stateless request is sent in that context. The
+  connection sends no explicit `X-sap-adt-sessiontype: stateless` after an
+  unlock. This is a fact of the documented policy, not a defect.
+- **A replaced ABAP session inside a lock window** is `SESSION_REPLACED`, and
+  the connection then **logs the security session off at once**, before
+  forgetting its cookies. That ends every context of the session, including
+  the old one with its locks. The caller's `disconnect()` that follows is the
+  first of that life: it resolves once that logoff is written and sends
+  nothing more, and `flushGoodbye()` waits for the logoff's answer.
 
 ## What a consumer must do
 

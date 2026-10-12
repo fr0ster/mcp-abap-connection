@@ -170,7 +170,14 @@ fact belongs on the transport instead.
   session with the locks (`IAdtTransport.abapContext()`); a DIFFERENT
   `sap-contextid` inside a critical section is SESSION_REPLACED
   (`applyContextPolicy`; measured E19 2026-10-13: a new context leaves the
-  old lock unreachable), a first-issued or deleted one is not. The
+  old lock unreachable), a first-issued or deleted one is not — and the
+  connection then logs the security session off at once, before forgetting
+  the cookies (`ownGoodbye`; the caller's `disconnect()` waits for its write,
+  `flushGoodbye()` for its answer). The logoff never carries `sap-contextid`
+  (`logoffCookies`): measured on E19 2026-10-13, a logoff without it ended
+  the context and freed the lock, one with a stale one got 400. After an
+  UNLOCK the stateful context lives on, lockless, until the logoff or a
+  stateless request in it. The
   **ABAP session** (`sap-contextid`, stateful context, ENQUEUE locks) ending
   with it rests on the kernel module `LocalSessionTermination`'s comment and
   the measured lock release; a failed stateful request leaving one rests only

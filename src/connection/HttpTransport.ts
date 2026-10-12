@@ -292,6 +292,25 @@ export class HttpTransport implements IAdtTransport {
     return fingerprint;
   }
 
+  /**
+   * The cookies a logoff carries: the jar without `sap-contextid`.
+   *
+   * The logoff ends the HTTP security session `SAP_SESSIONID` names, and with
+   * it every ABAP context of that session. Measured on E19 with bare HTTP
+   * (2026-10-13): a LOCK held in a stateful context, then a logoff carrying
+   * `SAP_SESSIONID_E19_100` and `sap-usercontext` but no `sap-contextid` →
+   * 200, `SAP_SESSIONID` deleted, and an independent session then got the
+   * LOCK: the context ended and the lock was released. A logoff that carried a
+   * stale (deleted) `sap-contextid` got 400 and closed nothing. So the
+   * context cookie never rides on a logoff.
+   */
+  protected logoffCookies(): string | null {
+    const pairs = Array.from(this.jar.entries())
+      .filter(([name]) => name !== CONTEXT_COOKIE)
+      .map(([name, value]) => (value ? `${name}=${value}` : name));
+    return pairs.length > 0 ? pairs.join('; ') : null;
+  }
+
   /** The `sap-contextid` this wire holds, or `null` (see the contract). */
   abapContext(): string | null {
     const context = this.jar.get(CONTEXT_COOKIE);

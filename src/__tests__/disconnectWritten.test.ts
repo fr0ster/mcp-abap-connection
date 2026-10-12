@@ -73,6 +73,8 @@ async function standIn(
      * fallback `/sap/bc/adt/discovery` with this one (200: a token).
      */
     fallbackStatus?: number;
+    /** Paths answered 200, each with the `Set-Cookie` given. */
+    routes?: Record<string, string[]>;
   } = {},
 ): Promise<StandIn> {
   const sessionCookie = options.sessionCookie ?? true;
@@ -100,6 +102,12 @@ async function standIn(
         return;
       }
       held = res;
+      return;
+    }
+    const route = options.routes?.[url.split('?')[0] ?? ''];
+    if (route) {
+      res.writeHead(200, { 'content-type': 'text/plain', 'set-cookie': route });
+      res.end('');
       return;
     }
     if (url.includes('/core/http/sessions')) {
@@ -594,6 +602,136 @@ describe('disconnect() resolves once the logoff is written', () => {
       expect(logoff.headers.cookie).toContain('SAP_SESSIONID_STUB_100=S1');
       server.answerLogoff();
     }, 30_000);
+  });
+
+  describe('the logoff never carries sap-contextid', () => {
+    // Measured on E19 (2026-10-13, bare HTTP): a logoff without the context
+    // cookie ended the context and released its lock; one carrying a stale
+    // (deleted) sap-contextid got 400 and closed nothing.
+    const STALE = 'sap-contextid=STALE; path=/sap/bc/adt';
+
+    it('on-prem: a context in the jar stays off the logoff', async () => {
+      server = await standIn();
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await conn.connect();
+      conn.transport.ingest({ 'set-cookie': [STALE] });
+
+      await conn.disconnect();
+      const logoff = await server.logoffArrived;
+      const cookie = String(logoff.headers.cookie ?? '');
+      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S1');
+      expect(cookie).toContain('sap-usercontext=');
+      expect(cookie).not.toContain('sap-contextid');
+      server.answerLogoff();
+    });
+
+    it('cloud: a context in the jar stays off the logoff', async () => {
+      server = await standIn();
+      const config = {
+        ...configFor(server.baseUrl),
+        authType: 'jwt',
+        jwtToken: 'TOKEN',
+      } as SapConfig;
+      const conn = new AdtCloudConnector(
+        config,
+        TokenAuthProvider.fixed('TOKEN'),
+        cloudHttpTransport(config, null),
+        null,
+      );
+      await conn.connect();
+      conn.transport.ingest({ 'set-cookie': [STALE] });
+
+      await conn.disconnect();
+      const logoff = await server.logoffArrived;
+      const cookie = String(logoff.headers.cookie ?? '');
+      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S1');
+      expect(cookie).not.toContain('sap-contextid');
+      server.answerLogoff();
+    });
+  });
+
+  describe('a replaced ABAP session in a lock window', () => {
+    it('logs the security session off at once — one logoff, with the original SAP_SESSIONID and no sap-contextid; disconnect() then sends nothing more', async () => {
+      server = await standIn({
+        routes: {
+          '/sap/bc/adt/lock': ['sap-contextid=A; path=/sap/bc/adt'],
+          '/sap/bc/adt/write': ['sap-contextid=B; path=/sap/bc/adt'],
+        },
+      });
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await conn.connect();
+      conn.beginCriticalSection();
+      conn.setSessionType('stateful');
+
+      await conn.makeAdtRequest({
+        url: '/sap/bc/adt/lock',
+        method: 'POST',
+        timeout: 5000,
+      });
+      await expect(
+        conn.makeAdtRequest({
+          url: '/sap/bc/adt/write',
+          method: 'PUT',
+          data: 'x',
+          timeout: 5000,
+        }),
+      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+
+      const logoff = await server.logoffArrived;
+      const cookie = String(logoff.headers.cookie ?? '');
+      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S1');
+      expect(cookie).not.toContain('sap-contextid');
+
+      // The caller's disconnect(): its first of this life, so it resolves —
+      // once that logoff is written — and sends nothing more.
+      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await turns(5);
+      expect(server.logoffs()).toBe(1);
+
+      // flushGoodbye() waits for that logoff's answer.
+      const flushed = watched(conn.flushGoodbye(60_000));
+      await turns(2);
+      expect(flushed()).toBe(false);
+      server.answerLogoff();
+      await conn.flushGoodbye(60_000);
+      conn.endCriticalSection();
+    });
+
+    it("the caller's disconnect() resolves only once that logoff is written", async () => {
+      server = await standIn({
+        routes: {
+          '/sap/bc/adt/lock': ['sap-contextid=A; path=/sap/bc/adt'],
+          '/sap/bc/adt/write': ['sap-contextid=B; path=/sap/bc/adt'],
+        },
+      });
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await conn.connect();
+      const wire = bytesNeverTaken(conn.transport);
+      conn.beginCriticalSection();
+      conn.setSessionType('stateful');
+
+      await conn.makeAdtRequest({
+        url: '/sap/bc/adt/lock',
+        method: 'POST',
+        timeout: 5000,
+      });
+      await expect(
+        conn.makeAdtRequest({
+          url: '/sap/bc/adt/write',
+          method: 'PUT',
+          data: 'x',
+          timeout: 5000,
+        }),
+      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+
+      const disconnected = watched(conn.disconnect());
+      await turns(20);
+      expect(disconnected()).toBe(false);
+      wire.fail();
+      await turns(20, disconnected);
+      expect(disconnected()).toBe(true);
+      conn.endCriticalSection();
+    });
   });
 
   it('goes out on a connection of its own, closed after it', async () => {

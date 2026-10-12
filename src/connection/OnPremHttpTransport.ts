@@ -45,7 +45,8 @@ export class OnPremHttpTransport
   ): Promise<void> {
     // Read synchronously, for the same reason as the cloud wire: the teardown
     // clears the jar while this is suspended on its first await.
-    const cookies = this.cookies();
+    // Without `sap-contextid`: see `logoffCookies()`.
+    const cookies = this.logoffCookies();
     const session = this.holdsSessionCookie();
     // Snapshotted too, and for the same reason as the cookies: the goodbye must
     // reach the application server that holds THIS session, and by the time it

@@ -154,7 +154,8 @@ export class CloudHttpTransport
     // connection waits for its write only after the transition — so a
     // goodbye assembled after an await would carry no cookie, which is the
     // one thing that proves the session is ours to end.
-    const cookies = this.cookies();
+    // Without `sap-contextid`: see `logoffCookies()`.
+    const cookies = this.logoffCookies();
     // Snapshotted for the same reason: the logoff must reach the server holding
     // this session, not whichever one the wire is pinned to when it goes out.
     const affinity = this.affinityHeaders();

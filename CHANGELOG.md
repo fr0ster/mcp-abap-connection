@@ -121,6 +121,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   makes SAP delete it (one-character value, 1980 expiry), the lock is
   released, `SAP_SESSIONID` stays (measured). Outside a critical section
   nothing is decided.
+- **The logoff never carries `sap-contextid`** — only `SAP_SESSIONID_*`,
+  `sap-usercontext` and the affinity it needs, on-prem and cloud
+  (`HttpTransport.logoffCookies`). Measured on E19 with bare HTTP
+  (2026-10-13): a LOCK held in a stateful context (an independent probe got
+  403 "currently editing"), then a logoff carrying `SAP_SESSIONID_E19_100`
+  and `sap-usercontext` but no `sap-contextid` → 200, SAP deleted
+  `SAP_SESSIONID`, and an independent session then got the LOCK: the logoff
+  ended the context and released the lock. A logoff carrying a stale
+  (deleted) `sap-contextid` got 400 and closed nothing — so the context
+  cookie, which SAP may have deleted unseen, is never sent with it.
+- **On a replaced ABAP session in a lock window, the connection logs off at
+  once**, before forgetting the cookies: the old context and its locks live on
+  under the unchanged `SAP_SESSIONID`, and that logoff ends every context of
+  the security session, the old one with its locks (measured above). The
+  caller's `disconnect()` that follows is its first of that life: it resolves
+  once that logoff is written and sends nothing more; `flushGoodbye()` waits
+  for its answer.
 - **`IAdtTransport.abapContext()`** (required): the ABAP session the wire
   addresses — over HTTP the `sap-contextid` cookie — or `null`; RFC answers
   `null` (its conversation is the session).

@@ -529,6 +529,16 @@ What was measured on E19 with bare HTTP (2026-10-13):
 - A stateless request inside a stateful context makes SAP **delete**
   `sap-contextid`. The lock is released and `SAP_SESSIONID` stays. That is
   not a replacement.
+- A logoff carrying `SAP_SESSIONID` but **no** `sap-contextid` ended the
+  context and released its lock: an independent session then got the LOCK.
+  A logoff carrying a stale `sap-contextid` got 400 and closed nothing.
+  So the logoff never carries `sap-contextid`.
+- After an UNLOCK, the stateful ABAP context lives on, without locks, until
+  the logoff or until a stateless request is sent in that context.
+- On a replacement inside a lock window, the connection logs the security
+  session off at once, ending the old context and its locks too.
+  `disconnect()` then resolves once that logoff is written, sending nothing
+  more, and `flushGoodbye()` waits for its answer.
 
 ### Uninterruptible spans
 

@@ -148,6 +148,15 @@ abstract class AbstractAbapConnection
    * twice is told so rather than handed a success that waited for nothing.
    */
   private disconnectCalled = false;
+  /**
+   * A goodbye the connection dispatched on its own during this connection
+   * life — today only on a replaced ABAP session in a lock window — which the
+   * caller's `disconnect()` and `flushGoodbye()` must still see.
+   */
+  private ownGoodbye: {
+    answered: Promise<void>;
+    written: Promise<void>;
+  } | null = null;
 
   private inCriticalSection = false;
   /** Reference count for nested beginCriticalSection()/endCriticalSection() pairs. */
@@ -372,6 +381,7 @@ abstract class AbstractAbapConnection
     const baselineEpoch = this.lifecycle.teardownEpoch;
     // A new connection life: its own disconnect() is owed once.
     this.disconnectCalled = false;
+    this.ownGoodbye = null;
     await this.lifecycle.transition('connect', async () => {
       if (this.lifecycle.connected) return;
 
@@ -499,8 +509,17 @@ abstract class AbstractAbapConnection
       // the promise never turns a failed goodbye into an unhandled rejection —
       // the transport already logs what went wrong.
       const goodbye = this.dispatchGoodbye(context);
-      this.goodbye = goodbye.answered;
-      written = goodbye.written;
+      // A goodbye the connection already sent in this life (a replaced ABAP
+      // session) is part of this teardown: the caller waits for its write,
+      // and `flushGoodbye()` for its answer, as for its own.
+      const own = this.ownGoodbye;
+      this.ownGoodbye = null;
+      this.goodbye = own
+        ? Promise.all([own.answered, goodbye.answered]).then(() => {})
+        : goodbye.answered;
+      written = own
+        ? Promise.all([own.written, goodbye.written]).then(() => {})
+        : goodbye.written;
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
@@ -947,10 +966,21 @@ abstract class AbstractAbapConnection
     if (!this.inCriticalSection) return;
     if (before === null || after === null || before === after) return;
 
+    // The old context and its locks live on under the unchanged
+    // SAP_SESSIONID, out of this connection's reach — and the cookie that can
+    // end them is about to be cleared. So the logoff goes FIRST: it carries
+    // SAP_SESSIONID and never sap-contextid, and ends every context of that
+    // security session, the old one with its locks (measured on E19,
+    // 2026-10-13; see `HttpTransport.logoffCookies`). `close()` takes its
+    // cookies synchronously, before the clearing below. Kept for the caller's
+    // `disconnect()` (which then resolves once this is written, sending
+    // nothing more) and `flushGoodbye()`.
+    this.ownGoodbye = this.dispatchGoodbye(this.sessionContext());
+    this.goodbye = this.ownGoodbye.answered;
     this.raiseSessionLost('the ABAP session (sap-contextid) changed under us');
     throw sessionError(
       ADT_SESSION_ERROR.SESSION_REPLACED,
-      "The ABAP session this connection was locking in is gone: inside the lock window the server addressed a different one (a new sap-contextid). The locks held in the old session are out of this connection's reach, and an UNLOCK sent now would release nothing. " +
+      "The ABAP session this connection was locking in is gone: inside the lock window the server addressed a different one (a new sap-contextid). The locks held in the old session were out of this connection's reach, so it has logged the security session off, which ends every context of it, the old one with its locks. " +
         'What to do about it is yours: re-establish and redo the work, or fail the operation. Nothing is retried here.',
     );
   }
