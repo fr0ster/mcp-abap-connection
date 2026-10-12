@@ -106,13 +106,54 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     ).toBe(true);
   });
 
-  it('cloud opens the session resource and gives it back by DELETE', async () => {
+  it('cloud opens the session resource and gives it back through the logoff it links to', async () => {
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
       TokenAuthProvider.fixed('TOKEN'),
       cloudHttpTransport(
         { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
         makeLogger(),
+      ),
+      makeLogger(),
+    );
+    const seen: Seen[] = [];
+    attachMockAxios(conn as never, seen, async () => ({
+      status: 200,
+      data: '<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom"><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/><atom:link href="/sap/public/bc/icf/logoff" rel="http://www.sap.com/adt/categories/core/http/sessions/logoff"/></http:session>',
+      headers: {
+        'x-csrf-token': 'TOKEN',
+        'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+      },
+    }));
+
+    await conn.connect();
+    await conn.disconnect();
+    await settled();
+
+    expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(true);
+    const goodbye = seen.find((r) =>
+      r.url.includes('/sap/public/bc/icf/logoff'),
+    );
+    expect(goodbye?.method).toBe('GET');
+    expect(goodbye?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
+    expect(goodbye?.headers['x-sap-security-session']).toBe('use');
+    expect(goodbye?.headers.Authorization).toBeUndefined();
+    expect(goodbye?.headers.Accept).toBe('*/*');
+    expect(goodbye?.headers['sap-cancel-on-close']).toBe('true');
+    expect(goodbye?.headers['sap-adt-request-id']).toMatch(/^[0-9a-f]{32}$/);
+    // Never the DELETE on the session's own address: from inside that session
+    // it answers 200 and ends nothing (measured on a BTP trial, 2026-10-12).
+    expect(seen.some((r) => r.method === 'DELETE')).toBe(false);
+  });
+
+  it('cloud sends nothing to end a session the server linked no logoff for', async () => {
+    const logger = makeLogger();
+    const conn = new AdtCloudConnector(
+      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      TokenAuthProvider.fixed('TOKEN'),
+      cloudHttpTransport(
+        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+        logger,
       ),
       makeLogger(),
     );
@@ -127,13 +168,113 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     }));
 
     await conn.connect();
+    const before = seen.length;
     await conn.disconnect();
     await settled();
 
-    expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(true);
-    expect(seen.some((r) => r.method === 'DELETE')).toBe(true);
-    // And never the platform logoff: that is the other system's mechanism.
-    expect(seen.some((r) => r.url.includes('/icf/logoff'))).toBe(false);
+    expect(seen.length).toBe(before);
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining('published no logoff resource'),
+    );
+  });
+});
+
+describe('the cloud logoff link', () => {
+  function cloudWithLogoffHref(href: string, logger: ILogger, seen: Seen[]) {
+    const conn = new AdtCloudConnector(
+      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      TokenAuthProvider.fixed('TOKEN'),
+      cloudHttpTransport(
+        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+        logger,
+      ),
+      makeLogger(),
+    );
+    attachMockAxios(conn as never, seen, async () => ({
+      status: 200,
+      data: `<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom"><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/><atom:link href="${href}" rel="http://www.sap.com/adt/categories/core/http/sessions/logoff"/></http:session>`,
+      headers: {
+        'x-csrf-token': 'TOKEN',
+        'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+      },
+    }));
+    return conn;
+  }
+
+  it('resolves a relative href against the session document, as an Atom link is', async () => {
+    const seen: Seen[] = [];
+    const conn = cloudWithLogoffHref('logoff', makeLogger(), seen);
+
+    await conn.connect();
+    await conn.disconnect();
+    await settled();
+
+    expect(seen.at(-1)?.url).toBe(
+      'https://sap.example.com/sap/bc/adt/core/http/logoff',
+    );
+  });
+
+  it('sends nothing for an href that is no URL, and the close still settles', async () => {
+    const logger = makeLogger();
+    const seen: Seen[] = [];
+    const conn = cloudWithLogoffHref('http://[', logger, seen);
+
+    await conn.connect();
+    const before = seen.length;
+    const transport = (conn as any).transport;
+    await expect(conn.disconnect()).resolves.toBeUndefined();
+    await settled();
+    // And the wire's own close, asked again, has nothing left that can throw.
+    await expect(
+      transport.close({ baseUrl: 'https://sap.example.com' }),
+    ).resolves.toBeUndefined();
+
+    expect(seen.length).toBe(before);
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining('logoff link that is no URL'),
+    );
+  });
+
+  it('carries no credential even when the context holds one', async () => {
+    const transport = cloudHttpTransport(
+      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      makeLogger(),
+    );
+    transport.ingest({
+      'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+    });
+    (transport as any).logoff =
+      'https://sap.example.com/sap/public/bc/icf/logoff';
+    const seen: Seen[] = [];
+    const instance = async (cfg: any) => {
+      seen.push({
+        url: cfg.url,
+        method: cfg.method,
+        headers: cfg.headers ?? {},
+      });
+      return { status: 200, data: '', headers: {} };
+    };
+    (instance as any).interceptors = {
+      request: { clear: jest.fn() },
+      response: { clear: jest.fn() },
+    };
+    (transport as any).instance = instance;
+    const authorize = jest.fn();
+
+    await transport.close({
+      baseUrl: 'https://sap.example.com',
+      authorize,
+      extraHeaders: {
+        authorization: 'Bearer LEAKED',
+        'sap-adt-connection-id': 'C-1',
+      },
+    } as never);
+
+    expect(seen).toHaveLength(1);
+    const names = Object.keys(seen[0].headers).map((n) => n.toLowerCase());
+    expect(names).not.toContain('authorization');
+    expect(seen[0].headers['sap-adt-connection-id']).toBe('C-1');
+    expect(authorize).not.toHaveBeenCalled();
   });
 });
 
@@ -460,8 +601,8 @@ describe('a session opened before a failed connect is not abandoned', () => {
           headers: { 'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'] },
         };
       }
-      // The DELETE that says goodbye.
-      if (String(cfg.url).includes('/core/http/sessions/')) {
+      // The logoff that says goodbye.
+      if (String(cfg.url).includes('/icf/logoff')) {
         return { status: 200, data: '', headers: {} };
       }
       // Establishing then fails, as it can on a credential the preflight did
@@ -497,7 +638,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
     await new Promise((r) => setTimeout(r, 20));
 
     const goodbye = seen.find(
-      (r) => r.method === 'DELETE' && r.url.includes('/core/http/sessions/S-1'),
+      (r) => r.method === 'GET' && r.url.includes('/sap/public/bc/icf/logoff'),
     );
     expect(goodbye).toBeDefined();
     // With the cookie that is the whole permission to close it, taken before
@@ -563,6 +704,14 @@ describe('disconnect ends the server session', () => {
     );
     expect(logoff).toBeDefined();
     expect(logoff?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
+    // As Eclipse sends it: the cookie and nothing that logs on — the service
+    // answers `sap-authenticated: not required`.
+    expect(logoff?.headers.Authorization).toBeUndefined();
+    expect(logoff?.headers.Accept).toBe('*/*');
+    expect(logoff?.headers['sap-cancel-on-close']).toBe('true');
+    expect(logoff?.headers['sap-adt-request-id']).toMatch(/^[0-9a-f]{32}$/);
+    // On-prem names no security session: its session arrives with the logon.
+    expect(logoff?.headers['x-sap-security-session']).toBeUndefined();
   });
 
   it('disconnects anyway when the logoff fails', async () => {
@@ -699,18 +848,33 @@ describe('disconnect ends the server session', () => {
     attachMockAxios(conn, seen);
 
     await conn.connect();
-    // What the goodbye asks of the credential: the session context's
-    // `authorize`, which is `credentialHeaders` — not `getAuthHeaders`, which
-    // the goodbye never calls.
-    (conn as any).credentialHeaders = async () => {
-      throw new Error('no credential to build a header from');
+    // Building the request throws, as a certificate connection's agent can.
+    (conn as any).transport.client = () => {
+      throw new Error('no material to build the agent from');
     };
 
     await expect(conn.disconnect()).resolves.toBeUndefined();
     await settled();
     expect(conn.isConnected()).toBe(false);
     expect(conn.getSessionIdentity()).toBeNull();
-    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(0);
+  });
+
+  it('asks nothing of the credential to say goodbye', async () => {
+    const conn = onPrem(baseConfig, makeLogger());
+    const seen: Seen[] = [];
+    attachMockAxios(conn, seen);
+
+    await conn.connect();
+    // The session context's `authorize` is `credentialHeaders`: the logoff
+    // never reaches it, so a credential that cannot build a header any more
+    // does not keep the session open.
+    (conn as any).credentialHeaders = async () => {
+      throw new Error('no credential to build a header from');
+    };
+
+    await expect(conn.disconnect()).resolves.toBeUndefined();
+    await settled();
+    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
   });
 
   it('sends nothing when there is no session to end', async () => {

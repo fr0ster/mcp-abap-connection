@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [14.1.0] - 2026-10-12
+
+### Fixed
+- **A cloud connection's `disconnect()` now ends its security session.** The
+  close sent `DELETE` on the session's own address, and the server ends a
+  session that way only when the request runs in a DIFFERENT one; from inside
+  it the answer is `200` and nothing is ended, so every closed connection left
+  its session until the server's timeout. The close now sends the logoff the
+  session document links to (`rel=…/sessions/logoff`). Measured on a BTP trial
+  (2026-10-12): after the `DELETE` the session's cookie alone was still
+  accepted 30 s later; after the logoff it is refused with `401` at once. When
+  the server links no logoff resource, nothing is sent and the debug log says
+  so.
+
+### Changed
+- **The logoff is sent as Eclipse ADT 3.60.3 sends it, on both wires**: the
+  session's cookie and no credential, with `Accept: */*`,
+  `sap-adt-request-id` and `sap-cancel-on-close: true`, and on the cloud
+  `x-sap-security-session: use`. The service answers `sap-authenticated: not
+  required`, so the credential the goodbye carried was handed to a public
+  endpoint that ignored it; the provider is no longer asked, and a provider
+  that refuses no longer keeps the session open. Measured 2026-10-12 on a BTP
+  trial and on premise (BASIS 816): after `disconnect()` the session's cookie
+  alone is refused with `401` at once and 10 s later.
+
 ## [14.0.1] - 2026-10-09
 
 Documentation and development only; the code is the same as 14.0.0.
@@ -2348,7 +2373,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.1.0...HEAD
+[14.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.1...v14.1.0
 [14.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.0.0...v14.0.1
 [14.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v13.0.0...v14.0.0
 [13.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v12.0.0...v13.0.0

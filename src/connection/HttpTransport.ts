@@ -19,6 +19,7 @@
  * the cookie jar and the CSRF token are the session's and stay.
  */
 
+import { randomUUID } from 'node:crypto';
 import { Agent, type AgentOptions } from 'node:https';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
@@ -708,11 +709,67 @@ export class HttpTransport implements IAdtTransport {
   /**
    * Nothing to give back at this level.
    *
-   * The two concrete wires override it — the cloud one DELETEs the session
-   * resource, the on-prem one sends the platform logoff. A bare HTTP wire has
+   * The two concrete wires override it — the cloud one sends the logoff its
+   * session document links to, the on-prem one the platform logoff. A bare HTTP wire has
    * neither, and says so by doing nothing.
    */
   async close(_context: IAdtSessionContext): Promise<void> {}
+
+  /**
+   * The logoff, sent as Eclipse ADT 3.60.3 sends it when a project is closed.
+   *
+   * The session's cookie and nothing that logs on: the service answers
+   * `sap-authenticated: not required`, so a credential would only be handed to
+   * a public endpoint that ignores it (measured on a BTP trial, 2026-10-12).
+   * What is snapshotted — the cookie, the affinity, the session headers — is
+   * taken by the caller before its first await, because the teardown clears it
+   * while the close is suspended.
+   *
+   * Its answer is not read: it is the same `200` and the same goodbye page for
+   * a live session, one already ended and no cookie at all, so it says nothing
+   * about THIS session; and when the logoff cannot end one, the reason is an
+   * error message whose status the ICF kernel picks, which no ABAP source shows.
+   */
+  protected async sendLogoff(
+    context: IAdtSessionContext,
+    url: string,
+    snapshot: {
+      cookies: string;
+      affinity: Record<string, string>;
+      session: Record<string, string>;
+    },
+  ): Promise<void> {
+    // Nothing that logs on, whoever put it in the context: the goodbye carries
+    // the session's cookie and no credential.
+    const extra = Object.fromEntries(
+      Object.entries(context.extraHeaders ?? {}).filter(
+        ([name]) => name.trim().toLowerCase() !== 'authorization',
+      ),
+    );
+    try {
+      await this.sendDetached({
+        method: 'GET',
+        url,
+        headers: {
+          ...snapshot.affinity,
+          // Detached, so not dressed: the client is said here in so many
+          // words, as on every other request of this wire.
+          ...this.clientHeaders(),
+          ...extra,
+          ...snapshot.session,
+          Accept: '*/*',
+          'sap-adt-request-id': randomUUID().replace(/-/g, ''),
+          'sap-cancel-on-close': 'true',
+          Cookie: snapshot.cookies,
+        },
+      });
+      this.logger?.debug('Told the server the session is finished');
+    } catch (error) {
+      this.logger?.debug(
+        `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
 
   /**
    * Throws for a status the request does not admit — by doing nothing, because

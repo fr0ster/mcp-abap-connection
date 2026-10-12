@@ -53,7 +53,7 @@ function httpSubstrate() {
 
     // The teardown call. 200 with no cookie, which is what a logoff answers —
     // and it must not read as a new session.
-    if (url.includes('/icf/logoff') || request.method === 'DELETE') {
+    if (url.includes('/icf/logoff')) {
       live = false;
       return { status: 200, statusText: 'OK', headers: {}, data: '' };
     }

@@ -2,12 +2,19 @@
  * ABAP Cloud over HTTP: the wire where a session is a resource with an address.
  *
  * Asked for at `/sap/bc/adt/core/http/sessions` with `x-sap-security-session:
- * create` and `sap-adt-purpose: preflight_logon`, and given back by `DELETE` on
- * the address the server publishes in the answer. Reproduced from Eclipse ADT
- * 3.60 and measured against a BTP trial: without that request the same
- * connection gets `sap-usercontext` and `sap-XSRF_*` and no session for a lock
- * to be bound to, which is how "cloud issues no SAP_SESSIONID" came to be
- * believed.
+ * create` and `sap-adt-purpose: preflight_logon`, and given back through the
+ * logoff resource the same answer links to. Reproduced from Eclipse ADT 3.60 and
+ * measured against a BTP trial: without that request the same connection gets
+ * `sap-usercontext` and `sap-XSRF_*` and no session for a lock to be bound to,
+ * which is how "cloud issues no SAP_SESSIONID" came to be believed.
+ *
+ * **Not by `DELETE` on the session's own address.** The resource ends a session
+ * only when the address names a DIFFERENT one than the request runs in — a new
+ * session ending an old one — and otherwise answers `200` having done nothing.
+ * Measured on a BTP trial (2026-10-12): after that `DELETE` the session's cookie
+ * alone was still accepted, at once and 30 s later; after the logoff it was
+ * refused with `401` at once, and so was a session whose address another
+ * session sent the `DELETE` for.
  *
  * **Taking this transport is the consumer saying which system it is dialling.**
  * Nothing here asks the server what it is. The strategy this replaces treated a
@@ -33,6 +40,9 @@ const SESSION_ACCEPT =
 
 const SECURITY_SESSION_REL =
   'http://www.sap.com/adt/categories/core/http/sessions/securitysession';
+
+const LOGOFF_REL =
+  'http://www.sap.com/adt/categories/core/http/sessions/logoff';
 
 export class CloudHttpTransport
   extends HttpTransport
@@ -65,8 +75,8 @@ export class CloudHttpTransport
     return this.sessionEstablished() ? { 'x-sap-security-session': 'use' } : {};
   }
 
-  /** The address this server published for our session — the only close target. */
-  private resource: string | null = null;
+  /** The logoff resource this server linked to beside our session, resolved — the close target. */
+  private logoff: string | null = null;
 
   override async open(context: IAdtSessionContext): Promise<void> {
     // The logon, outside the swallowing `try`: a credential that refuses it
@@ -101,7 +111,7 @@ export class CloudHttpTransport
       context.observe(response.headers);
       this.ingest(response.headers as Record<string, unknown>);
 
-      const resource = this.securitySessionHref(response.data);
+      const resource = this.linkHref(response.data, SECURITY_SESSION_REL);
       if (!resource) {
         // Answered, but published no session of its own — so there is no
         // address to give one back by. Said out loud rather than worked
@@ -113,7 +123,12 @@ export class CloudHttpTransport
         return;
       }
 
-      this.resource = resource;
+      // Published only while its ICF service is active; without it there is
+      // nothing that ends this session, and the close says so.
+      this.logoff = this.resolveLink(
+        this.linkHref(response.data, LOGOFF_REL),
+        `${context.baseUrl}${SESSIONS_PATH}`,
+      );
       this.logger?.debug(`Security session opened: ${resource}`);
     } catch (error) {
       // The provider will not authorize the preflight: its word, not a failed
@@ -129,65 +144,72 @@ export class CloudHttpTransport
   }
 
   override async close(context: IAdtSessionContext): Promise<void> {
-    const resource = this.resource;
-    this.resource = null;
+    const logoff = this.logoff;
+    this.logoff = null;
     // Read SYNCHRONOUSLY, before the first await. A close is dispatched
     // without being awaited, so the teardown's `forgetSession()` runs while
     // this is suspended — and a goodbye assembled afterwards would carry no
     // cookie, which is the one thing that proves the session is ours to end.
     const cookies = this.cookies();
-    const csrf = this.csrfToken();
-    // Snapshotted for the same reason: the DELETE must reach the server holding
+    // Snapshotted for the same reason: the logoff must reach the server holding
     // this session, not whichever one the wire is pinned to when it goes out.
     const affinity = this.affinityHeaders();
-    if (!resource || !cookies) {
-      // No address to send it to, or no cookie to prove the session is ours —
-      // holding the cookie is the whole permission to end one.
+    const session = this.sessionHeaders();
+    if (!cookies) {
+      // No cookie to prove the session is ours — holding the cookie is the
+      // whole permission to end one.
+      return;
+    }
+    if (!logoff) {
+      // A session was opened, but the server linked no logoff resource: it
+      // stays until the server's own timeout.
+      this.logger?.debug(
+        'The server published no logoff resource; the security session is left to its timeout',
+      );
       return;
     }
 
+    await this.sendLogoff(context, logoff, {
+      cookies,
+      affinity,
+      // `x-sap-security-session: use`, as Eclipse sends it on the logoff: it
+      // names the session the logoff ends, like every other request here.
+      session,
+    });
+  }
+
+  /**
+   * An href resolved against the document that published it, as a link in an
+   * Atom document is. Resolved at open, so the close has nothing left that can
+   * throw: an href that is no URL is said once and leaves nothing to send.
+   */
+  private resolveLink(
+    href: string | undefined,
+    documentUrl: string,
+  ): string | null {
+    if (!href) return null;
     try {
-      const auth: Record<string, string> = {};
-      await context.authorize(auth);
-      await this.sendDetached({
-        method: 'DELETE',
-        url: new URL(resource, context.baseUrl).toString(),
-        headers: {
-          ...affinity,
-          // Detached, so not dressed: the client is said here in so many
-          // words, as on every other request of this wire.
-          ...this.clientHeaders(),
-          ...auth,
-          ...context.extraHeaders,
-          Cookie: mergeCookieHeaders(auth.Cookie, cookies),
-          'x-sap-security-session': 'use',
-          // A state change, so the server wants the token. Without one the
-          // request is refused with 403 — which is still just a message the
-          // server did not accept, and still not something to raise from a
-          // teardown.
-          ...(csrf ? { 'x-csrf-token': csrf } : {}),
-        },
-      });
-      this.logger?.debug('Told the server the security session is finished');
-    } catch (error) {
+      return new URL(href, documentUrl).toString();
+    } catch {
       this.logger?.debug(
-        `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+        `The server published a logoff link that is no URL: ${href}`,
       );
+      return null;
     }
   }
 
   /**
-   * The `securitysession` link's href, by its `rel` rather than by position.
+   * A link's href, by its `rel` rather than by position.
    *
    * The document carries three links — the session, the logoff resource and
    * system information — and their order is not a contract.
    */
-  private securitySessionHref(body: unknown): string | undefined {
+  private linkHref(body: unknown, wanted: string): string | undefined {
     if (typeof body !== 'string') return undefined;
     for (const link of body.matchAll(/<[^>]*link\b([^>]*)>/g)) {
       const attrs = link[1];
       const rel = attrs.match(/\brel="([^"]*)"/)?.[1];
-      if (rel !== SECURITY_SESSION_REL) continue;
+      if (rel !== wanted) continue;
       const href = attrs.match(/\bhref="([^"]*)"/)?.[1];
       if (href) return href;
     }

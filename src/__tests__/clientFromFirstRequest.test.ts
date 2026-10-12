@@ -24,6 +24,8 @@ const CLIENTS = new Set(['100', '200']);
 const SESSIONS = '/sap/bc/adt/core/http/sessions';
 const SECURITY_SESSION_REL =
   'http://www.sap.com/adt/categories/core/http/sessions/securitysession';
+const LOGOFF_REL =
+  'http://www.sap.com/adt/categories/core/http/sessions/logoff';
 
 interface Seen {
   method: string;
@@ -85,7 +87,7 @@ async function startIcf(): Promise<{
           'set-cookie': cookies,
         });
         res.end(
-          `<session><link rel="${SECURITY_SESSION_REL}" href="${SESSIONS}/1"/></session>`,
+          `<session><link rel="${SECURITY_SESSION_REL}" href="${SESSIONS}/1"/><link rel="${LOGOFF_REL}" href="/sap/public/bc/icf/logoff"/></session>`,
         );
         return;
       }
@@ -170,9 +172,7 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
 
       // The goodbye is sent detached, not dressed — and says the client too.
       const goodbye = icf.seen[icf.seen.length - 1];
-      expect(goodbye.path).toBe(
-        wire === 'cloud' ? `${SESSIONS}/1` : '/sap/public/bc/icf/logoff',
-      );
+      expect(goodbye.path).toBe('/sap/public/bc/icf/logoff');
       expect(goodbye.headers['sap-client']).toBe('200');
       expect(goodbye.client).toBe('200');
     });

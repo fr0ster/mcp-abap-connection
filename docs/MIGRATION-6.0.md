@@ -87,7 +87,9 @@ The cloud wire is not the on-prem one with a different name. It asks for a
 session at `/sap/bc/adt/core/http/sessions` and gives it back by `DELETE` on the
 address the server publishes; the on-prem wire has neither, and says goodbye
 through the platform logoff. Handing the wrong one to a connector does not
-compile.
+compile. (Later releases give the cloud session back through the logoff its
+session document links to: the `DELETE`, sent from inside the session, ended
+nothing — see the CHANGELOG.)
 
 The `ITokenRefresher` that used to be a constructor slot **is** the credential
 now. Hand `TokenAuthProvider` a bare string instead and you get a token with

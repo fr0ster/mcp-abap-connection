@@ -16,7 +16,6 @@
  * first to see whether it answers.
  */
 
-import { mergeCookieHeaders } from '../utils/cookies.js';
 import { HttpTransport } from './HttpTransport.js';
 import type {
   IAdtEstablishContext,
@@ -82,29 +81,10 @@ export class OnPremHttpTransport
       return;
     }
 
-    try {
-      // Authorized once: a provider may answer differently on a second call,
-      // and one request must be built from one credential.
-      const auth: Record<string, string> = {};
-      await context.authorize(auth);
-      await this.sendDetached({
-        method: 'GET',
-        url: `${context.baseUrl}${ICF_LOGOFF_PATH}`,
-        headers: {
-          ...affinity,
-          // Detached, so not dressed: the client is said here in so many
-          // words, as on every other request of this wire.
-          ...this.clientHeaders(),
-          ...auth,
-          ...context.extraHeaders,
-          Cookie: mergeCookieHeaders(auth.Cookie, cookies),
-        },
-      });
-      this.logger?.debug('Told the server the session is finished');
-    } catch (error) {
-      this.logger?.debug(
-        `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    await this.sendLogoff(context, `${context.baseUrl}${ICF_LOGOFF_PATH}`, {
+      cookies,
+      affinity,
+      session: {},
+    });
   }
 }
