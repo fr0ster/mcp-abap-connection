@@ -460,10 +460,13 @@ the logoff's own.
 
 **Call it once per `connect()`.** A second call, while the first is still
 writing or after it, rejects with `ADT_SESSION_ERROR.NOT_CONNECTED`; the
-first call is unaffected. A failed `connect()` that dispatched a goodbye — in
-practice the cloud preflight's security session (measured on a BTP trial); a
-failure after a successful preflight is a code path, not observed live —
-rejects only after that goodbye is written. Either way the `disconnect()` in
+first call is unaffected. A failed `connect()` that dispatched a goodbye
+rejects only after that goodbye is written. A connect that fails after
+authentication leaves a live session on cloud and on-prem alike: the cloud
+preflight opens one (BTP trial, 2026-10-12), and on E19 an authenticated
+request answered 404 or 403 still set a live `SAP_SESSIONID` (2026-10-13;
+`CL_HTTP_SERVER_NET` creates the security session at logon, before any
+handler). The ICF logoff ends it only when that cookie is present. Either way the `disconnect()` in
 your `finally` is the first one of that life. Over RFC the close waits for a call still running on its
 conversation (sap-rfc-lite serialises them), so there it resolves after that
 call.

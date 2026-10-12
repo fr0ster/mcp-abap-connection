@@ -39,15 +39,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first call is unaffected.
 - **A failed `connect()` rejects only after its own goodbye is written, when
   it dispatched one**, so a caller that exits on the error does not lose it.
-  In practice that is the cloud wire: its preflight opens a security session
-  (measured on a BTP trial, 2026-10-12), and an establishment that fails after
-  it says goodbye to that session. A failure after a successful preflight is
-  a code path, not observed on a live system. On-prem, a connect refused for
-  opening no ABAP session (E19 answered with `sap-XSRF_*` instead of
-  `SAP_SESSIONID`, measured) sends the logoff only when the establishment left
-  a cookie in the jar: the wire's rule is "established and holding a cookie",
-  not "holding `SAP_SESSIONID`". What that logoff ends on SAP's side is not
-  measured.
+  A `connect()` that fails AFTER authentication leaves a live session, on
+  cloud and on-prem alike, so the connector's own goodbye is required:
+  - Cloud: the preflight opens a security session (measured on a BTP trial,
+    2026-10-12).
+  - On-prem, measured on E19 (BASIS 816, 2026-10-13): authenticated requests
+    answered with an error (404 for an unknown ADT resource, 404 for an
+    unknown class, 403 for DELETE on discovery) each set
+    `SAP_SESSIONID_E19_100`, and that cookie alone then got 200 on
+    discovery: the session was alive.
+  - On-prem, in the ABAP code on E19: `CL_HTTP_SERVER_NET` method
+    `authentication` creates the security session on a successful logon
+    (`set_core_authenticate`, `m_security_session_created = abap_true`)
+    before any handler runs, and `send_response` sets the
+    `SAP_SESSIONID_<SYSID>_<CLIENT>` cookie whenever that flag is true,
+    whatever the status.
+
+  The ICF logoff (`CL_HTTP_EXT_LOGOFF` → `CL_HTTP_SERVER_NET->
+  if_http_server~logoff`) ends the security session only when that cookie is
+  present: `terminate_security_session` deletes `SECURITY_CONTEXT` and calls
+  the kernel's `LocalSessionTermination`, which ends every application
+  session of the context (the inactivity timeout's path). The on-prem wire
+  sends its logoff whenever the establishment left any cookie in the jar. A
+  logoff without `SAP_SESSIONID` therefore ends nothing on SAP's side, and
+  that rule is harmless.
 - **The logoff goes out on a connection of its own** (`agent: false` over plain
   HTTP; the wire's own TLS agent or a proxy's is kept), so "written" is not a
   write to a pooled socket the server already closed. It no longer follows a

@@ -141,11 +141,14 @@ fact belongs on the transport instead.
   the write. `flushGoodbye()` is the wait for the answer. `disconnect()` is
   called once per `connect()`: a second call rejects `NOT_CONNECTED` (a
   consumer that calls it twice is told, not engineered around); a failed
-  `connect()` that dispatched a goodbye rejects only after it is written — in
-  practice the cloud preflight's session (measured, BTP trial); the failure
-  after a successful preflight is a code path, not observed live; on-prem the
-  wire sends one only when the establishment left a cookie (any, `sap-XSRF_*`
-  included). Tests:
+  `connect()` that dispatched a goodbye rejects only after it is written. A
+  connect failing after authentication leaves a live session on both wires
+  (cloud preflight: BTP trial 2026-10-12; on-prem: E19 2026-10-13, an
+  authenticated 404/403 still set a live `SAP_SESSIONID` —
+  `CL_HTTP_SERVER_NET->authentication` creates it before any handler, and
+  `send_response` sets the cookie whatever the status). The ICF logoff ends a
+  session only when `SAP_SESSIONID` is present; the on-prem wire sends one
+  whenever any cookie is in the jar, which is harmless. Tests:
   `disconnectWritten` (a real stand-in server that holds its answer; a socket
   that never takes the bytes; RFC)
 

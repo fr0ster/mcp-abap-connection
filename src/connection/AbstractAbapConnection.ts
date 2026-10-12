@@ -720,9 +720,12 @@ abstract class AbstractAbapConnection
       // The goodbye is the connector's own, so connect() rejects only once it
       // is WRITTEN: a caller that exits on the error must not lose it. When
       // the wire dispatches none (nothing to end), this resolves at once.
-      // The case that sends one is the cloud preflight's session (measured on
-      // a BTP trial); an establishment failing after a successful preflight
-      // is a code path, not observed on a live system. The answer is not
+      // A failure after authentication leaves a live session on both wires:
+      // the cloud preflight opens one (BTP trial, 2026-10-12), and on-prem an
+      // authenticated error answer still sets a live SAP_SESSIONID (E19,
+      // 2026-10-13: 404 and 403 each did; CL_HTTP_SERVER_NET->authentication
+      // creates the security session before any handler runs, and
+      // send_response sets the cookie whatever the status). The answer is not
       // waited for, as a teardown does not wait for one; its failure was
       // absorbed above, so nothing goes unhandled.
       await goodbye.written;
@@ -782,11 +785,13 @@ abstract class AbstractAbapConnection
       // is about to drop the cookies that are the only permission to close it.
       // Refusing to connect must not leak the session the refusal is about.
       // Written before connect() rejects, as above, when the wire sends one:
-      // on-prem only if the establishment left a cookie in the jar (E19 left
-      // `sap-XSRF_*` when it opened no session — measured; what the logoff
-      // ends then is not), on cloud when the preflight opened a session. Its
-      // answer is not waited for, and a close that throws or rejects is
-      // logged and absorbed.
+      // on-prem whenever the establishment left any cookie, on cloud when the
+      // preflight opened a session. Without SAP_SESSIONID the logoff ends
+      // nothing on SAP's side — CL_HTTP_SERVER_NET->if_http_server~logoff
+      // terminates the security session only when that cookie is present
+      // (E19's ABAP code) — so a goodbye carrying `sap-XSRF_*` alone is
+      // harmless. Its answer is not waited for, and a close that throws or
+      // rejects is logged and absorbed.
       const goodbye = this.dispatchGoodbye(this.sessionContext());
       this.invalidateSession();
       this.lifecycle.forgetIdentity();
