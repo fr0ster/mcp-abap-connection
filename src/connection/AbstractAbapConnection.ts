@@ -969,11 +969,10 @@ abstract class AbstractAbapConnection
     return { outcome: { ok: false, refusal: NO_CREDENTIAL_TO_RENEW } };
   }
 
-  // The defaults are IAbapConnection's (interfaces-adt-connection), which this
-  // implements: changing them here alone would type every caller's response
-  // differently from the contract it codes against. They change there first.
-  // biome-ignore lint/suspicious/noExplicitAny: mirrors IAbapConnection.makeAdtRequest
-  async makeAdtRequest<T = any, D = any>(
+  // The defaults are IAbapConnection's (interfaces-adt-connection 2: `unknown`),
+  // which this implements: changing them here alone would type every caller's
+  // response differently from the contract it codes against.
+  async makeAdtRequest<T = unknown, D = unknown>(
     options: AbapRequestOptions,
   ): Promise<IAdtWireResponse<T, D>> {
     // Admission first, synchronously, before any await: the check and the

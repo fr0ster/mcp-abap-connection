@@ -166,7 +166,8 @@ them is refused with `ADT_NOT_CONNECTED`.
 
 ```typescript
 import { getTimeout } from '@mcp-abap-adt/connection';
-const packages = await connection.makeAdtRequest({
+// The body is XML: name its type, or the answer's `data` is `unknown`.
+const packages = await connection.makeAdtRequest<string>({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
   params: {
@@ -716,11 +717,14 @@ try {
 connection satisfies, including RFC:
 
 ```typescript
-import { AbapRequestOptions } from '@mcp-abap-adt/connection';
-import type { AxiosResponse } from 'axios';
+import type { AbapRequestOptions } from '@mcp-abap-adt/connection';
+import type { IAdtWireResponse } from '@mcp-abap-adt/interfaces-adt-connection';
 interface AbapConnection {
   connect(): Promise<void>; // REQUIRED before any request
-  makeAdtRequest(options: AbapRequestOptions): Promise<AxiosResponse>;
+  // An answer whose type is not named is `unknown` (interfaces-adt-connection 2).
+  makeAdtRequest<T = unknown, D = unknown>(
+    options: AbapRequestOptions,
+  ): Promise<IAdtWireResponse<T, D>>;
   getBaseUrl(): Promise<string>;
   setSessionType(type: "stateless" | "stateful"): void;
   getSessionId(): string | null; // client-side conversation id
