@@ -162,7 +162,15 @@ fact belongs on the transport instead.
   logoff deletes with a one-character value and a 1980 expiry, E19 trace
   2026-10-13). A core-discovery 404 is not a failed connect: the fallback
   runs in the same session, and the goodbye goes only when connect() as a
-  whole fails. The
+  whole fails. In short: `disconnect()` logs off iff a live `SAP_SESSIONID`
+  is held; a failed `connect()` logs off itself only when the whole connect
+  (core + fallback discovery) failed AND a live `SAP_SESSIONID` was received;
+  a successful connect sends none. Two sessions: `SAP_SESSIONID` = HTTP
+  security session (logon), `sap-contextid` (`path=/sap/bc/adt`) = ABAP
+  session with the locks (`IAdtTransport.abapContext()`); a DIFFERENT
+  `sap-contextid` inside a critical section is SESSION_REPLACED
+  (`applyContextPolicy`; measured E19 2026-10-13: a new context leaves the
+  old lock unreachable), a first-issued or deleted one is not. The
   **ABAP session** (`sap-contextid`, stateful context, ENQUEUE locks) ending
   with it rests on the kernel module `LocalSessionTermination`'s comment and
   the measured lock release; a failed stateful request leaving one rests only

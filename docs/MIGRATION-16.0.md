@@ -125,6 +125,45 @@ signal, and it does not need SAP's answer.
   calling `written`. `disconnect()` resolves at the first of `written()` and
   the close settling.
 
+## When the logoff is sent
+
+1. **`disconnect()`** sends the logoff if and only if the connection holds a
+   live `SAP_SESSIONID_*`: one it received, and that no `Set-Cookie` with a
+   past `expires` or `Max-Age=0` has deleted since. After a successful
+   `connect()` it always does. With only `sap-XSRF_*` it sends nothing.
+2. **A failed `connect()`** sends the logoff itself only when both of these
+   hold:
+   - the whole `connect()` failed, meaning both
+     `/sap/bc/adt/core/discovery` and the fallback `/sap/bc/adt/discovery`
+     failed;
+   - a live `SAP_SESSIONID_*` was received during it. A 403 or 404 after a
+     successful logon carries one.
+
+   `connect()` then rejects after the logoff is written. A 401 means there is
+   no session, so nothing is sent.
+3. **A successful `connect()` (200)** sends no logoff. The session lives
+   until `disconnect()`.
+
+### What the rule rests on
+Measured on E19 with bare HTTP on 2026-10-13, unless marked otherwise.
+
+- **`SAP_SESSIONID` is the HTTP security session**, created at logon. Each
+  logon, even a stateless `/sap/bc/ping`, adds a `SECURITY_CONTEXT` row, and
+  the logoff removes it: 6 rows went to 3.
+- **`sap-contextid` (`path=/sap/bc/adt`) addresses the ABAP session.** That is
+  where the stateful context and the ENQUEUE locks live.
+- **From the ABAP code**, `CL_HTTP_SERVER_NET->send_response` sets
+  `SAP_SESSIONID` only when the request created a security session, whatever
+  the status. An authenticated 404 or 403 carried it, and the session was
+  alive.
+- **From the ABAP code**, the ICF logoff ends a session only when that cookie
+  is present.
+- **The logoff deletes every cookie**, each with a one-character value and
+  `expires=Tue, 01-Jan-1980 00:00:01 GMT`. The expiry is what deletes it; the
+  value is not empty.
+- **A request carrying a stale (deleted) `sap-contextid` gets a 400**, and so
+  does a logoff that carries one; that logoff then closes nothing.
+
 ## What a consumer must do
 
 - **Call `disconnect()` once.** If more than one path in your code can end a
@@ -150,8 +189,16 @@ signal, and it does not need SAP's answer.
   await connection.flushGoodbye();
   await connection.connect();
   ```
-- **A custom transport** (`IAdtTransport`) changes only in one case: when its
-  `close()` stays pending long after its goodbye has left. Such a wire should
-  call the new `written` argument at that point. Otherwise `disconnect()` now
-  waits for the close to settle, where before it did not wait at all. A wire
-  whose close is over at once needs no change.
+- **A custom transport** (`IAdtTransport`) changes in two places.
+  - It must implement `abapContext(): string | null`. This returns the ABAP
+    session it addresses (over HTTP, the `sap-contextid` cookie), or `null`
+    when it has none, as RFC does.
+  - If its `close()` stays pending long after its goodbye has left, it should
+    call the new `written` argument at that point. Otherwise `disconnect()`
+    now waits for the close to settle, where before it did not wait at all. A
+    wire whose close is over at once needs no change there.
+- **Handle `SESSION_REPLACED` from the ABAP session.** Inside a critical
+  section, a request that comes back with a different `sap-contextid` now
+  rejects with `ADT_SESSION_ERROR.SESSION_REPLACED`, and the connection
+  counts as lost. This is the same handling as a changed `SAP_SESSIONID`:
+  the locks are out of reach. Re-establish the connection and redo the work.

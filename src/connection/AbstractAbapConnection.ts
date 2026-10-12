@@ -913,9 +913,45 @@ abstract class AbstractAbapConnection
     }
     // The wire folds the response into its own state; what the change MEANS
     // is decided here, because it is a question about the session's lifetime.
+    const contextBefore = this.transport.abapContext();
     this.transport.ingest(headers);
     this.applyIdentityPolicy(
       this.lifecycle.observe(this.transport.sessionFingerprint()),
+    );
+    this.applyContextPolicy(contextBefore, this.transport.abapContext());
+  }
+
+  /**
+   * Acts on a change of the ABAP (application) session inside a lock window.
+   *
+   * The identity policy above watches the HTTP security session
+   * (`SAP_SESSIONID`); locks live one level down, in the ABAP session the
+   * `sap-contextid` cookie addresses. Measured on E19 (2026-10-13): a stateful
+   * request without that cookie but with the same `SAP_SESSIONID` is given a
+   * NEW `sap-contextid`, the lock taken in the old one stays held there, and
+   * an UNLOCK sent in the new one answers 200 and releases nothing. So inside
+   * a critical section — the lock window — a DIFFERENT `sap-contextid` means
+   * the locks are out of this connection's reach: SESSION_REPLACED, as for a
+   * changed `SAP_SESSIONID`.
+   *
+   * Keyed on the critical section, not the session mode: the write under a
+   * lock is itself stateless. Not a replacement: a `sap-contextid` issued for
+   * the first time, or deleted — a stateless switch deletes it (measured: the
+   * lock is then released and `SAP_SESSIONID` stays). Outside a critical
+   * section nothing is decided here.
+   */
+  private applyContextPolicy(
+    before: string | null,
+    after: string | null,
+  ): void {
+    if (!this.inCriticalSection) return;
+    if (before === null || after === null || before === after) return;
+
+    this.raiseSessionLost('the ABAP session (sap-contextid) changed under us');
+    throw sessionError(
+      ADT_SESSION_ERROR.SESSION_REPLACED,
+      "The ABAP session this connection was locking in is gone: inside the lock window the server addressed a different one (a new sap-contextid). The locks held in the old session are out of this connection's reach, and an UNLOCK sent now would release nothing. " +
+        'What to do about it is yours: re-establish and redo the work, or fail the operation. Nothing is retried here.',
     );
   }
 

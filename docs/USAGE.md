@@ -498,6 +498,38 @@ module `LocalSessionTermination`'s comment ("terminates all taskhandler
 measured release of the lock. Still unlock what you locked
 first: the logoff is the backstop, not the way to finish your work.
 
+### When the logoff is sent, and the two sessions
+
+**When the logoff is sent** (agreed rule; evidence below):
+1. `disconnect()` sends it iff the connection holds a live `SAP_SESSIONID_*` —
+   received, not deleted by a past `expires` / `Max-Age=0`. After a successful
+   `connect()` it always does; with only `sap-XSRF_*` it sends nothing.
+2. A failed `connect()` sends it itself only when both hold: the whole
+   `connect()` failed (both `/sap/bc/adt/core/discovery` and the fallback
+   `/sap/bc/adt/discovery`), and a live `SAP_SESSIONID_*` was received during
+   it (a 403/404 after a successful logon carries one). `connect()` then
+   rejects after the logoff is written. A 401 means no session: nothing.
+3. A successful `connect()` (200) sends no logoff; the session lives until
+   `disconnect()`.
+
+**Two sessions.**
+- **The HTTP security session.** This is the logon. It is named by
+  `SAP_SESSIONID_<SID>_<CLIENT>` and kept in `SECURITY_CONTEXT`. The ICF
+  logoff ends it.
+- **The ABAP session.** This is where the stateful context and the ENQUEUE
+  locks live. It is addressed by `sap-contextid` (`path=/sap/bc/adt`).
+
+What was measured on E19 with bare HTTP (2026-10-13):
+- A stateful request with the same `SAP_SESSIONID` but without
+  `sap-contextid` is given a new ABAP session. The lock taken in the old one
+  stays held, and an UNLOCK sent in the new one answers 200 and releases
+  nothing.
+- So inside a critical section, a **different** `sap-contextid` rejects with
+  `ADT_SESSION_ERROR.SESSION_REPLACED` and the connection counts as lost.
+- A stateless request inside a stateful context makes SAP **delete**
+  `sap-contextid`. The lock is released and `SAP_SESSIONID` stays. That is
+  not a replacement.
+
 ### Uninterruptible spans
 
 The connection does **not** track locks — it does not know one exists, what

@@ -95,6 +95,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   redirect: a 3xx is its answer, not a failure to say goodbye.
 - **Over RFC the close waits for a running call**: sap-rfc-lite 0.2.2's
   `close()` takes the invocation mutex a call holds until it returns.
+- **When the logoff is sent** (agreed rule; evidence below):
+  1. `disconnect()` sends it iff the connection holds a live `SAP_SESSIONID_*` —
+     received, not deleted by a past `expires` / `Max-Age=0`. After a successful
+     `connect()` it always does; with only `sap-XSRF_*` it sends nothing.
+  2. A failed `connect()` sends it itself only when both hold: the whole
+     `connect()` failed (both `/sap/bc/adt/core/discovery` and the fallback
+     `/sap/bc/adt/discovery`), and a live `SAP_SESSIONID_*` was received during
+     it (a 403/404 after a successful logon carries one). `connect()` then
+     rejects after the logoff is written. A 401 means no session: nothing.
+  3. A successful `connect()` (200) sends no logoff; the session lives until
+     `disconnect()`.
+- **A replaced ABAP session inside a lock window is `SESSION_REPLACED`.** The
+  connection watched only the HTTP security session (`SAP_SESSIONID`, the
+  logon). The ENQUEUE locks live in the ABAP session `sap-contextid`
+  (`path=/sap/bc/adt`) addresses. Measured on E19 with bare HTTP
+  (2026-10-13): a stateful request with the same `SAP_SESSIONID` but without
+  `sap-contextid` is given a NEW one, and the lock taken in the old one stays
+  (an independent LOCK answers 403 "currently editing"); an UNLOCK sent in
+  the wrong context answers 200 and releases nothing. So inside a critical
+  section a DIFFERENT `sap-contextid` now raises
+  `ADT_SESSION_ERROR.SESSION_REPLACED` in fixed words and the session is
+  lost, as for a changed `SAP_SESSIONID`. Not a replacement: one issued for
+  the first time, or deleted — a stateless request in a stateful context
+  makes SAP delete it (one-character value, 1980 expiry), the lock is
+  released, `SAP_SESSIONID` stays (measured). Outside a critical section
+  nothing is decided.
+- **`IAdtTransport.abapContext()`** (required): the ABAP session the wire
+  addresses — over HTTP the `sap-contextid` cookie — or `null`; RFC answers
+  `null` (its conversation is the session).
 - **`IAdtTransport.close(context, written?)`**: a wire calls `written` once its
   goodbye has left; `disconnect()` resolves at the first of that and the close
   settling. A custom wire whose close stays pending after its goodbye has left
