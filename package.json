@@ -51,7 +51,7 @@
   },
   "dependencies": {
     "@mcp-abap-adt/auth-errors": "^2.2.1",
-    "@mcp-abap-adt/interfaces-adt-connection": "^2.1.0",
+    "@mcp-abap-adt/interfaces-adt-connection": "^3.0.0",
     "@mcp-abap-adt/interfaces-auth": "^7.5.0",
     "@mcp-abap-adt/interfaces-auth-sap": "^3.3.0",
     "@mcp-abap-adt/interfaces-network": "^2.0.1",

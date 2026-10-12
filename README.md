@@ -680,17 +680,6 @@ owns is not being interrupted by a timeout mid-operation — see
 
 See [docs/USAGE.md — Session Lifecycle](./docs/USAGE.md#session-lifecycle).
 
-**Cancelling a request.** `makeAdtRequest({ …, signal })` takes the caller's
-`AbortSignal`. Once it aborts, nothing more of the request is sent — not the
-first send, not a resend, not the CSRF recovery, not a renewal — and the call
-rejects at once with `code: 'ADT_REQUEST_ABORTED'` (`ADT_REQUEST_ERROR.ABORTED`
-from `@mcp-abap-adt/interfaces-adt-connection`), over HTTP and RFC alike. A
-request already sent is not recalled, and a provider's renewal it was waiting
-on runs on for the other requests. A token exchange the request started makes
-no further attempt; the one already on the wire is not recalled, and the token
-it earns is the session's. See
-[docs/USAGE.md — Cancelling a request](./docs/USAGE.md#cancelling-a-request).
-
 **Session Management:**
 - `setSessionType(type)`: Programmatically switch between stateful and stateless modes *(on the contract)*
 - `getSessionId()`: Returns the client-side conversation id, an auto-generated UUID *(on the contract)*
