@@ -221,6 +221,11 @@ gone. Two methods replace it:
 provider refuses, so a goodbye that authorizes catches it; the connection absorbs
 a rejected close it dispatched, but a close that never throws is the contract.
 
+(Later releases send the logoff of the shipped wires without a credential, as
+Eclipse does: the service answers `sap-authenticated: not required`, and a goodbye
+that waits on the provider leaves the session open when the provider refuses. A
+custom wire is better off doing the same — see the CHANGELOG.)
+
 ```ts
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
