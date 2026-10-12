@@ -155,6 +155,33 @@ const response = await connection.makeAdtRequest({
 });
 ```
 
+## Building a connection: `createConnection`
+
+The recommended way to build a connection. State the system and the wire, and
+the factory picks the connector and the transport. Nothing is inferred:
+
+| `system` | `transport` | builds |
+|---|---|---|
+| `cloud` | `http` | `AdtCloudConnector` over `CloudHttpTransport` |
+| `onprem` | `http` | `AdtOnPremConnector` over `OnPremHttpTransport` |
+| `onprem` | `legacy-http` | `AdtOnPremConnector` over `LegacyOnPremHttpTransport` (BASIS 7.40) |
+| `onprem` | `rfc` | `AdtOnPremConnector` over `RfcTransport(rfcConversationFrom(config))` |
+
+Any other combination is refused at construction with a `TypeError`.
+`client` and `baseUrl` reach the HTTP wires from `config`. `agentOptions`,
+`rfc`, `wireLogger`, `logger` and `sessionId` are passed through exactly as
+you give them; whatever you leave out takes the constructors' own defaults.
+
+**A new instance on every call.** One instance is one SAP session. After its
+`disconnect()` it is spent, and the next session is the next
+`createConnection(...)`. The constructors still work for anything the
+factory does not name.
+
+Wrapping the connection with your own HTTP request logging stays with the
+consumer. That is a policy of yours, typically read from your environment, not
+a property of the wire. The factory passes `wireLogger` to the transport,
+which is the wire's own logging.
+
 ## Making ADT Requests
 
 All requests are made using the `makeAdtRequest()` method. CSRF token handling

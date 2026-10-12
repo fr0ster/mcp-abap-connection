@@ -221,7 +221,55 @@ For detailed installation instructions, see [Installation Guide](./docs/INSTALLA
 
 ## Quick Start
 
-### Basic Usage (On-Premise)
+### The recommended way: `createConnection`
+
+```typescript
+import { createConnection, getTimeout } from "@mcp-abap-adt/connection";
+import type { SapConfig } from "@mcp-abap-adt/connection";
+import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
+
+const config: SapConfig = {
+  url: "https://your-sap-system.com",
+  client: "100",
+  authType: "basic",
+  username: "your-username",
+  password: "your-password",
+};
+
+// Which system, and which wire: both stated, never inferred.
+//   cloud  + http          → AdtCloudConnector  + CloudHttpTransport
+//   onprem + http          → AdtOnPremConnector + OnPremHttpTransport
+//   onprem + legacy-http   → AdtOnPremConnector + LegacyOnPremHttpTransport (BASIS 7.40)
+//   onprem + rfc           → AdtOnPremConnector + RfcTransport
+const connection = createConnection({
+  system: "onprem",
+  transport: "http",
+  config,
+  credential: new BasicAuthProvider(config.username!, config.password!),
+});
+
+await connection.connect();
+try {
+  await connection.makeAdtRequest({
+    method: "GET",
+    url: "/sap/bc/adt/discovery",
+    timeout: getTimeout("default"),
+  });
+} finally {
+  await connection.disconnect(); // resolves once the logoff is written
+}
+// One instance is one SAP session: a new session is a new createConnection().
+```
+
+`createConnection` returns a **new instance on every call**. Any other
+combination of system and wire (cloud over RFC, say) is refused at
+construction. The transport options are passed through as you give them:
+`agentOptions` for the HTTP wires, `rfc` for the RFC wire, `wireLogger` for
+what the wire logs about itself, `logger` and `sessionId` for the connection.
+The constructors below remain available; the factory only names the four
+combinations that exist.
+
+### Basic Usage (On-Premise), with the constructors
 
 ```typescript
 import {
@@ -700,6 +748,16 @@ interface ILogger {
 ```
 
 ### Functions
+
+#### `createConnection(spec)`
+
+Builds a NEW connection from what the caller states: `system` (`'cloud'` or
+`'onprem'`) and `transport` (`'http'`, `'legacy-http'` or `'rfc'`), plus
+`config`, `credential` and, optionally, `logger`, `wireLogger`, `sessionId`,
+`agentOptions` (HTTP) or `rfc` (`IRfcTransportOptions`). Nothing is inferred,
+not even from `config.connectionType`. A combination that does not exist is
+refused with a `TypeError`. One instance is one SAP session: call it again
+for a new one.
 
 #### `rfcConversationFrom(config)`
 

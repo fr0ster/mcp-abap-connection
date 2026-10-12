@@ -200,6 +200,12 @@ Measured on E19 with bare HTTP on 2026-10-13, unless marked otherwise.
 
 ## What a consumer must do
 
+- **Build connections with `createConnection(spec)`** (recommended). You state
+  `system` and `transport` (`cloud`+`http`, `onprem`+`http` / `legacy-http`
+  / `rfc`), and the factory builds the right connector and wire, passing
+  your transport options through. It returns a new instance on every call,
+  which is what a new session needs. The constructors still work.
+
 - **Call `disconnect()` once.** If more than one path in your code can end a
   connection, such as a `finally` and a signal handler, let one of them own
   the call, or catch the second call's rejection. A rejection means

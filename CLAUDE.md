@@ -49,7 +49,14 @@ on it, and nothing here may branch on which provider it was handed.
   new AdtOnPremConnector(config, credential, new RfcTransport(…), logger)
 
 The wire is required and the caller builds it: there is no default and nothing
-is derived from the config. Cloud has one wire, so its type parameter admits
+is derived from the config. `createConnection(spec)` (`createConnection.ts`,
+16.0.0) is the recommended front door: the caller states `system` and
+`transport`, it builds the matching connector + wire (cloud+http,
+onprem+http / legacy-http / rfc), refuses any other combination in fixed
+words, passes transport options through, and returns a new instance per call
+(one instance = one session). An HTTP request-logging wrapper stays the
+consumer's (its env policy); the factory only hands the wire its
+`wireLogger`. Cloud has one wire, so its type parameter admits
 only `ICloudTransport` — "cloud over RFC" does not compile. On-prem has two, and
 which one is the caller's to say.
 

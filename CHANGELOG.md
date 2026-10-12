@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [16.0.0] - 2026-10-13
 
+### Added
+- **`createConnection(spec)`**, the recommended way to build a connection.
+  The caller states `system` (`'cloud'` | `'onprem'`) and `transport`
+  (`'http'` | `'legacy-http'` | `'rfc'`); the factory builds the matching
+  connector and wire:
+  - cloud+http → `AdtCloudConnector` + `CloudHttpTransport`;
+  - onprem+http → `AdtOnPremConnector` + `OnPremHttpTransport`;
+  - onprem+legacy-http → `AdtOnPremConnector` + `LegacyOnPremHttpTransport`;
+  - onprem+rfc → `AdtOnPremConnector` + `RfcTransport(rfcConversationFrom(config))`.
+
+  Nothing is inferred, `config.connectionType` included. Any other
+  combination is refused at construction in fixed words. `client` and
+  `baseUrl` come from `config`. `agentOptions`, `rfc`, `wireLogger`, `logger`
+  and `sessionId` pass through as given. A new instance on every call: one
+  instance is one session.
+
 ### Breaking
 - **The per-request signal is removed** (added in 15.1.0), on
   `@mcp-abap-adt/interfaces-adt-connection` `^3.0.0` (was `^2.1.0`), which
