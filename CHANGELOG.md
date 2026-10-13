@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [17.1.0] - 2026-10-13
+
+What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
+
+### Added
+- **`disconnect()` without `connect()` on an instance built on a session.**
+  An instance built with `session` (`createConnection({ …, session })`, or the
+  connectors' sixth argument) may be disconnected without connecting:
+  `disconnect()` sends the ICF logoff (`/sap/public/bc/icf/logoff`, on cloud
+  too) with the handed cookies — no `sap-contextid`, no credential, no CSRF
+  fetch or any other request before it, the credential's `prepare()` never
+  called — resolves when the logoff is written, and spends the instance;
+  `flushGoodbye()` waits for SAP's answer. A session string naming no
+  `SAP_SESSIONID` sends nothing. Still once: a second `disconnect()` rejects,
+  and `connect()` after it is refused as on any spent instance. For logging
+  off a leftover session of a process that is gone. No new API; an instance
+  built without `session` behaves as in 17.0.0.
+
 ## [17.0.0] - 2026-10-13
 
 What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
@@ -2630,7 +2648,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v17.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v17.1.0...HEAD
+[17.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v17.0.0...v17.1.0
 [17.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v16.0.0...v17.0.0
 [16.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.1.0...v16.0.0
 [15.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.1...v15.1.0

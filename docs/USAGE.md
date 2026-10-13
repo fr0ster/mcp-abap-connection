@@ -228,6 +228,34 @@ What `connect()` does then:
 The credential's logon moment (`establish`, which brings TLS material) is
 offered only after the session answered, so it never rides on that request.
 
+**Logging a kept session off without `connect()`** (since 17.1.0). An instance
+built with `session` may be disconnected without ever connecting — for a
+leftover session of a process that is gone:
+
+```typescript
+const leftover = createConnection({
+  system: 'onprem',
+  transport: 'http',
+  config,
+  credential: new BasicAuthProvider(config.username, config.password),
+  session: keptCookies,
+});
+await leftover.disconnect();   // the logoff has left; no connect() needed
+await leftover.flushGoodbye(); // only if you need SAP's answer too
+```
+
+`disconnect()` then sends **the logoff and nothing else**: the ICF logoff
+(`/sap/public/bc/icf/logoff`, on cloud too — measured to end a cloud security
+session) with the handed cookies, without `sap-contextid`, without the
+credential and with no CSRF fetch or other request before it; the credential's
+`prepare()` is never called. It resolves when the logoff is written, as always,
+and `flushGoodbye()` waits for SAP's answer. A string that names no
+`SAP_SESSIONID` sends nothing. The instance is spent either way: a second
+`disconnect()` rejects, and so does a `connect()` after it. An instance built
+without `session` sends nothing at a `disconnect()` before `connect()`, as
+before. Whether the session was still alive is SAP's to know; the logoff's
+answer is not read.
+
 Wrapping the connection with your own HTTP request logging stays with the
 consumer. That is a policy of yours, typically read from your environment, not
 a property of the wire. The factory passes `wireLogger` to the transport,
@@ -583,6 +611,9 @@ the logoff is the backstop, not the way to finish your work.
    retried.
 3. A successful `connect()` (200) sends no logoff; the session lives until
    `disconnect()`.
+   An instance built on a kept session (`session`) and never connected sends
+   it at `disconnect()` with the handed cookies when they name a
+   `SAP_SESSIONID_*` (see "Logging a kept session off without `connect()`").
 4. Where it goes: on-premise, the platform's ICF logoff
    (`/sap/public/bc/icf/logoff`). On cloud, the logoff resource the session
    document links to; when it links none, the same ICF logoff, sent exactly as

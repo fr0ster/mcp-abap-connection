@@ -511,6 +511,12 @@ abstract class AbstractAbapConnection
    * `connect()` rejects, so a caller's `disconnect()` in its `finally` is the
    * first of that life and has nothing of it to wait for.
    *
+   * **On an instance built on an existing session, without `connect()`**, this
+   * logs that session off: the handed cookies go to the wire, and the logoff
+   * is sent with them as for any instance — no request before it, no
+   * credential, the provider's `prepare()` never called. A string naming no
+   * `SAP_SESSIONID` sends nothing. The instance is spent either way.
+   *
    * **Requests already in flight are not waited for, and the logoff ends the
    * session they are running on** — so they will start failing against a
    * session that no longer exists. That is the caller having asked to
@@ -556,6 +562,18 @@ abstract class AbstractAbapConnection
       // The context is taken now, while the session is still true: the clear
       // below runs while the close is suspended on its first await.
       const context = this.sessionContext();
+      // An instance built on an existing session whose `connect()` never took
+      // it over: the session is still the caller's handed string, held by
+      // nothing. The wire is given its cookies — no request, no credential,
+      // nothing asked of the provider — so the logoff below ends it as for any
+      // instance: sent only when they name a live `SAP_SESSIONID`, without
+      // `sap-contextid`. A caller ending a leftover session of a process that
+      // is gone wants neither a probe nor a logon for it.
+      if (this.resumeFrom !== null) {
+        const session = this.resumeFrom;
+        this.resumeFrom = null;
+        this.seedHandedSession(session);
+      }
       // Kept, not dropped: `flushGoodbye()` is how a caller who is about to
       // open a new connection waits for it. Rejections are absorbed here so that holding
       // the promise never turns a failed goodbye into an unhandled rejection —
@@ -572,6 +590,31 @@ abstract class AbstractAbapConnection
     // transition, so the transition queue — a later connect() — is not held
     // by the write.
     await written;
+  }
+
+  /**
+   * Puts the cookies of a handed session into the wire, as `resume()` seeds
+   * its jar, and sends nothing: what the wire held goes first, and the
+   * session's cookies arrive as a `Set-Cookie` the wire folds in through its
+   * own `ingest()`. A wire whose session no cookie names (RFC) keeps nothing
+   * of it, and its close then has nothing to end. Never throws — it is
+   * reached from `disconnect()`: a custom wire that throws here is logged in
+   * fixed words (the cookies are never echoed) and its close decides alone.
+   */
+  private seedHandedSession(session: string): void {
+    try {
+      this.transport.forgetSession();
+      this.transport.ingest({
+        'set-cookie': session
+          .split(';')
+          .map((entry) => entry.trim())
+          .filter((entry) => entry !== ''),
+      });
+    } catch {
+      this.logger?.debug(
+        'Could not hand the session to the wire for its logoff',
+      );
+    }
   }
 
   /**
