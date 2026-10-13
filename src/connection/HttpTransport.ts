@@ -356,14 +356,20 @@ export class HttpTransport implements IAdtTransport {
     for (const [index, url] of endpoints.entries()) {
       try {
         // No `context.authorize`: the session's cookies are the only thing
-        // that may authenticate this request.
-        response = await this.send({
+        // that may authenticate this request. And no redirect followed: a
+        // redirect is not the session answering — followed, a login page's
+        // 200, or a SAP_SESSIONID replaced on the way, would be judged
+        // instead of what SAP said. Not admitted, a 3xx rejects as it came.
+        const fixed = this.fix({
           method: 'GET',
           url,
           headers: {
             ...context.extraHeaders,
             ...CSRF_CONFIG.REQUIRED_HEADERS,
           },
+        });
+        response = await this.dispatch(fixed, this.dress(fixed), undefined, {
+          maxRedirects: 0,
         });
         break;
       } catch (error) {
@@ -1079,8 +1085,11 @@ export class HttpTransport implements IAdtTransport {
     request: IAdtTransportRequest,
     headers: Record<string, string>,
     written?: () => void,
+    /** `maxRedirects: 0` for the adoption probe alone; see `resume()`. */
+    redirects?: { maxRedirects: number },
   ): Promise<IAdtTransportResponse> {
     const response = await this.client()({
+      ...(redirects ?? {}),
       // The write is the point `disconnect()` resolves at: the request's
       // `finish`, emitted once its bytes are handed to the socket — not when
       // the server answers, which it may do minutes later or never.

@@ -92,10 +92,11 @@ New, and nothing changes for a consumer that does not use it.
   `session`, on `AdtOnPremConnector` / `AdtCloudConnector`) builds the instance
   on that session. `connect()` does not log on: it makes one request in that
   session without the credential — the CSRF fetch; on cloud with
-  `x-sap-security-session: use` and no preflight — and SAP's answer says whether
-  the session is alive. Alive: the session is the instance's, a stateful
+  `x-sap-security-session: use` and no preflight — following no redirect, and
+  SAP's answer says whether the session is alive. Alive: the session is the instance's, a stateful
   request reaches its `sap-contextid`, and `disconnect()` logs it off as for any
-  instance. Gone (a `401`, or an answer that is not the session's):
+  instance. Gone (a `401`, a redirect — not followed, its target never asked —
+  or an answer that is not the session's):
   `connect()` rejects with SAP's answer as it is, nothing is logged off, and the
   instance is spent.
 - **HTTP wires only.** Over RFC, `session` is refused by `createConnection` at

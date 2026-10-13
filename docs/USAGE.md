@@ -207,7 +207,8 @@ What `connect()` does then:
 2. It makes **one request in that session, without the credential**: the CSRF
    fetch (`GET /sap/bc/adt/core/discovery` with `x-csrf-token: fetch`, the
    fallback `/sap/bc/adt/discovery` on a `404`; on cloud with
-   `x-sap-security-session: use`, and no preflight). Without the credential,
+   `x-sap-security-session: use`, and no preflight), following no redirect.
+   Without the credential,
    because a credential on that request would open a NEW session when the old
    one is gone (measured: a dead session cookie with a good password gets a new
    `SAP_SESSIONID`).
@@ -217,9 +218,11 @@ What `connect()` does then:
    later requests carry the credential as usual; a session lost later is
    reported as for any instance (`ADT_SESSION_REPLACED`); `disconnect()` logs it
    off as for any instance.
-4. **Gone** — a `401`, or any answer that is not the session's (another
-   `SAP_SESSIONID`, none, no token): `connect()` rejects with SAP's answer as it
-   is (`error.response`). Nothing was opened, so nothing is logged off, and the
+4. **Gone** — a `401`, a redirect (a `3xx` is not the session answering; it is
+   not followed, so its target is never asked and nothing it sets is taken), or
+   any answer that is not the session's (another `SAP_SESSIONID`, none, no
+   token): `connect()` rejects with SAP's answer as it is (`error.response`,
+   with the status and headers SAP gave). Nothing was opened, so nothing is logged off, and the
    instance is spent.
 
 The credential's logon moment (`establish`, which brings TLS material) is

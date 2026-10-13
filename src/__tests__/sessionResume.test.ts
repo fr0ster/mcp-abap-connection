@@ -310,6 +310,42 @@ describe('an instance on a session that is gone', () => {
     ).toStrictEqual([DISCOVERY]);
   });
 
+  it('follows no redirect: rejects with the 302 as SAP gave it, the target never asked', async () => {
+    const { cookies } = await openedSession();
+    stub.discovery.push({
+      status: 302,
+      headers: {
+        location: '/sap/public/bc/icf/login',
+        'set-cookie': [`${COOKIE}=S9; path=/`],
+      },
+    });
+    const before = stub.requests.length;
+
+    const conn = onPremHttp(cookies);
+    const rejected = expect(conn.connect()).rejects.toMatchObject({
+      response: {
+        status: 302,
+        headers: { location: '/sap/public/bc/icf/login' },
+      },
+    });
+    await rejected;
+    const afterConnect = stub.requests.length;
+
+    expect(
+      stub.requests.slice(before).map((request) => request.path),
+    ).toStrictEqual([DISCOVERY]);
+    expect(stub.sentTo('/sap/public/bc/icf/login')).toHaveLength(0);
+    expect(conn.isConnected()).toBe(false);
+    // Spent, and nothing logged off.
+    await expect(conn.connect()).rejects.toMatchObject({
+      code: ADT_SESSION_ERROR.NOT_CONNECTED,
+    });
+    await conn.disconnect();
+    await conn.flushGoodbye();
+    expect(stub.requests.length).toBe(afterConnect);
+    expect(stub.sentTo(LOGOFF)).toHaveLength(0);
+  });
+
   it('rejects an answer without a CSRF token', async () => {
     const { cookies } = await openedSession();
     stub.discovery.push({
