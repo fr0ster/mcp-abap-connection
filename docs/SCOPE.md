@@ -6,10 +6,15 @@
    on-prem + HTTP, on-prem + legacy HTTP (BASIS 7.40), on-prem + RFC. The caller states
    the system and the transport; nothing is inferred.
 2. **One instance, one SAP session.** `connect()` logs on; the first authenticated request
-   opens the session. A new session is a new instance.
+   opens the session. A new session is a new instance. An instance may instead be built on
+   an existing session: `createConnection({ …, session })` takes that session's cookies;
+   `connect()` does not log on, and SAP's answer to the first request says whether the
+   session is alive. The cookies of the instance's session are readable (`sessionCookies()`),
+   for the caller to keep.
 3. **Requests.** Each carries the credential the `IAuthProvider` hands over, the CSRF token
    and the session's cookies. A request is sent stateful (`LOCK`, `UNLOCK`, activation) or
-   stateless; nothing else of the session is kept between requests.
+   stateless; nothing else of the session is kept between requests. A request carries no
+   deadline but the caller's own timeout.
 4. **SAP's answer** reaches the caller as SAP gave it.
 5. **`disconnect()`, once.** It sends the logoff when the instance holds a live
    `SAP_SESSIONID` and resolves when the logoff is written. A `connect()` that failed after
