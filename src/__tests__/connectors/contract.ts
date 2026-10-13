@@ -165,7 +165,7 @@ export function describeConnectorContract(
       await expect(conn.connect()).rejects.toMatchObject({
         code: 'ADT_NOT_CONNECTED',
         message:
-          "This connection's SAP session has ended (it was disconnected, logged off or lost); one connection instance is one session. Create a new connection for a new session.",
+          "This connection's SAP session has ended (it was disconnected or logged off); one connection instance is one session. Create a new connection for a new session.",
       });
       expect(conn.isConnected()).toBe(false);
       // Nothing was asked of the server for it.

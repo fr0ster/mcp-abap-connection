@@ -332,7 +332,7 @@ describe('disconnect() resolves once the logoff is written', () => {
     });
   });
 
-  describe('every way a session ends spends the instance, through one teardown', () => {
+  describe('a failed connect() that logged off, and every establishment attempt', () => {
     it('cloud: a preflight session, then a renewable 401 at discovery — one logoff, no second establishment, the original failure', async () => {
       server = await standIn({ discoveryStatus: 401 });
       const config = {
@@ -382,91 +382,13 @@ describe('disconnect() resolves once the logoff is written', () => {
       expect(conn.isConnected()).toBe(false);
       server.answerLogoff();
     });
-
-    it('a replaced security session (a new SAP_SESSIONID): the new one is logged off, the instance is spent', async () => {
-      server = await standIn({
-        routes: {
-          '/sap/bc/adt/work': [
-            'SAP_SESSIONID_STUB_100=S2; Path=/',
-            'sap-contextid=CTX; path=/sap/bc/adt',
-          ],
-        },
-      });
-      const conn = onPrem(configFor(server.baseUrl), null);
-      await conn.connect();
-
-      await expect(
-        conn.makeAdtRequest({
-          url: '/sap/bc/adt/work',
-          method: 'GET',
-          timeout: 5000,
-        }),
-      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
-
-      const logoff = await server.logoffArrived;
-      const cookie = String(logoff.headers.cookie ?? '');
-      // The session the instance now holds — nobody will use it.
-      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S2');
-      expect(cookie).not.toContain('sap-contextid');
-      await expect(conn.connect()).rejects.toMatchObject({
-        code: 'ADT_NOT_CONNECTED',
-      });
-
-      // The caller's disconnect(): its first; it sends nothing more.
-      await expect(conn.disconnect()).resolves.toBeUndefined();
-      await turns(5);
-      expect(server.logoffs()).toBe(1);
-      const flushed = watched(conn.flushGoodbye());
-      await turns(2);
-      expect(flushed()).toBe(false);
-      server.answerLogoff();
-      await conn.flushGoodbye();
-    });
-
-    it('a dead session (400 "session not found"): the instance is spent, and nothing is logged off', async () => {
-      server = await standIn();
-      const conn = onPrem(configFor(server.baseUrl), null);
-      await conn.connect();
-      const send = conn.transport.send.bind(conn.transport);
-      conn.transport.send = async (request) => {
-        if (request.url.includes('/gone')) {
-          const error = new Error('status 400') as Error & {
-            response: unknown;
-          };
-          error.response = {
-            status: 400,
-            statusText: 'Session not found',
-            headers: {},
-            data: 'Session not found',
-          };
-          throw error;
-        }
-        return send(request);
-      };
-
-      await expect(
-        conn.makeAdtRequest({
-          url: '/sap/bc/adt/gone',
-          method: 'GET',
-          timeout: 5000,
-        }),
-      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
-      await turns(5);
-      await expect(conn.connect()).rejects.toMatchObject({
-        code: 'ADT_NOT_CONNECTED',
-      });
-      await expect(conn.disconnect()).resolves.toBeUndefined();
-      await turns(5);
-      // The session is gone on SAP's side: there is nothing to log off.
-      expect(server.logoffs()).toBe(0);
-    });
   });
 
   describe('one instance is one session', () => {
     const SPENT = {
       code: 'ADT_NOT_CONNECTED',
       message:
-        "This connection's SAP session has ended (it was disconnected, logged off or lost); one connection instance is one session. Create a new connection for a new session.",
+        "This connection's SAP session has ended (it was disconnected or logged off); one connection instance is one session. Create a new connection for a new session.",
     };
 
     it('connect() after disconnect() is refused, and nothing is sent', async () => {
@@ -519,6 +441,22 @@ describe('disconnect() resolves once the logoff is written', () => {
       await expect(conn.connect()).rejects.toMatchObject(SPENT);
       expect(server.establishments()).toBe(establishments);
       server.answerLogoff();
+    }, 30_000);
+
+    it("after a failed connect() that logged off, disconnect() then flushGoodbye() waits for that logoff's answer", async () => {
+      server = await standIn({ discoveryStatus: 404, fallbackStatus: 404 });
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await expect(conn.connect()).rejects.toBeDefined();
+      await server.logoffArrived;
+
+      await expect(conn.disconnect()).resolves.toBeUndefined();
+      const flushed = watched(conn.flushGoodbye());
+      await turns(5);
+      // The instance's one logoff is the failed connect's, still unanswered.
+      expect(flushed()).toBe(false);
+      server.answerLogoff();
+      await conn.flushGoodbye();
+      expect(server.logoffs()).toBe(1);
     }, 30_000);
 
     it('connect() after a failed connect() that sent no logoff (401) may be retried', async () => {
@@ -849,150 +787,6 @@ describe('disconnect() resolves once the logoff is written', () => {
       expect(cookie).toContain('SAP_SESSIONID_STUB_100=S1');
       expect(cookie).not.toContain('sap-contextid');
       server.answerLogoff();
-    });
-  });
-
-  describe('a replaced ABAP session in a lock window', () => {
-    it('logs the security session off at once — one logoff, with the original SAP_SESSIONID and no sap-contextid; disconnect() then sends nothing more', async () => {
-      server = await standIn({
-        routes: {
-          '/sap/bc/adt/lock': ['sap-contextid=A; path=/sap/bc/adt'],
-          '/sap/bc/adt/write': ['sap-contextid=B; path=/sap/bc/adt'],
-        },
-      });
-      const conn = onPrem(configFor(server.baseUrl), null);
-      await conn.connect();
-      conn.beginCriticalSection();
-      conn.setSessionType('stateful');
-
-      await conn.makeAdtRequest({
-        url: '/sap/bc/adt/lock',
-        method: 'POST',
-        timeout: 5000,
-      });
-      await expect(
-        conn.makeAdtRequest({
-          url: '/sap/bc/adt/write',
-          method: 'PUT',
-          data: 'x',
-          timeout: 5000,
-        }),
-      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
-
-      const logoff = await server.logoffArrived;
-      const cookie = String(logoff.headers.cookie ?? '');
-      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S1');
-      expect(cookie).not.toContain('sap-contextid');
-
-      // The caller's disconnect(): its first of this life, so it resolves —
-      // once that logoff is written — and sends nothing more.
-      await expect(conn.disconnect()).resolves.toBeUndefined();
-      await turns(5);
-      expect(server.logoffs()).toBe(1);
-
-      // flushGoodbye() waits for that logoff's answer.
-      const flushed = watched(conn.flushGoodbye(60_000));
-      await turns(2);
-      expect(flushed()).toBe(false);
-      server.answerLogoff();
-      await conn.flushGoodbye(60_000);
-      conn.endCriticalSection();
-    });
-
-    /** Connected, in a lock window, the context replaced; the logoff's bytes held. */
-    async function replacedWithHeldLogoff(provider?: unknown) {
-      server = await standIn({
-        routes: {
-          '/sap/bc/adt/lock': ['sap-contextid=A; path=/sap/bc/adt'],
-          '/sap/bc/adt/write': ['sap-contextid=B; path=/sap/bc/adt'],
-        },
-      });
-      const { AdtOnPremConnector } = await import(
-        '../connection/AdtOnPremConnector.js'
-      );
-      const { BasicAuthProvider } = await import(
-        '@mcp-abap-adt/auth-providers'
-      );
-      const conn = new AdtOnPremConnector(
-        configFor(server.baseUrl),
-        (provider ?? new BasicAuthProvider('u', 'p')) as never,
-        onPremHttpTransport(configFor(server.baseUrl)),
-        null,
-      );
-      await conn.connect();
-      const wire = bytesNeverTaken(conn.transport);
-      conn.beginCriticalSection();
-      conn.setSessionType('stateful');
-      await conn.makeAdtRequest({
-        url: '/sap/bc/adt/lock',
-        method: 'POST',
-        timeout: 5000,
-      });
-      await expect(
-        conn.makeAdtRequest({
-          url: '/sap/bc/adt/write',
-          method: 'PUT',
-          data: 'x',
-          timeout: 5000,
-        }),
-      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
-      conn.endCriticalSection();
-      conn.setSessionType('stateless');
-      return { conn, wire };
-    }
-
-    it('connect() after SESSION_REPLACED is refused; the old logoff is still awaited by disconnect()', async () => {
-      const { conn, wire } = await replacedWithHeldLogoff();
-      const establishments = server.establishments();
-
-      // Codex's sequences need a reconnect on this instance; there is none.
-      await expect(conn.connect()).rejects.toMatchObject({
-        code: 'ADT_NOT_CONNECTED',
-      });
-      expect(server.establishments()).toBe(establishments);
-
-      const disconnected = watched(conn.disconnect());
-      await turns(20);
-      expect(disconnected()).toBe(false);
-      wire.fail();
-      await turns(20, disconnected);
-      expect(disconnected()).toBe(true);
-    });
-
-    it("the caller's disconnect() resolves only once that logoff is written", async () => {
-      server = await standIn({
-        routes: {
-          '/sap/bc/adt/lock': ['sap-contextid=A; path=/sap/bc/adt'],
-          '/sap/bc/adt/write': ['sap-contextid=B; path=/sap/bc/adt'],
-        },
-      });
-      const conn = onPrem(configFor(server.baseUrl), null);
-      await conn.connect();
-      const wire = bytesNeverTaken(conn.transport);
-      conn.beginCriticalSection();
-      conn.setSessionType('stateful');
-
-      await conn.makeAdtRequest({
-        url: '/sap/bc/adt/lock',
-        method: 'POST',
-        timeout: 5000,
-      });
-      await expect(
-        conn.makeAdtRequest({
-          url: '/sap/bc/adt/write',
-          method: 'PUT',
-          data: 'x',
-          timeout: 5000,
-        }),
-      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
-
-      const disconnected = watched(conn.disconnect());
-      await turns(20);
-      expect(disconnected()).toBe(false);
-      wire.fail();
-      await turns(20, disconnected);
-      expect(disconnected()).toBe(true);
-      conn.endCriticalSection();
     });
   });
 

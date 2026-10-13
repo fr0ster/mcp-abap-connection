@@ -85,7 +85,7 @@ interface CredentialRenewal {
 function spentError(): Error & { code: string } {
   return sessionError(
     ADT_SESSION_ERROR.NOT_CONNECTED,
-    "This connection's SAP session has ended (it was disconnected, logged off or lost); one connection instance is one session. Create a new connection for a new session.",
+    "This connection's SAP session has ended (it was disconnected or logged off); one connection instance is one session. Create a new connection for a new session.",
   );
 }
 
@@ -158,8 +158,8 @@ abstract class AbstractAbapConnection
   private disconnectCalled = false;
   /**
    * Whether this instance's one SAP session has ended: it was disconnected,
-   * or it dispatched a logoff of its own (a replaced ABAP session, or a failed
-   * `connect()` that had received a session). One instance is one session —
+   * or a failed `connect()` logged off the session it had received. One
+   * instance is one session —
    * after its logoff it is spent, and `connect()` refuses. A new session is a
    * new instance, which the consumer creates (its own factory, or
    * `createConnection`).
@@ -395,8 +395,8 @@ abstract class AbstractAbapConnection
     // against itself would let the connect publish a session the caller had
     // asked to stop. The baseline is "when the caller asked to connect".
     // One instance is one SAP session: once that session has ended — a
-    // disconnect(), a logoff this connection sent on its own, or a session
-    // lost — the instance is spent, and a new session needs a new instance.
+    // disconnect(), or a failed connect() that logged it off — the instance
+    // is spent, and a new session needs a new instance.
     if (this.spent) throw spentError();
     const baselineEpoch = this.lifecycle.teardownEpoch;
     await this.lifecycle.transition('connect', async () => {
@@ -583,9 +583,8 @@ abstract class AbstractAbapConnection
   }
 
   /**
-   * The one terminal teardown of this instance's session, for every path that
-   * ends it: `disconnect()`, a failed `connect()` that had received a session,
-   * a replaced ABAP session, a replaced security session.
+   * The one terminal teardown of this instance's session: `disconnect()`, and
+   * a failed `connect()` that had received a session.
    *
    * Dispatches the logoff — the wire snapshots its cookies synchronously,
    * without `sap-contextid`, and sends it only when it holds a live
@@ -940,8 +939,6 @@ abstract class AbstractAbapConnection
    */
   protected raiseSessionLost(reason: string): void {
     this.logger?.warn(`Session lost: ${reason}`);
-    // A lost session ends this instance's one session: it is spent.
-    this.spent = true;
     this.lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
     void this.lifecycle.transition('cleanup', async () => {
       this.clearSessionState();
@@ -999,55 +996,9 @@ abstract class AbstractAbapConnection
     }
     // The wire folds the response into its own state; what the change MEANS
     // is decided here, because it is a question about the session's lifetime.
-    const contextBefore = this.transport.abapContext();
     this.transport.ingest(headers);
     this.applyIdentityPolicy(
       this.lifecycle.observe(this.transport.sessionFingerprint()),
-    );
-    this.applyContextPolicy(contextBefore, this.transport.abapContext());
-  }
-
-  /**
-   * Acts on a change of the ABAP (application) session inside a lock window.
-   *
-   * The identity policy above watches the HTTP security session
-   * (`SAP_SESSIONID`); locks live one level down, in the ABAP session the
-   * `sap-contextid` cookie addresses. Measured on E19 (2026-10-13): a stateful
-   * request without that cookie but with the same `SAP_SESSIONID` is given a
-   * NEW `sap-contextid`, the lock taken in the old one stays held there, and
-   * an UNLOCK sent in the new one answers 200 and releases nothing. So inside
-   * a critical section — the lock window — a DIFFERENT `sap-contextid` means
-   * the locks are out of this connection's reach: SESSION_REPLACED, as for a
-   * changed `SAP_SESSIONID`.
-   *
-   * Keyed on the critical section, not the session mode: the write under a
-   * lock is itself stateless. Not a replacement: a `sap-contextid` issued for
-   * the first time, or deleted — a stateless switch deletes it (measured: the
-   * lock is then released and `SAP_SESSIONID` stays). Outside a critical
-   * section nothing is decided here.
-   */
-  private applyContextPolicy(
-    before: string | null,
-    after: string | null,
-  ): void {
-    if (!this.inCriticalSection) return;
-    if (before === null || after === null || before === after) return;
-
-    // The old context and its locks live on under the unchanged
-    // SAP_SESSIONID, out of this connection's reach — and the cookie that can
-    // end them is about to be cleared. So the logoff goes FIRST: it carries
-    // SAP_SESSIONID and never sap-contextid, and ends every context of that
-    // security session, the old one with its locks (measured on E19,
-    // 2026-10-13; see `HttpTransport.logoffCookies`). `close()` takes its
-    // cookies synchronously, before the clearing below. Kept for the caller's
-    // `disconnect()` (which then resolves once this is written, sending
-    // nothing more) and `flushGoodbye()`.
-    this.endSession(this.sessionContext());
-    this.raiseSessionLost('the ABAP session (sap-contextid) changed under us');
-    throw sessionError(
-      ADT_SESSION_ERROR.SESSION_REPLACED,
-      "The ABAP session this connection was locking in is gone: inside the lock window the server addressed a different one (a new sap-contextid). The locks held in the old session were out of this connection's reach, so it has logged the security session off, which ends every context of it, the old one with its locks. " +
-        'What to do about it is yours: create a new connection and redo the work there, or fail the operation. Nothing is retried here.',
     );
   }
 
@@ -1064,7 +1015,7 @@ abstract class AbstractAbapConnection
    * were speaking to is not the one we are speaking to now. Anything the caller
    * held against the old one is dead, and continuing quietly would hand them a
    * session they never opened — the failure this whole design exists to prevent.
-   * Being wrong in this direction costs a new connection; being wrong the other way
+   * Being wrong in this direction costs a reconnect; being wrong the other way
    * costs a lock nobody can find.
    */
   private applyIdentityPolicy(
@@ -1072,18 +1023,12 @@ abstract class AbstractAbapConnection
   ): void {
     if (classification !== 'replaced') return;
 
-    // The instance now holds the NEW SAP_SESSIONID the server issued — a
-    // session nobody will use. It is logged off before the cookies are
-    // cleared, so it does not live to its timeout. The old session cannot be
-    // ended from here, if it still lives: its cookie was replaced, and the
-    // cookie is the only permission to end it.
-    this.endSession(this.sessionContext());
     this.raiseSessionLost('the session cookie changed under us');
     throw sessionError(
       ADT_SESSION_ERROR.SESSION_REPLACED,
       'The SAP session this connection was using is gone and the requests are now on a different one; anything held against the old session — a lock and any write under it — is dead. ' +
         'The server does not swap sessions on a whim: the usual causes are the session idling out (the timeout is idle-based, so a quiet connection loses it while a busy one does not) or a request landing on a different application server. ' +
-        'What to do about it is yours: create a new connection and redo the work there, or fail the operation. Nothing is retried here.',
+        'What to do about it is yours: re-establish and redo the work, or fail the operation. Nothing is retried here.',
     );
   }
 

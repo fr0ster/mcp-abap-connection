@@ -26,7 +26,7 @@ mcp-abap-connection/
 │   ├── MIGRATION-8.0.md            # request headers leave the stateful branch; onto interfaces 39; flushGoodbye
 │   ├── MIGRATION-6.0.md            # the factory and the per-credential classes go; RFC is a transport
 │   ├── MIGRATION-4.0.md            # JWT error classification: 401 refreshes, 403 propagates
-│   ├── SCOPE.md                    # What this package does and does not own
+│   ├── SCOPE.md                    # What this package answers for, and only that
 │   └── STATEFUL_SESSION_GUIDE.md   # Stateful requests and lock windows
 ├── examples/               # Working code examples
 │   ├── README.md          # Examples overview
@@ -44,7 +44,7 @@ mcp-abap-connection/
 - 📦 [Installation Guide](./INSTALLATION.md) - How to install and set up the package
 - 📚 [Usage Guide](./USAGE.md) - Basic usage and comprehensive API documentation
 - 📖 [Main README](../README.md) - Package overview and quick start
-- 🧭 [Scope and Boundaries](./SCOPE.md) - What this package does (and does not), sibling packages, and why there is no RFC to cloud
+- 🧭 [Scope](./SCOPE.md) - What this package answers for, and only that
 
 ### Upgrading
 - 🚚 [Migrating to 16.0.0](./MIGRATION-16.0.md) - the per-request `signal` and `ADT_REQUEST_ABORTED` are removed; `disconnect()` resolves once the logoff is written; `flushGoodbye()` waits for the answer

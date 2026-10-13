@@ -311,12 +311,6 @@ export class HttpTransport implements IAdtTransport {
     return pairs.length > 0 ? pairs.join('; ') : null;
   }
 
-  /** The `sap-contextid` this wire holds, or `null` (see the contract). */
-  abapContext(): string | null {
-    const context = this.jar.get(CONTEXT_COOKIE);
-    return context ? context : null;
-  }
-
   /**
    * Whether this wire holds a non-empty `SAP_SESSIONID_*` cookie it received —
    * the one condition under which a logoff is sent.

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [16.0.0] - 2026-10-13
 
+What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
+
 ### Added
 - **`createConnection(spec)`**, the recommended way to build a connection.
   The caller states `system` (`'cloud'` | `'onprem'`) and `transport`
@@ -29,175 +31,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The per-request signal is removed** (added in 15.1.0), on
   `@mcp-abap-adt/interfaces-adt-connection` `^3.0.0` (was `^2.1.0`), which
   drops `IAbapRequestOptions.signal`, `ADT_REQUEST_ERROR` and
-  `AdtRequestErrorCode`. No request rejects with `ADT_REQUEST_ABORTED`;
+  `AdtRequestErrorCode`. No request rejects with `ADT_REQUEST_ABORTED`, and
   `IAdtTransportRequest.signal` and `IAdtEstablishContext.signal` are gone
-  from the transport seam. Measured on E19 (BASIS 816, 2026-10-12): ABAP
-  neither cancels a request that reached it nor rolls back across requests,
-  a connection is never shared between threads, and a logoff releases the
-  locks — it ends the HTTP security session and with it the ABAP sessions
-  that hold them (see below) — so the signal protected nothing. Requests
-  behave as in 15.0.1.
-- **`disconnect()` resolves once the logoff is WRITTEN** — its bytes handed to
-  the socket (the node request's `finish`); over RFC, once the close call has
-  returned — not when SAP answers, and not at once as before. With a long
-  request running in the same stateful ABAP session SAP queues the logoff
-  behind it (answered ~96 s later through the connector; no answer in six
-  minutes raw from a second thread), and the ENQUEUE lock is gone afterwards
-  even when the client was killed with the answer pending; a connection
-  dropped without a logoff keeps its locks (E19, 2026-10-12). Checked against
-  this build on E19 on 2026-10-13: LOCK, then a long where-used in the same
-  stateful session, `await disconnect()` (the logoff written, carrying
-  `sap-cancel-on-close: true`) and the process exiting at once — the lock was
-  still held 1 s later and free ~70 s after the exit, long before the 30-min
-  idle timeout: ICM ran the queued logoff after the client's connection had
-  closed. So a caller about to exit awaits `disconnect()`;
-  `flushGoodbye()` still waits for the answer. No timer bounds the write: a
-  server that never takes the bytes holds `disconnect()` until the socket
-  fails, and that failure is logged, not thrown. The transition queue is not
-  held by the write.
-- **One connection instance is one SAP session.** Every way the session
-  ends spends the instance, through one terminal teardown (`endSession`):
-  snapshot the cookies (never `sap-contextid`), dispatch the logoff, mark the
-  instance spent, keep the logoff's write and answer for `disconnect()` and
-  `flushGoodbye()`. The paths:
-  - `disconnect()`;
-  - a failed `connect()` that had received a live `SAP_SESSIONID` (a cloud
-    preflight's, or a 403/404 after logon);
-  - a replaced ABAP session (`sap-contextid`) in a lock window;
-  - a replaced security session (a new `SAP_SESSIONID`). The new session the
-    instance now holds is logged off; the old one cannot be ended from here
-    if it still lives, because its cookie was replaced;
-  - a dead session (400 "session not found"). There is nothing left to log
-    off.
-
-  On a spent instance, `connect()` rejects with
+  from the transport seam. Requests behave as in 15.0.1. Measured on E19
+  (BASIS 816, 2026-10-12): ABAP neither cancels a request that reached it nor
+  rolls back across requests, a connection is never shared between threads,
+  and a logoff releases the locks — so the signal protected nothing.
+- **One connection instance is one SAP session.** After `disconnect()`, or
+  after a failed `connect()` that logged off the session it had received,
+  the instance is spent. On a spent instance, `connect()` rejects with
   `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed words, telling the caller to
   create a new connection, and asks the credential nothing. Every
-  establishment attempt checks this, the internal retry after a refused logon
-  included, so a failed `connect()` that ended a session never establishes
-  again. A failed `connect()` that sent nothing (401, network, no session
+  establishment attempt checks this, `connect()`'s internal logon retry
+  included. A failed `connect()` that sent nothing (401, network, no session
   cookie) may be retried. A new session is a new instance, created by the
   consumer (its own factory, or `createConnection`). Before 16.0.0 a
   disconnected instance could `connect()` again.
+- **`disconnect()`, once.**
+  - **It resolves once the logoff is WRITTEN**: its bytes handed to the
+    socket (the node request's `finish`), or over RFC, once the close call
+    has returned. It does not wait for SAP's answer, and it no longer
+    returns at once as before.
+  - Measured on E19 (2026-10-12): with a long request running in the same
+    stateful session, SAP queues the logoff behind it (answered ~96 s later
+    through the connector; no answer in six minutes raw from a second
+    thread). The lock is still gone afterwards, even when the client was
+    killed with the answer pending. A connection dropped without a logoff
+    keeps its locks.
+  - Checked against this build on E19 (2026-10-13): LOCK, then a long
+    where-used in the same stateful session, then `await disconnect()` and
+    an immediate process exit. The lock was still held 1 s later and free
+    ~70 s after the exit, long before the 30-min idle timeout.
+  - So a caller about to exit awaits `disconnect()`. No timer bounds the
+    write: a server that never takes the bytes holds `disconnect()` until the
+    socket fails, and that failure is logged, not thrown.
+  - **A second call rejects** with `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed
+    words, whether it comes while the first is still writing or after it.
+    It used to resolve. The first call is unaffected.
+- **The logoff is sent if and only if the instance holds a live
+  `SAP_SESSIONID_*`** it received, whatever the status of the answer that
+  brought it. This applies on-prem and on cloud (`HttpTransport.holdsSessionCookie`).
+  - A `connect()` that fails as a whole after the server opened a session —
+    a cloud preflight's, or a 403/404 after logon, on core discovery and the
+    fallback alike — logs that session off, and rejects only once the
+    logoff is written.
+  - A 404 on core discovery alone is not a failure: the fallback runs in the
+    same session.
+  - A 401 or a 200 with only `sap-XSRF_*` carries no session, and nothing is
+    sent.
+  - The on-prem rule used to be "established and holding any cookie".
+  - Evidence (E19 ABAP code and measurement): `CL_HTTP_SERVER_NET->send_response`
+    sets `SAP_SESSIONID` only when a security session was created, whatever
+    the status, and the ICF logoff ends a session only when that cookie is
+    present.
+- **The cookie jar honours deletions.** A `Set-Cookie` with a past `expires`
+  or `Max-Age=0` removes the cookie, so a deleted `SAP_SESSIONID` is no
+  session. SAP's logoff deletes with a one-character value and
+  `expires=Tue, 01-Jan-1980 00:00:01 GMT` (E19 trace, 2026-10-13). An empty
+  `SAP_SESSIONID` names no session either.
+- **The logoff never carries `sap-contextid`**: only `SAP_SESSIONID_*`,
+  `sap-usercontext` and the affinity it needs (`HttpTransport.logoffCookies`).
+  Measured on E19 with bare HTTP (2026-10-13):
+  - A logoff without the context cookie ended the context and released its
+    lock.
+  - A logoff carrying a stale (deleted) `sap-contextid` got 400 and closed
+    nothing.
+- **The logoff goes out on a connection of its own** (`agent: false` over
+  plain HTTP; the wire's TLS agent or a proxy's is kept). A 3xx answering it
+  is its answer: it is not followed and not logged as a failure.
 - **`flushGoodbye(timeoutMs?)` has no default bound.** Without an argument it
-  waits for SAP's answer to the logoff as long as it takes, and creates no
-  timer; the 5 s the library chose before is gone (no timeouts of the
-  library's own choosing — a bound is the caller's). With `timeoutMs` it waits
-  at most that long and returns without throwing, as before. SAP answers a
-  logoff queued behind a running request only when that request is done.
-- **`disconnect()` is called once per `connect()`.** A second call, made while
-  the first is still writing or after it, rejects with
-  `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed words. It used to resolve, and one
-  made in its own transition resolved before the first logoff had left. The
-  first call is unaffected.
-- **A failed `connect()` rejects only after its own goodbye is written, when
-  it dispatched one**, so a caller that exits on the error does not lose it.
-  Two sessions are involved, and what each claim rests on differs:
-  - **HTTP security session** (ICF; `SECURITY_CONTEXT`; cookie
-    `SAP_SESSIONID_<SID>_<CLIENT>`). A `connect()` that fails AFTER
-    authentication leaves one alive, on cloud and on-prem alike, so the
-    connector's own goodbye is required. Cloud: the preflight opens one
-    (measured on a BTP trial, 2026-10-12). On-prem, measured on E19
-    (BASIS 816, 2026-10-13): authenticated requests answered with an error
-    (404 for an unknown ADT resource, 404 for an unknown class, 403 for
-    DELETE on discovery) each set `SAP_SESSIONID_E19_100`, and that cookie
-    alone then got 200 on discovery. ABAP code on E19:
-    `CL_HTTP_SERVER_NET` method `authentication` creates it on a successful
-    logon (`set_core_authenticate`, `m_security_session_created =
-    abap_true`) before any handler runs, and `send_response` sets the cookie
-    whenever that flag is true, whatever the status. The ICF logoff
-    (`CL_HTTP_EXT_LOGOFF` → `CL_HTTP_SERVER_NET->if_http_server~logoff`)
-    ends it only when that cookie is present (`terminate_security_session`
-    deletes `SECURITY_CONTEXT`). The logoff is sent if and only if the
-    wire holds a non-empty `SAP_SESSIONID_*` cookie it received, whatever the
-    status of the answer that brought it — on-prem and cloud alike (it was
-    "established and holding any cookie" on-prem, which sent nothing after a
-    404/403 at logon and sent a logoff that ended nothing after a 200 with only
-    `sap-XSRF_*`). A 401's debris cookie names no session and gets no logoff.
-  - **ABAP (application) session** — where the stateful context and ENQUEUE
-    locks live, addressed by `sap-contextid`. That the logoff ends it rests on
-    the comment of the kernel module `LocalSessionTermination`, which
-    `terminate_security_session` calls (in `CL_HTTP_SECURITY_SESSION`:
-    "terminates all taskhandler (application) sessions associated with the
-    security context" — the inactivity timeout's path), and on the
-    measurement that the lock is released. That a failed stateful request
-    leaves an ABAP session rests only on the `sap-contextid` cookie seen in
-    the 404/403 answers; no ABAP code was read for it. A failed `connect()`
-    takes no lock.
-- **The cookie jar honours deletions**: a `Set-Cookie` whose `expires` is past
-  or whose `Max-Age` is `0` removes the cookie, so a deleted `SAP_SESSIONID`
-  no longer counts as a session. SAP's logoff deletes every cookie with a
-  one-character value and `expires=Tue, 01-Jan-1980 00:00:01 GMT` (E19 wire
-  trace, 2026-10-13) — the value is not empty, the expiry is what deletes. An
-  empty `SAP_SESSIONID` value names no session either.
-- **A 404 on `/sap/bc/adt/core/discovery` is not a failed `connect()`**: the
-  fallback to `/sap/bc/adt/discovery` runs in the same session (the 404's
-  `SAP_SESSIONID` is kept and carried), and no logoff is sent then — one
-  would end the session the fallback needs. The goodbye goes only when
-  `connect()` as a whole fails, after the fallback.
-- **The logoff goes out on a connection of its own** (`agent: false` over plain
-  HTTP; the wire's own TLS agent or a proxy's is kept), so "written" is not a
-  write to a pooled socket the server already closed. It no longer follows a
-  redirect: a 3xx is its answer, not a failure to say goodbye.
+  waits for SAP's answer to the logoff for as long as it takes, and creates
+  no timer; the library's own 5 s default is gone. With `timeoutMs` it waits
+  at most that long and returns without throwing, as before.
+- **`IAdtTransport.close(context, written?)`**: a wire calls `written` once
+  its goodbye has left; `disconnect()` resolves at the first of that and the
+  close settling. A custom wire whose close stays pending after its goodbye
+  has left should call it.
 - **Over RFC the close waits for a running call**: sap-rfc-lite 0.2.2's
   `close()` takes the invocation mutex a call holds until it returns.
-- **When the logoff is sent** (agreed rule; evidence below):
-  1. `disconnect()` sends it iff the connection holds a live `SAP_SESSIONID_*` —
-     received, not deleted by a past `expires` / `Max-Age=0`. After a successful
-     `connect()` it always does; with only `sap-XSRF_*` it sends nothing.
-  2. A failed `connect()` sends it itself only when both hold: the whole
-     `connect()` failed (both `/sap/bc/adt/core/discovery` and the fallback
-     `/sap/bc/adt/discovery`), and a live `SAP_SESSIONID_*` was received during
-     it (a 403/404 after a successful logon carries one). `connect()` then
-     rejects after the logoff is written. A 401 means no session: nothing.
-  3. A successful `connect()` (200) sends no logoff; the session lives until
-     `disconnect()`.
-- **A replaced ABAP session inside a lock window is `SESSION_REPLACED`.** The
-  connection watched only the HTTP security session (`SAP_SESSIONID`, the
-  logon). The ENQUEUE locks live in the ABAP session `sap-contextid`
-  (`path=/sap/bc/adt`) addresses. Measured on E19 with bare HTTP
-  (2026-10-13): a stateful request with the same `SAP_SESSIONID` but without
-  `sap-contextid` is given a NEW one, and the lock taken in the old one stays
-  (an independent LOCK answers 403 "currently editing"); an UNLOCK sent in
-  the wrong context answers 200 and releases nothing. So inside a critical
-  section a DIFFERENT `sap-contextid` now raises
-  `ADT_SESSION_ERROR.SESSION_REPLACED` in fixed words and the session is
-  lost, as for a changed `SAP_SESSIONID`. Not a replacement: one issued for
-  the first time, or deleted — a stateless request in a stateful context
-  makes SAP delete it (one-character value, 1980 expiry), the lock is
-  released, `SAP_SESSIONID` stays (measured). Outside a critical section
-  nothing is decided.
-- **The logoff never carries `sap-contextid`** — only `SAP_SESSIONID_*`,
-  `sap-usercontext` and the affinity it needs, on-prem and cloud
-  (`HttpTransport.logoffCookies`). Measured on E19 with bare HTTP
-  (2026-10-13): a LOCK held in a stateful context (an independent probe got
-  403 "currently editing"), then a logoff carrying `SAP_SESSIONID_E19_100`
-  and `sap-usercontext` but no `sap-contextid` → 200, SAP deleted
-  `SAP_SESSIONID`, and an independent session then got the LOCK: the logoff
-  ended the context and released the lock. A logoff carrying a stale
-  (deleted) `sap-contextid` got 400 and closed nothing — so the context
-  cookie, which SAP may have deleted unseen, is never sent with it.
-- **On a replaced ABAP session in a lock window, the connection logs off at
-  once**, before forgetting the cookies: the old context and its locks live on
-  under the unchanged `SAP_SESSIONID`, and that logoff ends every context of
-  the security session, the old one with its locks (measured above). The
-  caller's `disconnect()` that follows is its first of that life: it resolves
-  once that logoff is written and sends nothing more; `flushGoodbye()` waits
-  for its answer. A reconnect after it waits for that logoff to be WRITTEN
-  before it starts a new session, so a reconnect that fails cannot lose it.
-- **`IAdtTransport.abapContext()`** (required): the ABAP session the wire
-  addresses — over HTTP the `sap-contextid` cookie — or `null`; RFC answers
-  `null` (its conversation is the session).
-- **`IAdtTransport.close(context, written?)`**: a wire calls `written` once its
-  goodbye has left; `disconnect()` resolves at the first of that and the close
-  settling. A custom wire whose close stays pending after its goodbye has left
-  should call it. See [MIGRATION-16.0.md](./docs/MIGRATION-16.0.md).
+  See [MIGRATION-16.0.md](./docs/MIGRATION-16.0.md).
 
 ### Changed
-- Docs: USAGE's "disconnect() resolves once the logoff is written" (it was
-  "waits for nothing", and claimed an HTTP disconnect releases no locks — the
-  logoff releases them, see above), README, STATEFUL_SESSION_GUIDE,
-  CLAUDE.md.
+- `docs/SCOPE.md` lists what this package answers for; CLAUDE.md points to it.
+- Docs: README (Quick Start starts with `createConnection`), USAGE,
+  STATEFUL_SESSION_GUIDE, CLAUDE.md.
 - Tests: "nothing is left unhandled" is proven under plain node
   (`src/__tests__/helpers/plainNode`), where the real process reports it —
   Jest's sandboxed `process` never does; `dispatchedGoodbye` runs there.

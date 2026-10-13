@@ -24,7 +24,6 @@ export const holdsNoSession = {
   ingest: () => {},
   cookies: () => null,
   sessionFingerprint: () => new Map<string, string>(),
-  abapContext: () => null,
   affinityHeaders: () => ({}),
   forgetSession: () => {},
 };
@@ -80,7 +79,6 @@ export function holdsItsSession(
     ingest: (headers?: Record<string, unknown>) => state.ingest(headers),
     cookies: () => state.cookies(),
     sessionFingerprint: () => state.sessionFingerprint(),
-    abapContext: () => state.abapContext(),
     affinityHeaders: () => state.affinityHeaders(),
     forgetSession: () => state.forgetSession(),
   };

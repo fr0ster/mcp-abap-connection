@@ -269,11 +269,6 @@ export class RfcTransport implements IOnPremTransport {
     return fingerprint;
   }
 
-  /** None: the conversation IS the ABAP session, and no cookie names it. */
-  abapContext(): null {
-    return null;
-  }
-
   /** None: there is no dispatcher in front of this wire to stay bound to. */
   affinityHeaders(): Record<string, string> {
     return {};

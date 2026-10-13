@@ -493,20 +493,11 @@ the logoff's own.
 
 **Call it once per `connect()`.** A second call, while the first is still
 writing or after it, rejects with `ADT_SESSION_ERROR.NOT_CONNECTED`; the
-first call is unaffected. A failed `connect()` that dispatched a goodbye
-rejects only after that goodbye is written. A connect that fails after
-authentication leaves a live **HTTP security session** (ICF, cookie
-`SAP_SESSIONID_<SID>_<CLIENT>`) on cloud and on-prem alike: the cloud
-preflight opens one (BTP trial, 2026-10-12), and on E19 an authenticated
-request answered 404 or 403 still set a live `SAP_SESSIONID` (measured
-2026-10-13; `CL_HTTP_SERVER_NET->authentication` creates the security session
-at logon, before any handler). The ICF logoff ends it only when that cookie is
-present (ABAP code). That a failed stateful request also leaves an **ABAP
-session** (`sap-contextid`) rests only on that cookie in the 404/403 answers;
-a failed `connect()` takes no lock. Either way the `disconnect()` in your
-`finally` is the first one of that life. Over RFC the close waits for a call still running on its
-conversation (sap-rfc-lite serialises them), so there it resolves after that
-call.
+first call is unaffected. A `connect()` that failed after the server opened
+a session logs it off and rejects only after that logoff is written, so the
+`disconnect()` in your `finally` is the first one of that life. Over RFC the
+close waits for a call still running on its conversation (sap-rfc-lite
+serialises them), so there it resolves after that call.
 
 Requests already in flight run to completion untouched; nothing is aborted. What
 the connection guarantees is that their results can no longer reach it: a
@@ -519,56 +510,29 @@ teardown open forever, and since lifecycle transitions are serialized, every
 later `connect()` queued behind it.
 
 **The logoff releases the locks** — once it has arrived, whether or not you
-wait for the answer. It ends the HTTP security session (ABAP code: the ICF
-logoff deletes `SECURITY_CONTEXT`), and with it the ABAP sessions where the
-stateful context and the ENQUEUE locks live — that part rests on the kernel
-module `LocalSessionTermination`'s comment ("terminates all taskhandler
-(application) sessions associated with the security context") and on the
-measured release of the lock. Still unlock what you locked
-first: the logoff is the backstop, not the way to finish your work.
+wait for the answer (measured on E19). Still unlock what you locked first:
+the logoff is the backstop, not the way to finish your work.
 
-### When the logoff is sent, and the two sessions
+### When the logoff is sent
 
-**When the logoff is sent** (agreed rule; evidence below):
 1. `disconnect()` sends it iff the connection holds a live `SAP_SESSIONID_*` —
    received, not deleted by a past `expires` / `Max-Age=0`. After a successful
    `connect()` it always does; with only `sap-XSRF_*` it sends nothing.
 2. A failed `connect()` sends it itself only when both hold: the whole
    `connect()` failed (both `/sap/bc/adt/core/discovery` and the fallback
    `/sap/bc/adt/discovery`), and a live `SAP_SESSIONID_*` was received during
-   it (a 403/404 after a successful logon carries one). `connect()` then
-   rejects after the logoff is written. A 401 means no session: nothing.
+   it (a 403/404 after a successful logon carries one: E19,
+   `CL_HTTP_SERVER_NET->send_response` sets it whatever the status).
+   `connect()` then rejects after the logoff is written. A 401 means no
+   session: nothing.
 3. A successful `connect()` (200) sends no logoff; the session lives until
    `disconnect()`.
 
-**Two sessions.**
-- **The HTTP security session.** This is the logon. It is named by
-  `SAP_SESSIONID_<SID>_<CLIENT>` and kept in `SECURITY_CONTEXT`. The ICF
-  logoff ends it.
-- **The ABAP session.** This is where the stateful context and the ENQUEUE
-  locks live. It is addressed by `sap-contextid` (`path=/sap/bc/adt`).
-
-What was measured on E19 with bare HTTP (2026-10-13):
-- A stateful request with the same `SAP_SESSIONID` but without
-  `sap-contextid` is given a new ABAP session. The lock taken in the old one
-  stays held, and an UNLOCK sent in the new one answers 200 and releases
-  nothing.
-- So inside a critical section, a **different** `sap-contextid` rejects with
-  `ADT_SESSION_ERROR.SESSION_REPLACED` and the connection counts as lost.
-- A stateless request inside a stateful context makes SAP **delete**
-  `sap-contextid`. The lock is released and `SAP_SESSIONID` stays. That is
-  not a replacement.
-- A logoff carrying `SAP_SESSIONID` but **no** `sap-contextid` ended the
-  context and released its lock: an independent session then got the LOCK.
-  A logoff carrying a stale `sap-contextid` got 400 and closed nothing.
-  So the logoff never carries `sap-contextid`.
-- After an UNLOCK, the stateful ABAP context lives on, without locks, until
-  the logoff or until a stateless request is sent in that context.
-- On a replacement inside a lock window, the connection logs the security
-  session off at once, ending the old context and its locks too.
-  `disconnect()` then resolves once that logoff is written, sending nothing
-  more, and `flushGoodbye()` waits for its answer. A `connect()` after it
-  waits for that logoff's write before starting a new session.
+The logoff never carries `sap-contextid` — only `SAP_SESSIONID_*`,
+`sap-usercontext` and the affinity it needs. Measured on E19 with bare HTTP
+(2026-10-13): a logoff without the context cookie ended the context and
+released its lock; one carrying a stale (deleted) `sap-contextid` got 400 and
+closed nothing.
 
 ### Uninterruptible spans
 
@@ -697,7 +661,7 @@ There is no local-only reset. Discarding the cookie does not end the ABAP
 session — the server keeps it until its own timeout, and sessions are limited
 per user — so starting over means telling the server, then connecting a NEW
 instance. One connection instance is one session: after `disconnect()` (or a
-logoff the connection sent on its own) `connect()` on it rejects
+failed `connect()` that logged off its session) `connect()` on it rejects
 `NOT_CONNECTED`. Creating the new instance is yours — your own factory, or
 `createConnection` — as mcp-abap-adt's server does with `createAbapConnection`
 per connection:

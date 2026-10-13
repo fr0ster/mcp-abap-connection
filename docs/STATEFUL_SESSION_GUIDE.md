@@ -192,8 +192,8 @@ work under a new lock there.
 If the provider says no, or the retry is refused too, the caller gets an `AuthRefusedError` (the refused-again verdict is `refusal.kind === 'connection'`, `facts.problem === 'refused-after-renewal'`). A 403 is an authorization answer, not a credential one: it never goes to the
 provider. See [When the credential is refused](./USAGE.md#when-the-credential-is-refused).
 
-**One connection instance is one session.** After `disconnect()`, or a logoff the connection
-sent on its own, the instance is spent and `connect()` on it rejects `NOT_CONNECTED`. A new
+**One connection instance is one session.** After `disconnect()`, or a failed `connect()` that
+logged off the session it had received, the instance is spent and `connect()` on it rejects `NOT_CONNECTED`. A new
 session is a new instance, created by the consumer (its own factory, or `createConnection`), and
 outside a lock window rather than inside one.
 

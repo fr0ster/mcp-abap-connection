@@ -207,20 +207,6 @@ export interface IAdtTransport {
   sessionFingerprint(): Map<string, string>;
 
   /**
-   * The ABAP (application) session this wire addresses, as the server named
-   * it — over HTTP the `sap-contextid` cookie (`path=/sap/bc/adt`) — or
-   * `null` when it addresses none.
-   *
-   * Distinct from `sessionFingerprint()`, which names the HTTP security
-   * session (`SAP_SESSIONID`, the logon): measured on E19 (2026-10-13), a
-   * stateful request with the same `SAP_SESSIONID` but no `sap-contextid` is
-   * given a NEW one, and a lock taken in the old one stays there, out of
-   * reach. RFC has no such cookie — its conversation IS the session — and
-   * answers `null`.
-   */
-  abapContext(): string | null;
-
-  /**
    * Does this wire hold a session it can work over?
    *
    * A verdict, not a fact for somebody else to interpret. The connection used
