@@ -472,13 +472,13 @@ to the socket; over RFC, once the close call has returned — **not when SAP
 answers it**, and it does not wait for requests in flight or anything you hold.
 Deciding when to disconnect is yours, and so is preparing for it.
 
-Why the write and not the answer (measured on E19, 2026-10-12): with a long
+Why the write and not the answer (measured on an on-premise system, 2026-10-12): with a long
 request still running in the same stateful ABAP session, SAP queues the logoff
 behind it and answers only afterwards — about 96 s in one run, nothing in six
 minutes in another — yet once the logoff has arrived the ENQUEUE locks go
 with it, even if the client is killed while the answer is pending. A
 connection dropped *without* a logoff keeps its locks. Checked against 16.0.0
-on E19 on 2026-10-13: LOCK, a long where-used in the same stateful session,
+on an on-premise system on 2026-10-13: LOCK, a long where-used in the same stateful session,
 `await disconnect()`, and the process exiting at once — the lock was still
 held 1 s later and free ~70 s after the exit, long before the 30-minute idle
 timeout: ICM ran the queued logoff after the connection had closed. So a
@@ -510,7 +510,7 @@ teardown open forever, and since lifecycle transitions are serialized, every
 later `connect()` queued behind it.
 
 **The logoff releases the locks** — once it has arrived, whether or not you
-wait for the answer (measured on E19). Still unlock what you locked first:
+wait for the answer (measured on an on-premise system). Still unlock what you locked first:
 the logoff is the backstop, not the way to finish your work.
 
 ### When the logoff is sent
@@ -521,7 +521,7 @@ the logoff is the backstop, not the way to finish your work.
 2. A failed `connect()` sends it itself only when both hold: the whole
    `connect()` failed (both `/sap/bc/adt/core/discovery` and the fallback
    `/sap/bc/adt/discovery`), and a live `SAP_SESSIONID_*` was received during
-   it (a 403/404 after a successful logon carries one: E19,
+   it (a 403/404 after a successful logon carries one: measured on-premise,
    `CL_HTTP_SERVER_NET->send_response` sets it whatever the status).
    `connect()` then rejects after the logoff is written. A 401 means no
    session: nothing.
@@ -529,7 +529,7 @@ the logoff is the backstop, not the way to finish your work.
    `disconnect()`.
 
 The logoff never carries `sap-contextid` — only `SAP_SESSIONID_*`,
-`sap-usercontext` and the affinity it needs. Measured on E19 with bare HTTP
+`sap-usercontext` and the affinity it needs. Measured on an on-premise system with bare HTTP
 (2026-10-13): a logoff without the context cookie ended the context and
 released its lock; one carrying a stale (deleted) `sap-contextid` got 400 and
 closed nothing.
