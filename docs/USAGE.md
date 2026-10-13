@@ -571,16 +571,10 @@ precisely to avoid it.
 
 Two different things can cost you the session, and they do not behave alike.
 
-**The session was replaced** — a session cookie that changed underneath you. This is fatal **only while a lock window is open**:
-
-```typescript
-// window open  → ADT_SESSION_REPLACED, the connection stops being usable
-// no window    → transparent; work continues on the new session
-```
-
-With nothing held there is nothing to lose, so the connector carries on. The
-error exists to tell you that a lock handle you are carrying is now dead, which
-is the one thing you cannot work out for yourself.
+**The session was replaced** — a session cookie (`SAP_SESSIONID`) that changed
+underneath you. The request rejects with `ADT_SESSION_REPLACED`: a lock handle
+you are carrying is now dead, which is the one thing you cannot work out for
+yourself.
 
 **The server says the session is gone** — an answer meaning the session it was
 given no longer exists. This is **always** fatal, window or not: the connection
@@ -592,6 +586,13 @@ carry on over a session the caller never opened.
 In both cases the connector does **not** retry the request internally. Retrying
 blindly is what produced further orphaned locks in the field. That decision is
 yours.
+
+**A lost session spends the instance** (since 16.0.0), as `disconnect()` does.
+After either of these, `connect()` and every request on the instance reject
+`ADT_SESSION_ERROR.NOT_CONNECTED`, and a new session is a new connection.
+`disconnect()` is still owed once. It sends the logoff only if the instance
+still holds a live `SAP_SESSIONID`, and after a loss the connection has
+already cleared its cookies, so it sends nothing.
 
 ## Advanced Features
 

@@ -384,11 +384,88 @@ describe('disconnect() resolves once the logoff is written', () => {
     });
   });
 
+  describe('a lost session spends the instance; the consumer decides what next', () => {
+    const SPENT_CODE = { code: 'ADT_NOT_CONNECTED' };
+    const work = (url: string) => ({ url, method: 'GET', timeout: 5000 });
+
+    /** Every call on a spent instance throws; disconnect() is still owed once. */
+    async function spentAfterLoss(conn: ReturnType<typeof onPrem>) {
+      await expect(conn.connect()).rejects.toMatchObject(SPENT_CODE);
+      await expect(
+        conn.makeAdtRequest(work('/sap/bc/adt/other')),
+      ).rejects.toMatchObject(SPENT_CODE);
+      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await expect(conn.disconnect()).rejects.toMatchObject(SPENT_CODE);
+    }
+
+    it('a dead session (400 "session not found"): SESSION_REPLACED, then the instance is spent', async () => {
+      server = await standIn();
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await conn.connect();
+      const send = conn.transport.send.bind(conn.transport);
+      conn.transport.send = async (request) => {
+        if (request.url.includes('/gone')) {
+          const error = new Error('status 400') as Error & {
+            response: unknown;
+          };
+          error.response = {
+            status: 400,
+            statusText: 'Session not found',
+            headers: {},
+            data: 'Session not found',
+          };
+          throw error;
+        }
+        return send(request);
+      };
+      const establishments = server.establishments();
+
+      // Detected and reported as in 15.0.1.
+      await expect(
+        conn.makeAdtRequest(work('/sap/bc/adt/gone')),
+      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+      await spentAfterLoss(conn);
+      expect(server.establishments()).toBe(establishments);
+      // 15.0.1's session-loss cleanup cleared the jar, so disconnect() held
+      // no SAP_SESSIONID to log off (scope line 5).
+      await turns(5);
+      expect(server.logoffs()).toBe(0);
+    });
+
+    it('a replaced SAP_SESSIONID: SESSION_REPLACED, then the instance is spent', async () => {
+      server = await standIn({
+        routes: { '/sap/bc/adt/work': ['SAP_SESSIONID_STUB_100=S2; Path=/'] },
+      });
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await conn.connect();
+      const establishments = server.establishments();
+
+      await expect(
+        conn.makeAdtRequest(work('/sap/bc/adt/work')),
+      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+      await spentAfterLoss(conn);
+      expect(server.establishments()).toBe(establishments);
+      await turns(5);
+      expect(server.logoffs()).toBe(0);
+    });
+
+    it('after a plain disconnect(), a request throws NOT_CONNECTED', async () => {
+      server = await standIn();
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await conn.connect();
+      await conn.disconnect();
+      await expect(
+        conn.makeAdtRequest(work('/sap/bc/adt/other')),
+      ).rejects.toMatchObject(SPENT_CODE);
+      server.answerLogoff();
+    });
+  });
+
   describe('one instance is one session', () => {
     const SPENT = {
       code: 'ADT_NOT_CONNECTED',
       message:
-        "This connection's SAP session has ended (it was disconnected or logged off); one connection instance is one session. Create a new connection for a new session.",
+        "This connection's SAP session has ended (it was disconnected, logged off or lost); one connection instance is one session. Create a new connection for a new session.",
     };
 
     it('connect() after disconnect() is refused, and nothing is sent', async () => {

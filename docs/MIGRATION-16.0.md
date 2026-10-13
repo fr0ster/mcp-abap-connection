@@ -14,12 +14,16 @@ nothing else. For a consumer on 15.x that means the following.
   from the transport seam. Measured on E19 (BASIS 816, 2026-10-12): ABAP
   neither cancels a request that reached it nor rolls back across requests,
   and a logoff releases the locks — so the signal protected nothing.
-- **One connection instance is one SAP session.** After `disconnect()`, or
-  after a failed `connect()` that logged off the session it had received, the
-  instance is spent.
+- **One connection instance is one SAP session.** The instance is spent after
+  `disconnect()`, after a failed `connect()` that logged off the session it
+  had received, or after a lost session: `ADT_SESSION_REPLACED`, raised
+  exactly as in 15.0.1 for a changed `SAP_SESSIONID` or a 400 "session not
+  found". On a spent instance, `connect()` and every request reject
+  `ADT_SESSION_ERROR.NOT_CONNECTED`. The connector decides nothing beyond
+  that; what to do next is yours.
   - On a spent instance, `connect()` rejects with
     `ADT_SESSION_ERROR.NOT_CONNECTED`: "This connection's SAP session has
-    ended (it was disconnected or logged off); one connection instance is one
+    ended (it was disconnected, logged off or lost); one connection instance is one
     session. Create a new connection for a new session."
   - A failed `connect()` that sent nothing (a 401, a network error, no session
     cookie) leaves the instance usable, and `connect()` may be retried.

@@ -37,11 +37,14 @@ What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
   (BASIS 816, 2026-10-12): ABAP neither cancels a request that reached it nor
   rolls back across requests, a connection is never shared between threads,
   and a logoff releases the locks — so the signal protected nothing.
-- **One connection instance is one SAP session.** After `disconnect()`, or
-  after a failed `connect()` that logged off the session it had received,
-  the instance is spent. On a spent instance, `connect()` rejects with
-  `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed words, telling the caller to
-  create a new connection, and asks the credential nothing. Every
+- **One connection instance is one SAP session.** After `disconnect()`, after
+  a failed `connect()` that logged off the session it had received, or after
+  a lost session (`ADT_SESSION_REPLACED`, detected and raised exactly as in
+  15.0.1), the instance is spent. On a spent instance, `connect()` rejects
+  with `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed words, telling the caller to
+  create a new connection, and asks the credential nothing; every request
+  rejects `NOT_CONNECTED` too. After a lost session `disconnect()` is still
+  owed once, and sends nothing: the loss already cleared the cookies. Every
   establishment attempt checks this, `connect()`'s internal logon retry
   included. A failed `connect()` that sent nothing (401, network, no session
   cookie) may be retried. A new session is a new instance, created by the

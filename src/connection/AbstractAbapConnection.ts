@@ -85,7 +85,7 @@ interface CredentialRenewal {
 function spentError(): Error & { code: string } {
   return sessionError(
     ADT_SESSION_ERROR.NOT_CONNECTED,
-    "This connection's SAP session has ended (it was disconnected or logged off); one connection instance is one session. Create a new connection for a new session.",
+    "This connection's SAP session has ended (it was disconnected, logged off or lost); one connection instance is one session. Create a new connection for a new session.",
   );
 }
 
@@ -158,8 +158,8 @@ abstract class AbstractAbapConnection
   private disconnectCalled = false;
   /**
    * Whether this instance's one SAP session has ended: it was disconnected,
-   * or a failed `connect()` logged off the session it had received. One
-   * instance is one session —
+   * a failed `connect()` logged off the session it had received, or the
+   * session was lost (`raiseSessionLost`). One instance is one session —
    * after its logoff it is spent, and `connect()` refuses. A new session is a
    * new instance, which the consumer creates (its own factory, or
    * `createConnection`).
@@ -395,8 +395,9 @@ abstract class AbstractAbapConnection
     // against itself would let the connect publish a session the caller had
     // asked to stop. The baseline is "when the caller asked to connect".
     // One instance is one SAP session: once that session has ended — a
-    // disconnect(), or a failed connect() that logged it off — the instance
-    // is spent, and a new session needs a new instance.
+    // disconnect(), a failed connect() that logged it off, or a lost
+    // session — the instance is spent, and a new session needs a new
+    // instance.
     if (this.spent) throw spentError();
     const baselineEpoch = this.lifecycle.teardownEpoch;
     await this.lifecycle.transition('connect', async () => {
@@ -939,6 +940,9 @@ abstract class AbstractAbapConnection
    */
   protected raiseSessionLost(reason: string): void {
     this.logger?.warn(`Session lost: ${reason}`);
+    // The instance's one session is gone: it is spent, as after disconnect().
+    // Nothing else is decided here — the caller is told, and decides.
+    this.spent = true;
     this.lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
     void this.lifecycle.transition('cleanup', async () => {
       this.clearSessionState();
