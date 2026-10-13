@@ -332,11 +332,141 @@ describe('disconnect() resolves once the logoff is written', () => {
     });
   });
 
+  describe('every way a session ends spends the instance, through one teardown', () => {
+    it('cloud: a preflight session, then a renewable 401 at discovery — one logoff, no second establishment, the original failure', async () => {
+      server = await standIn({ discoveryStatus: 401 });
+      const config = {
+        ...configFor(server.baseUrl),
+        authType: 'jwt',
+        jwtToken: 'TOKEN',
+      } as SapConfig;
+      const { stubProvider } = await import('./helpers/stubProvider.js');
+      const provider = stubProvider();
+      const conn = new AdtCloudConnector(
+        config,
+        provider,
+        cloudHttpTransport(config, null),
+        null,
+      );
+
+      const error = await conn.connect().catch((e: unknown) => e);
+      expect(error).toBeDefined();
+      expect(conn.isConnected()).toBe(false);
+      // The preflight's session was logged off, and nothing was renewed or
+      // established again on the spent instance.
+      await server.logoffArrived;
+      expect(server.logoffs()).toBe(1);
+      expect(server.establishments()).toBe(1);
+      expect(provider.calls.filter((c) => c.method === 'rejected')).toEqual([]);
+      await expect(conn.connect()).rejects.toMatchObject({
+        code: 'ADT_NOT_CONNECTED',
+      });
+      server.answerLogoff();
+    });
+
+    it('a connect() queued behind a disconnect() establishes nothing: every attempt checks the instance', async () => {
+      server = await standIn();
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await conn.connect();
+      const establishments = server.establishments();
+
+      // Called together: connect() passes its entry check before the
+      // disconnect's transition has run, and must still open nothing.
+      const disconnecting = conn.disconnect();
+      const connecting = conn.connect();
+      await expect(connecting).rejects.toMatchObject({
+        code: 'ADT_NOT_CONNECTED',
+      });
+      await disconnecting;
+      expect(server.establishments()).toBe(establishments);
+      expect(conn.isConnected()).toBe(false);
+      server.answerLogoff();
+    });
+
+    it('a replaced security session (a new SAP_SESSIONID): the new one is logged off, the instance is spent', async () => {
+      server = await standIn({
+        routes: {
+          '/sap/bc/adt/work': [
+            'SAP_SESSIONID_STUB_100=S2; Path=/',
+            'sap-contextid=CTX; path=/sap/bc/adt',
+          ],
+        },
+      });
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await conn.connect();
+
+      await expect(
+        conn.makeAdtRequest({
+          url: '/sap/bc/adt/work',
+          method: 'GET',
+          timeout: 5000,
+        }),
+      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+
+      const logoff = await server.logoffArrived;
+      const cookie = String(logoff.headers.cookie ?? '');
+      // The session the instance now holds — nobody will use it.
+      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S2');
+      expect(cookie).not.toContain('sap-contextid');
+      await expect(conn.connect()).rejects.toMatchObject({
+        code: 'ADT_NOT_CONNECTED',
+      });
+
+      // The caller's disconnect(): its first; it sends nothing more.
+      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await turns(5);
+      expect(server.logoffs()).toBe(1);
+      const flushed = watched(conn.flushGoodbye());
+      await turns(2);
+      expect(flushed()).toBe(false);
+      server.answerLogoff();
+      await conn.flushGoodbye();
+    });
+
+    it('a dead session (400 "session not found"): the instance is spent, and nothing is logged off', async () => {
+      server = await standIn();
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await conn.connect();
+      const send = conn.transport.send.bind(conn.transport);
+      conn.transport.send = async (request) => {
+        if (request.url.includes('/gone')) {
+          const error = new Error('status 400') as Error & {
+            response: unknown;
+          };
+          error.response = {
+            status: 400,
+            statusText: 'Session not found',
+            headers: {},
+            data: 'Session not found',
+          };
+          throw error;
+        }
+        return send(request);
+      };
+
+      await expect(
+        conn.makeAdtRequest({
+          url: '/sap/bc/adt/gone',
+          method: 'GET',
+          timeout: 5000,
+        }),
+      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+      await turns(5);
+      await expect(conn.connect()).rejects.toMatchObject({
+        code: 'ADT_NOT_CONNECTED',
+      });
+      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await turns(5);
+      // The session is gone on SAP's side: there is nothing to log off.
+      expect(server.logoffs()).toBe(0);
+    });
+  });
+
   describe('one instance is one session', () => {
     const SPENT = {
       code: 'ADT_NOT_CONNECTED',
       message:
-        "This connection's SAP session has ended (it was disconnected or logged off); one connection instance is one session. Create a new connection for a new session.",
+        "This connection's SAP session has ended (it was disconnected, logged off or lost); one connection instance is one session. Create a new connection for a new session.",
     };
 
     it('connect() after disconnect() is refused, and nothing is sent', async () => {
@@ -351,6 +481,24 @@ describe('disconnect() resolves once the logoff is written', () => {
       expect(server.establishments()).toBe(establishments);
       expect(server.logoffs()).toBe(1);
       server.answerLogoff();
+    });
+
+    it('connect() on a spent instance asks the credential nothing', async () => {
+      server = await standIn();
+      const { stubProvider } = await import('./helpers/stubProvider.js');
+      const { AdtOnPremConnector } = await import(
+        '../connection/AdtOnPremConnector.js'
+      );
+      const provider = stubProvider();
+      const conn = new AdtOnPremConnector(
+        configFor(server.baseUrl),
+        provider,
+        onPremHttpTransport(configFor(server.baseUrl)),
+        null,
+      );
+      await conn.disconnect();
+      await expect(conn.connect()).rejects.toMatchObject(SPENT);
+      expect(provider.calls.filter((c) => c.method === 'prepare')).toEqual([]);
     });
 
     it('connect() after disconnect() on an instance that never connected is refused too', async () => {

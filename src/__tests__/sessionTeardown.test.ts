@@ -15,7 +15,6 @@ import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
 import { reportableLogoff, wroteIt } from './helpers/logoffWrite.js';
 import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
-import { loseSessionForTest } from './helpers/session.js';
 import { settled } from './helpers/settled.js';
 
 const baseConfig: SapConfig = {
@@ -563,18 +562,16 @@ describe('requests stay on the server the session lives on', () => {
     pinning(conn, seen, 'appserver-c5zhg');
 
     await conn.connect();
-    // Lost without a logoff (a dead session, a changed SAP_SESSIONID): the
-    // instance stays usable, and its next session must not inherit the old
-    // one's server.
-    await loseSessionForTest(conn);
+    expect(conn.transport.affinityHeaders().saplb).toBe('appserver-c5zhg');
+    // The session is lost (a dead session, a changed SAP_SESSIONID): the wire
+    // forgets the server it lived on, and asks again rather than asserting it.
+    (conn as unknown as { raiseSessionLost(r: string): void }).raiseSessionLost(
+      'test: the session was lost',
+    );
     await settled();
-    const before = seen.length;
-    await conn.connect();
 
-    // A fresh connect starts by asking again rather than by asserting where
-    // the last session used to live.
-    expect(seen[before].headers.saplb).toBeUndefined();
-    expect(seen[before].headers['sap-adt-saplb']).toBe('fetch');
+    expect(conn.transport.affinityHeaders().saplb).toBeUndefined();
+    expect(conn.transport.affinityHeaders()['sap-adt-saplb']).toBe('fetch');
   });
 });
 

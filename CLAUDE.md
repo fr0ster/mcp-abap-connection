@@ -182,14 +182,20 @@ fact belongs on the transport instead.
   old lock unreachable), a first-issued or deleted one is not — and the
   connection then logs the security session off at once, before forgetting
   the cookies (`ownGoodbye`; the caller's `disconnect()` waits for its write,
-  `flushGoodbye()` for its answer). One instance is one SAP session: after
-  `disconnect()`, a `SESSION_REPLACED` logoff, or a failed `connect()` that
-  logged a received session off, the instance is `spent` and `connect()`
-  rejects `NOT_CONNECTED` ("create a new connection"); a failed connect that
-  sent nothing may be retried. Creating the new instance is the consumer's
-  (its factory, or `createConnection`). Tests needing a next session on one
-  instance lose it without a logoff (`helpers/session.loseSessionForTest`,
-  the dead-session / changed-`SAP_SESSIONID` path). The logoff never carries `sap-contextid`
+  `flushGoodbye()` for its answer). One instance is one SAP session, and
+  every way it ends goes through ONE terminal teardown, `endSession()`
+  (snapshot without `sap-contextid`, logoff when a live `SAP_SESSIONID` is
+  held, `spent`, write/answer kept): `disconnect()`, a failed `connect()`
+  that received a live `SAP_SESSIONID`, a replaced `sap-contextid` in a lock
+  window, a replaced `SAP_SESSIONID` (the new one is logged off; the old one
+  is out of reach). `raiseSessionLost` spends too, so a dead session (400
+  "session not found", nothing to log off) does. A spent instance refuses
+  `connect()` (`NOT_CONNECTED`, "create a new connection") at entry and at
+  every establishment attempt, the internal logon retry included; a failed
+  connect that sent nothing may be retried. Creating the new instance is the
+  consumer's (its factory, or `createConnection`). No next session ever
+  shares an instance, so the stale-request fencing tests end the session
+  with `disconnect()` and assert nothing is sent at all. The logoff never carries `sap-contextid`
   (`logoffCookies`): measured on E19 2026-10-13, a logoff without it ended
   the context and freed the lock, one with a stale one got 400. After an
   UNLOCK the stateful context lives on, lockless, until the logoff or a

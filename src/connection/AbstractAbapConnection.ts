@@ -81,6 +81,14 @@ interface CredentialRenewal {
   spent: boolean;
 }
 
+/** What a spent instance answers to `connect()`. Fixed words. */
+function spentError(): Error & { code: string } {
+  return sessionError(
+    ADT_SESSION_ERROR.NOT_CONNECTED,
+    "This connection's SAP session has ended (it was disconnected, logged off or lost); one connection instance is one session. Create a new connection for a new session.",
+  );
+}
+
 abstract class AbstractAbapConnection
   implements
     AbapConnection,
@@ -158,12 +166,10 @@ abstract class AbstractAbapConnection
    */
   private spent = false;
   /**
-   * The logoff the connection dispatched on its own — on a replaced ABAP
-   * session in a lock window — which the caller's `disconnect()` (its write)
-   * and `flushGoodbye()` (its answer) must still see. At most one: the
-   * instance is spent after it.
+   * Every logoff `endSession()` dispatched for this instance, merged: what
+   * `disconnect()` waits for (the writes) and `flushGoodbye()` (the answers).
    */
-  private ownGoodbye: {
+  private ended: {
     answered: Promise<void>;
     written: Promise<void>;
   } | null = null;
@@ -389,14 +395,9 @@ abstract class AbstractAbapConnection
     // against itself would let the connect publish a session the caller had
     // asked to stop. The baseline is "when the caller asked to connect".
     // One instance is one SAP session: once that session has ended — a
-    // disconnect(), or a logoff this connection sent on its own — the
-    // instance is spent, and a new session needs a new instance.
-    if (this.spent) {
-      throw sessionError(
-        ADT_SESSION_ERROR.NOT_CONNECTED,
-        "This connection's SAP session has ended (it was disconnected or logged off); one connection instance is one session. Create a new connection for a new session.",
-      );
-    }
+    // disconnect(), a logoff this connection sent on its own, or a session
+    // lost — the instance is spent, and a new session needs a new instance.
+    if (this.spent) throw spentError();
     const baselineEpoch = this.lifecycle.teardownEpoch;
     await this.lifecycle.transition('connect', async () => {
       if (this.lifecycle.connected) return;
@@ -411,9 +412,13 @@ abstract class AbstractAbapConnection
         await this.establishAndCommit(baselineEpoch);
       } catch (error) {
         const rejection = this.credentialRejection(error);
+        // A failed establishment that ended a session it had received (a
+        // cloud preflight's, say) has spent the instance: no second attempt
+        // on it — the original failure is the answer.
         if (
           !(error instanceof WireLogonError) ||
           !rejection ||
+          this.spent ||
           this.lifecycle.teardownEpoch !== baselineEpoch
         ) {
           throw error;
@@ -502,8 +507,6 @@ abstract class AbstractAbapConnection
       );
     }
     this.disconnectCalled = true;
-    // The session ends here: the instance is spent, whatever follows.
-    this.spent = true;
     // Beyond that, nothing here throws. This method's place is a `finally` — a
     // connection that was connected must be disconnected — and an exception
     // raised there replaces the error that sent the caller into it.
@@ -526,18 +529,11 @@ abstract class AbstractAbapConnection
       // open a new connection waits for it. Rejections are absorbed here so that holding
       // the promise never turns a failed goodbye into an unhandled rejection —
       // the transport already logs what went wrong.
-      const goodbye = this.dispatchGoodbye(context);
-      // A goodbye the connection already sent in this life (a replaced ABAP
-      // session) is part of this teardown: the caller waits for its write,
-      // and `flushGoodbye()` for its answer, as for its own.
-      const own = this.ownGoodbye;
-      this.ownGoodbye = null;
-      this.goodbye = own
-        ? Promise.all([own.answered, goodbye.answered]).then(() => {})
-        : goodbye.answered;
-      written = own
-        ? Promise.all([own.written, goodbye.written]).then(() => {})
-        : goodbye.written;
+      // The terminal teardown: the logoff (when the wire holds a session),
+      // the instance spent, and — merged with any logoff the connection
+      // already sent on its own — the write the caller waits for and the
+      // answer `flushGoodbye()` does.
+      written = this.endSession(context).written;
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
@@ -584,6 +580,38 @@ abstract class AbstractAbapConnection
     } finally {
       if (timer) clearTimeout(timer);
     }
+  }
+
+  /**
+   * The one terminal teardown of this instance's session, for every path that
+   * ends it: `disconnect()`, a failed `connect()` that had received a session,
+   * a replaced ABAP session, a replaced security session.
+   *
+   * Dispatches the logoff — the wire snapshots its cookies synchronously,
+   * without `sap-contextid`, and sends it only when it holds a live
+   * `SAP_SESSIONID` — marks the instance spent, and keeps the logoff's write
+   * and answer, merged with any earlier one of this instance, for
+   * `disconnect()` and `flushGoodbye()`. The caller clears the cookies after.
+   */
+  private endSession(context: IAdtSessionContext): {
+    answered: Promise<void>;
+    written: Promise<void>;
+  } {
+    const goodbye = this.dispatchGoodbye(context);
+    this.spent = true;
+    const previous = this.ended;
+    this.ended = previous
+      ? {
+          answered: Promise.all([previous.answered, goodbye.answered]).then(
+            () => {},
+          ),
+          written: Promise.all([previous.written, goodbye.written]).then(
+            () => {},
+          ),
+        }
+      : goodbye;
+    this.goodbye = this.ended.answered;
+    return this.ended;
   }
 
   /**
@@ -696,6 +724,9 @@ abstract class AbstractAbapConnection
    * than written twice — the two would drift apart, as they did once before.
    */
   private async establishAndCommit(baselineEpoch: number): Promise<void> {
+    // Every establishment attempt, the internal retry included: a spent
+    // instance opens no session.
+    if (this.spent) throw spentError();
     if (this.lifecycle.teardownEpoch !== baselineEpoch) {
       throw sessionError(
         ADT_SESSION_ERROR.NOT_CONNECTED,
@@ -761,10 +792,13 @@ abstract class AbstractAbapConnection
       // close() may reject — its context.authorize throws when the provider
       // refuses — and nobody awaits this one. A throw that escaped here would
       // replace the establishment error and skip the clearing below.
-      // A session was held — the wire's logoff gate — so this logs it off,
-      // and the instance is spent; with none held, connect() may be retried.
-      if (this.transport.sessionFingerprint().size > 0) this.spent = true;
-      const goodbye = this.dispatchGoodbye(this.sessionContext());
+      // A session was held — the wire's logoff gate — so this ends it, and
+      // the instance is spent; with none held, nothing is sent and connect()
+      // may be retried.
+      const goodbye =
+        this.transport.sessionFingerprint().size > 0
+          ? this.endSession(this.sessionContext())
+          : this.dispatchGoodbye(this.sessionContext());
       this.invalidateSession();
       // And the identity with it. The rejecting response was still observed, so
       // its cookie was recorded as a session that had just been established —
@@ -906,6 +940,8 @@ abstract class AbstractAbapConnection
    */
   protected raiseSessionLost(reason: string): void {
     this.logger?.warn(`Session lost: ${reason}`);
+    // A lost session ends this instance's one session: it is spent.
+    this.spent = true;
     this.lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
     void this.lifecycle.transition('cleanup', async () => {
       this.clearSessionState();
@@ -1006,10 +1042,7 @@ abstract class AbstractAbapConnection
     // cookies synchronously, before the clearing below. Kept for the caller's
     // `disconnect()` (which then resolves once this is written, sending
     // nothing more) and `flushGoodbye()`.
-    this.ownGoodbye = this.dispatchGoodbye(this.sessionContext());
-    this.goodbye = this.ownGoodbye.answered;
-    // That logoff ends this instance's session: it is spent.
-    this.spent = true;
+    this.endSession(this.sessionContext());
     this.raiseSessionLost('the ABAP session (sap-contextid) changed under us');
     throw sessionError(
       ADT_SESSION_ERROR.SESSION_REPLACED,
@@ -1039,6 +1072,12 @@ abstract class AbstractAbapConnection
   ): void {
     if (classification !== 'replaced') return;
 
+    // The instance now holds the NEW SAP_SESSIONID the server issued — a
+    // session nobody will use. It is logged off before the cookies are
+    // cleared, so it does not live to its timeout. The old session cannot be
+    // ended from here, if it still lives: its cookie was replaced, and the
+    // cookie is the only permission to end it.
+    this.endSession(this.sessionContext());
     this.raiseSessionLost('the session cookie changed under us');
     throw sessionError(
       ADT_SESSION_ERROR.SESSION_REPLACED,

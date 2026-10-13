@@ -184,13 +184,23 @@ Measured on E19 with bare HTTP on 2026-10-13, unless marked otherwise.
   the old one with its locks. The caller's `disconnect()` that follows is the
   first of that life: it resolves once that logoff is written and sends
   nothing more, and `flushGoodbye()` waits for the logoff's answer.
-- **One connection instance is one SAP session.** Once a session has
-  ended, the instance is spent. That happens after `disconnect()`, after
-  `SESSION_REPLACED` (which sends its own logoff), and after a failed
-  `connect()` that logged off a session it had received.
+- **One connection instance is one SAP session.** Once a session has ended,
+  the instance is spent. Every way a session ends goes through the same
+  teardown: the logoff (when a live `SAP_SESSIONID` is held), the instance
+  spent, and the logoff's write and answer kept for `disconnect()` and
+  `flushGoodbye()`. That happens:
+  - after `disconnect()`;
+  - after a failed `connect()` that had received a live `SAP_SESSIONID` (a
+    cloud preflight's, or a 403/404 after logon);
+  - after `SESSION_REPLACED` from a new `sap-contextid` in a lock window;
+  - after `SESSION_REPLACED` from a new `SAP_SESSIONID`. The new session the
+    instance now holds is logged off. The old one cannot be ended from here
+    if it still lives, because its cookie was replaced;
+  - after a dead session (400 "session not found"). There is nothing left to
+    log off.
   - On a spent instance, `connect()` rejects with
     `ADT_SESSION_ERROR.NOT_CONNECTED`: "This connection's SAP session has
-    ended (it was disconnected or logged off); one connection instance is one
+    ended (it was disconnected, logged off or lost); one connection instance is one
     session. Create a new connection for a new session."
   - A failed `connect()` that sent no logoff (a 401, a network error, no
     session cookie) leaves the instance usable, and `connect()` may be

@@ -14,7 +14,6 @@ import { createServer, type Server } from 'node:http';
 import type { SapConfig } from '../../config/sapConfig.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { onPrem } from '../helpers/onPrem.js';
-import { loseSessionForTest } from '../helpers/session.js';
 
 interface Stub {
   baseUrl: string;
@@ -120,8 +119,10 @@ describe('a request that settles after its session was replaced', () => {
   });
 
   /**
-   * Sets up the dangerous ordering: request issued on S1, held; disconnect;
-   * connect (S2); then the request is let go and answers with `status`.
+   * Sets up the ordering: request issued on S1, held; the session ends
+   * (`disconnect()` — the instance is spent, so no next session can share it);
+   * then the request is let go and answers with `status`. Nothing it meets may
+   * act on the connection: no teardown raised, no token fetched, no resend.
    */
   async function staleRequest(status: number, body: string, method = 'GET') {
     const conn = onPrem(configFor(stub.baseUrl), null);
@@ -138,9 +139,8 @@ describe('a request that settles after its session was replaced', () => {
       .catch((e) => e);
 
     await new Promise((r) => setTimeout(r, 10));
-    await loseSessionForTest(conn);
-    await conn.connect();
-    expect(stub.sessions).toStrictEqual(['S1', 'S2']);
+    await conn.disconnect();
+    expect(stub.sessions).toStrictEqual(['S1']);
 
     stub.workStatus = status;
     stub.workBody = body;
@@ -150,13 +150,14 @@ describe('a request that settles after its session was replaced', () => {
   }
 
   // The identity comparison cannot see this one: the cookie is unchanged, so
-  // only the state can tell — and acting on it would tear down S2 because S1
-  // is gone, which it is, and which is no longer anybody's problem.
-  it('does not raise a session-lost teardown from a dead-session answer', async () => {
+  // only the state can tell — and the session it would declare lost is one
+  // already ended, which is no longer anybody's problem.
+  it('does not act on a dead-session answer from an ended session', async () => {
     const conn = await staleRequest(400, 'Session not found');
 
-    expect(conn.isConnected()).toBe(true);
-    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S2');
+    expect(conn.isConnected()).toBe(false);
+    expect(conn.getSessionIdentity()).toBeNull();
+    expect(stub.sessions).toStrictEqual(['S1']);
   });
 
   // The 403 path calls invalidateSession(), fetches a token and RETRIES. On a
@@ -165,20 +166,20 @@ describe('a request that settles after its session was replaced', () => {
   it('does not invalidate or refetch on a late CSRF complaint', async () => {
     const conn = await staleRequest(403, 'CSRF token validation failed', 'PUT');
 
-    expect(conn.isConnected()).toBe(true);
-    // Exactly the two the connects made: no third /discovery, so nothing went
-    // looking for a fresh token on the live session's behalf.
-    expect(stub.sessions).toStrictEqual(['S1', 'S2']);
-    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S2');
+    expect(conn.isConnected()).toBe(false);
+    // Exactly the one the connect made: no second /discovery, so nothing went
+    // looking for a fresh token after the session ended.
+    expect(stub.sessions).toStrictEqual(['S1']);
+    expect(conn.getSessionIdentity()).toBeNull();
   });
 
   // The worst of the three: a mutation from a dead session replayed inside the
   // live one. The retry would go out on the CURRENT axios instance, with the
   // current cookies, and the server would see a legitimate-looking write.
-  it('does not replay a stale mutation in the new session', async () => {
+  it('does not replay a stale mutation after its session ended', async () => {
     const conn = await staleRequest(401, 'unauthorized', 'PUT');
 
-    expect(conn.isConnected()).toBe(true);
-    expect(stub.sessions).toStrictEqual(['S1', 'S2']);
+    expect(conn.isConnected()).toBe(false);
+    expect(stub.sessions).toStrictEqual(['S1']);
   });
 });

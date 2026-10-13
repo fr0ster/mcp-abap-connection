@@ -55,14 +55,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server that never takes the bytes holds `disconnect()` until the socket
   fails, and that failure is logged, not thrown. The transition queue is not
   held by the write.
-- **One connection instance is one SAP session.** After `disconnect()`, after
-  `SESSION_REPLACED` (which sends its own logoff), or after a failed
-  `connect()` that logged off a session it had received, the instance is
-  spent: `connect()` rejects with `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed
-  words, telling the caller to create a new connection. A failed `connect()`
-  that sent nothing (401, network, no session cookie) may be retried. Each
-  instance sends at most one logoff. A new session is a new instance, created
-  by the consumer (its own factory, or `createConnection`). Before 16.0.0 a
+- **One connection instance is one SAP session.** Every way the session
+  ends spends the instance, through one terminal teardown (`endSession`):
+  snapshot the cookies (never `sap-contextid`), dispatch the logoff, mark the
+  instance spent, keep the logoff's write and answer for `disconnect()` and
+  `flushGoodbye()`. The paths:
+  - `disconnect()`;
+  - a failed `connect()` that had received a live `SAP_SESSIONID` (a cloud
+    preflight's, or a 403/404 after logon);
+  - a replaced ABAP session (`sap-contextid`) in a lock window;
+  - a replaced security session (a new `SAP_SESSIONID`). The new session the
+    instance now holds is logged off; the old one cannot be ended from here
+    if it still lives, because its cookie was replaced;
+  - a dead session (400 "session not found"). There is nothing left to log
+    off.
+
+  On a spent instance, `connect()` rejects with
+  `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed words, telling the caller to
+  create a new connection, and asks the credential nothing. Every
+  establishment attempt checks this, the internal retry after a refused logon
+  included, so a failed `connect()` that ended a session never establishes
+  again. A failed `connect()` that sent nothing (401, network, no session
+  cookie) may be retried. A new session is a new instance, created by the
+  consumer (its own factory, or `createConnection`). Before 16.0.0 a
   disconnected instance could `connect()` again.
 - **`flushGoodbye(timeoutMs?)` has no default bound.** Without an argument it
   waits for SAP's answer to the logoff as long as it takes, and creates no

@@ -25,7 +25,6 @@ import {
 } from '../../connection/authErrors.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { type SapStub, startSapStub } from '../helpers/sapStub.js';
-import { loseSessionForTest } from '../helpers/session.js';
 import { type StubScript, stubProvider } from '../helpers/stubProvider.js';
 
 /** connection's `provider-threw` (I3), whatever the moment. */
@@ -582,8 +581,8 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await loseSessionForTest(conn);
-    await conn.connect();
+    // The session ends (the instance is spent: no next session on it).
+    await conn.disconnect();
     // The new session's wire holds no token either, so a loop that went on
     // would fetch one for it.
     transport.adoptCsrfToken(null);
@@ -595,7 +594,7 @@ describe('a request whose session is gone', () => {
     expect(stub.sentTo(WORK)).toHaveLength(0);
     // Nor the token fetch that would have readied the wire for it.
     expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('a GET whose authorization outlives its session is not sent into the next one', async () => {
@@ -621,14 +620,14 @@ describe('a request whose session is gone', () => {
 
     const request = get(conn).catch((e: unknown) => e);
     await asked;
-    await loseSessionForTest(conn);
-    await conn.connect();
+    // The session ends (the instance is spent: no next session on it).
+    await conn.disconnect();
     release();
     const error = await request;
 
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('a logon rejection whose token fetch outlives its session sends no discovery into the next one', async () => {
@@ -642,8 +641,8 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await loseSessionForTest(conn);
-    await conn.connect();
+    // The session ends (the instance is spent: no next session on it).
+    await conn.disconnect();
     const discoveries = stub.sentTo(DISCOVERY).length;
     release();
     const error = await request;
@@ -654,7 +653,7 @@ describe('a request whose session is gone', () => {
     // Nothing went out on the new session's cookies after the release.
     expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
     expect(stub.sentTo(WORK)).toHaveLength(1);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('a CSRF recovery fetch that outlives its session sends no discovery into the next one', async () => {
@@ -666,8 +665,8 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await loseSessionForTest(conn);
-    await conn.connect();
+    // The session ends (the instance is spent: no next session on it).
+    await conn.disconnect();
     const discoveries = stub.sentTo(DISCOVERY).length;
     release();
     const error = await request;
@@ -675,7 +674,7 @@ describe('a request whose session is gone', () => {
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
     expect(stub.sentTo(WORK)).toHaveLength(1);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('an upfront token fetch retried after a renewal sends no discovery into the next session', async () => {
@@ -689,8 +688,8 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await loseSessionForTest(conn);
-    await conn.connect();
+    // The session ends (the instance is spent: no next session on it).
+    await conn.disconnect();
     transport.adoptCsrfToken(null);
     const discoveries = stub.sentTo(DISCOVERY).length;
     release();
@@ -700,7 +699,7 @@ describe('a request whose session is gone', () => {
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
     expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('the first pass of the upfront token fetch sends nothing into the next session', async () => {
@@ -712,8 +711,8 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await loseSessionForTest(conn);
-    await conn.connect();
+    // The session ends (the instance is spent: no next session on it).
+    await conn.disconnect();
     transport.adoptCsrfToken(null);
     const discoveries = stub.sentTo(DISCOVERY).length;
     release();
@@ -722,7 +721,7 @@ describe('a request whose session is gone', () => {
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
     expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('an upfront fetch refused after its session went away is NOT_CONNECTED, never the wire error', async () => {
@@ -747,8 +746,8 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await inFlight;
-    await loseSessionForTest(conn);
-    await conn.connect();
+    // The session ends (the instance is spent: no next session on it).
+    await conn.disconnect();
     release();
     const error = await request;
 
@@ -756,7 +755,7 @@ describe('a request whose session is gone', () => {
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(rejections()).toHaveLength(0);
     expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('a GET resent after its cookie fetch, answered "session not found", says SESSION_REPLACED', async () => {
@@ -803,7 +802,7 @@ function held(status: number) {
 }
 
 describe('an answer that arrives after its session is gone', () => {
-  it("a request's token fetch answered after a reconnect writes nothing into the new session's jar", async () => {
+  it("a request's token fetch answered after its session ended writes nothing into the jar", async () => {
     const { conn, transport } = await connected();
     // No token, so the POST readies the wire first; that fetch carries the
     // first session's cookie, and its answer is held at the server.
@@ -813,23 +812,23 @@ describe('an answer that arrives after its session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await fetch.inFlight;
-    await loseSessionForTest(conn);
-    await conn.connect();
+    // The session ends (the instance is spent: no next session on it).
+    await conn.disconnect();
     const jar = transport.cookies();
     const token = transport.csrfToken();
     const identity = conn.getSessionIdentity();
-    expect(jar).toContain('SAP_SESSIONID_STUB_100=S2');
+    // Ended and cleared: no next session on this instance to write into.
+    expect(jar).toBeNull();
     fetch.release();
     const error = await request;
 
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     // The held answer set S1 — the old session's cookie — and a token.
     expect(transport.cookies()).toBe(jar);
-    expect(transport.cookies()).not.toContain('S1');
     expect(transport.csrfToken()).toBe(token);
     expect(conn.getSessionIdentity()).toBe(identity);
     expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('a resend refused after its session went away is NOT_CONNECTED, not a credential verdict', async () => {
@@ -841,8 +840,8 @@ describe('an answer that arrives after its session is gone', () => {
 
     const request = get(conn).catch((e: unknown) => e);
     await resend.inFlight;
-    await loseSessionForTest(conn);
-    await conn.connect();
+    // The session ends (the instance is spent: no next session on it).
+    await conn.disconnect();
     resend.release();
     const error = await request;
 
@@ -850,7 +849,7 @@ describe('an answer that arrives after its session is gone', () => {
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(rejections()).toHaveLength(1);
     expect(stub.sentTo(WORK)).toHaveLength(3);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 });
 
@@ -878,15 +877,15 @@ describe('a stale request meets its credential', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await loseSessionForTest(conn);
-    await conn.connect();
+    // The session ends (the instance is spent: no next session on it).
+    await conn.disconnect();
     release();
     const error = await request;
 
     expect(error).not.toBeInstanceOf(WireLogonError);
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(WORK)).toHaveLength(1);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('an upfront fetch the provider refuses after the session went away is NOT_CONNECTED', async () => {
@@ -912,15 +911,15 @@ describe('a stale request meets its credential', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
-    await loseSessionForTest(conn);
-    await conn.connect();
+    // The session ends (the instance is spent: no next session on it).
+    await conn.disconnect();
     release();
     const error = await request;
 
     expect(error).not.toBeInstanceOf(AuthRefusedError);
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 });
 
@@ -973,14 +972,14 @@ describe("a provider's Oops that arrives after the session went away", () => {
 
     const request = send(conn).catch((e: unknown) => e);
     await asked;
-    await loseSessionForTest(conn);
-    await conn.connect();
+    // The session ends (the instance is spent: no next session on it).
+    await conn.disconnect();
     release();
     const error = await request;
 
     expect(error).not.toBeInstanceOf(AuthRefusedError);
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   }
 
   const forgetCookies = (
