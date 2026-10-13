@@ -1059,8 +1059,8 @@ token the provider renewed is on the very next attempt.
 
 | answer | what happens |
 |---|---|
-| **401** on a stale CSRF token or a login form | the wire's own session recovery runs first; a session fault is not a credential fault, and never reaches the provider. For a mutation refused while a CSRF token is cached, that recovery starts a new session — except inside a critical section, where the 401 goes straight to the provider (next row) so the session and its lock are kept |
-| **401** that survives that recovery, or a logon the system refused | put to `provider.rejected({ at, status?, error })`. On Ok the request is authorized again and sent **once more**; on no, `AuthRefusedError` |
+| **403** "CSRF token validation failed", or a **401** to a mutation that holds no CSRF token yet | the wire's own CSRF recovery: a token fetched in the same session (its cookies kept) and one resend. A GET whose 401 brought cookies is resent once with them. None of this discards the session or opens another |
+| any other **401** — a mutation's with a CSRF token cached included — or a logon the system refused | put to `provider.rejected({ at, status?, error })`. On Ok the request is authorized again and sent **once more**, in the same session; on no, `AuthRefusedError` carrying SAP's 401 as its cause |
 | the same refusal after an Ok | the verdict. The provider is not asked again — asking would invite a second renewal — and you get an `AuthRefusedError` saying the credential was refused again after the provider renewed it |
 | **403** | propagates untouched, never put to the provider. The server authenticated the caller and refused the action anyway, so a new credential is the same caller — usually the body names the authorization object |
 | anything else | untouched |
@@ -1069,21 +1069,26 @@ The one more attempt keeps the request's own lease and generation, so
 stale-request fencing applies to it: a request from a superseded session asks
 nobody and gets its error back. After a rejection `at: 'request'` it goes out on
 the same session; after a rejection `at: 'logon'` the wire logs on again — token
-dropped, established anew — before the resend. Inside a critical section a
-renewal keeps the session: a mutation that meets a 401 with a CSRF token cached
-is resent on it with the same token, and if SAP did replace the session the
-request fails with `SESSION_REPLACED` rather than carrying on in a new one.
-Outside a critical section that mutation takes the wire's stale-session recovery
-first (above), which starts a new session.
+dropped, established anew — before the resend.
 
-**The price of keeping the lock.** Inside a critical section the connection
-cannot tell a dead session from a refused credential when SAP answers the resend
-with the same session cookie and no `Set-Cookie`: the 401 comes back a second
-time, and the request ends as `AuthRefusedError` with the refused-again verdict
+**No 401 opens a new session.** One instance is one session: nothing discards
+the session's cookies to open another and retry there. A mutation that meets a
+401 with a CSRF token cached is put to the provider like any other 401; on Ok it
+is resent on the same session with the same token, inside a critical section or
+not, and if SAP did replace the session the request fails with
+`SESSION_REPLACED`. Before 16.0.0, outside a critical section, that mutation
+discarded the session and retried in a new one on the same instance, and a GET
+401 on a wire with no cookies fetched a token to open one; both are gone. If you
+want a new session after a 401, create a new connection.
+
+**A dead session can look like a refused credential.** When SAP answers the
+resend with the same session cookie and no `Set-Cookie`, the connection cannot
+tell a dead session from a refused credential: the 401 comes back a second time,
+and the request ends as `AuthRefusedError` with the refused-again verdict
 (`at: 'request'`), not `SESSION_REPLACED`. The connection stays connected on
-that session. If you get this inside a critical section, treat the lock as lost:
-`disconnect()`, create a new connection, and redo the work under a new lock there. That is the
-intended trade-off — a renewal must not discard a lock the session still holds.
+that session. If you suspect the session is gone, `disconnect()` and create a
+new connection; if you held a lock, treat it as lost and redo the work under a
+new lock there.
 
 One credential retry per request: the upfront token fetch before a mutation and
 a later rejection draw on the same allowance.

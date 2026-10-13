@@ -297,19 +297,20 @@ describe("the wire's own recovery", () => {
     expect(stub.sentTo(WORK)).toHaveLength(1);
   });
 
-  it('a GET whose path-(b) token fetch meets a 401 goes to rejected, not the original error', async () => {
+  it('a GET 401 on a wire holding no cookies fetches nothing to earn some: the provider is asked, the resend stays in this session', async () => {
     const { conn, rejections } = await connected();
-    // A wire that holds nothing: path (b) has no cookies to resend with and
-    // fetches a token to get some.
+    // A wire that holds nothing. Before 16.0.0 a token was fetched here — on a
+    // fresh jar, a second session on this instance.
     (conn as unknown as { invalidateSession(): void }).invalidateSession();
     stub.work(WORK, [401]);
-    stub.discovery.push(401);
+    const discoveries = stub.sentTo(DISCOVERY).length;
 
     const response = await get(conn);
 
     expect(response.status).toBe(200);
+    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
     expect(rejections()).toHaveLength(1);
-    expect(rejections()[0]).toMatchObject({ at: 'logon', status: 401 });
+    expect(rejections()[0]).toMatchObject({ at: 'request', status: 401 });
   });
 });
 
@@ -630,32 +631,6 @@ describe('a request whose session is gone', () => {
     expect(conn.isConnected()).toBe(false);
   });
 
-  it('a logon rejection whose token fetch outlives its session sends no discovery into the next one', async () => {
-    const { conn, provider, rejections } = await connected();
-    // The POST's cached token is refused as a login form, the wire's own
-    // token fetch is refused as a logon, and the provider renews: the third
-    // authorize from here is the one that readies the wire for the resend.
-    stub.work(WORK, [401]);
-    stub.discovery.push(401);
-    const { asked, release } = gateAuthorize(provider, 3);
-
-    const request = post(conn).catch((e: unknown) => e);
-    await asked;
-    // The session ends (the instance is spent: no next session on it).
-    await conn.disconnect();
-    const discoveries = stub.sentTo(DISCOVERY).length;
-    release();
-    const error = await request;
-
-    expect(rejections()).toHaveLength(1);
-    expect(rejections()[0]).toMatchObject({ at: 'logon' });
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    // Nothing went out on the new session's cookies after the release.
-    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
-    expect(stub.sentTo(WORK)).toHaveLength(1);
-    expect(conn.isConnected()).toBe(false);
-  });
-
   it('a CSRF recovery fetch that outlives its session sends no discovery into the next one', async () => {
     const { conn, provider } = await connected();
     // The login-form 401 discards the session and fetches a token anew; the
@@ -758,10 +733,11 @@ describe('a request whose session is gone', () => {
     expect(conn.isConnected()).toBe(false);
   });
 
-  it('a GET resent after its cookie fetch, answered "session not found", says SESSION_REPLACED', async () => {
+  it('a GET resent after its 401, answered "session not found", says SESSION_REPLACED', async () => {
     const { conn, transport } = await connected();
-    // The GET goes out with no cookies, so its 401 is recovered by a token
-    // fetch that brings them, and the resend meets a dead session.
+    // The GET goes out with no cookies; nothing is fetched to earn some. Its
+    // 401 goes to the provider, whose Ok resends it, and the resend meets a
+    // dead session.
     transport.forgetSession();
     (conn as any).lifecycle.forgetIdentity();
     stub.work(WORK, [
@@ -982,14 +958,6 @@ describe("a provider's Oops that arrives after the session went away", () => {
     expect(conn.isConnected()).toBe(false);
   }
 
-  const forgetCookies = (
-    conn: AdtOnPremConnector,
-    transport: OnPremHttpTransport,
-  ) => {
-    transport.forgetSession();
-    (conn as any).lifecycle.forgetIdentity();
-  };
-
   it('on the first attempt is NOT_CONNECTED', async () => {
     await staleOops('authorize', 1, get);
   });
@@ -998,12 +966,6 @@ describe("a provider's Oops that arrives after the session went away", () => {
     stub.work(WORK, [{ status: 403, body: 'CSRF token validation failed' }]);
     // The POST (1), the token fetch (2), the resend (3).
     await staleOops('authorize', 3, post);
-  });
-
-  it('on the GET resend after a cookie-bringing token fetch (path b) is NOT_CONNECTED', async () => {
-    stub.work(WORK, [401]);
-    // The GET (1), the token fetch (2), the resend (3).
-    await staleOops('authorize', 3, get, forgetCookies);
   });
 
   it('on the GET resend with the cookies it already holds (path b) is NOT_CONNECTED', async () => {

@@ -228,7 +228,7 @@ describe("the wire's own recovery", () => {
     expect(resend.headers['sap-client']).toBe('100');
   });
 
-  it('path (b), cookies fetched: the GET resend carries only the credential written for it', async () => {
+  it('a GET 401 on a wire holding no cookies: the renewed resend carries only the credential written for it', async () => {
     const { conn } = await connected(
       providerWriting((request) => {
         if (stub.sentTo(WORK).length === 0)
@@ -236,7 +236,9 @@ describe("the wire's own recovery", () => {
         else request.cookies('MYSSO=new');
       }),
     );
-    // A wire that holds nothing: path (b) fetches a token to get cookies.
+    // A wire that holds nothing. Nothing is fetched to earn cookies (that
+    // would open a second session on this instance): the 401 goes to the
+    // provider, and its renewal is resent in this same session.
     (conn as unknown as { invalidateSession(): void }).invalidateSession();
     stub.work(WORK, [401]);
 
@@ -247,7 +249,8 @@ describe("the wire's own recovery", () => {
     expect(first.headers.authorization).toBe('Bearer old');
     expect(resend.headers.authorization).toBeUndefined();
     expect(cookiesOf(resend.headers).get('MYSSO')).toEqual(['new']);
-    expect(cookiesOf(resend.headers).get(SESSION)).toBeDefined();
+    // No session cookie was earned on a fresh jar.
+    expect(cookiesOf(resend.headers).get(SESSION)).toBeUndefined();
     expect(resend.headers['sap-client']).toBe('100');
   });
 });
@@ -262,20 +265,20 @@ describe('what outranks the credential', () => {
         request.header('Authorization', `Bearer ${renewals}`);
       }),
     );
-    // The first attempt, path (a)'s resend, and the one more attempt after
-    // rejected() → Ok.
-    stub.work(WORK, [401, 401]);
+    // The first attempt, and the one more attempt after rejected() → Ok, in
+    // the same session (a cached-token 401 opens no new one).
+    stub.work(WORK, [401]);
 
     const response = await post(conn);
 
     expect(response.status).toBe(200);
     const sent = stub.sentTo(WORK);
-    expect(sent.map((request) => request.status)).toEqual([401, 401, 200]);
+    expect(sent.map((request) => request.status)).toEqual([401, 200]);
     for (const request of sent) {
       expect(request.headers['x-csrf-token']).toMatch(/^TOKEN-\d+$/);
       expect(request.headers['content-type']).toBe('text/plain; charset=utf-8');
     }
-    expect(sent[2].headers['x-csrf-token']).toBe(stub.tokens.at(-1));
-    expect(sent[2].headers.authorization).toBe('Bearer 1');
+    expect(sent[1].headers['x-csrf-token']).toBe(stub.tokens.at(-1));
+    expect(sent[1].headers.authorization).toBe('Bearer 1');
   });
 });

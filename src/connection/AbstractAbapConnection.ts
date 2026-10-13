@@ -1430,9 +1430,9 @@ abstract class AbstractAbapConnection
     // Fencing observeResponse() alone was not enough, and the gap was wide:
     // everything below acts on this connection, not on the request. A late
     // 400 "session not found" would call raiseSessionLost() and tear down the
-    // healthy session established since; a late 401/403 would call
-    // invalidateSession(), write a fresh CSRF token, and RETRY — replaying a
-    // mutation from a dead session inside the live one.
+    // healthy session established since; a late 403 would write a fresh CSRF
+    // token and RETRY — replaying a mutation from a dead session inside the
+    // live one.
     //
     // A stale request gets its error back and nothing else happens.
     if (!this.lifecycle.isCurrent(lease)) {
@@ -1494,46 +1494,22 @@ abstract class AbstractAbapConnection
       this.logger?.error(errorDetails.message, errorDetails);
     }
 
-    // The "login-form 401": SAP refused a mutation while we hold a cached CSRF
-    // token, so the token and the session it is bound to are dead and must be
-    // discarded before the retry.
-    //
-    // These retries cure the session. A 401 that survives them is the
-    // credential's, not the session's.
-    const isCachedTokenStale =
-      (normalizedMethod === 'POST' ||
-        normalizedMethod === 'PUT' ||
-        normalizedMethod === 'DELETE') &&
-      refusalOf(error)?.status === 401 &&
-      this.getCsrfToken() !== null;
+    // No session is discarded and reopened on this instance to retry a
+    // request: one instance is one session. A 401 on a mutation that holds a
+    // CSRF token (a login form) is not cured here; it goes to the provider
+    // like any other 401, and SAP's answer reaches the caller.
 
-    // Not inside a critical section. Curing the login-form 401 discards the
-    // session, and with it the lock the section exists to hold; a renewal
-    // must keep it (goal decision 2). There the 401 goes to the provider,
-    // whose Ok resends on the same session — and a session SAP really
-    // replaced is reported as SESSION_REPLACED from that resend's refusal.
-    // Keyed on the section, not the session mode: the write under a lock is
-    // itself stateless.
-    if (isCachedTokenStale && this.inCriticalSection) throw error;
-
-    // Retry logic for CSRF token errors (403 with CSRF message) and the
-    // login-form 401 pattern.
-    if (this.shouldRetryCsrf(error, normalizedMethod) || isCachedTokenStale) {
+    // A CSRF complaint (403 "CSRF token validation failed", or a 401 to a
+    // mutation that holds no token yet): a token earned in the SAME session —
+    // the cookies are kept — and one resend.
+    if (this.shouldRetryCsrf(error, normalizedMethod)) {
       this.logger?.debug(
-        isCachedTokenStale
-          ? 'Stale CSRF token / SAP session — invalidating and retrying'
-          : 'CSRF token validation failed, fetching new token and retrying request',
+        'CSRF token validation failed, fetching new token and retrying request',
         {
           url: requestUrl,
           method: normalizedMethod,
         },
       );
-
-      if (isCachedTokenStale) {
-        this.invalidateSession();
-        delete requestHeaders.Cookie;
-        delete requestHeaders.cookie;
-      }
 
       try {
         this.setCsrfToken(
@@ -1597,41 +1573,9 @@ abstract class AbstractAbapConnection
         }
       }
 
-      // If no cookies, try to get them via CSRF token fetch
-      this.logger?.debug(
-        `401 on GET request, attempting to get cookies via CSRF token fetch`,
-      );
-      try {
-        // Try to get CSRF token (this will also get cookies)
-        this.setCsrfToken(
-          await this.fetchCsrfToken(requestUrl, 3, 1000, lease),
-        );
-        const afterCsrf = this.transport.cookies();
-        if (afterCsrf) {
-          requestHeaders.Cookie = afterCsrf;
-          this.logger?.debug(
-            `Retrying GET request with cookies from CSRF fetch`,
-          );
-
-          requestConfig.headers = await this.authorizedFrom(requestHeaders);
-          return await this.sendObserved<T, D>(requestConfig, lease);
-        }
-      } catch (csrfError) {
-        // As in path (a): a stale request gets the session verdict.
-        if (!this.lifecycle.isCurrent(lease)) {
-          throw this.staleVerdict(csrfError);
-        }
-        this.throwIfSessionDead(csrfError, lease);
-        // Swallowed, unless it says more than the 401 that started this —
-        // a session verdict, or the credential's failure.
-        if (this.outranksOriginal(csrfError)) {
-          throw csrfError;
-        }
-        this.logger?.debug(
-          `Failed to get CSRF token for 401 retry: ${csrfError instanceof Error ? csrfError.message : String(csrfError)}`,
-        );
-        // Fall through to throw original error
-      }
+      // Without cookies nothing is fetched to earn some: that would open a
+      // session on a fresh jar, a second session on this instance. The 401
+      // goes on, as SAP gave it.
     }
 
     throw error;

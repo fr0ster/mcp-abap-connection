@@ -1,15 +1,11 @@
 /**
- * The two recovery paths that re-establish a session mid-request.
+ * A 401 mid-request, and what it does NOT do: open a second session.
  *
- * C — a login-form 401 on a mutation while a CSRF token is cached: the
- *     connector invalidates the session and fetches a new one.
- * D — a 401 on a GET: it retries with the cookies it has, or fetches a token
- *     to get some.
- *
- * Neither has any code of its own for the session rules. The claim under test
- * is that they do not need any: whatever they re-establish is observed like any
- * other response, so a replacement is fatal while a lock is held and
- * transparent when none is. An assumption until this file says otherwise.
+ * C — a login-form 401 on a mutation while a CSRF token is cached. Until
+ *     16.0.0 the connector discarded the session and fetched a new one; one
+ *     instance is one session now, so the 401 reaches the caller as SAP gave
+ *     it (through the provider, which the auth contract asks).
+ * D — a 401 on a GET: it retries with the cookies it has — the same session.
  */
 
 import { createServer, type Server } from 'node:http';
@@ -22,6 +18,8 @@ interface Stub {
   nextWorkStatus: number;
   /** Body for that response — the login-form shape drives path C. */
   nextWorkBody: string;
+  /** How many sessions the discovery endpoint has issued. */
+  readonly issued: number;
   close(): Promise<void>;
 }
 
@@ -61,6 +59,9 @@ async function startStub(): Promise<Stub> {
     get nextWorkBody() {
       return state.nextWorkBody;
     },
+    get issued() {
+      return state.issued;
+    },
     set nextWorkBody(v: string) {
       state.nextWorkBody = v;
     },
@@ -91,29 +92,27 @@ describe('path C — a login-form 401 on a mutation', () => {
     await stub.close();
   });
 
-  it('recovers transparently when no lock is held', async () => {
+  it('opens no second session: the 401 reaches the caller, the session stays S1', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S1');
 
     stub.nextWorkStatus = 401;
-    const response = await conn.makeAdtRequest({
-      url: '/sap/bc/adt/work',
-      method: 'PUT',
-      timeout: 5000,
-      data: 'x',
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/work',
+        method: 'PUT',
+        timeout: 5000,
+        data: 'x',
+      }),
+    ).rejects.toMatchObject({
+      name: 'AuthRefusedError',
+      cause: { response: { status: 401 } },
     });
 
-    expect(response.status).toBe(200);
-    // A new session was established, and it is not a "replacement": WE
-    // discarded the old one. invalidateSession() drops the tracked identity
-    // with the cookies, so the next fingerprint reads as established rather
-    // than as a session taken from under us — which, since a replacement is now
-    // always fatal, would otherwise make our own re-authentication tear the
-    // connection down. The pair of tests here used to differ only by whether a
-    // lock window was open; with windows gone the distinction that survives is
-    // "did we cause this".
-    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S2');
+    // No discovery after the connect's: nothing was re-established.
+    expect(stub.issued).toBe(1);
+    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S1');
     expect(conn.isConnected()).toBe(true);
   });
 });

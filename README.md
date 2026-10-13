@@ -62,7 +62,7 @@ The package uses a clean separation of concerns:
     what kind of provider it was given; it calls the same four methods on all of
     them: `prepare` once before the wire opens, `establish` at each logon,
     `authorize` before every attempt, `rejected` when the system refused
-  - A `401` that survives the wire's own session recovery, or a refused logon, is
+  - A `401` that survives the wire's own CSRF recovery, or a refused logon, is
     put to the provider through `rejected`. If it answers Ok (a renewed token, say)
     the request gets exactly one more attempt; if it says no, or the retry is
     refused too, you get an `AuthRefusedError` carrying the provider's refusal —
@@ -511,10 +511,9 @@ await connection.connect();
 // AuthRefusedError. The resend always runs under the same lease and generation
 // as the attempt it repeats, so stale-request fencing applies. After a rejection
 // at 'request' it goes out on the same session; after one at 'logon' the wire
-// logs on again first. Inside a critical section a renewal keeps the session —
-// or the request fails with SESSION_REPLACED if SAP replaced it. Outside one, a
-// mutation refused with a 401 while a CSRF token is cached takes the wire's
-// stale-session recovery first, which starts a new session.
+// logs on again first. No 401 opens a new session: the resend stays in this
+// one, or fails with SESSION_REPLACED if SAP replaced it. For a new session,
+// create a new connection.
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
@@ -537,7 +536,7 @@ See [MIGRATION-4.0.md](./docs/MIGRATION-4.0.md).
 ### When the credential is refused
 
 Every request asks the provider first (`authorize`). A `401` that survives the
-wire's own session recovery, or a logon the system refused, is put to the
+wire's own CSRF recovery (in the same session), or a logon the system refused, is put to the
 provider (`rejected`); on Ok the request is sent once more, otherwise it fails
 with an `AuthRefusedError` carrying the provider's refusal. A `403` is never
 put to the provider. The refusal is an `IAuthProviderError`: decide on its

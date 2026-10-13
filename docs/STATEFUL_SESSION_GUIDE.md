@@ -172,23 +172,23 @@ Every ADT request issued through `makeAdtRequest` automatically:
 
 This logic is transparent to callers (Builders, handlers, CLI scripts).
 
-A 401 that survives the wire's own CSRF recovery is put to the provider (`rejected`). On Ok the
+A 401 that survives the wire's own CSRF recovery (in the same session) is put to the provider (`rejected`). On Ok the
 request is sent once more, always under the same lease and generation as the attempt it repeats,
 so stale-request fencing applies. After a rejection at `'request'` that resend goes out on the
 same session; after a rejection at `'logon'` the wire logs on again before the resend.
-**Inside a critical section a renewal keeps the session, and the lock in it:** a mutation
+**No 401 opens a new session, and the lock in the session is kept:** a mutation
 (POST / PUT / DELETE) refused with a 401 while a CSRF token is cached goes to the provider and is
-resent on the same session with the same token, and if SAP did replace the session the request
-fails with `SESSION_REPLACED` instead of carrying on in a new one. Outside a critical section
-that mutation takes the wire's own stale-session recovery first, which starts a new session
-before the provider is asked — so hold a lock inside `beginCriticalSection()` /
-`endCriticalSection()`.
-**The price of keeping the lock:** when the session is really dead but SAP answers the resend with
-the SAME session cookie (no `Set-Cookie`), the connection cannot tell it from a refused
-credential — the second 401 ends the request as `AuthRefusedError` with the refused-again
-verdict (`at: 'request'`), not `SESSION_REPLACED`, and the connection stays connected. Inside a
-critical section, treat that as a lost lock: `disconnect()`, create a new connection, and redo the
-work under a new lock there.
+resent on the same session with the same token, inside a critical section or not, and if SAP did
+replace the session the request fails with `SESSION_REPLACED` instead of carrying on in a new one.
+Before 16.0.0, outside a critical section, that mutation discarded the session and retried in a
+new one on the same instance; that recovery is gone. One instance is one session: if you want a
+new session after a 401, create a new connection.
+**A dead session can look like a refused credential:** when the session is really dead but SAP
+answers the resend with the SAME session cookie (no `Set-Cookie`), the connection cannot tell it
+from a refused credential — the second 401 ends the request as `AuthRefusedError` with the
+refused-again verdict (`at: 'request'`), not `SESSION_REPLACED`, and the connection stays
+connected. Treat that as a lost session, and any lock in it as lost: `disconnect()`, create a new
+connection, and redo the work under a new lock there.
 If the provider says no, or the retry is refused too, the caller gets an `AuthRefusedError` (the refused-again verdict is `refusal.kind === 'connection'`, `facts.problem === 'refused-after-renewal'`). A 403 is an authorization answer, not a credential one: it never goes to the
 provider. See [When the credential is refused](./USAGE.md#when-the-credential-is-refused).
 
@@ -291,9 +291,10 @@ What it promises is narrow and worth stating exactly — inside a section the
 short: the ceiling is `SAP_TIMEOUT_CRITICAL`, ten minutes by default, and a
 socket ends a request whatever a contract says.
 
-Since 10.0.0 a section also keeps its session through a credential renewal: a
-mutation refused with a 401 inside it is renewed and resent on the same
-session, never moved to a new one (see [Request Hooks](#request-hooks)).
+A section keeps its session through a credential renewal: a mutation refused
+with a 401 inside it is renewed and resent on the same session, never moved to
+a new one. Since 16.0.0 that holds outside a section too: no 401 moves a
+request to a new session (see [Request Hooks](#request-hooks)).
 
 ### Two sessions, and they are not the same thing
 
@@ -360,7 +361,7 @@ import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
   const next = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
   await next.connect(); // a new session is a new instance
   ```
-- **Session expired**: reauthenticate to obtain a new session.
+- **Session expired**: create a new connection; a new session is a new instance.
 - **Multiple connections**: each connector holds its own wire, and the wire holds the cookie jar; share the instance if you need continuity.
 
 ---

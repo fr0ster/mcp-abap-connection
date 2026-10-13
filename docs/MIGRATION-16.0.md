@@ -27,6 +27,14 @@ nothing else. For a consumer on 15.x that means the following.
     session. Create a new connection for a new session."
   - A failed `connect()` that sent nothing (a 401, a network error, no session
     cookie) leaves the instance usable, and `connect()` may be retried.
+- **No 401 opens a new session on the same instance.** Before 16.0.0, a
+  mutation refused with a 401 while a CSRF token was cached (outside a
+  critical section) discarded the session and retried in a new one, and a GET
+  refused with a 401 on a wire with no cookies fetched a token to open one.
+  Both recoveries are removed. The 401 goes to the provider (`rejected`); on
+  Ok the request is resent once in the same session, otherwise you get
+  `AuthRefusedError` carrying SAP's 401. The CSRF refetch for a 403 "CSRF
+  token validation failed" (cookies kept) and the provider's re-ask stay.
 - **`disconnect()` resolves once the logoff is written.** It resolves when the
   bytes are handed to the socket over HTTP, or when the close call has
   returned over RFC. It does not wait for SAP's answer, and it never throws.
@@ -86,6 +94,11 @@ nothing else. For a consumer on 15.x that means the following.
 - **A new session is a new instance, and creating it is yours.** Use your
   own factory or `createConnection`. Anywhere you called `connect()` again on
   an instance after `disconnect()`, create a new connection instead.
+- **On a 401, create a new instance if you want a new session.** The
+  connection no longer opens one for you. Where you relied on a mutation's
+  401 being retried in a fresh session, catch the `AuthRefusedError` (or the
+  `ADT_SESSION_REPLACED` the resend may raise), `disconnect()` the instance,
+  and redo the work on a new connection — under a new lock, if it held one.
 - **`flushGoodbye()` no longer gives up after 5 s.** If you need a bound,
   pass one: `flushGoodbye(5000)`.
 - **Await `flushGoodbye()` as well if SAP's answer matters**, for example
