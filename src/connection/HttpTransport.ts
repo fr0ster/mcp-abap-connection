@@ -800,21 +800,6 @@ export class HttpTransport implements IAdtTransport {
   ): Promise<void> {}
 
   /**
-   * The logoff, sent as Eclipse ADT 3.60.3 sends it when a project is closed.
-   *
-   * The session's cookie and nothing that logs on: the service answers
-   * `sap-authenticated: not required`, so a credential would only be handed to
-   * a public endpoint that ignores it (measured on a BTP trial, 2026-10-12).
-   * What is snapshotted — the cookie, the affinity, the session headers — is
-   * taken by the caller before its first await, because the teardown clears it
-   * while the close is suspended.
-   *
-   * Its answer is not read: it is the same `200` and the same goodbye page for
-   * a live session, one already ended and no cookie at all, so it says nothing
-   * about THIS session; and when the logoff cannot end one, the reason is an
-   * error message whose status the ICF kernel picks, which no ABAP source shows.
-   */
-  /**
    * The platform's own logoff, `/sap/public/bc/icf/logoff`: the session's
    * cookies (taken by the caller before its first await, without
    * `sap-contextid`), no session headers, its write reported through
@@ -836,6 +821,21 @@ export class HttpTransport implements IAdtTransport {
     );
   }
 
+  /**
+   * The logoff, sent as Eclipse ADT 3.60.3 sends it when a project is closed.
+   *
+   * The session's cookie and nothing that logs on: the service answers
+   * `sap-authenticated: not required`, so a credential would only be handed to
+   * a public endpoint that ignores it (measured on a BTP trial, 2026-10-12).
+   * What is snapshotted — the cookie, the affinity, the session headers — is
+   * taken by the caller before its first await, because the teardown clears it
+   * while the close is suspended.
+   *
+   * Its answer is not read: it is the same `200` and the same goodbye page for
+   * a live session, one already ended and no cookie at all, so it says nothing
+   * about THIS session; and when the logoff cannot end one, the reason is an
+   * error message whose status the ICF kernel picks, which no ABAP source shows.
+   */
   protected async sendLogoff(
     context: IAdtSessionContext,
     url: string,
