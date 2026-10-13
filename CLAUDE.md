@@ -146,7 +146,7 @@ fact belongs on the transport instead.
   sent, the spent instance, session loss: docs/USAGE.md "Session Lifecycle"
   and docs/MIGRATION-16.0.md. Code: `AbstractAbapConnection` (`endSession`,
   `spent`, `raiseSessionLost`), `HttpTransport` (`holdsSessionCookie`,
-  `logoffCookies`). Tests: `disconnectWritten`.
+  `logoffCookies`, `sendIcfLogoff`). Tests: `disconnectWritten`.
 
 **Taking the RFC wire** needs the SAP NW RFC SDK on the machine and
 `@mcp-abap-adt/sap-rfc-lite` installed; `rfcConversationFrom(config)` derives
