@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [17.0.0] - 2026-10-13
+
+What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
+See [docs/MIGRATION-17.0.md](./docs/MIGRATION-17.0.md).
+
+### Breaking
+- **No deadline of the package's own.** A client deadline closes the socket,
+  and SAP then ends the synchronous request running on it — a write in it is
+  lost. So:
+  - `getTimeout`, `getTimeoutConfig` and `TimeoutConfig` are no longer
+    exported (`src/utils/timeouts.ts` is gone), and no `SAP_TIMEOUT_*`
+    variable is read;
+  - a request carries the caller's `timeout`, unchanged, and nothing else;
+    the CSRF fetch and the cloud preflight carry none (they were bounded by
+    `SAP_TIMEOUT_CSRF`);
+  - inside a critical section a request carries no deadline at all, not even
+    the caller's (it was raised to `SAP_TIMEOUT_CRITICAL`, 600 s); the
+    critical section itself is unchanged;
+  - `GenericWebSocketTransport.connect()` sets no timer unless the caller
+    passes `connectTimeoutMs` (the default was 15 s);
+  - `IAdtEstablishContext.timeoutMs` is removed.
+- **`IAdtTransport` has two new required members**, `resume(context, session)`
+  and `sessionCookies()`. `HttpTransport` and its subclasses implement them;
+  `RfcTransport` refuses `resume` and answers `null`. A custom wire adds both.
+
+### Added
+- **An instance on an existing session.** `createConnection({ …, session })`
+  (and a sixth constructor argument, `session`, on `AdtOnPremConnector` /
+  `AdtCloudConnector`) takes the cookies of a session that already exists.
+  `connect()` then does not log on: it makes one request in that session
+  without the credential — the CSRF fetch; on cloud with
+  `x-sap-security-session: use` — and SAP's answer says whether the session
+  is alive. Alive (a token, and the `SAP_SESSIONID` handed over, unchanged):
+  the session is the instance's, a stateful request reaches its
+  `sap-contextid`, and `disconnect()` logs it off as for any instance. Gone (a
+  `401`, or any answer that is not the session's): `connect()` rejects with
+  SAP's answer as it is, nothing is logged off, and the instance is spent.
+  HTTP wires only: over RFC `session` is refused at construction.
+- **`sessionCookies()`**: the instance's session cookies as the string
+  `session` takes — the wire's jar without `sap-XSRF_*`; `null` before a
+  session, after it ended, and over RFC. Never logged.
+
 ## [16.0.0] - 2026-10-13
 
 What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
@@ -2588,7 +2630,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v16.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v17.0.0...HEAD
+[17.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v16.0.0...v17.0.0
 [16.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.1.0...v16.0.0
 [15.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.1...v15.1.0
 [15.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.0...v15.0.1

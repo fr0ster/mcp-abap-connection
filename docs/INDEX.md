@@ -15,6 +15,7 @@ mcp-abap-connection/
 │   ├── INSTALLATION.md             # Setup and installation guide
 │   ├── USAGE.md                    # API documentation and examples
 │   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── MIGRATION-17.0.md           # no deadline of the package's own; an instance on an existing session
 │   ├── MIGRATION-16.0.md           # the request signal removed; disconnect() resolves once the logoff is written
 │   ├── MIGRATION-15.0.md           # interfaces-adt-connection 2: makeAdtRequest answers unknown
 │   ├── MIGRATION-14.0.md           # the sap-abap-auth CLI, open and commander are removed
@@ -47,6 +48,7 @@ mcp-abap-connection/
 - 🧭 [Scope](./SCOPE.md) - What this package answers for, and only that
 
 ### Upgrading
+- 🚚 [Migrating to 17.0.0](./MIGRATION-17.0.md) - `getTimeout`, `getTimeoutConfig` and `SAP_TIMEOUT_*` are gone; a request carries only the caller's `timeout`, and none inside a critical section; `createConnection({ …, session })` and `sessionCookies()`
 - 🚚 [Migrating to 16.0.0](./MIGRATION-16.0.md) - the per-request `signal` and `ADT_REQUEST_ABORTED` are removed; `disconnect()` resolves once the logoff is written; `flushGoodbye()` waits for the answer
 - 🚚 [Migrating to 15.0.0](./MIGRATION-15.0.md) - on `@mcp-abap-adt/interfaces-adt-connection` 2: `makeAdtRequest`'s answer is `unknown` unless its type is named
 - 🚚 [Migrating to 14.0.0](./MIGRATION-14.0.md) - the `sap-abap-auth` CLI is removed; use `@mcp-abap-adt/auth-broker-cli`

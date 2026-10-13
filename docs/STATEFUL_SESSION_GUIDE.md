@@ -5,8 +5,8 @@
 > and context cookie. Another handler can flip it back while your lock is open. Nothing in this
 > layer tracks locks: that belongs to `@mcp-abap-adt/adt-clients`, which holds the
 > handles and pairs each LOCK with its UNLOCK per object. What the connection
-> offers is `beginCriticalSection()` / `endCriticalSection()`, so a short timeout
-> cannot abort a request mid-span. See
+> offers is `beginCriticalSection()` / `endCriticalSection()`, inside which a
+> request carries no deadline at all, so nothing cuts it mid-span. See
 > [USAGE.md — Session Lifecycle](./USAGE.md#session-lifecycle).
 
 
@@ -279,16 +279,18 @@ server's own timeout releases them together.
 This is what makes an aborted request expensive, and it is not what it looks
 like. Aborting costs you **knowledge**, not a session: whether the modification
 was applied becomes unknowable, and the handle `unlock` needs is gone, while the
-lock is still very much held. That — not any teardown — is why
-`beginCriticalSection()` raises the effective timeout to a large ceiling for the
-duration of a `lock → modify → unlock` chain.
+lock is still very much held. And SAP, seeing the socket close, ends the
+synchronous request that was running on it — a write in it is lost. That — not
+any teardown — is why a request inside `beginCriticalSection()` carries no
+deadline at all for the duration of a `lock → modify → unlock` chain.
 
 Since 8.0.0 you reach it through the contract rather than the class: it is
 `ICriticalSection` in `@mcp-abap-adt/interfaces-adt-connection`, which this connection declares.
-What it promises is narrow and worth stating exactly — inside a section the
-*ordinary* per-request deadline does not apply. Not that no request can be cut
-short: the ceiling is `SAP_TIMEOUT_CRITICAL`, ten minutes by default, and a
-socket ends a request whatever a contract says.
+What it promises is narrow and worth stating exactly — inside a section no
+deadline of this package's applies, and the caller's per-request `timeout` is
+not applied either (17.0.0; before, a ten-minute `SAP_TIMEOUT_CRITICAL` ceiling
+replaced it). Not that no request can be cut short: the network, a proxy or the
+server's own limits end a request whatever a contract says.
 
 A section keeps its session through a credential renewal: a mutation refused
 with a 401 inside it is renewed and resent on the same session, never moved to
