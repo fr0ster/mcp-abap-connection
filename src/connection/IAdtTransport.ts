@@ -164,7 +164,7 @@ export interface IAdtTransport {
    * settles when the close is over, answer included. `disconnect()` resolves
    * at the first: SAP queues a logoff behind a request still running in the
    * same stateful ABAP session and answers it only after, yet the ENQUEUE
-   * locks go once it arrives (measured on E19, 2026-10-12 and 2026-10-13), so
+   * locks go once it arrives (measured on an on-premise system, 2026-10-12 and 2026-10-13), so
    * a caller about to
    * exit needs it sent, not answered. A wire that sends nothing, or whose
    * close is over at once (RFC: when the close call has returned), need not

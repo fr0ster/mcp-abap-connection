@@ -2,7 +2,7 @@
  * `disconnect()` resolves once the logoff is WRITTEN — its bytes on the
  * socket — not when SAP answers it.
  *
- * Measured on E19 (2026-10-12): with a long request still running in the same
+ * Measured on an on-premise system (2026-10-12): with a long request still running in the same
  * stateful session, SAP queues the logoff behind it and answers it only
  * afterwards (~96 s through the connector; no answer in six minutes sent raw
  * from a second thread), yet once the logoff has arrived the session's locks
@@ -743,7 +743,7 @@ describe('disconnect() resolves once the logoff is written', () => {
         observe: () => {},
       };
       for (const deletion of [
-        // Exactly what SAP's logoff answers with (E19, 2026-10-13): a
+        // Exactly what SAP's logoff answers with (on-premise, 2026-10-13): a
         // one-character value and an expiry in 1980.
         'SAP_SESSIONID_STUB_100=X; path=/; expires=Tue, 01-Jan-1980 00:00:01 GMT',
         'SAP_SESSIONID_STUB_100=S1; Max-Age=0; Path=/',
@@ -852,7 +852,7 @@ describe('disconnect() resolves once the logoff is written', () => {
   });
 
   describe('the logoff never carries sap-contextid', () => {
-    // Measured on E19 (2026-10-13, bare HTTP): a logoff without the context
+    // Measured on an on-premise system (2026-10-13, bare HTTP): a logoff without the context
     // cookie ended the context and released its lock; one carrying a stale
     // (deleted) sap-contextid got 400 and closed nothing.
     const STALE = 'sap-contextid=STALE; path=/sap/bc/adt';

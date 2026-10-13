@@ -468,7 +468,7 @@ abstract class AbstractAbapConnection
    * same stateful ABAP session and answers it only after — ~96 s in one
    * measurement, never in another — yet once it has arrived the ENQUEUE locks
    * go with it, even if the client is killed while waiting for the answer
-   * (measured on E19, 2026-10-12; checked against 16.0.0 on 2026-10-13 with
+   * (measured on an on-premise system, 2026-10-12; checked against 16.0.0 on 2026-10-13 with
    * the process exiting right after this resolved: the lock was free ~70 s
    * later, long before the idle timeout). A connection dropped WITHOUT a
    * logoff keeps its locks. So a caller about to exit awaits this, and one
@@ -817,7 +817,7 @@ abstract class AbstractAbapConnection
       // A failure after authentication leaves a live HTTP security session
       // (ICF, SAP_SESSIONID) on both wires: the cloud preflight opens one
       // (BTP trial, 2026-10-12), and on-prem an authenticated error answer
-      // still sets a live SAP_SESSIONID (measured on E19, 2026-10-13: 404 and
+      // still sets a live SAP_SESSIONID (measured on an on-premise system, 2026-10-13: 404 and
       // 403 each did; ABAP code: CL_HTTP_SERVER_NET->authentication creates
       // it before any handler runs, send_response sets the cookie whatever
       // the status). A failed connect() takes no ENQUEUE lock. The answer is not
@@ -883,7 +883,7 @@ abstract class AbstractAbapConnection
       // A shipped wire sends none here: this path means the wire holds no
       // SAP_SESSIONID, and without it the logoff would end nothing —
       // CL_HTTP_SERVER_NET->if_http_server~logoff terminates the security
-      // session only when that cookie is present (E19's ABAP code). A custom
+      // session only when that cookie is present (an on-premise system's ABAP code). A custom
       // wire's close() may still send one, and is waited for. Its answer is not waited for, and a close that throws or
       // rejects is logged and absorbed.
       // No session held — that is what this path means — so nothing was

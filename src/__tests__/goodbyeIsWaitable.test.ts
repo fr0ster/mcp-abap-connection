@@ -76,7 +76,7 @@ describe('flushGoodbye', () => {
 
   it('without a budget waits for the answer as long as it takes, and creates no timer', async () => {
     const connection = onPrem(config);
-    seedCookies(connection, 'SAP_SESSIONID_E19_100=nobudget');
+    seedCookies(connection, 'SAP_SESSIONID_ABC_001=nobudget');
     markConnectedForTest(connection);
     const goodbye = suspendedClose(
       connection as unknown as { transport: unknown },
@@ -104,7 +104,7 @@ describe('flushGoodbye', () => {
 
   it("with the caller's budget, schedules exactly that bound", async () => {
     const connection = onPrem(config);
-    seedCookies(connection, 'SAP_SESSIONID_E19_100=budget');
+    seedCookies(connection, 'SAP_SESSIONID_ABC_001=budget');
     markConnectedForTest(connection);
     suspendedClose(connection as unknown as { transport: unknown });
     await connection.disconnect();

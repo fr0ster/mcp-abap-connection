@@ -11,7 +11,7 @@ nothing else. For a consumer on 15.x that means the following.
   No request rejects with `ADT_REQUEST_ABORTED` any more. A request behaves as
   it did in 15.0.1: once admitted, it runs to its answer or its `timeout`.
   `IAdtTransportRequest.signal` and `IAdtEstablishContext.signal` are gone
-  from the transport seam. Measured on E19 (BASIS 816, 2026-10-12): ABAP
+  from the transport seam. Measured on an on-premise system (BASIS 816, 2026-10-12): ABAP
   neither cancels a request that reached it nor rolls back across requests,
   and a logoff releases the locks — so the signal protected nothing.
 - **One connection instance is one SAP session.** The instance is spent after
@@ -65,7 +65,7 @@ nothing else. For a consumer on 15.x that means the following.
     same session.
   - A 401, or a 200 with only `sap-XSRF_*`, has no session, so nothing is
     sent.
-  - The logoff never carries `sap-contextid`. Measured on E19 (2026-10-13), a
+  - The logoff never carries `sap-contextid`. Measured on an on-premise system (2026-10-13), a
     logoff carrying a stale one got 400 and closed nothing, while one without
     it ended the context and released its lock.
   - A redirect answering the logoff counts as its answer: it is not

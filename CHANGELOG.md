@@ -33,7 +33,7 @@ What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
   drops `IAbapRequestOptions.signal`, `ADT_REQUEST_ERROR` and
   `AdtRequestErrorCode`. No request rejects with `ADT_REQUEST_ABORTED`, and
   `IAdtTransportRequest.signal` and `IAdtEstablishContext.signal` are gone
-  from the transport seam. Requests behave as in 15.0.1. Measured on E19
+  from the transport seam. Requests behave as in 15.0.1. Measured on an on-premise system
   (BASIS 816, 2026-10-12): ABAP neither cancels a request that reached it nor
   rolls back across requests, a connection is never shared between threads,
   and a logoff releases the locks — so the signal protected nothing.
@@ -74,13 +74,13 @@ What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
     socket (the node request's `finish`), or over RFC, once the close call
     has returned. It does not wait for SAP's answer, and it no longer
     returns at once as before.
-  - Measured on E19 (2026-10-12): with a long request running in the same
+  - Measured on an on-premise system (2026-10-12): with a long request running in the same
     stateful session, SAP queues the logoff behind it (answered ~96 s later
     through the connector; no answer in six minutes raw from a second
     thread). The lock is still gone afterwards, even when the client was
     killed with the answer pending. A connection dropped without a logoff
     keeps its locks.
-  - Checked against this build on E19 (2026-10-13): LOCK, then a long
+  - Checked against this build on an on-premise system (2026-10-13): LOCK, then a long
     where-used in the same stateful session, then `await disconnect()` and
     an immediate process exit. The lock was still held 1 s later and free
     ~70 s after the exit, long before the 30-min idle timeout.
@@ -102,18 +102,18 @@ What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
   - A 401 or a 200 with only `sap-XSRF_*` carries no session, and nothing is
     sent.
   - The on-prem rule used to be "established and holding any cookie".
-  - Evidence (E19 ABAP code and measurement): `CL_HTTP_SERVER_NET->send_response`
+  - Evidence (on-premise ABAP code and measurement): `CL_HTTP_SERVER_NET->send_response`
     sets `SAP_SESSIONID` only when a security session was created, whatever
     the status, and the ICF logoff ends a session only when that cookie is
     present.
 - **The cookie jar honours deletions.** A `Set-Cookie` with a past `expires`
   or `Max-Age=0` removes the cookie, so a deleted `SAP_SESSIONID` is no
   session. SAP's logoff deletes with a one-character value and
-  `expires=Tue, 01-Jan-1980 00:00:01 GMT` (E19 trace, 2026-10-13). An empty
+  `expires=Tue, 01-Jan-1980 00:00:01 GMT` (on-premise trace, 2026-10-13). An empty
   `SAP_SESSIONID` names no session either.
 - **The logoff never carries `sap-contextid`**: only `SAP_SESSIONID_*`,
   `sap-usercontext` and the affinity it needs (`HttpTransport.logoffCookies`).
-  Measured on E19 with bare HTTP (2026-10-13):
+  Measured on an on-premise system with bare HTTP (2026-10-13):
   - A logoff without the context cookie ended the context and released its
     lock.
   - A logoff carrying a stale (deleted) `sap-contextid` got 400 and closed

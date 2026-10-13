@@ -244,7 +244,7 @@ export class HttpTransport implements IAdtTransport {
       if (!trimmed) continue;
       // A deletion removes the cookie, and is told by its expiry, not its
       // value: SAP's logoff deletes every cookie with a one-character value
-      // and `expires=Tue, 01-Jan-1980 00:00:01 GMT` (E19, 2026-10-13). Kept,
+      // and `expires=Tue, 01-Jan-1980 00:00:01 GMT` (on-premise, 2026-10-13). Kept,
       // a deleted `SAP_SESSIONID` would read as a session the server has
       // just ended.
       if (deletesCookie(attributes)) {
@@ -296,9 +296,9 @@ export class HttpTransport implements IAdtTransport {
    * The cookies a logoff carries: the jar without `sap-contextid`.
    *
    * The logoff ends the HTTP security session `SAP_SESSIONID` names, and with
-   * it every ABAP context of that session. Measured on E19 with bare HTTP
+   * it every ABAP context of that session. Measured on an on-premise system with bare HTTP
    * (2026-10-13): a LOCK held in a stateful context, then a logoff carrying
-   * `SAP_SESSIONID_E19_100` and `sap-usercontext` but no `sap-contextid` →
+   * `SAP_SESSIONID_ABC_001` and `sap-usercontext` but no `sap-contextid` →
    * 200, `SAP_SESSIONID` deleted, and an independent session then got the
    * LOCK: the context ended and the lock was released. A logoff that carried a
    * stale (deleted) `sap-contextid` got 400 and closed nothing. So the
@@ -317,7 +317,7 @@ export class HttpTransport implements IAdtTransport {
    *
    * Read from the jar, never from `sessionEstablished()`, which a wire may
    * answer otherwise (BASIS 7.40 says yes with no such cookie). The evidence,
-   * on E19 (ABAP code and measurement): `CL_HTTP_SERVER_NET->send_response`
+   * on an on-premise system (ABAP code and measurement): `CL_HTTP_SERVER_NET->send_response`
    * sets `SAP_SESSIONID_<SID>_<CLIENT>` only when that request created a
    * security session (`m_security_session_created`), whatever the status — a
    * 404 or 403 after logon carried it and the session was alive; and the ICF
