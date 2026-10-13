@@ -436,7 +436,7 @@ export class HttpTransport implements IAdtTransport {
     for (const [index, url] of endpoints.entries()) {
       // The fallback exists for a system that HAS no
       // `/sap/bc/adt/core/discovery` — BASIS < 7.52 — which the server says by
-      // answering 404 there. Trying it after a refused connection or a timeout
+      // answering 404 there. Trying it after a refused connection or a network
       // asks a host that is not answering to answer a different path, which
       // doubles the wait before the caller is told what is actually wrong.
       if (index > 0 && !absentEndpoint(last)) break;
@@ -453,9 +453,6 @@ export class HttpTransport implements IAdtTransport {
               ...context.extraHeaders,
               ...CSRF_CONFIG.REQUIRED_HEADERS,
             },
-            ...(context.timeoutMs !== undefined
-              ? { timeout: context.timeoutMs }
-              : {}),
           });
 
           // Handed up BEFORE the token is read: the cookies are the session,

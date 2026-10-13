@@ -32,7 +32,12 @@ export interface IAdtTransportRequest {
    * its query — silently, and only on one of the two wires.
    */
   params?: Record<string, unknown>;
-  /** Milliseconds; absent means the transport's own default. */
+  /**
+   * Milliseconds: the caller's own deadline, and the only one a request
+   * carries. Absent means none — no wire sets one of its own, because a
+   * client deadline closes the socket and SAP then ends the request running
+   * on it, a write in it lost.
+   */
   timeout?: number;
   /**
    * Which statuses resolve rather than throw. Absent means the default: 2xx
@@ -115,8 +120,6 @@ export interface IAdtEstablishContext extends IAdtSessionContext {
   retries?: number;
   /** Milliseconds between attempts. Absent means the transport's own default. */
   retryDelayMs?: number;
-  /** Milliseconds per attempt. Absent means the transport's own default. */
-  timeoutMs?: number;
   /**
    * Which failures must not be retried.
    *

@@ -19,7 +19,6 @@
 import {
   AdtOnPremConnector,
   OnPremHttpTransport,
-  getTimeout,
 } from '@mcp-abap-adt/connection';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import { SapConfig } from '@mcp-abap-adt/connection';
@@ -61,7 +60,7 @@ await connection.connect();
 const response = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
-  timeout: getTimeout('default'),
+  timeout: 0,
 });
 
 console.log(response.data);
@@ -122,7 +121,6 @@ For SAP BTP ABAP Environment. Token refresh belongs to
 import {
   AdtCloudConnector,
   CloudHttpTransport,
-  getTimeout,
 } from '@mcp-abap-adt/connection';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 
@@ -151,7 +149,7 @@ await connection.connect();   // required: nothing is established implicitly
 const response = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
-  timeout: getTimeout('default'),
+  timeout: 0,
 });
 ```
 
@@ -192,7 +190,6 @@ them is refused with `ADT_NOT_CONNECTED`.
 ### GET Request
 
 ```typescript
-import { getTimeout } from '@mcp-abap-adt/connection';
 // The body is XML: name its type, or the answer's `data` is `unknown`.
 const packages = await connection.makeAdtRequest<string>({
   method: 'GET',
@@ -202,14 +199,13 @@ const packages = await connection.makeAdtRequest<string>({
     parent_type: 'DEVC/K',
     withShortDescriptions: 'true',
   },
-  timeout: getTimeout('default'),
+  timeout: 0,
 });
 ```
 
 ### POST Request (Create Object)
 
 ```typescript
-import { getTimeout } from '@mcp-abap-adt/connection';
 const classXml = `<?xml version="1.0" encoding="UTF-8"?>
 <class:abapClass xmlns:class="http://www.sap.com/adt/oo/classes" 
                  class:name="ZCL_MY_CLASS">
@@ -222,7 +218,7 @@ const response = await connection.makeAdtRequest({
   headers: { 'Content-Type': 'application/xml' },
   data: classXml,
   params: { package: 'ZTEST' },
-  timeout: getTimeout('default'),
+  timeout: 0,
 });
 ```
 
@@ -231,26 +227,24 @@ const response = await connection.makeAdtRequest({
 ```typescript
 const classSourceCode = 'CLASS zcl_my_class DEFINITION ...';
 const lockToken = 'the handle the lock call returned';
-import { getTimeout } from '@mcp-abap-adt/connection';
 await connection.makeAdtRequest({
   method: 'PUT',
   url: '/sap/bc/adt/oo/classes/zcl_my_class/source/main',
   headers: { 'Content-Type': 'text/plain' },
   data: classSourceCode,      // the new source, as a string
   params: { lockHandle: lockToken },  // from the lock you took first
-  timeout: getTimeout('default'),
+  timeout: 0,
 });
 ```
 
 ### DELETE Request
 
 ```typescript
-import { getTimeout } from '@mcp-abap-adt/connection';
 await connection.makeAdtRequest({
   method: 'DELETE',
   url: '/sap/bc/adt/oo/classes/zcl_my_class',
   params: { deleteOption: 'deleteAndLocalVersions' },
-  timeout: getTimeout('default'),
+  timeout: 0,
 });
 ```
 
@@ -261,7 +255,7 @@ await connection.makeAdtRequest({
 By default, connections are stateless - each request gets fresh cookies and CSRF tokens:
 
 ```typescript
-import { AdtOnPremConnector, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 const connection = new AdtOnPremConnector(
   config,
@@ -275,7 +269,7 @@ const connection = new AdtOnPremConnector(
 await connection.connect();
 
 // Each request is independent
-await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
+await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: 0 });
 ```
 
 ### Stateful Mode (HTTP Context)
@@ -287,7 +281,7 @@ writes from running in the lock context and failing with PAK/058 or an invalid
 lock handle. See [HTTP context isolation](./STATEFUL_SESSION_GUIDE.md#http-context-isolation-931).
 
 ```typescript
-import { AdtOnPremConnector, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 const connection = new AdtOnPremConnector(
   config,
@@ -304,7 +298,7 @@ await connection.connect();
 connection.setSessionType('stateful');
 
 // Following requests use the stateful context until the mode is changed
-await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
+await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: 0 });
 
 // Check session mode
 console.log(connection.getSessionMode()); // 'stateful'
@@ -435,12 +429,11 @@ side instead of a condition that silently stops matching. The codes live in
 
 ```typescript
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
-import { getTimeout } from '@mcp-abap-adt/connection';
 
 const options = {
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
-  timeout: getTimeout('default'),
+  timeout: 0,
 };
 
 try {
@@ -647,7 +640,7 @@ console.log(connectionWithOwnId.getSessionId()); // 'custom-session-123'
 Dynamically switch between stateful and stateless modes:
 
 ```typescript
-import { AdtOnPremConnector, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 // Start in stateless mode (default)
 const connection = new AdtOnPremConnector(
@@ -665,7 +658,7 @@ await connection.connect();
 connection.setSessionType('stateful');
 
 // Do stateful operations...
-await connection.makeAdtRequest({ method: 'POST', url: '...' , timeout: getTimeout('default') });
+await connection.makeAdtRequest({ method: 'POST', url: '...' , timeout: 0 });
 
 // Switch back to stateless
 connection.setSessionType('stateless');
@@ -746,12 +739,11 @@ const connection = new AdtOnPremConnector(
 ### Basic Error Handling
 
 ```typescript
-import { getTimeout } from '@mcp-abap-adt/connection';
 try {
   await connection.makeAdtRequest({
     method: 'GET',
     url: '/sap/bc/adt/invalid/endpoint',
-    timeout: getTimeout('default'),
+    timeout: 0,
   });
 } catch (error) {
   const failure = error as {
@@ -784,12 +776,11 @@ When these errors occur, the connection:
 3. **Logs the error** with full context for troubleshooting
 
 ```typescript
-import { getTimeout } from '@mcp-abap-adt/connection';
 try {
   await connection.makeAdtRequest({
     method: 'GET',
     url: '/sap/bc/adt/repository/nodestructure',
-    timeout: getTimeout('default'),
+    timeout: 0,
   });
 } catch (error) {
   const failure = error as {

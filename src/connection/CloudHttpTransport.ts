@@ -32,7 +32,6 @@
  */
 
 import { mergeCookieHeaders } from '../utils/cookies.js';
-import { getTimeout } from '../utils/timeouts.js';
 import { AuthRefusedError } from './authErrors.js';
 import { HttpTransport } from './HttpTransport.js';
 import type { IAdtSessionContext, ICloudTransport } from './IAdtTransport.js';
@@ -101,8 +100,8 @@ export class CloudHttpTransport
         // from anything's cache — a cached session document would hand back an
         // address that belongs to a session somebody else already ended.
         url: `${context.baseUrl}${SESSIONS_PATH}?_=${Date.now()}`,
-        // Bounded: connect() waits for this one.
-        timeout: getTimeout('csrf'),
+        // No deadline: a client deadline closes the socket, and SAP then
+        // ends what was running on it. connect() waits for SAP's answer.
         headers: {
           ...auth,
           ...context.extraHeaders,

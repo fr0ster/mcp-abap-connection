@@ -225,7 +225,7 @@ For detailed installation instructions, see [Installation Guide](./docs/INSTALLA
 ### The recommended way: `createConnection`
 
 ```typescript
-import { createConnection, getTimeout } from "@mcp-abap-adt/connection";
+import { createConnection } from "@mcp-abap-adt/connection";
 import type { SapConfig } from "@mcp-abap-adt/connection";
 import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 
@@ -254,7 +254,7 @@ try {
   await connection.makeAdtRequest({
     method: "GET",
     url: "/sap/bc/adt/discovery",
-    timeout: getTimeout("default"),
+    timeout: 0,
   });
 } finally {
   await connection.disconnect(); // resolves once the logoff is written
@@ -277,7 +277,6 @@ import {
   AdtOnPremConnector,
   OnPremHttpTransport,
   SapConfig,
-  getTimeout,
 } from "@mcp-abap-adt/connection";
 import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 
@@ -314,7 +313,7 @@ await connection.connect();   // required before any request
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
-  timeout: getTimeout("default"),
+  timeout: 0,
 });
 ```
 
@@ -337,7 +336,6 @@ import {
   AdtCloudConnector,
   CloudHttpTransport,
   SapConfig,
-  getTimeout,
 } from "@mcp-abap-adt/connection";
 import { TokenAuthProvider } from "@mcp-abap-adt/auth-providers";
 
@@ -375,7 +373,7 @@ await connection.connect();
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
-  timeout: getTimeout("default"),
+  timeout: 0,
 });
 ```
 
@@ -433,7 +431,6 @@ import {
   AdtOnPremConnector,
   OnPremHttpTransport,
   SapConfig,
-  getTimeout,
 } from "@mcp-abap-adt/connection";
 import { SamlAuthProvider } from "@mcp-abap-adt/auth-providers";
 
@@ -458,7 +455,7 @@ await connection.connect();
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
-  timeout: getTimeout("default"),
+  timeout: 0,
 });
 ```
 
@@ -475,7 +472,6 @@ import {
   AdtCloudConnector,
   CloudHttpTransport,
   SapConfig,
-  getTimeout,
 } from "@mcp-abap-adt/connection";
 import { TokenAuthProvider } from "@mcp-abap-adt/auth-providers";
 import type { ITokenRefresher } from "@mcp-abap-adt/interfaces-auth";
@@ -518,7 +514,7 @@ await connection.connect();
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
-  timeout: getTimeout("default"),
+  timeout: 0,
 });
 ```
 
@@ -596,7 +592,6 @@ cookies and the CSRF token remain available in both modes. See the
 import {
   AdtOnPremConnector,
   OnPremHttpTransport,
-  getTimeout,
 } from "@mcp-abap-adt/connection";
 import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 

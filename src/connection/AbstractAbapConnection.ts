@@ -18,7 +18,6 @@ import {
   sessionError,
 } from '../session/SessionLifecycle.js';
 import { isNetworkError } from '../utils/networkErrors.js';
-import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import {
   AuthRefusedError,
@@ -125,14 +124,11 @@ abstract class AbstractAbapConnection
   private profilingRequest: string | null = 'server-time';
   /**
    * When true, requests are treated as part of an uninterruptible critical
-   * section (e.g. a lock → modify → unlock chain). In this state a short
-   * per-request timeout must NOT abort the request mid-flight: the abort ends
-   * nothing server-side — only the server ends an ABAP session, on an idle
-   * timeout this side cannot see — it ends what this side KNOWS. Whether the
-   * change was applied becomes unknowable, and the handle `unlock` needs is
-   * lost while the lock lives on in that session. While set, makeAdtRequest
-   * raises the effective timeout to CRITICAL_SECTION_TIMEOUT (a large ceiling)
-   * so the request runs to completion instead of being interrupted.
+   * section (e.g. a lock → modify → unlock chain). In this state a request
+   * carries no deadline at all, not even the caller's: a client deadline closes
+   * the socket, SAP then ends the request running on it — a write in it lost —
+   * and what this side knew goes with it: whether the change was applied, and
+   * the handle `unlock` needs, while the lock lives on in that session.
    */
   /**
    * The last goodbye this connection dispatched, so a caller can wait for it.
@@ -300,14 +296,13 @@ abstract class AbstractAbapConnection
    * Enter an uninterruptible critical section.
    *
    * Call this BEFORE acquiring a lock (and pair it with endCriticalSection()
-   * in a finally, AFTER unlocking). While in a critical section, a short
-   * per-request timeout is not applied — makeAdtRequest uses a large ceiling
-   * (CRITICAL_SECTION_TIMEOUT, env SAP_TIMEOUT_CRITICAL) instead — so a slow
-   * PUT/activate/unlock is not aborted mid-flight. An abort does not end the
-   * ABAP session — that session is the server's, and only the server ends it,
-   * on an idle timeout this side cannot influence — it strands the caller:
-   * the outcome is unknown and the handle `unlock` needs is gone, while the
-   * lock survives inside the ABAP session that owns it.
+   * in a finally, AFTER unlocking). While in a critical section a request
+   * carries no deadline — the caller's `timeout` is not applied — so a slow
+   * PUT/activate/unlock is not cut mid-flight. A client deadline closes the
+   * socket, and SAP then ends the request that was running on it (a write in
+   * it lost); and it strands the caller: the outcome is unknown and the handle
+   * `unlock` needs is gone, while the lock survives inside the ABAP session
+   * that owns it.
    *
    * Nesting is reference-counted so nested begin/end pairs are safe.
    */
@@ -321,8 +316,8 @@ abstract class AbstractAbapConnection
 
   /**
    * Leave the uninterruptible critical section. See beginCriticalSection().
-   * Safe to call more times than begin (clamped at 0). Normal per-request
-   * timeouts resume once the outermost section ends.
+   * Safe to call more times than begin (clamped at 0). The caller's own
+   * per-request timeouts apply again once the outermost section ends.
    */
   endCriticalSection(): void {
     if (this.criticalSectionDepth > 0) {
@@ -1270,16 +1265,13 @@ abstract class AbstractAbapConnection
       }
     }
 
-    // Inside an uninterruptible critical section (lock → modify → unlock), a
-    // short per-request timeout must not abort the request mid-flight — not
-    // because the abort ends the ABAP session (only the server does that), but
-    // because it leaves the outcome unknown and the unlock handle lost while
-    // the lock stays held in that session. Raise the effective
-    // timeout to the large critical-section ceiling for the whole request
-    // (also honoured on the retry paths below, which reuse requestConfig).
-    const effectiveTimeout = this.inCriticalSection
-      ? Math.max(timeout ?? 0, getCriticalSectionTimeout())
-      : timeout;
+    // The only deadline a request carries is the caller's own, and inside an
+    // uninterruptible critical section (lock → modify → unlock) not even that:
+    // a client deadline closes the socket, SAP then ends the request running
+    // on it — a write in it lost — and the outcome is unknown, the unlock
+    // handle lost while the lock stays held in that session. Decided once for
+    // the whole request: the retry paths below reuse requestConfig.
+    const callerTimeout = this.inCriticalSection ? undefined : timeout;
 
     const requestConfig: IAdtTransportRequest = {
       method: normalizedMethod,
@@ -1294,7 +1286,7 @@ abstract class AbstractAbapConnection
           throw this.staleOr(error, lease);
         },
       ),
-      timeout: effectiveTimeout,
+      ...(callerTimeout !== undefined ? { timeout: callerTimeout } : {}),
       // `unknown` on the caller's options, a record on the seam: the two
       // transports serialise a query differently and both need the pairs.
       params: params as Record<string, unknown> | undefined,
@@ -1817,7 +1809,6 @@ abstract class AbstractAbapConnection
         : this.leasedContext(fence)),
       retries: retryCount,
       retryDelayMs: retryDelay,
-      timeoutMs: getTimeout('csrf'),
       isFatal: (error) => this.endsTheExchange(error),
     });
 

@@ -106,7 +106,6 @@ const logger = console;
 import {
   AdtOnPremConnector,
   OnPremHttpTransport,
-  getTimeout,
 } from '@mcp-abap-adt/connection';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
@@ -125,7 +124,7 @@ await connection.connect();   // required before any request
 connection.setSessionType('stateful');
 
 // Following requests use the stateful context until the mode is changed
-await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
+await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: 0 });
 
 // Switch back to stateless
 connection.setSessionType('stateless');

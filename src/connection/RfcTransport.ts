@@ -600,9 +600,9 @@ export class RfcTransport implements IOnPremTransport {
     //
     // Nor is one needed. What bounds this call is the server: a dialog step
     // ends at `rdisp/max_wprun_time`. And a call that cannot be torn down
-    // mid-flight is precisely what the connection emulates over HTTP, where
-    // a critical section raises the caller's timeout to a ten-minute ceiling so
-    // an abort cannot orphan a lock handle. Here that comes free.
+    // mid-flight is precisely what the connection keeps over HTTP, where a
+    // request inside a critical section carries no deadline at all, so an
+    // abort cannot orphan a lock handle. Here that comes free.
     // The last point before anything leaves: nothing awaits between this
     // check and the call, so a close() that ran at any await above stops it.
     if (generation !== this.generation) {
