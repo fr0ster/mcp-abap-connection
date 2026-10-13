@@ -137,14 +137,15 @@ describe('the goodbye is still called synchronously', () => {
     expect(logoffs()[0].cookie).toContain('SAP_SESSIONID_STUB_100=S1');
   });
 
-  it('when the server opened no session, it carries the cookie the wire held', async () => {
+  it('when the server opened no session, nothing is sent: no SAP_SESSIONID, nothing to end', async () => {
     const { conn, logoffs } = onPremWire(NO_SESSION);
 
     await expect(conn.connect()).rejects.toThrow(/opened no ABAP session/);
     await settled();
 
-    expect(logoffs()).toHaveLength(1);
-    expect(logoffs()[0].cookie).toContain('sap-XSRF_STUB_100=X1');
+    // `sap-XSRF_*` alone names no security session, and the ICF logoff ends
+    // one only when `SAP_SESSIONID` is present: a logoff would end nothing.
+    expect(logoffs()).toHaveLength(0);
   });
 
   it('on disconnect(), it carries the session cookie', async () => {

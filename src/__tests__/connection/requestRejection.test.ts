@@ -7,8 +7,8 @@
  * `Stub <n>`, `n` the Ok answers `rejected` has given — so a request that
  * carries `Stub 1` carried the renewed credential.
  *
- * A GET 401 is first retried by the wire itself while it holds the session's
- * cookies, so a 401 reaches the provider only when it comes twice.
+ * A 401 goes to the provider at once — a GET's included: the wire resends
+ * nothing before `rejected()` is asked.
  */
 
 import { authError } from '@mcp-abap-adt/auth-errors';
@@ -125,21 +125,24 @@ function gateAuthorize(
 describe('a 401 that survives the wire', () => {
   it('asks rejected once, at request, and the resend carries the renewed credential', async () => {
     const { conn, rejections } = await connected();
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
 
     const response = await get(conn);
 
     expect(response.status).toBe(200);
     expect(rejections()).toHaveLength(1);
     expect(rejections()[0]).toMatchObject({ at: 'request', status: 401 });
+    // No resend before rejected(): the first attempt, then exactly one more,
+    // carrying the renewed credential.
     const sent = stub.sentTo(WORK);
-    expect(sent).toHaveLength(3);
-    expect(sent[2].headers.authorization).toBe('Stub 1');
+    expect(sent).toHaveLength(2);
+    expect(sent[0].headers.authorization).toBe('Stub 0');
+    expect(sent[1].headers.authorization).toBe('Stub 1');
   });
 
   it('an Oops is an AuthRefusedError at request in the provider words, the 401 as cause', async () => {
     const { conn } = await connected({ rejected: [NO] });
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
 
     const error = await get(conn).catch((e: unknown) => e);
 
@@ -149,7 +152,8 @@ describe('a 401 that survives the wire', () => {
       (NO as { refusal: unknown }).refusal,
     );
     expect(statusOf((error as AuthRefusedError).cause)).toBe(401);
-    expect(stub.sentTo(WORK)).toHaveLength(2);
+    // SAP's 401 reaches the caller; nothing was resent.
+    expect(stub.sentTo(WORK)).toHaveLength(1);
   });
 
   it('a rejected() that throws is PROVIDER_FAILED at request, the throw as cause', async () => {
@@ -161,7 +165,7 @@ describe('a 401 that survives the wire', () => {
         },
       ],
     });
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
 
     const error = await get(conn).catch((e: unknown) => e);
 
@@ -170,12 +174,12 @@ describe('a 401 that survives the wire', () => {
     expect((error as AuthRefusedError).refusal).toMatchObject(PROVIDER_FAILED);
     expect((error as AuthRefusedError).cause).toBe(boom);
     expect(rejections()).toHaveLength(1);
-    expect(stub.sentTo(WORK)).toHaveLength(2);
+    expect(stub.sentTo(WORK)).toHaveLength(1);
   });
 
   it('refused again after Ok is the verdict, and rejected is asked once', async () => {
     const { conn, rejections } = await connected();
-    stub.work(WORK, [401, 401, 401]);
+    stub.work(WORK, [401, 401]);
 
     const error = await get(conn).catch((e: unknown) => e);
 
@@ -184,8 +188,11 @@ describe('a 401 that survives the wire', () => {
     expect((error as AuthRefusedError).refusal).toMatchObject({
       facts: { at: 'request' },
     });
+    // SAP's repeated 401 reaches the caller: the first attempt and the one
+    // resend Ok bought, nothing more.
     expect(statusOf((error as AuthRefusedError).cause)).toBe(401);
     expect(rejections()).toHaveLength(1);
+    expect(stub.sentTo(WORK)).toHaveLength(2);
   });
 
   it('a 403 is thrown unchanged, and rejected is never asked', async () => {
@@ -297,19 +304,20 @@ describe("the wire's own recovery", () => {
     expect(stub.sentTo(WORK)).toHaveLength(1);
   });
 
-  it('a GET whose path-(b) token fetch meets a 401 goes to rejected, not the original error', async () => {
+  it('a GET 401 on a wire holding no cookies fetches nothing to earn some: the provider is asked, the resend stays in this session', async () => {
     const { conn, rejections } = await connected();
-    // A wire that holds nothing: path (b) has no cookies to resend with and
-    // fetches a token to get some.
+    // A wire that holds nothing. Before 16.0.0 a token was fetched here — on a
+    // fresh jar, a second session on this instance.
     (conn as unknown as { invalidateSession(): void }).invalidateSession();
     stub.work(WORK, [401]);
-    stub.discovery.push(401);
+    const discoveries = stub.sentTo(DISCOVERY).length;
 
     const response = await get(conn);
 
     expect(response.status).toBe(200);
+    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
     expect(rejections()).toHaveLength(1);
-    expect(rejections()[0]).toMatchObject({ at: 'logon', status: 401 });
+    expect(rejections()[0]).toMatchObject({ at: 'request', status: 401 });
   });
 });
 
@@ -403,10 +411,10 @@ describe('the upfront token fetch before a mutation', () => {
 });
 
 describe('many requests, and a critical section', () => {
-  it('two concurrent requests meeting two 401s each ask rejected once and both end 200', async () => {
+  it('two concurrent requests meeting a 401 each ask rejected once and both end 200', async () => {
     const { conn, rejections } = await connected();
-    stub.work('/sap/bc/adt/a', [401, 401]);
-    stub.work('/sap/bc/adt/b', [401, 401]);
+    stub.work('/sap/bc/adt/a', [401]);
+    stub.work('/sap/bc/adt/b', [401]);
 
     const [a, b] = await Promise.all([
       get(conn, '/sap/bc/adt/a'),
@@ -416,14 +424,14 @@ describe('many requests, and a critical section', () => {
     expect(a.status).toBe(200);
     expect(b.status).toBe(200);
     expect(rejections()).toHaveLength(2);
-    expect(stub.sentTo('/sap/bc/adt/a')).toHaveLength(3);
-    expect(stub.sentTo('/sap/bc/adt/b')).toHaveLength(3);
+    expect(stub.sentTo('/sap/bc/adt/a')).toHaveLength(2);
+    expect(stub.sentTo('/sap/bc/adt/b')).toHaveLength(2);
   });
 
   it('inside a critical section, a surviving 401 is resent on the same session', async () => {
     const { conn, rejections } = await connected();
     const identity = conn.getSessionIdentity();
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
 
     conn.beginCriticalSection();
     try {
@@ -581,8 +589,8 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
+    // The session ends (the instance is spent: no next session on it).
     await conn.disconnect();
-    await conn.connect();
     // The new session's wire holds no token either, so a loop that went on
     // would fetch one for it.
     transport.adoptCsrfToken(null);
@@ -594,7 +602,7 @@ describe('a request whose session is gone', () => {
     expect(stub.sentTo(WORK)).toHaveLength(0);
     // Nor the token fetch that would have readied the wire for it.
     expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('a GET whose authorization outlives its session is not sent into the next one', async () => {
@@ -620,40 +628,14 @@ describe('a request whose session is gone', () => {
 
     const request = get(conn).catch((e: unknown) => e);
     await asked;
+    // The session ends (the instance is spent: no next session on it).
     await conn.disconnect();
-    await conn.connect();
     release();
     const error = await request;
 
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(true);
-  });
-
-  it('a logon rejection whose token fetch outlives its session sends no discovery into the next one', async () => {
-    const { conn, provider, rejections } = await connected();
-    // The POST's cached token is refused as a login form, the wire's own
-    // token fetch is refused as a logon, and the provider renews: the third
-    // authorize from here is the one that readies the wire for the resend.
-    stub.work(WORK, [401]);
-    stub.discovery.push(401);
-    const { asked, release } = gateAuthorize(provider, 3);
-
-    const request = post(conn).catch((e: unknown) => e);
-    await asked;
-    await conn.disconnect();
-    await conn.connect();
-    const discoveries = stub.sentTo(DISCOVERY).length;
-    release();
-    const error = await request;
-
-    expect(rejections()).toHaveLength(1);
-    expect(rejections()[0]).toMatchObject({ at: 'logon' });
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    // Nothing went out on the new session's cookies after the release.
-    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
-    expect(stub.sentTo(WORK)).toHaveLength(1);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('a CSRF recovery fetch that outlives its session sends no discovery into the next one', async () => {
@@ -665,8 +647,8 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
+    // The session ends (the instance is spent: no next session on it).
     await conn.disconnect();
-    await conn.connect();
     const discoveries = stub.sentTo(DISCOVERY).length;
     release();
     const error = await request;
@@ -674,7 +656,7 @@ describe('a request whose session is gone', () => {
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
     expect(stub.sentTo(WORK)).toHaveLength(1);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('an upfront token fetch retried after a renewal sends no discovery into the next session', async () => {
@@ -688,8 +670,8 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
+    // The session ends (the instance is spent: no next session on it).
     await conn.disconnect();
-    await conn.connect();
     transport.adoptCsrfToken(null);
     const discoveries = stub.sentTo(DISCOVERY).length;
     release();
@@ -699,7 +681,7 @@ describe('a request whose session is gone', () => {
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
     expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('the first pass of the upfront token fetch sends nothing into the next session', async () => {
@@ -711,8 +693,8 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
+    // The session ends (the instance is spent: no next session on it).
     await conn.disconnect();
-    await conn.connect();
     transport.adoptCsrfToken(null);
     const discoveries = stub.sentTo(DISCOVERY).length;
     release();
@@ -721,7 +703,7 @@ describe('a request whose session is gone', () => {
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
     expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('an upfront fetch refused after its session went away is NOT_CONNECTED, never the wire error', async () => {
@@ -746,8 +728,8 @@ describe('a request whose session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await inFlight;
+    // The session ends (the instance is spent: no next session on it).
     await conn.disconnect();
-    await conn.connect();
     release();
     const error = await request;
 
@@ -755,13 +737,14 @@ describe('a request whose session is gone', () => {
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(rejections()).toHaveLength(0);
     expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
-  it('a GET resent after its cookie fetch, answered "session not found", says SESSION_REPLACED', async () => {
+  it('a GET resent after its 401, answered "session not found", says SESSION_REPLACED', async () => {
     const { conn, transport } = await connected();
-    // The GET goes out with no cookies, so its 401 is recovered by a token
-    // fetch that brings them, and the resend meets a dead session.
+    // The GET goes out with no cookies; nothing is fetched to earn some. Its
+    // 401 goes to the provider, whose Ok resends it, and the resend meets a
+    // dead session.
     transport.forgetSession();
     (conn as any).lifecycle.forgetIdentity();
     stub.work(WORK, [
@@ -802,7 +785,7 @@ function held(status: number) {
 }
 
 describe('an answer that arrives after its session is gone', () => {
-  it("a request's token fetch answered after a reconnect writes nothing into the new session's jar", async () => {
+  it("a request's token fetch answered after its session ended writes nothing into the jar", async () => {
     const { conn, transport } = await connected();
     // No token, so the POST readies the wire first; that fetch carries the
     // first session's cookie, and its answer is held at the server.
@@ -812,44 +795,44 @@ describe('an answer that arrives after its session is gone', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await fetch.inFlight;
+    // The session ends (the instance is spent: no next session on it).
     await conn.disconnect();
-    await conn.connect();
     const jar = transport.cookies();
     const token = transport.csrfToken();
     const identity = conn.getSessionIdentity();
-    expect(jar).toContain('SAP_SESSIONID_STUB_100=S2');
+    // Ended and cleared: no next session on this instance to write into.
+    expect(jar).toBeNull();
     fetch.release();
     const error = await request;
 
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     // The held answer set S1 — the old session's cookie — and a token.
     expect(transport.cookies()).toBe(jar);
-    expect(transport.cookies()).not.toContain('S1');
     expect(transport.csrfToken()).toBe(token);
     expect(conn.getSessionIdentity()).toBe(identity);
     expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('a resend refused after its session went away is NOT_CONNECTED, not a credential verdict', async () => {
     const { conn, rejections } = await connected();
-    // The GET's 401 survives the wire's cookie resend and goes to the
-    // provider; its one more attempt is held, and refused once released.
+    // The GET's 401 goes to the provider; its one more attempt is held, and
+    // refused once released.
     const resend = held(401);
-    stub.work(WORK, [401, 401, resend.answer]);
+    stub.work(WORK, [401, resend.answer]);
 
     const request = get(conn).catch((e: unknown) => e);
     await resend.inFlight;
+    // The session ends (the instance is spent: no next session on it).
     await conn.disconnect();
-    await conn.connect();
     resend.release();
     const error = await request;
 
     expect(error).not.toBeInstanceOf(AuthRefusedError);
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(rejections()).toHaveLength(1);
-    expect(stub.sentTo(WORK)).toHaveLength(3);
-    expect(conn.isConnected()).toBe(true);
+    expect(stub.sentTo(WORK)).toHaveLength(2);
+    expect(conn.isConnected()).toBe(false);
   });
 });
 
@@ -877,15 +860,15 @@ describe('a stale request meets its credential', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
+    // The session ends (the instance is spent: no next session on it).
     await conn.disconnect();
-    await conn.connect();
     release();
     const error = await request;
 
     expect(error).not.toBeInstanceOf(WireLogonError);
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(WORK)).toHaveLength(1);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 
   it('an upfront fetch the provider refuses after the session went away is NOT_CONNECTED', async () => {
@@ -911,15 +894,15 @@ describe('a stale request meets its credential', () => {
 
     const request = post(conn).catch((e: unknown) => e);
     await asked;
+    // The session ends (the instance is spent: no next session on it).
     await conn.disconnect();
-    await conn.connect();
     release();
     const error = await request;
 
     expect(error).not.toBeInstanceOf(AuthRefusedError);
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   });
 });
 
@@ -972,23 +955,15 @@ describe("a provider's Oops that arrives after the session went away", () => {
 
     const request = send(conn).catch((e: unknown) => e);
     await asked;
+    // The session ends (the instance is spent: no next session on it).
     await conn.disconnect();
-    await conn.connect();
     release();
     const error = await request;
 
     expect(error).not.toBeInstanceOf(AuthRefusedError);
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    expect(conn.isConnected()).toBe(true);
+    expect(conn.isConnected()).toBe(false);
   }
-
-  const forgetCookies = (
-    conn: AdtOnPremConnector,
-    transport: OnPremHttpTransport,
-  ) => {
-    transport.forgetSession();
-    (conn as any).lifecycle.forgetIdentity();
-  };
 
   it('on the first attempt is NOT_CONNECTED', async () => {
     await staleOops('authorize', 1, get);
@@ -1000,20 +975,14 @@ describe("a provider's Oops that arrives after the session went away", () => {
     await staleOops('authorize', 3, post);
   });
 
-  it('on the GET resend after a cookie-bringing token fetch (path b) is NOT_CONNECTED', async () => {
+  it('on the GET resend after rejected() → Ok is NOT_CONNECTED', async () => {
     stub.work(WORK, [401]);
-    // The GET (1), the token fetch (2), the resend (3).
-    await staleOops('authorize', 3, get, forgetCookies);
-  });
-
-  it('on the GET resend with the cookies it already holds (path b) is NOT_CONNECTED', async () => {
-    stub.work(WORK, [401]);
-    // The GET (1), the resend (2).
+    // The GET (1), the resend rejected()'s Ok bought (2).
     await staleOops('authorize', 2, get);
   });
 
   it('from rejected() after a refused request is NOT_CONNECTED', async () => {
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
     await staleOops('rejected', 1, get);
   });
 

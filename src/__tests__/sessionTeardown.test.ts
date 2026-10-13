@@ -13,6 +13,7 @@ import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
+import { reportableLogoff, wroteIt } from './helpers/logoffWrite.js';
 import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
 import { settled } from './helpers/settled.js';
 
@@ -59,6 +60,7 @@ function attachMockAxios(
       headers: cfg.headers ?? {},
       timeout: cfg.timeout,
     });
+    wroteIt(cfg);
     return answer(cfg);
   };
   // clearSessionState() detaches interceptors before dropping the instance, so
@@ -68,6 +70,7 @@ function attachMockAxios(
     response: { clear: jest.fn() },
   };
   (conn as any).transport.instance = instance;
+  reportableLogoff((conn as any).transport);
 }
 
 /**
@@ -146,7 +149,7 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     expect(seen.some((r) => r.method === 'DELETE')).toBe(false);
   });
 
-  it('cloud sends nothing to end a session the server linked no logoff for', async () => {
+  it('cloud ends a session the server linked no logoff for with the platform logoff, without sap-contextid, resolving on the write', async () => {
     const logger = makeLogger();
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
@@ -158,21 +161,38 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
       makeLogger(),
     );
     const seen: Seen[] = [];
-    attachMockAxios(conn as never, seen, async () => ({
-      status: 200,
-      data: '<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom"><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/></http:session>',
-      headers: {
-        'x-csrf-token': 'TOKEN',
-        'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-      },
-    }));
+    attachMockAxios(conn as never, seen, async (cfg) =>
+      // The logoff's answer never comes: disconnect() resolves on its write.
+      String(cfg.url).includes('/icf/logoff')
+        ? new Promise(() => {})
+        : {
+            status: 200,
+            data: '<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom"><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/></http:session>',
+            headers: {
+              'x-csrf-token': 'TOKEN',
+              'set-cookie': [
+                'SAP_SESSIONID_STUB_100=abc%3d; path=/',
+                'sap-contextid=CTX; path=/',
+              ],
+            },
+          },
+    );
 
     await conn.connect();
     const before = seen.length;
     await conn.disconnect();
     await settled();
 
-    expect(seen.length).toBe(before);
+    const sent = seen.slice(before);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.method).toBe('GET');
+    expect(sent[0]?.url).toBe(
+      'https://sap.example.com/sap/public/bc/icf/logoff',
+    );
+    expect(sent[0]?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
+    expect(sent[0]?.headers.Cookie).not.toContain('sap-contextid');
+    expect(sent[0]?.headers['x-sap-security-session']).toBeUndefined();
+    expect(sent[0]?.headers.Authorization).toBeUndefined();
     expect(logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('published no logoff resource'),
     );
@@ -214,7 +234,7 @@ describe('the cloud logoff link', () => {
     );
   });
 
-  it('sends nothing for an href that is no URL, and the close still settles', async () => {
+  it('an href that is no URL is said once; the platform logoff goes instead, and the close still settles', async () => {
     const logger = makeLogger();
     const seen: Seen[] = [];
     const conn = cloudWithLogoffHref('http://[', logger, seen);
@@ -229,7 +249,10 @@ describe('the cloud logoff link', () => {
       transport.close({ baseUrl: 'https://sap.example.com' }),
     ).resolves.toBeUndefined();
 
-    expect(seen.length).toBe(before);
+    // One logoff, the platform's; the second close has no session left.
+    expect(seen.slice(before).map((r) => r.url)).toEqual([
+      'https://sap.example.com/sap/public/bc/icf/logoff',
+    ]);
     expect(logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('logoff link that is no URL'),
     );
@@ -373,6 +396,7 @@ describe('every session of a reconnect cycle is released', () => {
         headers: cfg.headers ?? {},
         timeout: cfg.timeout,
       });
+      wroteIt(cfg);
       return answer(cfg);
     };
     (instance as any).interceptors = {
@@ -380,6 +404,7 @@ describe('every session of a reconnect cycle is released', () => {
       response: { clear: jest.fn() },
     };
     (conn as any).transport.instance = instance;
+    reportableLogoff((conn as any).transport);
   }
 
   /**
@@ -388,7 +413,7 @@ describe('every session of a reconnect cycle is released', () => {
    * that "a release already on its way is the release still owed", left the
    * second session never released at all.
    */
-  it('sends a logoff for the second session while the first still hangs', async () => {
+  it('a reconnect on a disconnected instance is refused: its one logoff carries its own session', async () => {
     const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     // A server issues ONE session and keeps handing back the same id until it
@@ -415,16 +440,15 @@ describe('every session of a reconnect cycle is released', () => {
 
     await conn.connect();
     await conn.disconnect();
-    await conn.connect();
-    await conn.disconnect();
+    // One instance is one session: a second session is a new instance.
+    await expect(conn.connect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
     await settled();
 
     const logoffs = seen.filter((r) => r.url.includes('/logoff'));
-    expect(logoffs).toHaveLength(2);
-    // Each carried its own session, which is what proves they are two releases
-    // and not the same one sent twice.
+    expect(logoffs).toHaveLength(1);
     expect(logoffs[0].headers.Cookie).toContain('S1');
-    expect(logoffs[1].headers.Cookie).toContain('S2');
   });
 
   /**
@@ -446,7 +470,7 @@ describe('every session of a reconnect cycle is released', () => {
    * this passes either way.
    */
 
-  it('does not re-send a release already on its way for the same session', async () => {
+  it('refuses a repeat disconnect() and does not re-send the release', async () => {
     const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     surviving(conn, seen, async (cfg) => {
@@ -465,9 +489,11 @@ describe('every session of a reconnect cycle is released', () => {
 
     await conn.connect();
     await conn.disconnect();
-    // Nothing reconnected, so there is no second session to close: the repeat
-    // joins the release already going rather than asking twice.
-    await conn.disconnect();
+    // Nothing reconnected, so there is no second session to close: the
+    // repeat is refused — disconnect() is called once — and asks nothing.
+    await expect(conn.disconnect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
     await settled();
 
     expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
@@ -556,15 +582,16 @@ describe('requests stay on the server the session lives on', () => {
     pinning(conn, seen, 'appserver-c5zhg');
 
     await conn.connect();
-    await conn.disconnect();
+    expect(conn.transport.affinityHeaders().saplb).toBe('appserver-c5zhg');
+    // The session is lost (a dead session, a changed SAP_SESSIONID): the wire
+    // forgets the server it lived on, and asks again rather than asserting it.
+    (conn as unknown as { raiseSessionLost(r: string): void }).raiseSessionLost(
+      'test: the session was lost',
+    );
     await settled();
-    const before = seen.length;
-    await conn.connect();
 
-    // A fresh connect starts by asking again rather than by asserting where
-    // the last session used to live.
-    expect(seen[before].headers.saplb).toBeUndefined();
-    expect(seen[before].headers['sap-adt-saplb']).toBe('fetch');
+    expect(conn.transport.affinityHeaders().saplb).toBeUndefined();
+    expect(conn.transport.affinityHeaders()['sap-adt-saplb']).toBe('fetch');
   });
 });
 
@@ -787,19 +814,21 @@ describe('disconnect ends the server session', () => {
    * change exists to prevent, reintroduced by the parameter meant to bound it.
    */
 
-  it('sends nothing on a repeat call when the first logoff succeeded', async () => {
+  it('refuses a repeat call and sends nothing when the first logoff succeeded', async () => {
     const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     attachMockAxios(conn, seen);
 
     await conn.connect();
     await conn.disconnect();
-    await conn.disconnect();
+    await expect(conn.disconnect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
 
     expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
   });
 
-  it('joins a release still in flight instead of opening a second', async () => {
+  it('refuses a repeat call while the release is still in flight, and opens no second', async () => {
     const conn = onPrem(baseConfig, makeLogger());
     const seen: Seen[] = [];
     let releaseLogoff: (() => void) | undefined;
@@ -822,7 +851,9 @@ describe('disconnect ends the server session', () => {
     await conn.connect();
     // Detaches while the logoff is still on its way.
     await conn.disconnect();
-    await conn.disconnect();
+    await expect(conn.disconnect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
 
     expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
     releaseLogoff?.();

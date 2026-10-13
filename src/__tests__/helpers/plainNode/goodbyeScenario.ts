@@ -6,12 +6,15 @@
 import type { SapConfig } from '../../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../../connection/AdtOnPremConnector.js';
 import type { OnPremHttpTransport } from '../../../connection/OnPremHttpTransport.js';
-import { drained } from '../requestSignal.js';
 import { stubProvider } from '../stubProvider.js';
 import { holdsNoSession } from '../transportStub.js';
 import { recordUnhandled } from './run.js';
 
 const unhandled = recordUnhandled();
+
+/** Lets every queued turn run. */
+const drained = (): Promise<void> =>
+  new Promise<void>((resolve) => setImmediate(resolve));
 
 const config = {
   url: 'https://sap.example.com',

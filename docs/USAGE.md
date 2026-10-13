@@ -155,6 +155,33 @@ const response = await connection.makeAdtRequest({
 });
 ```
 
+## Building a connection: `createConnection`
+
+The recommended way to build a connection. State the system and the wire, and
+the factory picks the connector and the transport. Nothing is inferred:
+
+| `system` | `transport` | builds |
+|---|---|---|
+| `cloud` | `http` | `AdtCloudConnector` over `CloudHttpTransport` |
+| `onprem` | `http` | `AdtOnPremConnector` over `OnPremHttpTransport` |
+| `onprem` | `legacy-http` | `AdtOnPremConnector` over `LegacyOnPremHttpTransport` (BASIS 7.40) |
+| `onprem` | `rfc` | `AdtOnPremConnector` over `RfcTransport(rfcConversationFrom(config))` |
+
+Any other combination is refused at construction with a `TypeError`.
+`client` and `baseUrl` reach the HTTP wires from `config`. `agentOptions`,
+`rfc`, `wireLogger`, `logger` and `sessionId` are passed through exactly as
+you give them; whatever you leave out takes the constructors' own defaults.
+
+**A new instance on every call.** One instance is one SAP session. After its
+`disconnect()` it is spent, and the next session is the next
+`createConnection(...)`. The constructors still work for anything the
+factory does not name.
+
+Wrapping the connection with your own HTTP request logging stays with the
+consumer. That is a policy of yours, typically read from your environment, not
+a property of the wire. The factory passes `wireLogger` to the transport,
+which is the wire's own logging.
+
 ## Making ADT Requests
 
 All requests are made using the `makeAdtRequest()` method. CSRF token handling
@@ -226,52 +253,6 @@ await connection.makeAdtRequest({
   timeout: getTimeout('default'),
 });
 ```
-
-### Cancelling a request
-
-A request takes the caller's `AbortSignal` as `signal`. It is checked at every
-point where the request would send something — before the first send, before
-every resend (the CSRF recovery's included) and before the provider is asked to
-renew — and every wait the request makes races it: the provider's `authorize()`
-and `rejected()`, a logon (`establish()`), the token exchange and, over RFC, the
-`open()` of a conversation of its own. Once it aborts, nothing more of the
-request is sent and the call rejects at once with `code: 'ADT_REQUEST_ABORTED'`
-(`ADT_REQUEST_ERROR.ABORTED` from `@mcp-abap-adt/interfaces-adt-connection`),
-in fixed words.
-
-```typescript
-import { ADT_REQUEST_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
-import { getTimeout } from '@mcp-abap-adt/connection';
-const controller = new AbortController();
-try {
-  await connection.makeAdtRequest<string>({
-    method: 'GET',
-    url: '/sap/bc/adt/repository/nodestructure',
-    timeout: getTimeout('default'),
-    signal: controller.signal,
-  });
-} catch (error) {
-  if ((error as { code?: unknown }).code === ADT_REQUEST_ERROR.ABORTED) {
-    // Nothing more of it was sent. What was already sent may have been acted on.
-  }
-}
-```
-
-What it does not do:
-
-- **It does not recall a request already sent.** The server may act on it, and
-  its answer — success or failure — is still the caller's. Only what would
-  follow it (a resend, a renewal) is not sent.
-- **It ends a wait for this caller only.** A provider's work behind it runs
-  on: a provider shares one renewal among every request it refused. Whatever
-  that work answers late is handled and dropped. A token exchange the request
-  started makes no further attempt once it aborts; one already on the wire is
-  not recalled, and the token it earns is the session's. A conversation an
-  RFC call opened for itself alone is closed when its `open()` answers.
-- **It is not the deadline.** `timeout` still bounds a request on the HTTP wire;
-  the signal is the caller saying it no longer needs the answer.
-
-Without a signal a request behaves exactly as before.
 
 ## Session Management
 
@@ -478,15 +459,45 @@ than on a concrete class where you can: an `IAbapConnection` may come from
 somewhere that implements only the minimum, so the atom you require is also the
 documentation of what your code actually needs.
 
-### disconnect() waits for nothing
+### disconnect() resolves once the logoff is written
 
 ```typescript
-await connection.disconnect();   // Promise<void>
+await connection.disconnect();   // the logoff has left
+await connection.flushGoodbye(); // only if you need SAP's answer too; no bound
+// await connection.flushGoodbye(5000); // a bound of your own, if you need one
 ```
 
-It never throws, and it always settles. **It waits for nothing** — not for
-requests in flight, not for anything you hold. Deciding when to disconnect is
-yours, and so is preparing for it.
+It never throws, except on a second call (below). **It resolves once the logoff is written** — its bytes handed
+to the socket; over RFC, once the close call has returned — **not when SAP
+answers it**, and it does not wait for requests in flight or anything you hold.
+Deciding when to disconnect is yours, and so is preparing for it.
+
+Why the write and not the answer (measured on an on-premise system, 2026-10-12): with a long
+request still running in the same stateful ABAP session, SAP queues the logoff
+behind it and answers only afterwards — about 96 s in one run, nothing in six
+minutes in another — yet once the logoff has arrived the ENQUEUE locks go
+with it, even if the client is killed while the answer is pending. A
+connection dropped *without* a logoff keeps its locks. Checked against 16.0.0
+on an on-premise system on 2026-10-13: LOCK, a long where-used in the same stateful session,
+`await disconnect()`, and the process exiting at once — the lock was still
+held 1 s later and free ~70 s after the exit, long before the 30-minute idle
+timeout: ICM ran the queued logoff after the connection had closed. So a
+process about to exit awaits `disconnect()`; one that needs the server's
+answer awaits `flushGoodbye()` as well — without an argument it waits as long
+as SAP takes and sets no timer; `flushGoodbye(ms)` bounds the wait.
+
+Nothing bounds the write with a timer: a server that never takes the bytes
+holds `disconnect()` until the socket fails, and that failure is logged, not
+thrown. "Written" means handed to the operating system, on a connection of
+the logoff's own.
+
+**Call it once per instance.** A second call, while the first is still
+writing or after it, rejects with `ADT_SESSION_ERROR.NOT_CONNECTED`; the
+first call is unaffected. A `connect()` that failed after the server opened
+a session logs it off and rejects only after that logoff is written, so the
+`disconnect()` in your `finally` is the first one of that life. Over RFC the
+close waits for a call still running on its conversation (sap-rfc-lite
+serialises them), so there it resolves after that call.
 
 Requests already in flight run to completion untouched; nothing is aborted. What
 the connection guarantees is that their results can no longer reach it: a
@@ -498,9 +509,45 @@ turned out to be unbounded — a request whose caller chose no timeout could hol
 teardown open forever, and since lifecycle transitions are serialized, every
 later `connect()` queued behind it.
 
-**Over HTTP it does not release locks.** The ABAP session lives on until its
-timeout, along with whatever it held. Unlock first; disconnecting is not a way to
-clean up after yourself.
+**The logoff releases the locks** — once it has arrived, whether or not you
+wait for the answer (measured on an on-premise system). Still unlock what you locked first:
+the logoff is the backstop, not the way to finish your work.
+
+### When the logoff is sent
+
+1. `disconnect()` sends it iff the connection holds a live `SAP_SESSIONID_*` —
+   received, not deleted by a past `expires` / `Max-Age=0`. After a successful
+   `connect()` over `http` (on-premise or cloud) it does: such a connect
+   requires one. Over `legacy-http` a `connect()` succeeds on a system that
+   names no session, and then there is no `SAP_SESSIONID_*` and nothing is
+   sent. With only `sap-XSRF_*` nothing is sent either.
+2. A failed `connect()` sends it itself only when both hold: the whole
+   `connect()` failed (both `/sap/bc/adt/core/discovery` and the fallback
+   `/sap/bc/adt/discovery`), and a live `SAP_SESSIONID_*` was received during
+   it (a 403/404 after a successful logon carries one: measured on-premise,
+   `CL_HTTP_SERVER_NET->send_response` sets it whatever the status).
+   `connect()` then rejects after the logoff is written. A 401 means no
+   session: nothing.
+
+   **A failed `connect()` spends the instance whenever it received a session
+   cookie** — the wire reports a non-empty `SAP_SESSIONID_*` (over RFC, an
+   open conversation) — even when no logoff was sent: a custom wire's
+   `close()` may send none, and a logoff that fails is only logged. A failed
+   `connect()` that received none leaves the instance usable, and may be
+   retried.
+3. A successful `connect()` (200) sends no logoff; the session lives until
+   `disconnect()`.
+4. Where it goes: on-premise, the platform's ICF logoff
+   (`/sap/public/bc/icf/logoff`). On cloud, the logoff resource the session
+   document links to; when it links none, the same ICF logoff, sent exactly as
+   on-premise. Nothing is left to the server's timeout while a live
+   `SAP_SESSIONID_*` is held.
+
+The logoff never carries `sap-contextid` — only `SAP_SESSIONID_*`,
+`sap-usercontext` and the affinity it needs. Measured on an on-premise system with bare HTTP
+(2026-10-13): a logoff without the context cookie ended the context and
+released its lock; one carrying a stale (deleted) `sap-contextid` got 400 and
+closed nothing.
 
 ### Uninterruptible spans
 
@@ -539,16 +586,10 @@ precisely to avoid it.
 
 Two different things can cost you the session, and they do not behave alike.
 
-**The session was replaced** — a session cookie that changed underneath you. This is fatal **only while a lock window is open**:
-
-```typescript
-// window open  → ADT_SESSION_REPLACED, the connection stops being usable
-// no window    → transparent; work continues on the new session
-```
-
-With nothing held there is nothing to lose, so the connector carries on. The
-error exists to tell you that a lock handle you are carrying is now dead, which
-is the one thing you cannot work out for yourself.
+**The session was replaced** — a session cookie (`SAP_SESSIONID`) that changed
+underneath you. The request rejects with `ADT_SESSION_REPLACED`: a lock handle
+you are carrying is now dead, which is the one thing you cannot work out for
+yourself.
 
 **The server says the session is gone** — an answer meaning the session it was
 given no longer exists. This is **always** fatal, window or not: the connection
@@ -560,6 +601,13 @@ carry on over a session the caller never opened.
 In both cases the connector does **not** retry the request internally. Retrying
 blindly is what produced further orphaned locks in the field. That decision is
 yours.
+
+**A lost session spends the instance** (since 16.0.0), as `disconnect()` does.
+After either of these, `connect()` and every request on the instance reject
+`ADT_SESSION_ERROR.NOT_CONNECTED`, and a new session is a new connection.
+`disconnect()` is still owed once. It sends the logoff only if the instance
+still holds a live `SAP_SESSIONID`, and after a loss the connection has
+already cleared its cookies, so it sends nothing.
 
 ## Advanced Features
 
@@ -627,15 +675,31 @@ connection.setSessionType('stateless');
 
 There is no local-only reset. Discarding the cookie does not end the ABAP
 session — the server keeps it until its own timeout, and sessions are limited
-per user — so starting over means telling the server, then connecting again:
+per user — so starting over means telling the server, then connecting a NEW
+instance. One connection instance is one session: after `disconnect()` (or a
+failed `connect()` that logged off its session) `connect()` on it rejects
+`NOT_CONNECTED`. Creating the new instance is yours — your own factory, or
+`createConnection` — as mcp-abap-adt's server does with `createAbapConnection`
+per connection:
 
 ```typescript
 await connection.disconnect(); // ends the session on the server too
-await connection.connect(); // a new one, explicitly
+const next = new AdtOnPremConnector(
+  config,
+  new BasicAuthProvider(config.username!, config.password!),
+  new OnPremHttpTransport(() => ({}), logger, {
+    client: config.client,
+    baseUrl: config.url,
+  }),
+  logger,
+);
+await next.connect(); // a new session is a new instance
 ```
 
 A connection that was connected must be disconnected, which is why this belongs
-in a `finally`. `disconnect()` never throws, so it is safe there.
+in a `finally`. The first `disconnect()` never throws, so it is safe there; a
+second call on the same instance rejects `NOT_CONNECTED`, so let one path own
+the call.
 
 ## Custom Logging
 
@@ -818,7 +882,8 @@ class AdtCloudConnector<
 The difference is what each does with the session: on-prem takes it from the
 establishing call and gives it back with the platform's ICF logoff; cloud opens
 one at `/sap/bc/adt/core/http/sessions` and gives it back through the logoff
-resource the server links to in the same answer. Not by `DELETE` on the
+resource the server links to in the same answer — or, when it links none, with
+the platform's ICF logoff, sent exactly as on-prem. Not by `DELETE` on the
 session's own address: from inside that session it answers `200` and ends
 nothing (measured on a BTP trial, 2026-10-12).
 
@@ -1012,8 +1077,8 @@ token the provider renewed is on the very next attempt.
 
 | answer | what happens |
 |---|---|
-| **401** on a stale CSRF token or a login form | the wire's own session recovery runs first; a session fault is not a credential fault, and never reaches the provider. For a mutation refused while a CSRF token is cached, that recovery starts a new session — except inside a critical section, where the 401 goes straight to the provider (next row) so the session and its lock are kept |
-| **401** that survives that recovery, or a logon the system refused | put to `provider.rejected({ at, status?, error })`. On Ok the request is authorized again and sent **once more**; on no, `AuthRefusedError` |
+| **403** "CSRF token validation failed", or a **401** to a mutation that holds no CSRF token yet | the wire's own CSRF recovery: a token fetched in the same session (its cookies kept) and one resend. None of this discards the session or opens another |
+| any other **401** — a mutation's with a CSRF token cached included — or a logon the system refused | put to `provider.rejected({ at, status?, error })`. On Ok the request is authorized again and sent **once more**, in the same session; on no, `AuthRefusedError` carrying SAP's 401 as its cause |
 | the same refusal after an Ok | the verdict. The provider is not asked again — asking would invite a second renewal — and you get an `AuthRefusedError` saying the credential was refused again after the provider renewed it |
 | **403** | propagates untouched, never put to the provider. The server authenticated the caller and refused the action anyway, so a new credential is the same caller — usually the body names the authorization object |
 | anything else | untouched |
@@ -1022,21 +1087,28 @@ The one more attempt keeps the request's own lease and generation, so
 stale-request fencing applies to it: a request from a superseded session asks
 nobody and gets its error back. After a rejection `at: 'request'` it goes out on
 the same session; after a rejection `at: 'logon'` the wire logs on again — token
-dropped, established anew — before the resend. Inside a critical section a
-renewal keeps the session: a mutation that meets a 401 with a CSRF token cached
-is resent on it with the same token, and if SAP did replace the session the
-request fails with `SESSION_REPLACED` rather than carrying on in a new one.
-Outside a critical section that mutation takes the wire's stale-session recovery
-first (above), which starts a new session.
+dropped, established anew — before the resend.
 
-**The price of keeping the lock.** Inside a critical section the connection
-cannot tell a dead session from a refused credential when SAP answers the resend
-with the same session cookie and no `Set-Cookie`: the 401 comes back a second
-time, and the request ends as `AuthRefusedError` with the refused-again verdict
+**No 401 opens a new session.** One instance is one session: nothing discards
+the session's cookies to open another and retry there. A mutation that meets a
+401 with a CSRF token cached is put to the provider like any other 401; on Ok it
+is resent on the same session with the same token, inside a critical section or
+not, and if SAP did replace the session the request fails with
+`SESSION_REPLACED`. Before 16.0.0, outside a critical section, that mutation
+discarded the session and retried in a new one on the same instance, a GET
+401 on a wire with no cookies fetched a token to open one, and a GET 401 with
+cookies held was resent once before the provider was asked; all three are
+gone. If you
+want a new session after a 401, create a new connection.
+
+**A dead session can look like a refused credential.** When SAP answers the
+resend with the same session cookie and no `Set-Cookie`, the connection cannot
+tell a dead session from a refused credential: the 401 comes back a second time,
+and the request ends as `AuthRefusedError` with the refused-again verdict
 (`at: 'request'`), not `SESSION_REPLACED`. The connection stays connected on
-that session. If you get this inside a critical section, treat the lock as lost:
-`disconnect()`, `connect()`, and redo the work under a new lock. That is the
-intended trade-off — a renewal must not discard a lock the session still holds.
+that session. If you suspect the session is gone, `disconnect()` and create a
+new connection; if you held a lock, treat it as lost and redo the work under a
+new lock there.
 
 One credential retry per request: the upfront token fetch before a mutation and
 a later rejection draw on the same allowance.

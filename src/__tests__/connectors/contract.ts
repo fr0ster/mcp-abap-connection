@@ -129,13 +129,15 @@ export function describeConnectorContract(
       ).rejects.toThrow(/ADT_NOT_CONNECTED/);
     });
 
-    it('settles a repeat disconnect(), with nothing left owed', async () => {
+    it('rejects a repeat disconnect(): it is called once per instance', async () => {
       const conn = fixture.build();
       await conn.connect();
 
       await conn.disconnect();
 
-      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await expect(conn.disconnect()).rejects.toMatchObject({
+        code: 'ADT_NOT_CONNECTED',
+      });
     });
 
     it('settles disconnect() on a connection that never connected', async () => {
@@ -155,19 +157,29 @@ export function describeConnectorContract(
       expect(conn.isConnected()).toBe(false);
     });
 
-    it('opens a new session on a second connect()', async () => {
+    it('refuses connect() after disconnect(): one instance is one session', async () => {
       const conn = fixture.build();
       await conn.connect();
-      const first = conn.getSessionIdentity();
       await conn.disconnect();
 
-      await conn.connect();
+      await expect(conn.connect()).rejects.toMatchObject({
+        code: 'ADT_NOT_CONNECTED',
+        message:
+          "This connection's SAP session has ended (it was disconnected, logged off or lost); one connection instance is one session. Create a new connection for a new session.",
+      });
+      expect(conn.isConnected()).toBe(false);
+      // Nothing was asked of the server for it.
+      expect(fixture.sessionsOpened()).toBe(1);
+    });
 
-      expect(conn.isConnected()).toBe(true);
-      // A reconnect is a NEW session, not the old one resumed — otherwise a
-      // caller could not tell a session it still holds from one it lost.
-      expect(conn.getSessionIdentity()).not.toBe(first);
-      expect(fixture.sessionsOpened()).toBe(2);
+    it('a new session is a new instance', async () => {
+      const first = fixture.build();
+      await first.connect();
+      await first.disconnect();
+
+      const next = fixture.build();
+      await next.connect();
+      expect(next.isConnected()).toBe(true);
     });
   });
 }

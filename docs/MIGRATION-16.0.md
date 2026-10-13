@@ -1,0 +1,123 @@
+# Migration to 16.0
+
+16.0.0 makes this package answer for what [SCOPE.md](./SCOPE.md) lists, and for
+nothing else. For a consumer on 15.x that means the following.
+
+## What changed
+
+- **`signal` is gone from request options.** This matches
+  `@mcp-abap-adt/interfaces-adt-connection` 3.0.0, which drops
+  `IAbapRequestOptions.signal`, `ADT_REQUEST_ERROR` and `AdtRequestErrorCode`.
+  No request rejects with `ADT_REQUEST_ABORTED` any more. A request behaves as
+  it did in 15.0.1: once admitted, it runs to its answer or its `timeout`.
+  `IAdtTransportRequest.signal` and `IAdtEstablishContext.signal` are gone
+  from the transport seam. Measured on an on-premise system (BASIS 816, 2026-10-12): ABAP
+  neither cancels a request that reached it nor rolls back across requests,
+  and a logoff releases the locks — so the signal protected nothing.
+- **One connection instance is one SAP session.** The instance is spent after
+  `disconnect()`, after a failed `connect()` that received a session cookie
+  (a `SAP_SESSIONID_*`; over RFC, an open conversation) — whether or not a
+  logoff was sent for it —, or after a lost session: `ADT_SESSION_REPLACED`, raised
+  exactly as in 15.0.1 for a changed `SAP_SESSIONID` or a 400 "session not
+  found". On a spent instance, `connect()` and every request reject
+  `ADT_SESSION_ERROR.NOT_CONNECTED`. The connector decides nothing beyond
+  that; what to do next is yours.
+  - On a spent instance, `connect()` rejects with
+    `ADT_SESSION_ERROR.NOT_CONNECTED`: "This connection's SAP session has
+    ended (it was disconnected, logged off or lost); one connection instance is one
+    session. Create a new connection for a new session."
+  - A failed `connect()` that received no session cookie (a 401, a network
+    error, a 200 with only `sap-XSRF_*`) leaves the instance usable, and
+    `connect()` may be retried.
+- **No 401 opens a new session on the same instance.** Before 16.0.0, a
+  mutation refused with a 401 while a CSRF token was cached (outside a
+  critical section) discarded the session and retried in a new one, and a GET
+  refused with a 401 on a wire with no cookies fetched a token to open one,
+  and a GET refused with a 401 while cookies were held was resent once with
+  them before the provider was asked. All three are removed. The 401 goes to the provider (`rejected`); on
+  Ok the request is resent once in the same session, otherwise you get
+  `AuthRefusedError` carrying SAP's 401. The CSRF refetch for a 403 "CSRF
+  token validation failed" (cookies kept) and the provider's re-ask stay.
+- **`disconnect()` resolves once the logoff is written.** It resolves when the
+  bytes are handed to the socket over HTTP, or when the close call has
+  returned over RFC. It does not wait for SAP's answer. The first call never
+  throws: a logoff that fails is logged.
+  - **Call it once per instance.** A second call rejects with
+    `ADT_SESSION_ERROR.NOT_CONNECTED` ("disconnect() was already called for
+    this connection; call it once per instance"), whether it comes while the
+    first is still writing or after it. The first call is unaffected.
+  - No timer bounds the write. A server that never takes the bytes holds
+    `disconnect()` until the socket fails. That failure is logged, not thrown.
+  - **"Written" means handed to the operating system.** The logoff goes out
+    on a connection of its own over HTTP. Over HTTPS this holds while your
+    `agentOptions` leave `keepAlive` off.
+  - **Over RFC, the close waits for a call still running on its
+    conversation.** In `@mcp-abap-adt/sap-rfc-lite` 0.2.2, a call holds the
+    client's invocation mutex until it returns, and `close()` takes the same
+    mutex.
+- **When the logoff is sent.** It is sent if and only if the instance holds
+  a live `SAP_SESSIONID_*` that it received: not one deleted by a past
+  `expires` or `Max-Age=0`.
+  - A `connect()` that fails as a whole after the server opened a session (a
+    cloud preflight's, or a 403/404 after logon on both discovery endpoints)
+    logs it off, and rejects only once the logoff is written.
+  - A 404 on core discovery alone is not a failure: the fallback runs in the
+    same session.
+  - A 401, or a 200 with only `sap-XSRF_*`, has no session, so nothing is
+    sent.
+  - The logoff never carries `sap-contextid`. Measured on an on-premise system (2026-10-13), a
+    logoff carrying a stale one got 400 and closed nothing, while one without
+    it ended the context and released its lock.
+  - A redirect answering the logoff counts as its answer: it is not
+    followed.
+  - On cloud, a session the server linked no logoff resource for is logged
+    off through the platform's ICF logoff (`/sap/public/bc/icf/logoff`), as
+    on-prem, instead of being left to the server's timeout. A linked logoff
+    resource is used as before.
+- **`flushGoodbye(timeoutMs?)` has no default bound.** Without an argument it
+  waits for SAP's answer to the logoff for as long as it takes. With
+  `timeoutMs` it waits at most that long and returns without throwing.
+- **`IAdtTransport.close(context, written?)`**: a wire reports the write by
+  calling `written`. `disconnect()` resolves at the first of `written()` and
+  the close settling.
+
+## What a consumer must do
+
+- **Build connections with `createConnection(spec)`** (recommended). You state
+  `system` and `transport` (`cloud`+`http`, or `onprem` with `http`,
+  `legacy-http` or `rfc`). The factory builds the matching connector and wire
+  and passes your transport options through. It returns a new instance on
+  every call. The constructors still work.
+- **Drop `signal`** from the options passed to `makeAdtRequest`, and drop any
+  check for `ADT_REQUEST_ERROR` or `'ADT_REQUEST_ABORTED'`.
+- **Call `disconnect()` once.** If more than one path in your code can end a
+  connection, such as a `finally` and a signal handler, let one of them own
+  the call, or catch the second call's rejection.
+- **A process about to exit awaits `disconnect()`.** Once it resolves, the
+  logoff has left:
+  ```typescript
+  await connection.disconnect();
+  process.exit(0);
+  ```
+- **A new session is a new instance, and creating it is yours.** Use your
+  own factory or `createConnection`. Anywhere you called `connect()` again on
+  an instance after `disconnect()`, create a new connection instead.
+- **On a 401, create a new instance if you want a new session.** The
+  connection no longer opens one for you. Where you relied on a mutation's
+  401 being retried in a fresh session, catch the `AuthRefusedError` (or the
+  `ADT_SESSION_REPLACED` the resend may raise), `disconnect()` the instance,
+  and redo the work on a new connection — under a new lock, if it held one.
+- **`flushGoodbye()` no longer gives up after 5 s.** If you need a bound,
+  pass one: `flushGoodbye(5000)`.
+- **Await `flushGoodbye()` as well if SAP's answer matters**, for example
+  before a new connection connects, so that the server never holds two
+  sessions:
+  ```typescript
+  await connection.disconnect();
+  await connection.flushGoodbye();
+  const next = createYourConnection();
+  await next.connect();
+  ```
+- **A custom transport** (`IAdtTransport`) whose `close()` stays pending long
+  after its goodbye has left should call the new `written` argument at that
+  point. Otherwise `disconnect()` waits for the close to settle.

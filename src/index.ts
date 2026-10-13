@@ -32,6 +32,16 @@ export {
   WireLogonError,
 } from './connection/authErrors.js';
 export { CloudHttpTransport } from './connection/CloudHttpTransport.js';
+// The recommended way to build a connection: the system and the wire stated,
+// a new instance per session.
+export {
+  type CloudHttpSpec,
+  type ConnectionSpec,
+  type CreatedConnection,
+  createConnection,
+  type OnPremHttpSpec,
+  type OnPremRfcSpec,
+} from './connection/createConnection.js';
 // The session lifecycle vocabulary — ISessionLifecycleAware, ADT_SESSION_ERROR —
 // is deliberately NOT exported here. It lives in @mcp-abap-adt/interfaces-adt-connection, and a
 // consumer imports it from there: re-exporting a contract type gives it two

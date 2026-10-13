@@ -81,7 +81,7 @@ is what every stateless call cost with `sap-rfc-lite` 0.1.x (and with 0.2.0,
 whose npm package lacks the reset), and why 9.4.2 requires 0.2.1. Direct connector users must mark
 LOCK and UNLOCK stateful to retain their conversation. If disconnect occurs
 while a temporary conversation is logging on, it is closed without sending
-the request; reconnect does not revive that pending request.
+the request; a new connection does not revive that pending request.
 
 ## Enabling Stateful Sessions
 
@@ -172,51 +172,47 @@ Every ADT request issued through `makeAdtRequest` automatically:
 
 This logic is transparent to callers (Builders, handlers, CLI scripts).
 
-A request carrying a `signal` stops at the first of these steps that would send
-something after its caller aborted: the upfront token fetch, the send itself,
-the CSRF retry, the cookie retry of a GET and the provider's renewal below. Each
-wait in between — the provider's `authorize()` and `rejected()`, a logon, the
-token exchange, an RFC conversation's `open()` — ends for that caller at the
-abort, with `ADT_REQUEST_ABORTED`; the session's token and cookies are left as
-they are, for the requests still running on them. A request already on the wire
-is not recalled. See [USAGE.md — Cancelling a request](./USAGE.md#cancelling-a-request).
-
-A 401 that survives the wire's own CSRF recovery is put to the provider (`rejected`). On Ok the
+A 401 that survives the wire's own CSRF recovery (in the same session) is put to the provider (`rejected`). On Ok the
 request is sent once more, always under the same lease and generation as the attempt it repeats,
 so stale-request fencing applies. After a rejection at `'request'` that resend goes out on the
 same session; after a rejection at `'logon'` the wire logs on again before the resend.
-**Inside a critical section a renewal keeps the session, and the lock in it:** a mutation
+**No 401 opens a new session, and the lock in the session is kept:** a mutation
 (POST / PUT / DELETE) refused with a 401 while a CSRF token is cached goes to the provider and is
-resent on the same session with the same token, and if SAP did replace the session the request
-fails with `SESSION_REPLACED` instead of carrying on in a new one. Outside a critical section
-that mutation takes the wire's own stale-session recovery first, which starts a new session
-before the provider is asked — so hold a lock inside `beginCriticalSection()` /
-`endCriticalSection()`.
-**The price of keeping the lock:** when the session is really dead but SAP answers the resend with
-the SAME session cookie (no `Set-Cookie`), the connection cannot tell it from a refused
-credential — the second 401 ends the request as `AuthRefusedError` with the refused-again
-verdict (`at: 'request'`), not `SESSION_REPLACED`, and the connection stays connected. Inside a
-critical section, treat that as a lost lock: `disconnect()`, `connect()`, and redo the work under
-a new lock.
+resent on the same session with the same token, inside a critical section or not, and if SAP did
+replace the session the request fails with `SESSION_REPLACED` instead of carrying on in a new one.
+Before 16.0.0, outside a critical section, that mutation discarded the session and retried in a
+new one on the same instance; that recovery is gone. One instance is one session: if you want a
+new session after a 401, create a new connection.
+**A dead session can look like a refused credential:** when the session is really dead but SAP
+answers the resend with the SAME session cookie (no `Set-Cookie`), the connection cannot tell it
+from a refused credential — the second 401 ends the request as `AuthRefusedError` with the
+refused-again verdict (`at: 'request'`), not `SESSION_REPLACED`, and the connection stays
+connected. Treat that as a lost session, and any lock in it as lost: `disconnect()`, create a new
+connection, and redo the work under a new lock there.
 If the provider says no, or the retry is refused too, the caller gets an `AuthRefusedError` (the refused-again verdict is `refusal.kind === 'connection'`, `facts.problem === 'refused-after-renewal'`). A 403 is an authorization answer, not a credential one: it never goes to the
 provider. See [When the credential is refused](./USAGE.md#when-the-credential-is-refused).
 
-A reconnect is a NEW session, so do it outside a lock window rather than inside one.
+**One connection instance is one session.** After `disconnect()`, or a failed `connect()` that
+received a session cookie (whether or not a logoff was sent for it), the instance is spent and `connect()` on it rejects `NOT_CONNECTED`. A new
+session is a new instance, created by the consumer (its own factory, or `createConnection`), and
+outside a lock window rather than inside one.
 
-**Wait for the goodbye before opening the next one.** `disconnect()` dispatches the logoff and does
-not await it, so a reconnect otherwise opens the next session while the previous one's goodbye is
-still being assembled, and the server keeps both:
+**Wait for the goodbye before opening the next one.** `disconnect()` resolves once the logoff is
+written, not answered, so a new connection otherwise opens the next session while the previous
+one's goodbye is still unanswered, and the server keeps both:
 
 ```typescript
 await conn.disconnect();
-await conn.flushGoodbye();   // give the goodbye its budget to finish first
-await conn.connect();
+await conn.flushGoodbye();   // wait for the goodbye's answer; flushGoodbye(ms) bounds it
+const next = createYourConnection(); // a new instance for the new session
+await next.connect();
 ```
 
 Measured on E19 through a harness that recycled the session after each test: a new ABAP session
 every one to two seconds for a whole run, none released, each living to its own thirty-minute idle
-timeout. The budget bounds the waiting, not the overlap — if the goodbye finishes in time there is
-none, and if it does not you proceed while it stays outstanding. Calling `disconnect()` again is not
+timeout. Without an argument `flushGoodbye()` waits for the answer as long as SAP takes; a budget
+you pass bounds the waiting, not the overlap — if the goodbye finishes in time there is none, and if
+it does not you proceed while it stays outstanding. Calling `disconnect()` again is not
 a substitute: a repeat call does not wait either.
 
 ---
@@ -246,7 +242,7 @@ The link to the ABAP session is not guaranteed, and that is the whole problem:
 Both are reported, neither is worked around. `connect()` fails with the reason
 when no session was opened; a session lost afterwards surfaces as
 `ADT_SESSION_REPLACED` rather than a request quietly continuing somewhere it
-does not belong. What to do about either — wait, retry, reconnect, release
+does not belong. What to do about either — wait, retry, create a new connection, release
 sessions the user still holds, carry on read-only — is the caller's decision,
 made with the cookies and the answers in hand.
 
@@ -295,9 +291,10 @@ What it promises is narrow and worth stating exactly — inside a section the
 short: the ceiling is `SAP_TIMEOUT_CRITICAL`, ten minutes by default, and a
 socket ends a request whatever a contract says.
 
-Since 10.0.0 a section also keeps its session through a credential renewal: a
-mutation refused with a 401 inside it is renewed and resent on the same
-session, never moved to a new one (see [Request Hooks](#request-hooks)).
+A section keeps its session through a credential renewal: a mutation refused
+with a 401 inside it is renewed and resent on the same session, never moved to
+a new one. Since 16.0.0 that holds outside a section too: no 401 moves a
+request to a new session (see [Request Hooks](#request-hooks)).
 
 ### Two sessions, and they are not the same thing
 
@@ -348,7 +345,8 @@ you get by asking — `getSessionIdentity()` for which session you are in, and
 ## Troubleshooting
 
 - **CSRF token errors**: discard the session and establish a new one. That is
-  `disconnect()` followed by `connect()` — there is no local-only discard, because
+  `disconnect()`, then a NEW connection's `connect()` — one instance is one
+  session — and there is no local-only discard, because
   dropping the cookie leaves the ABAP session open on the server. Both live on
   the HTTP connection classes and are **not** on the `IAbapConnection` type
   a bare `IAbapConnection` carries — reach them through a connector type, or
@@ -360,9 +358,10 @@ import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 
   const connection = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
   await connection.disconnect(); // ends the session on the server, then clears
-  await connection.connect(); // a new session, explicitly
+  const next = new AdtOnPremConnector(config, new BasicAuthProvider(user, pass), new OnPremHttpTransport(() => ({}), logger, { client: config.client, baseUrl: config.url }), logger);
+  await next.connect(); // a new session is a new instance
   ```
-- **Session expired**: reauthenticate to obtain a new session.
+- **Session expired**: create a new connection; a new session is a new instance.
 - **Multiple connections**: each connector holds its own wire, and the wire holds the cookie jar; share the instance if you need continuity.
 
 ---

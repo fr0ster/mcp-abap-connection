@@ -159,90 +159,38 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     expect(mock).toHaveBeenCalledTimes(2);
   });
 
-  it('POST 401 with cached CSRF token: invalidates session, refetches, retries with new token/cookies', async () => {
+  // One instance is one session: a 401 on a mutation that holds a cached CSRF
+  // token is not cured by discarding the session and opening another on this
+  // instance. It goes to the provider like any 401; Basic cannot renew a
+  // password, so the caller gets SAP's 401 as the cause of the refusal, and
+  // nothing else is sent — no token fetch, no new session.
+  it('POST 401 with a cached CSRF token: no new session is opened; the 401 reaches the caller', async () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).transport.adoptCsrfToken('stale-token');
     seedCookies(conn, 'SAP_SESSIONID_HQ6=dead');
 
+    const original = makeAxiosError(
+      401,
+      '<html>Anmeldung fehlgeschlagen</html>',
+      {
+        method: 'POST',
+        url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
+      },
+    );
     const calls: AxiosCall[] = [];
     const mock = jest.fn().mockImplementation(async (cfg: AxiosCall) => {
-      calls.push({
-        method: cfg.method,
-        url: cfg.url,
-        headers: { ...(cfg.headers || {}) },
-      });
-      if (calls.length === 1) {
-        throw makeAxiosError(401, '<html>Anmeldung fehlgeschlagen</html>', {
-          method: cfg.method,
-          url: cfg.url,
-        });
-      }
-      if (calls.length === 2) {
-        return {
-          status: 200,
-          data: '',
-          headers: {
-            'x-csrf-token': 'fresh-token',
-            'set-cookie': ['SAP_SESSIONID_HQ6=fresh'],
-          },
-        };
-      }
-      return { status: 200, data: 'ok', headers: {} };
-    });
-    attachMockAxios(conn, mock);
-
-    const res = await conn.makeAdtRequest({
-      url: '/sap/bc/adt/ddic/domains/zfoo',
-      method: 'POST',
-      timeout: 30000,
-      data: '<x/>',
-    });
-
-    expect(res.status).toBe(200);
-    expect(mock).toHaveBeenCalledTimes(3);
-
-    const refetchCookie =
-      calls[1]?.headers?.Cookie ?? calls[1]?.headers?.cookie;
-    expect(refetchCookie ?? '').not.toContain('SAP_SESSIONID_HQ6=dead');
-
-    expect(calls[2]?.headers?.['x-csrf-token']).toBe('fresh-token');
-    const retryCookie = calls[2]?.headers?.Cookie ?? calls[2]?.headers?.cookie;
-    expect(retryCookie ?? '').toContain('SAP_SESSIONID_HQ6=fresh');
-
-    expect((conn as any).transport.csrfToken()).toBe('fresh-token');
-  });
-
-  // The retry's 401 is what survives the wire's recovery, so it — not the
-  // first attempt's — is what the provider is asked about. Basic cannot renew
-  // a password, so its answer is final, in its own words.
-  it('401 with cached token, retry also 401: the retry 401 goes to the provider', async () => {
-    const conn = onPrem(baseConfig, mockLogger);
-    markConnectedForTest(conn);
-    (conn as any).transport.adoptCsrfToken('stale-token');
-    seedCookies(conn, 'SAP_SESSIONID_HQ6=dead');
-
-    const originalError = makeAxiosError(401, '<html>first</html>', {
-      method: 'POST',
-      url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
-    });
-    const secondError = makeAxiosError(401, '<html>second</html>', {
-      method: 'POST',
-      url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
-    });
-
-    let call = 0;
-    const mock = jest.fn().mockImplementation(async () => {
-      call += 1;
-      if (call === 1) throw originalError;
-      if (call === 2) {
-        return {
-          status: 200,
-          data: '',
-          headers: { 'x-csrf-token': 'fresh-token' },
-        };
-      }
-      throw secondError;
+      calls.push({ method: cfg.method, url: cfg.url });
+      if (calls.length === 1) throw original;
+      // A token fetch here would hand out a different session.
+      return {
+        status: 200,
+        data: '',
+        headers: {
+          'x-csrf-token': 'fresh-token',
+          'set-cookie': ['SAP_SESSIONID_HQ6=fresh'],
+        },
+      };
     });
     attachMockAxios(conn, mock);
 
@@ -256,113 +204,53 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     ).rejects.toMatchObject({
       name: 'AuthRefusedError',
       at: 'request',
-      refusal: { reason: 'the user or password was refused' },
-      cause: secondError,
+      cause: original,
     });
 
-    expect(mock).toHaveBeenCalledTimes(3);
+    // Only the POST: no token fetch, no second session.
+    expect(calls).toHaveLength(1);
+    expect(heldCookies(conn)).toContain('SAP_SESSIONID_HQ6=dead');
+    expect(heldCookies(conn)).not.toContain('fresh');
+    expect((conn as any).transport.csrfToken()).toBe('stale-token');
   });
 
-  // A refetch that fails for its own reasons says nothing about the
-  // credential, so the 401 that started the retry is what survives the wire —
-  // and a surviving 401 is the provider's to answer.
-  it('401 with cached token, CSRF refetch fails: the original 401 goes to the provider', async () => {
-    const conn = onPrem(baseConfig, mockLogger);
-    markConnectedForTest(conn);
-    (conn as any).transport.adoptCsrfToken('stale-token');
-    seedCookies(conn, 'SAP_SESSIONID_HQ6=dead');
-
-    const originalError = makeAxiosError(401, '<html>first</html>', {
-      method: 'POST',
-      url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
-    });
-    const refetchError = makeAxiosError(500, 'ICF service unavailable', {
-      method: 'GET',
-      url: 'https://sap.example.com/sap/bc/adt/core/discovery',
-    });
-
-    const fetchSpy = jest
-      .spyOn(conn as any, 'fetchCsrfToken')
-      .mockRejectedValue(refetchError);
-    const mock = jest.fn().mockRejectedValue(originalError);
-    attachMockAxios(conn, mock);
-
-    await expect(
-      conn.makeAdtRequest({
-        url: '/sap/bc/adt/ddic/domains/zfoo',
-        method: 'POST',
-        timeout: 30000,
-        data: '<x/>',
-      }),
-    ).rejects.toMatchObject({
-      name: 'AuthRefusedError',
-      at: 'request',
-      cause: originalError,
-    });
-
-    expect(mock).toHaveBeenCalledTimes(1);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('GET 401 with cached token: does NOT invalidate session (new branch is mutation-only)', async () => {
+  it('GET 401 with cookies held: nothing is resent before the provider; the 401 reaches the caller', async () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).transport.adoptCsrfToken('cached-token');
     seedCookies(conn, 'SAP_SESSIONID_HQ6=alive');
 
+    const original = makeAxiosError(
+      401,
+      '<html>login</html>',
+      {
+        method: 'GET',
+        url: 'https://sap.example.com/sap/bc/adt/oo/classes/zcl_x',
+      },
+      { 'set-cookie': ['sap-usercontext=sap-client=100'] },
+    );
     const mock = jest
       .fn()
-      .mockRejectedValueOnce(
-        makeAxiosError(401, '<html>login</html>', {
-          method: 'GET',
-          url: 'https://sap.example.com/sap/bc/adt/oo/classes/zcl_x',
-        }),
-      )
+      .mockRejectedValueOnce(original)
       .mockResolvedValueOnce({ status: 200, data: 'ok', headers: {} });
     attachMockAxios(conn, mock);
 
-    const res = await conn.makeAdtRequest({
-      url: '/sap/bc/adt/oo/classes/zcl_x',
-      method: 'GET',
-      timeout: 30000,
+    await expect(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/oo/classes/zcl_x',
+        method: 'GET',
+        timeout: 30000,
+      }),
+    ).rejects.toMatchObject({
+      name: 'AuthRefusedError',
+      at: 'request',
+      cause: original,
     });
 
-    expect(res.status).toBe(200);
+    // Only the GET: the provider (Basic) answers no, and nothing else is sent.
+    expect(mock).toHaveBeenCalledTimes(1);
     expect((conn as any).transport.csrfToken()).toBe('cached-token');
     expect(heldCookies(conn)).toContain('SAP_SESSIONID_HQ6=alive');
-  });
-
-  it('GET 401 with cookies retries with cookies (existing GET branch)', async () => {
-    const conn = onPrem(baseConfig, mockLogger);
-    markConnectedForTest(conn);
-    (conn as any).transport.adoptCsrfToken('whatever');
-    seedCookies(conn, 'SAP_SESSIONID_HQ6=alive');
-
-    const mock = jest.fn();
-    mock
-      .mockRejectedValueOnce(
-        makeAxiosError(
-          401,
-          '<html>login</html>',
-          {
-            method: 'GET',
-            url: 'https://sap.example.com/sap/bc/adt/oo/classes/zcl_x',
-          },
-          { 'set-cookie': ['SAP_SESSIONID_HQ6=new'] },
-        ),
-      )
-      .mockResolvedValueOnce({ status: 200, data: 'ok', headers: {} });
-    attachMockAxios(conn, mock);
-
-    const res = await conn.makeAdtRequest({
-      url: '/sap/bc/adt/oo/classes/zcl_x',
-      method: 'GET',
-      timeout: 30000,
-    });
-
-    expect(res.status).toBe(200);
-    expect(mock).toHaveBeenCalledTimes(2);
-    expect((conn as any).transport.csrfToken()).toBe('whatever');
   });
 });
 

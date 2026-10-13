@@ -20,7 +20,13 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { Agent, type AgentOptions } from 'node:https';
+import {
+  type ClientRequest,
+  request as httpRequest,
+  type IncomingMessage,
+  type RequestOptions,
+} from 'node:http';
+import { Agent, type AgentOptions, request as httpsRequest } from 'node:https';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
@@ -40,11 +46,36 @@ import {
   type IAdtTransportResponse,
   refusalOf,
 } from './IAdtTransport.js';
-import { requestAborted } from './requestAbort.js';
 import { isStatefulRequest, SESSION_TYPE_HEADER } from './statefulRequest.js';
+
+/**
+ * Whether a `Set-Cookie`'s attributes delete it: `Max-Age` of zero or less, or
+ * an `Expires` already in the past — SAP's own deletions are the latter
+ * (`expires=Tue, 01-Jan-1980 00:00:01 GMT`, a one-character value). Read by
+ * splitting, not by pattern; `Date.parse` reads the date.
+ */
+function deletesCookie(attributes: string[]): boolean {
+  for (const attribute of attributes) {
+    const [rawName, ...rawValue] = attribute.split('=');
+    const name = rawName?.trim().toLowerCase();
+    const value = rawValue.join('=').trim();
+    if (name === 'max-age') {
+      const seconds = Number(value);
+      if (value !== '' && Number.isFinite(seconds) && seconds <= 0) return true;
+    }
+    if (name === 'expires') {
+      const at = Date.parse(value);
+      if (Number.isFinite(at) && at <= Date.now()) return true;
+    }
+  }
+  return false;
+}
 
 /** The cookie that names a stateful ABAP context. */
 const CONTEXT_COOKIE = 'sap-contextid';
+
+/** The platform's logoff, which answers `200` while expiring the session cookie. */
+const ICF_LOGOFF_PATH = '/sap/public/bc/icf/logoff';
 
 /**
  * A `Cookie` header without `sap-contextid`, for a request that is not stateful.
@@ -209,11 +240,20 @@ export class HttpTransport implements IAdtTransport {
     if (!setCookie) return;
     for (const entry of Array.isArray(setCookie) ? setCookie : [setCookie]) {
       if (typeof entry !== 'string') continue;
-      const [nameValue] = entry.split(';');
+      const [nameValue, ...attributes] = entry.split(';');
       if (!nameValue) continue;
       const [name, ...rest] = nameValue.split('=');
       const trimmed = name?.trim();
       if (!trimmed) continue;
+      // A deletion removes the cookie, and is told by its expiry, not its
+      // value: SAP's logoff deletes every cookie with a one-character value
+      // and `expires=Tue, 01-Jan-1980 00:00:01 GMT` (on-premise, 2026-10-13). Kept,
+      // a deleted `SAP_SESSIONID` would read as a session the server has
+      // just ended.
+      if (deletesCookie(attributes)) {
+        this.jar.delete(trimmed);
+        continue;
+      }
       this.jar.set(trimmed, rest.join('=').trim());
     }
 
@@ -225,11 +265,11 @@ export class HttpTransport implements IAdtTransport {
       this.jar.set('sap-usercontext', `sap-client=${this.options.client}`);
     }
 
-    if (this.jar.size === 0) return;
+    // Recomputed from what the jar holds now, deletions included.
     const combined = Array.from(this.jar.entries())
       .map(([name, value]) => (value ? `${name}=${value}` : name))
       .join('; ');
-    if (combined) this.combined = combined;
+    this.combined = combined || null;
   }
 
   /** What to put on the `Cookie` header, or nothing if the jar is empty. */
@@ -247,9 +287,49 @@ export class HttpTransport implements IAdtTransport {
   sessionFingerprint(): Map<string, string> {
     const fingerprint = new Map<string, string>();
     for (const [name, value] of this.jar) {
-      if (name.startsWith('SAP_SESSIONID')) fingerprint.set(name, value);
+      // Non-empty only: an empty value names no session.
+      if (name.startsWith('SAP_SESSIONID') && value !== '') {
+        fingerprint.set(name, value);
+      }
     }
     return fingerprint;
+  }
+
+  /**
+   * The cookies a logoff carries: the jar without `sap-contextid`.
+   *
+   * The logoff ends the HTTP security session `SAP_SESSIONID` names, and with
+   * it every ABAP context of that session. Measured on an on-premise system with bare HTTP
+   * (2026-10-13): a LOCK held in a stateful context, then a logoff carrying
+   * `SAP_SESSIONID_ABC_001` and `sap-usercontext` but no `sap-contextid` →
+   * 200, `SAP_SESSIONID` deleted, and an independent session then got the
+   * LOCK: the context ended and the lock was released. A logoff that carried a
+   * stale (deleted) `sap-contextid` got 400 and closed nothing. So the
+   * context cookie never rides on a logoff.
+   */
+  protected logoffCookies(): string | null {
+    const pairs = Array.from(this.jar.entries())
+      .filter(([name]) => name !== CONTEXT_COOKIE)
+      .map(([name, value]) => (value ? `${name}=${value}` : name));
+    return pairs.length > 0 ? pairs.join('; ') : null;
+  }
+
+  /**
+   * Whether this wire holds a non-empty `SAP_SESSIONID_*` cookie it received —
+   * the one condition under which a logoff is sent.
+   *
+   * Read from the jar, never from `sessionEstablished()`, which a wire may
+   * answer otherwise (BASIS 7.40 says yes with no such cookie). The evidence,
+   * on an on-premise system (ABAP code and measurement): `CL_HTTP_SERVER_NET->send_response`
+   * sets `SAP_SESSIONID_<SID>_<CLIENT>` only when that request created a
+   * security session (`m_security_session_created`), whatever the status — a
+   * 404 or 403 after logon carried it and the session was alive; and the ICF
+   * logoff ends a session only when that cookie is present. So a logoff
+   * without it ends nothing, and one with it is owed whatever the status that
+   * brought it.
+   */
+  protected holdsSessionCookie(): boolean {
+    return this.sessionFingerprint().size > 0;
   }
 
   /**
@@ -365,10 +445,6 @@ export class HttpTransport implements IAdtTransport {
           // Authorized per attempt: a provider may renew behind the call.
           const auth: Record<string, string> = {};
           await context.authorize(auth);
-          // The last point before the wire: the exchange's request was
-          // aborted in a turn since its authorize answered. Fatal to the
-          // exchange through `isFatal`, like the abort `authorize` raises.
-          if (context.signal?.aborted) throw requestAborted();
           const response = await this.send({
             method: 'GET',
             url,
@@ -718,7 +794,32 @@ export class HttpTransport implements IAdtTransport {
    * session document links to, the on-prem one the platform logoff. A bare HTTP wire has
    * neither, and says so by doing nothing.
    */
-  async close(_context: IAdtSessionContext): Promise<void> {}
+  async close(
+    _context: IAdtSessionContext,
+    _written?: () => void,
+  ): Promise<void> {}
+
+  /**
+   * The platform's own logoff, `/sap/public/bc/icf/logoff`: the session's
+   * cookies (taken by the caller before its first await, without
+   * `sap-contextid`), no session headers, its write reported through
+   * `written`. On-prem it is the only goodbye; on cloud it is the goodbye when
+   * the server linked no logoff resource of its own — it ends a cloud security
+   * session too (measured on a BTP trial with bare HTTP, 2026-10-13: the same
+   * cookies were refused with 401 right after it, accepted before).
+   */
+  protected async sendIcfLogoff(
+    context: IAdtSessionContext,
+    snapshot: { cookies: string; affinity: Record<string, string> },
+    written?: () => void,
+  ): Promise<void> {
+    await this.sendLogoff(
+      context,
+      `${context.baseUrl}${ICF_LOGOFF_PATH}`,
+      { ...snapshot, session: {} },
+      written,
+    );
+  }
 
   /**
    * The logoff, sent as Eclipse ADT 3.60.3 sends it when a project is closed.
@@ -743,6 +844,8 @@ export class HttpTransport implements IAdtTransport {
       affinity: Record<string, string>;
       session: Record<string, string>;
     },
+    /** Called once the logoff's bytes are on the socket; see `close()`. */
+    written?: () => void,
   ): Promise<void> {
     // Nothing that logs on, whoever put it in the context: the goodbye carries
     // the session's cookie and no credential.
@@ -752,22 +855,30 @@ export class HttpTransport implements IAdtTransport {
       ),
     );
     try {
-      await this.sendDetached({
-        method: 'GET',
-        url,
-        headers: {
-          ...snapshot.affinity,
-          // Detached, so not dressed: the client is said here in so many
-          // words, as on every other request of this wire.
-          ...this.clientHeaders(),
-          ...extra,
-          ...snapshot.session,
-          Accept: '*/*',
-          'sap-adt-request-id': randomUUID().replace(/-/g, ''),
-          'sap-cancel-on-close': 'true',
-          Cookie: snapshot.cookies,
+      await this.sendDetached(
+        {
+          method: 'GET',
+          // A redirect is an answer like any other: the logoff has arrived,
+          // and its answer is not read. Not followed — that would send the
+          // session's cookie on to wherever the server points — and not
+          // reported as a failure to say goodbye.
+          validateStatus: (status: number) => status >= 200 && status < 400,
+          url,
+          headers: {
+            ...snapshot.affinity,
+            // Detached, so not dressed: the client is said here in so many
+            // words, as on every other request of this wire.
+            ...this.clientHeaders(),
+            ...extra,
+            ...snapshot.session,
+            Accept: '*/*',
+            'sap-adt-request-id': randomUUID().replace(/-/g, ''),
+            'sap-cancel-on-close': 'true',
+            Cookie: snapshot.cookies,
+          },
         },
-      });
+        written,
+      );
       this.logger?.debug('Told the server the session is finished');
     } catch (error) {
       this.logger?.debug(
@@ -816,9 +927,10 @@ export class HttpTransport implements IAdtTransport {
   /**
    * Send EXACTLY these headers, with nothing of the wire's live state mixed in.
    *
-   * For a goodbye, and only for a goodbye. `disconnect()` dispatches the logoff
-   * without awaiting it, so the request is still being assembled while the
-   * connection is already free to `connect()` again — and by the time it goes
+   * For a goodbye, and only for a goodbye. `disconnect()` releases the
+   * transition queue before the logoff is even written, so the request is
+   * still being assembled while the connection is already free to `connect()`
+   * again — and by the time it goes
    * out, the jar can hold a different session. Dressing it then merges the LIVE
    * `SAP_SESSIONID` over the snapshot, and `mergeCookieHeaders` lets the later
    * value win on a repeated name, so the goodbye for the old session arrives
@@ -829,15 +941,64 @@ export class HttpTransport implements IAdtTransport {
    */
   protected async sendDetached(
     request: IAdtTransportRequest,
+    /** Called once the request's bytes are on the socket. */
+    written?: () => void,
   ): Promise<IAdtTransportResponse> {
-    return this.dispatch(request, { ...request.headers });
+    return this.dispatch(request, { ...request.headers }, written);
+  }
+
+  /**
+   * The node request a logoff goes out on — the seam where its write is seen.
+   *
+   * A test replaces it to hold a request's socket shut; the wire uses node's
+   * own `http` / `https`, as axios would with redirects off. The logoff's
+   * answer is not read, so not following a redirect changes nothing.
+   */
+  protected logoffRequest(
+    options: RequestOptions,
+    onResponse: (response: IncomingMessage) => void,
+  ): ClientRequest {
+    return options.protocol === 'https:'
+      ? httpsRequest(options, onResponse)
+      : httpRequest(options, onResponse);
   }
 
   private async dispatch(
     request: IAdtTransportRequest,
     headers: Record<string, string>,
+    written?: () => void,
   ): Promise<IAdtTransportResponse> {
     const response = await this.client()({
+      // The write is the point `disconnect()` resolves at: the request's
+      // `finish`, emitted once its bytes are handed to the socket — not when
+      // the server answers, which it may do minutes later or never.
+      ...(written !== undefined
+        ? {
+            transport: {
+              request: (
+                options: RequestOptions,
+                onResponse: (response: IncomingMessage) => void,
+              ) => {
+                // A socket of its own: with no agent of the wire's (plain
+                // `http:` — the TLS material's agent and a proxy's are kept),
+                // node would take a pooled keep-alive socket, whose write can
+                // succeed after the server closed it, losing the logoff after
+                // `finish`. `agent: false` opens a fresh connection, and node
+                // sends `Connection: close` on it. Over `https:` the wire's
+                // own agent keeps no socket alive unless the caller's
+                // `agentOptions` say `keepAlive: true`.
+                const outgoing = this.logoffRequest(
+                  options.agent === undefined
+                    ? { ...options, agent: false }
+                    : options,
+                  onResponse,
+                );
+                outgoing.once('finish', written);
+                return outgoing;
+              },
+            },
+          }
+        : {}),
       method: request.method,
       // The connection hands over a PATH; putting a server in front of it is
       // this wire's job. RFC's is to write the same path into the request line

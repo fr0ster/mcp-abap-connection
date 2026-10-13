@@ -7,6 +7,148 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [16.0.0] - 2026-10-13
+
+What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
+
+### Added
+- **`createConnection(spec)`**, the recommended way to build a connection.
+  The caller states `system` (`'cloud'` | `'onprem'`) and `transport`
+  (`'http'` | `'legacy-http'` | `'rfc'`); the factory builds the matching
+  connector and wire:
+  - cloud+http → `AdtCloudConnector` + `CloudHttpTransport`;
+  - onprem+http → `AdtOnPremConnector` + `OnPremHttpTransport`;
+  - onprem+legacy-http → `AdtOnPremConnector` + `LegacyOnPremHttpTransport`;
+  - onprem+rfc → `AdtOnPremConnector` + `RfcTransport(rfcConversationFrom(config))`.
+
+  Nothing is inferred, `config.connectionType` included. Any other
+  combination is refused at construction in fixed words. `client` and
+  `baseUrl` come from `config`. `agentOptions`, `rfc`, `wireLogger`, `logger`
+  and `sessionId` pass through as given. A new instance on every call: one
+  instance is one session.
+
+### Breaking
+- **The per-request signal is removed** (added in 15.1.0), on
+  `@mcp-abap-adt/interfaces-adt-connection` `^3.0.0` (was `^2.1.0`), which
+  drops `IAbapRequestOptions.signal`, `ADT_REQUEST_ERROR` and
+  `AdtRequestErrorCode`. No request rejects with `ADT_REQUEST_ABORTED`, and
+  `IAdtTransportRequest.signal` and `IAdtEstablishContext.signal` are gone
+  from the transport seam. Requests behave as in 15.0.1. Measured on an on-premise system
+  (BASIS 816, 2026-10-12): ABAP neither cancels a request that reached it nor
+  rolls back across requests, a connection is never shared between threads,
+  and a logoff releases the locks — so the signal protected nothing.
+- **One connection instance is one SAP session.** After `disconnect()`, after
+  a failed `connect()` that received a session cookie (a `SAP_SESSIONID_*`;
+  over RFC, an open conversation) — whether or not a logoff was sent for it —,
+  or after
+  a lost session (`ADT_SESSION_REPLACED`, detected and raised exactly as in
+  15.0.1), the instance is spent. On a spent instance, `connect()` rejects
+  with `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed words, telling the caller to
+  create a new connection, and asks the credential nothing; every request
+  rejects `NOT_CONNECTED` too. After a lost session `disconnect()` is still
+  owed once, and sends nothing: the loss already cleared the cookies. Every
+  establishment attempt checks this, `connect()`'s internal logon retry
+  included. A failed `connect()` that received no session cookie (401,
+  network, a 200 with only `sap-XSRF_*`) may be retried. A new session is a new instance, created by the
+  consumer (its own factory, or `createConnection`). Before 16.0.0 a
+  disconnected instance could `connect()` again.
+- **No 401 opens a new session on the same instance, and none is resent
+  before the provider is asked.** Three recoveries are removed:
+  - a mutation (POST / PUT / DELETE) refused with a 401 while a CSRF token
+    was cached, outside a critical section, discarded the session's cookies
+    and token and retried in a new session;
+  - a GET refused with a 401 on a wire holding no cookies fetched a CSRF
+    token to earn some, opening a session on an empty jar;
+  - a GET refused with a 401 while the wire held cookies was resent once with
+    them, before the provider was asked.
+
+  All three now reach the provider like any other 401 (`rejected`); on Ok the
+  request is resent once in the same session, and otherwise the caller gets
+  `AuthRefusedError` carrying SAP's 401. What stays: the CSRF refetch for a
+  403 "CSRF token validation failed" or a 401 to a mutation holding no token
+  (cookies kept, one resend), and the provider's re-ask — both in the same
+  session. A consumer that wants
+  a new session after a 401 creates a new instance.
+- **`disconnect()`, once.**
+  - **It resolves once the logoff is WRITTEN**: its bytes handed to the
+    socket (the node request's `finish`), or over RFC, once the close call
+    has returned. It does not wait for SAP's answer, and it no longer
+    returns at once as before.
+  - Measured on an on-premise system (2026-10-12): with a long request running in the same
+    stateful session, SAP queues the logoff behind it (answered ~96 s later
+    through the connector; no answer in six minutes raw from a second
+    thread). The lock is still gone afterwards, even when the client was
+    killed with the answer pending. A connection dropped without a logoff
+    keeps its locks.
+  - Checked against this build on an on-premise system (2026-10-13): LOCK, then a long
+    where-used in the same stateful session, then `await disconnect()` and
+    an immediate process exit. The lock was still held 1 s later and free
+    ~70 s after the exit, long before the 30-min idle timeout.
+  - So a caller about to exit awaits `disconnect()`. No timer bounds the
+    write: a server that never takes the bytes holds `disconnect()` until the
+    socket fails, and that failure is logged, not thrown.
+  - **A second call rejects** with `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed
+    words, whether it comes while the first is still writing or after it.
+    It used to resolve. The first call is unaffected.
+- **The logoff is sent if and only if the instance holds a live
+  `SAP_SESSIONID_*`** it received, whatever the status of the answer that
+  brought it. This applies on-prem and on cloud (`HttpTransport.holdsSessionCookie`).
+  - A `connect()` that fails as a whole after the server opened a session —
+    a cloud preflight's, or a 403/404 after logon, on core discovery and the
+    fallback alike — logs that session off, and rejects only once the
+    logoff is written.
+  - A 404 on core discovery alone is not a failure: the fallback runs in the
+    same session.
+  - A 401 or a 200 with only `sap-XSRF_*` carries no session, and nothing is
+    sent.
+  - The on-prem rule used to be "established and holding any cookie".
+  - On cloud, a session whose server linked no logoff resource is logged off
+    through the platform's ICF logoff (`/sap/public/bc/icf/logoff`), sent
+    exactly as on-prem: the session's cookies without `sap-contextid`, no
+    session header, the write reported the same way. It used to be left to
+    the server's timeout. Measured on a BTP trial with bare HTTP
+    (2026-10-13): a preflight answered without a logoff link yet set a live
+    `SAP_SESSIONID`; after the ICF logoff the same cookies got `401`, before
+    it `200`. A linked logoff resource is used as before.
+  - Evidence (on-premise ABAP code and measurement): `CL_HTTP_SERVER_NET->send_response`
+    sets `SAP_SESSIONID` only when a security session was created, whatever
+    the status, and the ICF logoff ends a session only when that cookie is
+    present.
+- **The cookie jar honours deletions.** A `Set-Cookie` with a past `expires`
+  or `Max-Age=0` removes the cookie, so a deleted `SAP_SESSIONID` is no
+  session. SAP's logoff deletes with a one-character value and
+  `expires=Tue, 01-Jan-1980 00:00:01 GMT` (on-premise trace, 2026-10-13). An empty
+  `SAP_SESSIONID` names no session either.
+- **The logoff never carries `sap-contextid`**: only `SAP_SESSIONID_*`,
+  `sap-usercontext` and the affinity it needs (`HttpTransport.logoffCookies`).
+  Measured on an on-premise system with bare HTTP (2026-10-13):
+  - A logoff without the context cookie ended the context and released its
+    lock.
+  - A logoff carrying a stale (deleted) `sap-contextid` got 400 and closed
+    nothing.
+- **The logoff goes out on a connection of its own** (`agent: false` over
+  plain HTTP; the wire's TLS agent or a proxy's is kept). A 3xx answering it
+  is its answer: it is not followed and not logged as a failure.
+- **`flushGoodbye(timeoutMs?)` has no default bound.** Without an argument it
+  waits for SAP's answer to the logoff for as long as it takes, and creates
+  no timer; the library's own 5 s default is gone. With `timeoutMs` it waits
+  at most that long and returns without throwing, as before.
+- **`IAdtTransport.close(context, written?)`**: a wire calls `written` once
+  its goodbye has left; `disconnect()` resolves at the first of that and the
+  close settling. A custom wire whose close stays pending after its goodbye
+  has left should call it.
+- **Over RFC the close waits for a running call**: sap-rfc-lite 0.2.2's
+  `close()` takes the invocation mutex a call holds until it returns.
+  See [MIGRATION-16.0.md](./docs/MIGRATION-16.0.md).
+
+### Changed
+- `docs/SCOPE.md` lists what this package answers for; CLAUDE.md points to it.
+- Docs: README (Quick Start starts with `createConnection`), USAGE,
+  STATEFUL_SESSION_GUIDE, CLAUDE.md.
+- Tests: "nothing is left unhandled" is proven under plain node
+  (`src/__tests__/helpers/plainNode`), where the real process reports it —
+  Jest's sandboxed `process` never does; `dispatchedGoodbye` runs there.
+
 ## [15.1.0] - 2026-10-12
 
 ### Added
@@ -2446,7 +2588,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.1.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v16.0.0...HEAD
+[16.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.1.0...v16.0.0
 [15.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.1...v15.1.0
 [15.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.0.0...v15.0.1
 [15.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v14.1.0...v15.0.0

@@ -48,7 +48,8 @@ The package uses a clean separation of concerns:
 - **`AdtCloudConnector`** (concrete, exported):
   - An ABAP Cloud system: a session is a resource, opened at
     `/sap/bc/adt/core/http/sessions` and given back through the logoff resource its answer
-    links to (a `DELETE` on the session's own address answers `200` and ends nothing)
+    links to, or the platform's ICF logoff when it links none (a `DELETE` on the
+    session's own address answers `200` and ends nothing)
   - Takes an auth provider, same as above
 
   **Which one you take is how you say where you are dialling.** Nothing is probed:
@@ -62,7 +63,7 @@ The package uses a clean separation of concerns:
     what kind of provider it was given; it calls the same four methods on all of
     them: `prepare` once before the wire opens, `establish` at each logon,
     `authorize` before every attempt, `rejected` when the system refused
-  - A `401` that survives the wire's own session recovery, or a refused logon, is
+  - A `401` that survives the wire's own CSRF recovery, or a refused logon, is
     put to the provider through `rejected`. If it answers Ok (a renewed token, say)
     the request gets exactly one more attempt; if it says no, or the retry is
     refused too, you get an `AuthRefusedError` carrying the provider's refusal —
@@ -160,6 +161,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 16.0.0](./docs/MIGRATION-16.0.md)** - the per-request `signal` (15.1.0) and `ADT_REQUEST_ABORTED` are removed; `disconnect()` resolves once the logoff is written, not answered — a process about to exit awaits it; `flushGoodbye()` when the answer matters
 - 🚚 **[Migration to 15.0.0](./docs/MIGRATION-15.0.md)** - on `@mcp-abap-adt/interfaces-adt-connection` 2: `makeAdtRequest`'s answer is `unknown` unless its type is named; nothing changes at run time
 - 🚚 **[Migration to 14.0.0](./docs/MIGRATION-14.0.md)** - the `sap-abap-auth` CLI is removed, with its `open` and `commander` dependencies; use `@mcp-abap-adt/auth-broker-cli`; the library's API is unchanged
 - 🚚 **[Migration to 13.0.0](./docs/MIGRATION-13.0.md)** - interfaces-auth 7 and auth-errors 2, and the providers from auth-providers 6.0.0; no behaviour change, one interfaces-auth major per process
@@ -220,7 +222,55 @@ For detailed installation instructions, see [Installation Guide](./docs/INSTALLA
 
 ## Quick Start
 
-### Basic Usage (On-Premise)
+### The recommended way: `createConnection`
+
+```typescript
+import { createConnection, getTimeout } from "@mcp-abap-adt/connection";
+import type { SapConfig } from "@mcp-abap-adt/connection";
+import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
+
+const config: SapConfig = {
+  url: "https://your-sap-system.com",
+  client: "100",
+  authType: "basic",
+  username: "your-username",
+  password: "your-password",
+};
+
+// Which system, and which wire: both stated, never inferred.
+//   cloud  + http          → AdtCloudConnector  + CloudHttpTransport
+//   onprem + http          → AdtOnPremConnector + OnPremHttpTransport
+//   onprem + legacy-http   → AdtOnPremConnector + LegacyOnPremHttpTransport (BASIS 7.40)
+//   onprem + rfc           → AdtOnPremConnector + RfcTransport
+const connection = createConnection({
+  system: "onprem",
+  transport: "http",
+  config,
+  credential: new BasicAuthProvider(config.username!, config.password!),
+});
+
+await connection.connect();
+try {
+  await connection.makeAdtRequest({
+    method: "GET",
+    url: "/sap/bc/adt/discovery",
+    timeout: getTimeout("default"),
+  });
+} finally {
+  await connection.disconnect(); // resolves once the logoff is written
+}
+// One instance is one SAP session: a new session is a new createConnection().
+```
+
+`createConnection` returns a **new instance on every call**. Any other
+combination of system and wire (cloud over RFC, say) is refused at
+construction. The transport options are passed through as you give them:
+`agentOptions` for the HTTP wires, `rfc` for the RFC wire, `wireLogger` for
+what the wire logs about itself, `logger` and `sessionId` for the connection.
+The constructors below remain available; the factory only names the four
+combinations that exist.
+
+### Basic Usage (On-Premise), with the constructors
 
 ```typescript
 import {
@@ -462,10 +512,9 @@ await connection.connect();
 // AuthRefusedError. The resend always runs under the same lease and generation
 // as the attempt it repeats, so stale-request fencing applies. After a rejection
 // at 'request' it goes out on the same session; after one at 'logon' the wire
-// logs on again first. Inside a critical section a renewal keeps the session —
-// or the request fails with SESSION_REPLACED if SAP replaced it. Outside one, a
-// mutation refused with a 401 while a CSRF token is cached takes the wire's
-// stale-session recovery first, which starts a new session.
+// logs on again first. No 401 opens a new session: the resend stays in this
+// one, or fails with SESSION_REPLACED if SAP replaced it. For a new session,
+// create a new connection.
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
@@ -488,7 +537,7 @@ See [MIGRATION-4.0.md](./docs/MIGRATION-4.0.md).
 ### When the credential is refused
 
 Every request asks the provider first (`authorize`). A `401` that survives the
-wire's own session recovery, or a logon the system refused, is put to the
+wire's own CSRF recovery (in the same session), or a logon the system refused, is put to the
 provider (`rejected`); on Ok the request is sent once more, otherwise it fails
 with an `AuthRefusedError` carrying the provider's refusal. A `403` is never
 put to the provider. The refusal is an `IAuthProviderError`: decide on its
@@ -664,7 +713,7 @@ by address, which is an empty mechanism, not an absent lifecycle:
 
 ```typescript
 // ISessionLifecycleAware
-disconnect(): Promise<void>;         // never throws, and waits for nothing
+disconnect(): Promise<void>;         // resolves once the logoff is written; call it once (a second call rejects)
 isConnected(): boolean;
 getSessionIdentity(): string | null; // WHICH SAP session; null is not "disconnected"
 ```
@@ -679,17 +728,6 @@ owns is not being interrupted by a timeout mid-operation — see
 `beginCriticalSection()` below.
 
 See [docs/USAGE.md — Session Lifecycle](./docs/USAGE.md#session-lifecycle).
-
-**Cancelling a request.** `makeAdtRequest({ …, signal })` takes the caller's
-`AbortSignal`. Once it aborts, nothing more of the request is sent — not the
-first send, not a resend, not the CSRF recovery, not a renewal — and the call
-rejects at once with `code: 'ADT_REQUEST_ABORTED'` (`ADT_REQUEST_ERROR.ABORTED`
-from `@mcp-abap-adt/interfaces-adt-connection`), over HTTP and RFC alike. A
-request already sent is not recalled, and a provider's renewal it was waiting
-on runs on for the other requests. A token exchange the request started makes
-no further attempt; the one already on the wire is not recalled, and the token
-it earns is the session's. See
-[docs/USAGE.md — Cancelling a request](./docs/USAGE.md#cancelling-a-request).
 
 **Session Management:**
 - `setSessionType(type)`: Programmatically switch between stateful and stateless modes *(on the contract)*
@@ -710,6 +748,16 @@ interface ILogger {
 ```
 
 ### Functions
+
+#### `createConnection(spec)`
+
+Builds a NEW connection from what the caller states: `system` (`'cloud'` or
+`'onprem'`) and `transport` (`'http'`, `'legacy-http'` or `'rfc'`), plus
+`config`, `credential` and, optionally, `logger`, `wireLogger`, `sessionId`,
+`agentOptions` (HTTP) or `rfc` (`IRfcTransportOptions`). Nothing is inferred,
+not even from `config.connectionType`. A combination that does not exist is
+refused with a `TypeError`. One instance is one SAP session: call it again
+for a new one.
 
 #### `rfcConversationFrom(config)`
 

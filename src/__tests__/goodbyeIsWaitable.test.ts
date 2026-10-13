@@ -1,9 +1,9 @@
 /**
  * A caller that ends a session and opens another can wait for the goodbye.
  *
- * `disconnect()` dispatches the logoff without awaiting it, which is right for
- * a teardown — a server that never answers must not hold one open — and wrong
- * for a caller who reconnects immediately: the next session is asked for while
+ * `disconnect()` resolves once the logoff is written, not answered, which is
+ * right for a teardown — a server that never answers must not hold one open —
+ * and wrong for a caller who reconnects immediately: the next session is asked for while
  * the previous one's goodbye is still being assembled, so the server keeps
  * both. Measured against E19 from `@mcp-abap-adt/adt-clients`, whose test
  * harness recycles per test: one abandoned session every 1-2 seconds for the
@@ -26,7 +26,10 @@ const config: SapConfig = {
   client: '100',
 };
 
-/** A close that settles only when the test says so. */
+/**
+ * A close whose logoff has left — it reports the write at once — and whose
+ * answer arrives only when the test says so.
+ */
 function suspendedClose(connection: { transport: unknown }) {
   let release!: () => void;
   const arrived = new Promise<void>((resolve) => {
@@ -34,8 +37,9 @@ function suspendedClose(connection: { transport: unknown }) {
   });
   let started = false;
   const transport = connection.transport as { close: unknown };
-  transport.close = jest.fn(async () => {
+  transport.close = jest.fn(async (_context: unknown, written?: () => void) => {
     started = true;
+    written?.();
     await arrived;
   });
   return { release, started: () => started };
@@ -52,8 +56,8 @@ describe('flushGoodbye', () => {
     );
 
     await connection.disconnect();
-    // disconnect() has returned while the logoff is still in flight — that is
-    // the behaviour, not the defect.
+    // disconnect() has returned once the logoff was written, its answer still
+    // to come — that is the behaviour, not the defect.
     expect(goodbye.started()).toBe(true);
 
     let flushed = false;
@@ -68,6 +72,48 @@ describe('flushGoodbye', () => {
     goodbye.release();
     await waiting;
     expect(flushed).toBe(true);
+  });
+
+  it('without a budget waits for the answer as long as it takes, and creates no timer', async () => {
+    const connection = onPrem(config);
+    seedCookies(connection, 'SAP_SESSIONID_ABC_001=nobudget');
+    markConnectedForTest(connection);
+    const goodbye = suspendedClose(
+      connection as unknown as { transport: unknown },
+    );
+    await connection.disconnect();
+
+    const timers = jest.spyOn(global, 'setTimeout');
+    let flushed = false;
+    const waiting = connection.flushGoodbye().then(() => {
+      flushed = true;
+    });
+    // No bound of the library's own choosing: nothing was scheduled.
+    expect(timers).not.toHaveBeenCalled();
+    timers.mockRestore();
+
+    for (let turn = 0; turn < 10; turn += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect(flushed).toBe(false);
+
+    goodbye.release();
+    await waiting;
+    expect(flushed).toBe(true);
+  });
+
+  it("with the caller's budget, schedules exactly that bound", async () => {
+    const connection = onPrem(config);
+    seedCookies(connection, 'SAP_SESSIONID_ABC_001=budget');
+    markConnectedForTest(connection);
+    suspendedClose(connection as unknown as { transport: unknown });
+    await connection.disconnect();
+
+    const timers = jest.spyOn(global, 'setTimeout');
+    const waiting = connection.flushGoodbye(50);
+    expect(timers).toHaveBeenCalledWith(expect.any(Function), 50);
+    timers.mockRestore();
+    await expect(waiting).resolves.toBeUndefined();
   });
 
   it('gives up on its own budget rather than hanging', async () => {

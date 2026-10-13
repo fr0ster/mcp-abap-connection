@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+Read docs/SCOPE.md first. What it does not list, this package does not do — refuse it.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands
@@ -49,7 +51,14 @@ on it, and nothing here may branch on which provider it was handed.
   new AdtOnPremConnector(config, credential, new RfcTransport(…), logger)
 
 The wire is required and the caller builds it: there is no default and nothing
-is derived from the config. Cloud has one wire, so its type parameter admits
+is derived from the config. `createConnection(spec)` (`createConnection.ts`,
+16.0.0) is the recommended front door: the caller states `system` and
+`transport`, it builds the matching connector + wire (cloud+http,
+onprem+http / legacy-http / rfc), refuses any other combination in fixed
+words, passes transport options through, and returns a new instance per call
+(one instance = one session). An HTTP request-logging wrapper stays the
+consumer's (its env policy); the factory only hands the wire its
+`wireLogger`. Cloud has one wire, so its type parameter admits
 only `ICloudTransport` — "cloud over RFC" does not compile. On-prem has two, and
 which one is the caller's to say.
 
@@ -68,8 +77,8 @@ the RFC wire could not connect at all as a result.
   including its own renewal. The connection calls `prepare()` once before the wire
   opens, `establish(logon)` at each logon (through `IAdtSessionContext.logon`),
   `authorize(request)` before every attempt (through
-  `IAdtSessionContext.authorize`), and `rejected(rejection)` on a 401 that survived
-  the wire's session recovery or a refused logon. Ok means exactly one more
+  `IAdtSessionContext.authorize`), and `rejected(rejection)` on a 401 or a refused
+  logon. Ok means exactly one more
   attempt; a second refusal is `AuthRefusedError`, never a loop. A 403 never goes
   to the provider. The wire offers what it can carry (`ILogonTarget`: TLS material
   for HTTP, logon parameters for RFC), the provider writes, the connection decides
@@ -130,22 +139,14 @@ fact belongs on the transport instead.
   `SAP_TIMEOUT_LONG` configure `getTimeout()`, which is exported for callers to
   pass back in `makeAdtRequest`; nothing in `src/` reads either. A per-request
   deadline is the caller's choice and is honoured only by the HTTP wire — RFC
-  is a synchronous call with nothing to cancel
-- The request's `signal` (`requestAbort.ts`) is a boundary, not a cancel: it is
-  checked before each send, resend and `rejected()` — and in the same turn as
-  the send: `sendObserved`, `RfcTransport.carry`, and `HttpTransport.establish`
-  through `IAdtEstablishContext.signal` — and every wait of the
-  request — `authorize()`, `rejected()`, a logon, the token exchange, an RFC
-  call's own logon and `open()` — is raced against it (`untilAborted`), for
-  that caller only; the work runs on and its late answer is dropped. An abort
-  rejects `ADT_REQUEST_ERROR.ABORTED` in fixed words. Nothing hands the signal
-  to axios or the SDK: a request already sent is not recalled. The suites are
-  `requestSignalHttp`, `requestSignalRfc` (two callers, one aborted at each
-  boundary) and `requestSignalUnhandled`, which runs a scenario under plain
-  node (`helpers/plainNode/run.ts`, `register.cjs`) — Jest's sandboxed
-  `process` never sees an `unhandledRejection`, so a listener inside a Jest
-  test proves nothing; `dispatchedGoodbye` runs on the same harness. Each
-  scenario has a control run that leaves one rejection unhandled on purpose
+  is a synchronous call with nothing to cancel. There is no per-request
+  signal (15.1.0 had one; 16.0.0 removed it): ABAP neither cancels nor rolls
+  back, and the logoff is what releases the ENQUEUE locks
+- Session lifecycle — `connect()`, `disconnect()` once, when the logoff is
+  sent, the spent instance, session loss: docs/USAGE.md "Session Lifecycle"
+  and docs/MIGRATION-16.0.md. Code: `AbstractAbapConnection` (`endSession`,
+  `spent`, `raiseSessionLost`), `HttpTransport` (`holdsSessionCookie`,
+  `logoffCookies`, `sendIcfLogoff`). Tests: `disconnectWritten`.
 
 **Taking the RFC wire** needs the SAP NW RFC SDK on the machine and
 `@mcp-abap-adt/sap-rfc-lite` installed; `rfcConversationFrom(config)` derives
@@ -164,6 +165,14 @@ over them at each open) and loads the SDK lazily, so a machine without it fails 
 - Stub a transport UNDER what you are testing, not instead of it: replacing
   `transport.send` skips everything the wire adds to its own requests, so
   replace `transport.client` when the subject is cookies or affinity headers
+- "Nothing is left unhandled" is proven under plain node, never inside Jest:
+  Jest hands a test a copy of `process`, and the real one's
+  `unhandledRejection` never reaches a listener on the copy, so such an
+  assertion in a Jest test cannot fail. `helpers/plainNode/run.ts`
+  (`runScenario`, `recordUnhandled`) runs a scenario through
+  `register.cjs` (TypeScript transpiled with the repo's own `typescript`);
+  each scenario has a control run that leaves one rejection unhandled on
+  purpose. `connection/dispatchedGoodbye.test.ts` is the first user
 - `src/__tests__/helpers/transportStub.ts` carries the session half of
   `IAdtTransport` for stubs whose subject is something else
 

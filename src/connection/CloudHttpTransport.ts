@@ -22,6 +22,13 @@
  * back to the platform logoff — an inference, and the only one left in this
  * layer. A consumer that reaches an on-prem system with this transport has
  * taken the wrong one, and finds out rather than being silently downgraded.
+ *
+ * **The platform logoff when no link was published.** Not an inference about
+ * the system: `/sap/public/bc/icf/logoff` ends a cloud security session too
+ * (measured on a BTP trial with bare HTTP, 2026-10-13: a preflight answered
+ * without a logoff link yet set a live `SAP_SESSIONID`; after that logoff the
+ * same cookies got `401`, before it `200`). So a held session with no link is
+ * logged off there, as the on-prem wire does.
  */
 
 import { mergeCookieHeaders } from '../utils/cookies.js';
@@ -123,8 +130,8 @@ export class CloudHttpTransport
         return;
       }
 
-      // Published only while its ICF service is active; without it there is
-      // nothing that ends this session, and the close says so.
+      // Published only while its ICF service is active; without it the close
+      // sends the platform's own logoff instead.
       this.logoff = this.resolveLink(
         this.linkHref(response.data, LOGOFF_REL),
         `${context.baseUrl}${SESSIONS_PATH}`,
@@ -143,39 +150,53 @@ export class CloudHttpTransport
     }
   }
 
-  override async close(context: IAdtSessionContext): Promise<void> {
+  override async close(
+    context: IAdtSessionContext,
+    written?: () => void,
+  ): Promise<void> {
     const logoff = this.logoff;
     this.logoff = null;
-    // Read SYNCHRONOUSLY, before the first await. A close is dispatched
-    // without being awaited, so the teardown's `forgetSession()` runs while
-    // this is suspended — and a goodbye assembled afterwards would carry no
-    // cookie, which is the one thing that proves the session is ours to end.
-    const cookies = this.cookies();
+    // Read SYNCHRONOUSLY, before the first await. The teardown's
+    // `forgetSession()` runs as soon as the close is dispatched — the
+    // connection waits for its write only after the transition — so a
+    // goodbye assembled after an await would carry no cookie, which is the
+    // one thing that proves the session is ours to end.
+    // Without `sap-contextid`: see `logoffCookies()`.
+    const cookies = this.logoffCookies();
     // Snapshotted for the same reason: the logoff must reach the server holding
     // this session, not whichever one the wire is pinned to when it goes out.
     const affinity = this.affinityHeaders();
     const session = this.sessionHeaders();
-    if (!cookies) {
-      // No cookie to prove the session is ours — holding the cookie is the
-      // whole permission to end one.
+    if (!cookies || !this.holdsSessionCookie()) {
+      // The same rule as on-prem: a logoff only for a non-empty
+      // `SAP_SESSIONID_*` this wire received — here the security session the
+      // preflight created. Holding that cookie is the whole permission to end
+      // one, and without it the ICF logoff ends nothing.
       return;
     }
     if (!logoff) {
-      // A session was opened, but the server linked no logoff resource: it
-      // stays until the server's own timeout.
+      // A session is held, but the server linked no logoff resource (a
+      // preflight that published none, or failed): the platform's own logoff
+      // ends it, sent exactly as the on-prem wire sends it.
       this.logger?.debug(
-        'The server published no logoff resource; the security session is left to its timeout',
+        'The server published no logoff resource; sending the platform logoff',
       );
+      await this.sendIcfLogoff(context, { cookies, affinity }, written);
       return;
     }
 
-    await this.sendLogoff(context, logoff, {
-      cookies,
-      affinity,
-      // `x-sap-security-session: use`, as Eclipse sends it on the logoff: it
-      // names the session the logoff ends, like every other request here.
-      session,
-    });
+    await this.sendLogoff(
+      context,
+      logoff,
+      {
+        cookies,
+        affinity,
+        // `x-sap-security-session: use`, as Eclipse sends it on the logoff: it
+        // names the session the logoff ends, like every other request here.
+        session,
+      },
+      written,
+    );
   }
 
   /**

@@ -150,17 +150,17 @@ describe('over HTTP: a token renewed through refreshToken', () => {
       },
     });
     const { conn } = await overHttp(provider);
-    // The wire retries a GET 401 itself once, so two 401s reach the provider.
-    stub.work(WORK, [401, 401]);
+    // The GET's 401 goes to the provider at once: nothing is resent first.
+    stub.work(WORK, [401]);
 
     const response = await getWork(conn);
 
     expect(response.status).toBe(200);
     expect(refreshes).toBe(1);
     const sent = stub.sentTo(WORK);
-    expect(sent).toHaveLength(3);
+    expect(sent).toHaveLength(2);
     expect(sent[0].headers.authorization).toBe('Bearer OLD');
-    expect(sent[2].headers.authorization).toBe('Bearer NEW');
+    expect(sent[1].headers.authorization).toBe('Bearer NEW');
   });
 });
 

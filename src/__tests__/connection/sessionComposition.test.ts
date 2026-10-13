@@ -26,12 +26,18 @@ interface Stub {
   rejectDiscovery: boolean;
   /** How many times /discovery was asked, refusals included. */
   readonly discoveryAttempts: number;
+  /** Settles when a request to /slow has reached the server. */
+  slowArrived: Promise<void>;
   close(): Promise<void>;
 }
 
 async function startStub(): Promise<Stub> {
   const sessions: string[] = [];
   const state = { rejectDiscovery: false, discoveryAttempts: 0 };
+  let arrived!: () => void;
+  const slowArrived = new Promise<void>((resolve) => {
+    arrived = resolve;
+  });
   const server: Server = createServer((req, res) => {
     const url = req.url ?? '';
     if (url.includes('/discovery')) {
@@ -59,6 +65,7 @@ async function startStub(): Promise<Stub> {
     // claim rather than the absence of I/O in disconnect(): every route used to
     // answer instantly, which made the ordering hold for the wrong reason.
     if (url.includes('/slow')) {
+      arrived();
       setTimeout(() => {
         res.writeHead(200, { 'content-type': 'text/plain' });
         res.end('');
@@ -77,6 +84,7 @@ async function startStub(): Promise<Stub> {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     sessions,
+    slowArrived,
     get rejectDiscovery() {
       return state.rejectDiscovery;
     },
@@ -155,22 +163,26 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
     expect(conn.getSessionIdentity()).toBeNull();
   });
 
-  it('connects again after a disconnect, on a fresh session', async () => {
+  it('refuses to connect again after a disconnect; a new instance opens the next session', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     await conn.disconnect();
 
-    await conn.connect();
+    await expect(conn.connect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
+    expect(stub.sessions).toStrictEqual(['S1']);
 
-    expect(conn.isConnected()).toBe(true);
-    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S2');
+    const next = onPrem(configFor(stub.baseUrl), null);
+    await next.connect();
+    expect(next.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S2');
     expect(stub.sessions).toStrictEqual(['S1', 'S2']);
   });
 
   // Joining shares the answer, not just the execution. Building the report
   // outside the transition leaves every caller but the first reporting an empty
   // teardown — abandoned locks announced to nobody.
-  it('tears down once for concurrent disconnects', async () => {
+  it('tears down once; a concurrent second disconnect() is refused', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
@@ -184,11 +196,13 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
         realClear();
       };
 
-    await Promise.all([conn.disconnect(), conn.disconnect()]);
+    const first = conn.disconnect();
+    // disconnect() is called once; a second call is told so.
+    await expect(conn.disconnect()).rejects.toMatchObject({
+      code: 'ADT_NOT_CONNECTED',
+    });
+    await first;
 
-    // Callers of one kind join the tail, so the body runs once. There is no
-    // report to share any more — a teardown that waits for nothing has nothing
-    // to tell anyone.
     expect(cleared).toBe(1);
     expect(conn.isConnected()).toBe(false);
   });
@@ -352,6 +366,9 @@ describe('explicit connect is required', () => {
       .makeAdtRequest({ url: '/sap/bc/adt/slow', method: 'GET', timeout: 5000 })
       .then(() => order.push('request'))
       .catch(() => order.push('request'));
+    // In flight for real: on the server, its answer still to come. A request
+    // not yet sent is refused at the fence instead, faster than any logoff.
+    await stub.slowArrived;
     const teardown = conn.disconnect().then(() => order.push('teardown'));
 
     await teardown;
@@ -403,8 +420,6 @@ describe('a teardown requested during establishment', () => {
   // already asked to close.
   it('does not publish a connect that finished after a disconnect was requested', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
-    await conn.connect();
-    await conn.disconnect();
 
     const { release, started } = stallEstablishment(conn);
     const connecting = conn.connect();

@@ -17,13 +17,7 @@
  */
 
 import { HttpTransport } from './HttpTransport.js';
-import type {
-  IAdtEstablishContext,
-  IAdtSessionContext,
-  IOnPremTransport,
-} from './IAdtTransport.js';
-
-const ICF_LOGOFF_PATH = '/sap/public/bc/icf/logoff';
+import type { IAdtSessionContext, IOnPremTransport } from './IAdtTransport.js';
 
 export class OnPremHttpTransport
   extends HttpTransport
@@ -35,26 +29,6 @@ export class OnPremHttpTransport
   readonly system = 'onprem' as const;
 
   /**
-   * Whether an establishment actually succeeded.
-   *
-   * Cookies alone cannot answer it: a 401 that refuses us can carry a
-   * `Set-Cookie`, and that is debris, not a session. Telling the server we are
-   * finished with something we never had sends a request nobody asked for —
-   * into the middle of an authentication exchange, in the case that found this.
-   */
-  private established = false;
-
-  override async establish(context: IAdtEstablishContext): Promise<void> {
-    await super.establish(context);
-    this.established = true;
-  }
-
-  override forgetSession(): void {
-    super.forgetSession();
-    this.established = false;
-  }
-
-  /**
    * Nothing to ask for: the session comes with the establishing request.
    *
    * Stated by being absent rather than by a method that returns `false`. A wire
@@ -63,28 +37,33 @@ export class OnPremHttpTransport
    * decision that is now this class's, below.
    */
 
-  override async close(context: IAdtSessionContext): Promise<void> {
+  override async close(
+    context: IAdtSessionContext,
+    written?: () => void,
+  ): Promise<void> {
     // Read synchronously, for the same reason as the cloud wire: the teardown
     // clears the jar while this is suspended on its first await.
-    const cookies = this.cookies();
-    const established = this.established;
+    // Without `sap-contextid`: see `logoffCookies()`.
+    const cookies = this.logoffCookies();
+    const session = this.holdsSessionCookie();
     // Snapshotted too, and for the same reason as the cookies: the goodbye must
     // reach the application server that holds THIS session, and by the time it
     // goes out the wire may be pinned to the one holding the next.
     const affinity = this.affinityHeaders();
-    if (!established || !cookies) {
-      // Holding the cookie is the whole permission to end a session, and it is
-      // why nothing is sent without one. The session limit is per user and the
-      // pool is shared — a SAP GUI logon of the same user sits in the same SM04
-      // list — so a connector that tidied up sessions it did not open would
-      // eventually close somebody's GUI.
+    if (!session || !cookies) {
+      // Sent if and only if this wire holds a non-empty `SAP_SESSIONID_*` it
+      // received, whatever the status of the answer that brought it
+      // (`holdsSessionCookie`): a 404 or 403 after logon carries one and
+      // leaves a live security session, which this ends; a 401's debris
+      // cookie, or a 200 with only `sap-XSRF_*` (the session limit), names
+      // none, and a logoff then would end nothing. Holding the cookie is also
+      // the whole permission to end a session: the pool is shared per user —
+      // a SAP GUI logon of the same user sits in the same SM04 list — so a
+      // connector that tidied up sessions it did not open would eventually
+      // close somebody's GUI.
       return;
     }
 
-    await this.sendLogoff(context, `${context.baseUrl}${ICF_LOGOFF_PATH}`, {
-      cookies,
-      affinity,
-      session: {},
-    });
+    await this.sendIcfLogoff(context, { cookies, affinity }, written);
   }
 }
