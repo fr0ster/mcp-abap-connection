@@ -1071,7 +1071,7 @@ token the provider renewed is on the very next attempt.
 
 | answer | what happens |
 |---|---|
-| **403** "CSRF token validation failed", or a **401** to a mutation that holds no CSRF token yet | the wire's own CSRF recovery: a token fetched in the same session (its cookies kept) and one resend. A GET whose 401 brought cookies is resent once with them. None of this discards the session or opens another |
+| **403** "CSRF token validation failed", or a **401** to a mutation that holds no CSRF token yet | the wire's own CSRF recovery: a token fetched in the same session (its cookies kept) and one resend. None of this discards the session or opens another |
 | any other **401** — a mutation's with a CSRF token cached included — or a logon the system refused | put to `provider.rejected({ at, status?, error })`. On Ok the request is authorized again and sent **once more**, in the same session; on no, `AuthRefusedError` carrying SAP's 401 as its cause |
 | the same refusal after an Ok | the verdict. The provider is not asked again — asking would invite a second renewal — and you get an `AuthRefusedError` saying the credential was refused again after the provider renewed it |
 | **403** | propagates untouched, never put to the provider. The server authenticated the caller and refused the action anyway, so a new credential is the same caller — usually the body names the authorization object |
@@ -1089,8 +1089,10 @@ the session's cookies to open another and retry there. A mutation that meets a
 is resent on the same session with the same token, inside a critical section or
 not, and if SAP did replace the session the request fails with
 `SESSION_REPLACED`. Before 16.0.0, outside a critical section, that mutation
-discarded the session and retried in a new one on the same instance, and a GET
-401 on a wire with no cookies fetched a token to open one; both are gone. If you
+discarded the session and retried in a new one on the same instance, a GET
+401 on a wire with no cookies fetched a token to open one, and a GET 401 with
+cookies held was resent once before the provider was asked; all three are
+gone. If you
 want a new session after a 401, create a new connection.
 
 **A dead session can look like a refused credential.** When SAP answers the

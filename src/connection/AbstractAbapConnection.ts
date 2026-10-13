@@ -1407,16 +1407,16 @@ abstract class AbstractAbapConnection
   }
 
   /**
-   * The wire's own recovery from a failed attempt: the session faults it can
-   * cure — a stale CSRF token, a login-form 401 on a mutation, a GET 401 that
-   * cookies answer — and the verdicts it must not hide.
+   * The wire's own recovery from a failed attempt: the one fault it can cure
+   * in the same session — a CSRF token SAP refused (a 403 "CSRF token
+   * validation failed", or a 401 to a mutation holding no token yet) — and
+   * the verdicts it must not hide.
    *
-   * Runs before anything asks the credential, because it cures session
-   * faults, not credential ones: a stale CSRF token under Basic must not
-   * become "the user or password was refused". What it cannot cure it throws,
-   * and a credential failure among that goes on to the provider. One
-   * exception: inside a critical section the login-form 401 is not cured
-   * here, because curing it discards the session and the lock with it.
+   * Runs before anything asks the credential: a stale CSRF token under Basic
+   * must not become "the user or password was refused". What it cannot cure
+   * it throws, and a credential failure among that — any other 401, a GET's
+   * included — goes on to the provider. Nothing here resends a 401 as it is,
+   * and nothing discards the session to retry in another.
    *
    * `requestHeaders` are the request's own, without the credential's: what
    * the recovery adds — a new token, the jar's cookies — goes there, and each
@@ -1555,32 +1555,6 @@ abstract class AbstractAbapConnection
         );
         throw error;
       }
-    }
-
-    // A 401 on a GET where cookies have since arrived: the first request had
-    // none, and the session they name is what the retry needs. Guarded below
-    // on actually holding some, so a wire that issues no cookies — RFC —
-    // never takes it.
-    if (refusalOf(error)?.status === 401 && normalizedMethod === 'GET') {
-      // If we already have cookies from error response, retry immediately
-      const afterError = this.transport.cookies();
-      if (afterError) {
-        this.logger?.debug(
-          `401 on GET request, retrying with cookies from error response`,
-        );
-        requestHeaders.Cookie = afterError;
-
-        try {
-          requestConfig.headers = await this.authorizedFrom(requestHeaders);
-          return await this.sendObserved<T, D>(requestConfig, lease);
-        } catch (resendError) {
-          throw this.staleOr(resendError, lease);
-        }
-      }
-
-      // Without cookies nothing is fetched to earn some: that would open a
-      // session on a fresh jar, a second session on this instance. The 401
-      // goes on, as SAP gave it.
     }
 
     throw error;

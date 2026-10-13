@@ -52,20 +52,22 @@ What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
   network, a 200 with only `sap-XSRF_*`) may be retried. A new session is a new instance, created by the
   consumer (its own factory, or `createConnection`). Before 16.0.0 a
   disconnected instance could `connect()` again.
-- **No 401 opens a new session on the same instance.** Two recoveries are
-  removed:
+- **No 401 opens a new session on the same instance, and none is resent
+  before the provider is asked.** Three recoveries are removed:
   - a mutation (POST / PUT / DELETE) refused with a 401 while a CSRF token
     was cached, outside a critical section, discarded the session's cookies
     and token and retried in a new session;
   - a GET refused with a 401 on a wire holding no cookies fetched a CSRF
-    token to earn some, opening a session on an empty jar.
+    token to earn some, opening a session on an empty jar;
+  - a GET refused with a 401 while the wire held cookies was resent once with
+    them, before the provider was asked.
 
-  Both now reach the provider like any other 401 (`rejected`); on Ok the
+  All three now reach the provider like any other 401 (`rejected`); on Ok the
   request is resent once in the same session, and otherwise the caller gets
   `AuthRefusedError` carrying SAP's 401. What stays: the CSRF refetch for a
   403 "CSRF token validation failed" or a 401 to a mutation holding no token
-  (cookies kept, one resend), the GET resend with cookies its 401 brought,
-  and the provider's re-ask — all in the same session. A consumer that wants
+  (cookies kept, one resend), and the provider's re-ask — both in the same
+  session. A consumer that wants
   a new session after a 401 creates a new instance.
 - **`disconnect()`, once.**
   - **It resolves once the logoff is WRITTEN**: its bytes handed to the

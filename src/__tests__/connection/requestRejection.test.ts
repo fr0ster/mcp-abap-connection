@@ -7,8 +7,8 @@
  * `Stub <n>`, `n` the Ok answers `rejected` has given — so a request that
  * carries `Stub 1` carried the renewed credential.
  *
- * A GET 401 is first retried by the wire itself while it holds the session's
- * cookies, so a 401 reaches the provider only when it comes twice.
+ * A 401 goes to the provider at once — a GET's included: the wire resends
+ * nothing before `rejected()` is asked.
  */
 
 import { authError } from '@mcp-abap-adt/auth-errors';
@@ -125,21 +125,24 @@ function gateAuthorize(
 describe('a 401 that survives the wire', () => {
   it('asks rejected once, at request, and the resend carries the renewed credential', async () => {
     const { conn, rejections } = await connected();
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
 
     const response = await get(conn);
 
     expect(response.status).toBe(200);
     expect(rejections()).toHaveLength(1);
     expect(rejections()[0]).toMatchObject({ at: 'request', status: 401 });
+    // No resend before rejected(): the first attempt, then exactly one more,
+    // carrying the renewed credential.
     const sent = stub.sentTo(WORK);
-    expect(sent).toHaveLength(3);
-    expect(sent[2].headers.authorization).toBe('Stub 1');
+    expect(sent).toHaveLength(2);
+    expect(sent[0].headers.authorization).toBe('Stub 0');
+    expect(sent[1].headers.authorization).toBe('Stub 1');
   });
 
   it('an Oops is an AuthRefusedError at request in the provider words, the 401 as cause', async () => {
     const { conn } = await connected({ rejected: [NO] });
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
 
     const error = await get(conn).catch((e: unknown) => e);
 
@@ -149,7 +152,8 @@ describe('a 401 that survives the wire', () => {
       (NO as { refusal: unknown }).refusal,
     );
     expect(statusOf((error as AuthRefusedError).cause)).toBe(401);
-    expect(stub.sentTo(WORK)).toHaveLength(2);
+    // SAP's 401 reaches the caller; nothing was resent.
+    expect(stub.sentTo(WORK)).toHaveLength(1);
   });
 
   it('a rejected() that throws is PROVIDER_FAILED at request, the throw as cause', async () => {
@@ -161,7 +165,7 @@ describe('a 401 that survives the wire', () => {
         },
       ],
     });
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
 
     const error = await get(conn).catch((e: unknown) => e);
 
@@ -170,12 +174,12 @@ describe('a 401 that survives the wire', () => {
     expect((error as AuthRefusedError).refusal).toMatchObject(PROVIDER_FAILED);
     expect((error as AuthRefusedError).cause).toBe(boom);
     expect(rejections()).toHaveLength(1);
-    expect(stub.sentTo(WORK)).toHaveLength(2);
+    expect(stub.sentTo(WORK)).toHaveLength(1);
   });
 
   it('refused again after Ok is the verdict, and rejected is asked once', async () => {
     const { conn, rejections } = await connected();
-    stub.work(WORK, [401, 401, 401]);
+    stub.work(WORK, [401, 401]);
 
     const error = await get(conn).catch((e: unknown) => e);
 
@@ -184,8 +188,11 @@ describe('a 401 that survives the wire', () => {
     expect((error as AuthRefusedError).refusal).toMatchObject({
       facts: { at: 'request' },
     });
+    // SAP's repeated 401 reaches the caller: the first attempt and the one
+    // resend Ok bought, nothing more.
     expect(statusOf((error as AuthRefusedError).cause)).toBe(401);
     expect(rejections()).toHaveLength(1);
+    expect(stub.sentTo(WORK)).toHaveLength(2);
   });
 
   it('a 403 is thrown unchanged, and rejected is never asked', async () => {
@@ -404,10 +411,10 @@ describe('the upfront token fetch before a mutation', () => {
 });
 
 describe('many requests, and a critical section', () => {
-  it('two concurrent requests meeting two 401s each ask rejected once and both end 200', async () => {
+  it('two concurrent requests meeting a 401 each ask rejected once and both end 200', async () => {
     const { conn, rejections } = await connected();
-    stub.work('/sap/bc/adt/a', [401, 401]);
-    stub.work('/sap/bc/adt/b', [401, 401]);
+    stub.work('/sap/bc/adt/a', [401]);
+    stub.work('/sap/bc/adt/b', [401]);
 
     const [a, b] = await Promise.all([
       get(conn, '/sap/bc/adt/a'),
@@ -417,14 +424,14 @@ describe('many requests, and a critical section', () => {
     expect(a.status).toBe(200);
     expect(b.status).toBe(200);
     expect(rejections()).toHaveLength(2);
-    expect(stub.sentTo('/sap/bc/adt/a')).toHaveLength(3);
-    expect(stub.sentTo('/sap/bc/adt/b')).toHaveLength(3);
+    expect(stub.sentTo('/sap/bc/adt/a')).toHaveLength(2);
+    expect(stub.sentTo('/sap/bc/adt/b')).toHaveLength(2);
   });
 
   it('inside a critical section, a surviving 401 is resent on the same session', async () => {
     const { conn, rejections } = await connected();
     const identity = conn.getSessionIdentity();
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
 
     conn.beginCriticalSection();
     try {
@@ -809,10 +816,10 @@ describe('an answer that arrives after its session is gone', () => {
 
   it('a resend refused after its session went away is NOT_CONNECTED, not a credential verdict', async () => {
     const { conn, rejections } = await connected();
-    // The GET's 401 survives the wire's cookie resend and goes to the
-    // provider; its one more attempt is held, and refused once released.
+    // The GET's 401 goes to the provider; its one more attempt is held, and
+    // refused once released.
     const resend = held(401);
-    stub.work(WORK, [401, 401, resend.answer]);
+    stub.work(WORK, [401, resend.answer]);
 
     const request = get(conn).catch((e: unknown) => e);
     await resend.inFlight;
@@ -824,7 +831,7 @@ describe('an answer that arrives after its session is gone', () => {
     expect(error).not.toBeInstanceOf(AuthRefusedError);
     expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
     expect(rejections()).toHaveLength(1);
-    expect(stub.sentTo(WORK)).toHaveLength(3);
+    expect(stub.sentTo(WORK)).toHaveLength(2);
     expect(conn.isConnected()).toBe(false);
   });
 });
@@ -968,14 +975,14 @@ describe("a provider's Oops that arrives after the session went away", () => {
     await staleOops('authorize', 3, post);
   });
 
-  it('on the GET resend with the cookies it already holds (path b) is NOT_CONNECTED', async () => {
+  it('on the GET resend after rejected() → Ok is NOT_CONNECTED', async () => {
     stub.work(WORK, [401]);
-    // The GET (1), the resend (2).
+    // The GET (1), the resend rejected()'s Ok bought (2).
     await staleOops('authorize', 2, get);
   });
 
   it('from rejected() after a refused request is NOT_CONNECTED', async () => {
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
     await staleOops('rejected', 1, get);
   });
 

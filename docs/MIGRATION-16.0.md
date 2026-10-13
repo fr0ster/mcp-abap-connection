@@ -32,8 +32,9 @@ nothing else. For a consumer on 15.x that means the following.
 - **No 401 opens a new session on the same instance.** Before 16.0.0, a
   mutation refused with a 401 while a CSRF token was cached (outside a
   critical section) discarded the session and retried in a new one, and a GET
-  refused with a 401 on a wire with no cookies fetched a token to open one.
-  Both recoveries are removed. The 401 goes to the provider (`rejected`); on
+  refused with a 401 on a wire with no cookies fetched a token to open one,
+  and a GET refused with a 401 while cookies were held was resent once with
+  them before the provider was asked. All three are removed. The 401 goes to the provider (`rejected`); on
   Ok the request is resent once in the same session, otherwise you get
   `AuthRefusedError` carrying SAP's 401. The CSRF refetch for a 403 "CSRF
   token validation failed" (cookies kept) and the provider's re-ask stay.

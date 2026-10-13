@@ -114,7 +114,7 @@ describe('after rejected() → Ok', () => {
         else request.cookies('MYSSO=new');
       }),
     );
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
 
     const response = await get(conn);
 
@@ -132,7 +132,7 @@ describe('after rejected() → Ok', () => {
         request.cookies(`MYSSO=v${renewals}`);
       }),
     );
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
 
     await get(conn);
 
@@ -147,7 +147,7 @@ describe('after rejected() → Ok', () => {
         request.cookies(renewals === 0 ? 'SSO_OLD=1' : 'SSO_NEW=2');
       }),
     );
-    stub.work(WORK, [401, 401]);
+    stub.work(WORK, [401]);
 
     await get(conn);
 
@@ -207,7 +207,7 @@ describe("the wire's own recovery", () => {
     expect(resend.headers['sap-client']).toBe('100');
   });
 
-  it('path (b), cookies at hand: the GET resend carries only the credential written for it', async () => {
+  it('a GET 401 with cookies at hand goes to the provider: the resend carries only the credential written for it', async () => {
     const { conn } = await connected(
       providerWriting((request) => {
         if (stub.sentTo(WORK).length === 0)
