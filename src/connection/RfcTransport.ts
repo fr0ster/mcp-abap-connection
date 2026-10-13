@@ -233,6 +233,21 @@ export class RfcTransport implements IOnPremTransport {
     return null;
   }
 
+  /** None: the session is the conversation, which no cookie names. */
+  sessionCookies(): null {
+    return null;
+  }
+
+  /**
+   * Refused, with nothing sent: an RFC session is a conversation, opened by
+   * this process and held by it, and a conversation cannot be taken over.
+   */
+  async resume(): Promise<void> {
+    throw new TypeError(
+      'An RFC session cannot be taken over: it is a conversation, not something a cookie names. Over RFC, connect() opens a new session.',
+    );
+  }
+
   /**
    * Nothing to establish. `open()` made the ABAP session, and there is no token
    * to earn: this endpoint answers `x-csrf-token: fetch` with the same two

@@ -170,6 +170,13 @@ abstract class AbstractAbapConnection
     written: Promise<void>;
   } | null = null;
 
+  /**
+   * The existing session this instance takes over at `connect()`, instead of
+   * logging on: its cookies, as `sessionCookies()` handed them out. Dropped
+   * once the takeover is attempted — a session is taken over once.
+   */
+  private resumeFrom: string | null;
+
   private inCriticalSection = false;
   /** Reference count for nested beginCriticalSection()/endCriticalSection() pairs. */
   private criticalSectionDepth = 0;
@@ -232,7 +239,23 @@ abstract class AbstractAbapConnection
     readonly transport: IAdtTransport,
     protected readonly logger: ILogger | null,
     sessionId?: string,
+    /**
+     * An existing session to take over instead of logging on: the cookies
+     * `sessionCookies()` handed out for it. `connect()` then sends no logon
+     * and asks SAP, without the credential, whether that session is alive.
+     */
+    session?: string,
   ) {
+    // Fixed words: the session's cookies are never echoed.
+    if (
+      session !== undefined &&
+      (typeof session !== 'string' || session.trim() === '')
+    ) {
+      throw new TypeError(
+        'session: the cookies of an existing session, as sessionCookies() returned them; an empty one names no session.',
+      );
+    }
+    this.resumeFrom = session ?? null;
     // Generate sessionId (used for sap-adt-connection-id header)
     this.sessionId = sessionId || randomUUID();
 
@@ -406,6 +429,13 @@ abstract class AbstractAbapConnection
       // Before the wire opens, so that a credential which cannot get ready
       // sends nothing and the wire's logon has something to bring.
       await this.prepareCredential();
+
+      // An instance built on an existing session takes it over: no logon,
+      // and SAP's answer to one request says whether the session is alive.
+      if (this.resumeFrom !== null) {
+        await this.resumeAndCommit(baselineEpoch);
+        return;
+      }
 
       // The wire logs on inside, through the context, and then the session is
       // established: one step, which a refused logon repeats once.
@@ -900,6 +930,52 @@ abstract class AbstractAbapConnection
     this.lifecycle.markConnected(this.sessionFingerprint());
   }
 
+  /**
+   * Takes over the session `resumeFrom` names, and publishes it — the
+   * counterpart of `establishAndCommit` for an instance built on an existing
+   * session.
+   *
+   * No logon: the wire makes one request in that session without the
+   * credential (`IAdtTransport.resume`). Alive, the session is this
+   * instance's — its `SAP_SESSIONID`, and its `sap-contextid` when the caller
+   * kept one — and `disconnect()` logs it off as for any instance. Gone, or
+   * any answer that is not the session's: `connect()` rejects with SAP's
+   * answer as it is, nothing is logged off — nothing was opened — and the
+   * instance is spent.
+   */
+  private async resumeAndCommit(baselineEpoch: number): Promise<void> {
+    if (this.spent) throw spentError();
+    if (this.lifecycle.teardownEpoch !== baselineEpoch) {
+      throw sessionError(
+        ADT_SESSION_ERROR.NOT_CONNECTED,
+        'Establishment abandoned: a teardown was requested for this connection',
+      );
+    }
+    const session = this.resumeFrom as string;
+    this.resumeFrom = null;
+    this.lifecycle.forgetIdentity();
+    try {
+      await this.transport.resume(this.sessionContext(), session);
+    } catch (error) {
+      // Nothing was opened, so nothing is logged off: the session was the
+      // caller's, and whatever it is now, it stays theirs. What the wire was
+      // seeded with goes, and the instance is spent.
+      this.spent = true;
+      this.invalidateSession();
+      this.lifecycle.markDisconnected();
+      throw error;
+    }
+    if (this.lifecycle.teardownEpoch !== baselineEpoch) {
+      // As in `establishAndCommit`: the queued teardown clears, and — the
+      // session now being this instance's — logs it off.
+      throw sessionError(
+        ADT_SESSION_ERROR.NOT_CONNECTED,
+        'Establishment abandoned: a teardown was requested while it was in flight',
+      );
+    }
+    this.lifecycle.markConnected(this.sessionFingerprint());
+  }
+
   /** The teardown epoch, for a recovery to capture before it starts. */
   protected get teardownEpoch(): number {
     return this.lifecycle.teardownEpoch;
@@ -1079,6 +1155,19 @@ abstract class AbstractAbapConnection
    */
   protected sessionFingerprint(): Map<string, string> {
     return this.transport.sessionFingerprint();
+  }
+
+  /**
+   * The cookies of this instance's SAP session, for the caller to keep: the
+   * string `createConnection({ …, session })` takes to build a later instance
+   * on the same session. `null` before a session, after it ended, and over
+   * RFC, whose session is a conversation no cookie names.
+   *
+   * It authenticates as the session's user for as long as the session lives:
+   * keep it as a secret. Nothing here logs it.
+   */
+  sessionCookies(): string | null {
+    return this.transport.sessionCookies();
   }
 
   async getBaseUrl(): Promise<string> {

@@ -201,6 +201,36 @@ export interface IAdtTransport {
   cookies(): string | null;
 
   /**
+   * Take over a session that already exists, instead of logging on.
+   *
+   * `session` is what `sessionCookies()` handed out for it. The wire seeds its
+   * jar with those cookies and makes ONE request in that session **without
+   * the credential**, earning its CSRF token: a dead session must not quietly
+   * become a new one, and a credential on the request would open one (a dead
+   * cookie with a good password gets a new `SAP_SESSIONID`, measured). The
+   * credential's logon (`context.logon`) is offered only once the session has
+   * answered, so what it brings rides on the requests that follow, never on
+   * this one.
+   *
+   * Resolves when SAP answered as that session — a CSRF token, and the
+   * `SAP_SESSIONID` it was handed, unchanged. Rejects otherwise with SAP's
+   * answer as it is: a `401`, or an error carrying the `response` that did not
+   * belong to the session. Nothing is logged off either way: the wire opened
+   * nothing.
+   *
+   * A wire whose session is not something a cookie names — RFC, where it is a
+   * conversation — rejects without sending anything.
+   */
+  resume(context: IAdtSessionContext, session: string): Promise<void>;
+
+  /**
+   * The cookies of the session this wire is on, as `resume()` takes them, or
+   * `null` while it is on none (or on a wire whose session no cookie names).
+   * For the caller to keep; never logged.
+   */
+  sessionCookies(): string | null;
+
+  /**
    * Which session this wire is on, as something comparable.
    *
    * Empty means "this wire is on no session" — which for HTTP is a system that
