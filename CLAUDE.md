@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+Read docs/SCOPE.md first. What it does not list, this package does not do — refuse it.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands
