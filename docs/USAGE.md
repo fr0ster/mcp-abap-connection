@@ -19,7 +19,6 @@
 import {
   AdtOnPremConnector,
   OnPremHttpTransport,
-  getTimeout,
 } from '@mcp-abap-adt/connection';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import { SapConfig } from '@mcp-abap-adt/connection';
@@ -61,7 +60,7 @@ await connection.connect();
 const response = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
-  timeout: getTimeout('default'),
+  timeout: 0,
 });
 
 console.log(response.data);
@@ -122,7 +121,6 @@ For SAP BTP ABAP Environment. Token refresh belongs to
 import {
   AdtCloudConnector,
   CloudHttpTransport,
-  getTimeout,
 } from '@mcp-abap-adt/connection';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 
@@ -151,7 +149,7 @@ await connection.connect();   // required: nothing is established implicitly
 const response = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
-  timeout: getTimeout('default'),
+  timeout: 0,
 });
 ```
 
@@ -177,6 +175,59 @@ you give them; whatever you leave out takes the constructors' own defaults.
 `createConnection(...)`. The constructors still work for anything the
 factory does not name.
 
+### An instance on an existing session: `session` and `sessionCookies()`
+
+`sessionCookies()` returns the cookies of the instance's SAP session as one
+`Cookie`-header string: `SAP_SESSIONID_*`, `sap-usercontext`, `sap-contextid`
+when a stateful request opened a context, and whatever else the server set to
+keep the session where it lives — everything the wire holds but `sap-XSRF_*`,
+which belongs to the CSRF token and is earned again. It is `null` before a
+session, after the session ended, and over RFC. The string acts as the user
+for as long as the session lives: keep it as a secret. The package never logs
+it.
+
+Hand it back as `session` to build an instance on that session instead of a
+new one (HTTP wires only — over RFC, whose session is a conversation, it is
+refused at construction; an empty string is refused too):
+
+```typescript
+const resumed = createConnection({
+  system: 'onprem',
+  transport: 'http',
+  config,
+  credential: new BasicAuthProvider(config.username, config.password),
+  session: keptCookies, // what an earlier instance's sessionCookies() returned
+});
+await resumed.connect();
+```
+
+What `connect()` does then:
+
+1. It prepares the credential as always, and **logs on nowhere**.
+2. It makes **one request in that session, without the credential**: the CSRF
+   fetch (`GET /sap/bc/adt/core/discovery` with `x-csrf-token: fetch`, the
+   fallback `/sap/bc/adt/discovery` on a `404`; on cloud with
+   `x-sap-security-session: use`, and no preflight), following no redirect.
+   Without the credential,
+   because a credential on that request would open a NEW session when the old
+   one is gone (measured: a dead session cookie with a good password gets a new
+   `SAP_SESSIONID`).
+3. **Alive** — a CSRF token, and the `SAP_SESSIONID` that was handed over,
+   unchanged: the session is this instance's. A stateful request reaches the
+   ABAP context `sap-contextid` names (an `UNLOCK` lands in the old context);
+   later requests carry the credential as usual; a session lost later is
+   reported as for any instance (`ADT_SESSION_REPLACED`); `disconnect()` logs it
+   off as for any instance.
+4. **Gone** — a `401`, a redirect (a `3xx` is not the session answering; it is
+   not followed, so its target is never asked and nothing it sets is taken), or
+   any answer that is not the session's (another `SAP_SESSIONID`, none, no
+   token): `connect()` rejects with SAP's answer as it is (`error.response`,
+   with the status and headers SAP gave). Nothing was opened, so nothing is logged off, and the
+   instance is spent.
+
+The credential's logon moment (`establish`, which brings TLS material) is
+offered only after the session answered, so it never rides on that request.
+
 Wrapping the connection with your own HTTP request logging stays with the
 consumer. That is a policy of yours, typically read from your environment, not
 a property of the wire. The factory passes `wireLogger` to the transport,
@@ -192,7 +243,6 @@ them is refused with `ADT_NOT_CONNECTED`.
 ### GET Request
 
 ```typescript
-import { getTimeout } from '@mcp-abap-adt/connection';
 // The body is XML: name its type, or the answer's `data` is `unknown`.
 const packages = await connection.makeAdtRequest<string>({
   method: 'GET',
@@ -202,14 +252,13 @@ const packages = await connection.makeAdtRequest<string>({
     parent_type: 'DEVC/K',
     withShortDescriptions: 'true',
   },
-  timeout: getTimeout('default'),
+  timeout: 0,
 });
 ```
 
 ### POST Request (Create Object)
 
 ```typescript
-import { getTimeout } from '@mcp-abap-adt/connection';
 const classXml = `<?xml version="1.0" encoding="UTF-8"?>
 <class:abapClass xmlns:class="http://www.sap.com/adt/oo/classes" 
                  class:name="ZCL_MY_CLASS">
@@ -222,7 +271,7 @@ const response = await connection.makeAdtRequest({
   headers: { 'Content-Type': 'application/xml' },
   data: classXml,
   params: { package: 'ZTEST' },
-  timeout: getTimeout('default'),
+  timeout: 0,
 });
 ```
 
@@ -231,26 +280,24 @@ const response = await connection.makeAdtRequest({
 ```typescript
 const classSourceCode = 'CLASS zcl_my_class DEFINITION ...';
 const lockToken = 'the handle the lock call returned';
-import { getTimeout } from '@mcp-abap-adt/connection';
 await connection.makeAdtRequest({
   method: 'PUT',
   url: '/sap/bc/adt/oo/classes/zcl_my_class/source/main',
   headers: { 'Content-Type': 'text/plain' },
   data: classSourceCode,      // the new source, as a string
   params: { lockHandle: lockToken },  // from the lock you took first
-  timeout: getTimeout('default'),
+  timeout: 0,
 });
 ```
 
 ### DELETE Request
 
 ```typescript
-import { getTimeout } from '@mcp-abap-adt/connection';
 await connection.makeAdtRequest({
   method: 'DELETE',
   url: '/sap/bc/adt/oo/classes/zcl_my_class',
   params: { deleteOption: 'deleteAndLocalVersions' },
-  timeout: getTimeout('default'),
+  timeout: 0,
 });
 ```
 
@@ -261,7 +308,7 @@ await connection.makeAdtRequest({
 By default, connections are stateless - each request gets fresh cookies and CSRF tokens:
 
 ```typescript
-import { AdtOnPremConnector, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 const connection = new AdtOnPremConnector(
   config,
@@ -275,7 +322,7 @@ const connection = new AdtOnPremConnector(
 await connection.connect();
 
 // Each request is independent
-await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
+await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: 0 });
 ```
 
 ### Stateful Mode (HTTP Context)
@@ -287,7 +334,7 @@ writes from running in the lock context and failing with PAK/058 or an invalid
 lock handle. See [HTTP context isolation](./STATEFUL_SESSION_GUIDE.md#http-context-isolation-931).
 
 ```typescript
-import { AdtOnPremConnector, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 const connection = new AdtOnPremConnector(
   config,
@@ -304,7 +351,7 @@ await connection.connect();
 connection.setSessionType('stateful');
 
 // Following requests use the stateful context until the mode is changed
-await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: getTimeout('default') });
+await connection.makeAdtRequest({ method: 'GET', url: '/sap/bc/adt/discovery' , timeout: 0 });
 
 // Check session mode
 console.log(connection.getSessionMode()); // 'stateful'
@@ -435,12 +482,11 @@ side instead of a condition that silently stops matching. The codes live in
 
 ```typescript
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
-import { getTimeout } from '@mcp-abap-adt/connection';
 
 const options = {
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
-  timeout: getTimeout('default'),
+  timeout: 0,
 };
 
 try {
@@ -555,10 +601,11 @@ The connection does **not** track locks — it does not know one exists, what
 object it covers, or what would release it. Pairing every LOCK with its UNLOCK is
 `@mcp-abap-adt/adt-clients`' job, and it does it per object in its lock registry.
 
-What this layer owns is the timeout, because a timeout is the server taking too
-long and nothing about it depends on the caller. Aborting a request mid-flight
-leaves an operation whose outcome you cannot determine — a `LOCK` that may have
-succeeded server-side, with a handle you never received:
+What this layer owns is that no deadline cuts such a span. A client deadline
+closes the socket, and SAP then ends the synchronous request running on it — a
+write in it lost — and leaves you an operation whose outcome you cannot
+determine: a `LOCK` that may have succeeded server-side, with a handle you
+never received:
 
 ```typescript
 connection.beginCriticalSection();
@@ -571,16 +618,21 @@ try {
 }
 ```
 
-While a section is active the effective timeout is raised to
-`SAP_TIMEOUT_CRITICAL` (600s by default) — `Math.max(yours, the ceiling)`, so it
-never shortens a timeout you chose. The pair is reference-counted, so nesting is
+While a section is active a request carries **no deadline at all** — not the
+`timeout` you passed either, and no ceiling of the package's own (17.0.0
+removed `SAP_TIMEOUT_CRITICAL`). The pair is reference-counted, so nesting is
 safe.
 
-The raise is **connection-wide**: while any section is active, every request on
-that connection gets the ceiling, including one that has nothing to do with the
-locked object. Those requests share one ABAP session, and an abort leaves that
-session in the same uncertain state during a span someone declared sensitive
-precisely to avoid it.
+This is **connection-wide**: while any section is active, every request on that
+connection goes without a deadline, including one that has nothing to do with
+the locked object. Those requests share one ABAP session, and a cut one leaves
+that session in the same uncertain state during a span someone declared
+sensitive precisely to avoid it.
+
+Outside a section a request carries the `timeout` you passed, unchanged, and
+nothing else: the CSRF fetch and the cloud preflight carry none either.
+`IAbapRequestOptions.timeout` is still a required field of the contract; `0` is
+none over HTTP, and the RFC wire reads it not at all.
 
 ### When the session is lost
 
@@ -647,7 +699,7 @@ console.log(connectionWithOwnId.getSessionId()); // 'custom-session-123'
 Dynamically switch between stateful and stateless modes:
 
 ```typescript
-import { AdtOnPremConnector, OnPremHttpTransport, getTimeout } from '@mcp-abap-adt/connection';
+import { AdtOnPremConnector, OnPremHttpTransport } from '@mcp-abap-adt/connection';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 // Start in stateless mode (default)
 const connection = new AdtOnPremConnector(
@@ -665,7 +717,7 @@ await connection.connect();
 connection.setSessionType('stateful');
 
 // Do stateful operations...
-await connection.makeAdtRequest({ method: 'POST', url: '...' , timeout: getTimeout('default') });
+await connection.makeAdtRequest({ method: 'POST', url: '...' , timeout: 0 });
 
 // Switch back to stateless
 connection.setSessionType('stateless');
@@ -746,12 +798,11 @@ const connection = new AdtOnPremConnector(
 ### Basic Error Handling
 
 ```typescript
-import { getTimeout } from '@mcp-abap-adt/connection';
 try {
   await connection.makeAdtRequest({
     method: 'GET',
     url: '/sap/bc/adt/invalid/endpoint',
-    timeout: getTimeout('default'),
+    timeout: 0,
   });
 } catch (error) {
   const failure = error as {
@@ -784,12 +835,11 @@ When these errors occur, the connection:
 3. **Logs the error** with full context for troubleshooting
 
 ```typescript
-import { getTimeout } from '@mcp-abap-adt/connection';
 try {
   await connection.makeAdtRequest({
     method: 'GET',
     url: '/sap/bc/adt/repository/nodestructure',
-    timeout: getTimeout('default'),
+    timeout: 0,
   });
 } catch (error) {
   const failure = error as {
@@ -862,6 +912,7 @@ class AdtOnPremConnector<
     transport: TTransport,
     logger?: ILogger | null,
     sessionId?: string,
+    session?: string, // an existing session to take over; HTTP wires only
   );
 }
 
@@ -875,6 +926,7 @@ class AdtCloudConnector<
     transport: TTransport,
     logger?: ILogger | null,
     sessionId?: string,
+    session?: string, // an existing session to take over
   );
 }
 ```

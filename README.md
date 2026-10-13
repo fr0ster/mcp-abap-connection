@@ -25,7 +25,7 @@ ABAP connection layer for MCP ABAP ADT server. Provides a unified interface for 
   - Reusable for debugger/traces and other event-driven flows
 - 📝 **Custom Logging**: Pluggable logger interface for integration with any logging system
 - 📦 **TypeScript**: Full TypeScript support with type definitions included
-- ⚡ **Timeout Management**: Configurable timeouts for different operation types
+- ⏱️ **No built-in deadline**: a request carries the caller's own `timeout` and nothing else — inside a critical section, none at all
 
 ## Architecture
 
@@ -161,6 +161,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 17.0.0](./docs/MIGRATION-17.0.md)** - no deadline of the package's own: `getTimeout`, `getTimeoutConfig` and `SAP_TIMEOUT_*` are gone, and a request inside a critical section carries none at all; an instance can be built on an existing session (`session`, `sessionCookies()`)
 - 🚚 **[Migration to 16.0.0](./docs/MIGRATION-16.0.md)** - the per-request `signal` (15.1.0) and `ADT_REQUEST_ABORTED` are removed; `disconnect()` resolves once the logoff is written, not answered — a process about to exit awaits it; `flushGoodbye()` when the answer matters
 - 🚚 **[Migration to 15.0.0](./docs/MIGRATION-15.0.md)** - on `@mcp-abap-adt/interfaces-adt-connection` 2: `makeAdtRequest`'s answer is `unknown` unless its type is named; nothing changes at run time
 - 🚚 **[Migration to 14.0.0](./docs/MIGRATION-14.0.md)** - the `sap-abap-auth` CLI is removed, with its `open` and `commander` dependencies; use `@mcp-abap-adt/auth-broker-cli`; the library's API is unchanged
@@ -181,7 +182,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 - 💾 **Session Management**: Session headers management (cookies, CSRF tokens) for HTTP communication
 - 📝 **Custom Logging**: Pluggable logger interface for integration with any logging system (optional)
 - 📦 **TypeScript**: Full TypeScript support with type definitions included
-- ⚡ **Timeout Management**: Configurable timeouts for different operation types
+- ⏱️ **No built-in deadline**: a request carries the caller's own `timeout` and nothing else — inside a critical section, none at all
 - 🌐 **Network Error Detection**: Automatic detection and proper handling of network-level errors (connection refused, timeout, DNS failures)
 
 ## Installation
@@ -225,7 +226,7 @@ For detailed installation instructions, see [Installation Guide](./docs/INSTALLA
 ### The recommended way: `createConnection`
 
 ```typescript
-import { createConnection, getTimeout } from "@mcp-abap-adt/connection";
+import { createConnection } from "@mcp-abap-adt/connection";
 import type { SapConfig } from "@mcp-abap-adt/connection";
 import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 
@@ -254,7 +255,7 @@ try {
   await connection.makeAdtRequest({
     method: "GET",
     url: "/sap/bc/adt/discovery",
-    timeout: getTimeout("default"),
+    timeout: 0,
   });
 } finally {
   await connection.disconnect(); // resolves once the logoff is written
@@ -270,6 +271,63 @@ what the wire logs about itself, `logger` and `sessionId` for the connection.
 The constructors below remain available; the factory only names the four
 combinations that exist.
 
+**No deadline but yours.** A request carries the `timeout` you pass and
+nothing else: no wire sets one of its own, because a client deadline closes
+the socket and SAP then ends the request running on it — a write in it lost.
+`IAbapRequestOptions` still requires the field; `0` is none over HTTP. Inside
+a critical section (`beginCriticalSection()`) a request carries none at all,
+not even yours.
+
+### An instance on an existing session
+
+An instance may be built on a session that already exists, instead of logging
+on: `session` takes the cookies an earlier instance's `sessionCookies()`
+returned. `connect()` then sends no logon. It makes one request in that
+session **without the credential** — so a session that is gone cannot quietly
+become a new one — and SAP's answer says whether the session is alive: if it
+is, the instance is on it (a stateful request reaches the same ABAP context,
+and `disconnect()` logs it off); if not, `connect()` rejects with SAP's answer
+as it is (a `401`), nothing is logged off, and the instance is spent. HTTP
+wires only; over RFC `session` is refused at construction.
+
+```typescript
+import { createConnection } from "@mcp-abap-adt/connection";
+import type { SapConfig } from "@mcp-abap-adt/connection";
+import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
+
+const system: SapConfig = {
+  url: "https://your-sap-system.com",
+  client: "100",
+  authType: "basic",
+  username: "your-username",
+  password: "your-password",
+};
+const credential = new BasicAuthProvider(system.username!, system.password!);
+
+const first = createConnection({ system: "onprem", transport: "http", config: system, credential });
+await first.connect();
+// The session's cookies, for you to keep — they act as the user while the
+// session lives, so keep them as a secret. null before a session, and over RFC.
+const kept = first.sessionCookies();
+
+// Later — another process, say: the same SAP session, no new logon.
+if (kept !== null) {
+  const resumed = createConnection({
+    system: "onprem",
+    transport: "http",
+    config: system,
+    credential,
+    session: kept,
+  });
+  await resumed.connect(); // rejects with SAP's 401 when the session is gone
+  try {
+    await resumed.makeAdtRequest({ method: "GET", url: "/sap/bc/adt/discovery", timeout: 0 });
+  } finally {
+    await resumed.disconnect(); // logs the session off, as for any instance
+  }
+}
+```
+
 ### Basic Usage (On-Premise), with the constructors
 
 ```typescript
@@ -277,7 +335,6 @@ import {
   AdtOnPremConnector,
   OnPremHttpTransport,
   SapConfig,
-  getTimeout,
 } from "@mcp-abap-adt/connection";
 import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 
@@ -314,7 +371,7 @@ await connection.connect();   // required before any request
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
-  timeout: getTimeout("default"),
+  timeout: 0,
 });
 ```
 
@@ -337,7 +394,6 @@ import {
   AdtCloudConnector,
   CloudHttpTransport,
   SapConfig,
-  getTimeout,
 } from "@mcp-abap-adt/connection";
 import { TokenAuthProvider } from "@mcp-abap-adt/auth-providers";
 
@@ -375,7 +431,7 @@ await connection.connect();
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
-  timeout: getTimeout("default"),
+  timeout: 0,
 });
 ```
 
@@ -433,7 +489,6 @@ import {
   AdtOnPremConnector,
   OnPremHttpTransport,
   SapConfig,
-  getTimeout,
 } from "@mcp-abap-adt/connection";
 import { SamlAuthProvider } from "@mcp-abap-adt/auth-providers";
 
@@ -458,7 +513,7 @@ await connection.connect();
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
-  timeout: getTimeout("default"),
+  timeout: 0,
 });
 ```
 
@@ -475,7 +530,6 @@ import {
   AdtCloudConnector,
   CloudHttpTransport,
   SapConfig,
-  getTimeout,
 } from "@mcp-abap-adt/connection";
 import { TokenAuthProvider } from "@mcp-abap-adt/auth-providers";
 import type { ITokenRefresher } from "@mcp-abap-adt/interfaces-auth";
@@ -518,7 +572,7 @@ await connection.connect();
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
-  timeout: getTimeout("default"),
+  timeout: 0,
 });
 ```
 
@@ -596,7 +650,6 @@ cookies and the CSRF token remain available in both modes. See the
 import {
   AdtOnPremConnector,
   OnPremHttpTransport,
-  getTimeout,
 } from "@mcp-abap-adt/connection";
 import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 
@@ -724,8 +777,8 @@ contract type re-exported under a second name is a contract type that can drift.
 **The connection does not track locks.** Deciding when to disconnect, and
 preparing for it, belongs to the caller; pairing every LOCK with its UNLOCK
 belongs to `@mcp-abap-adt/adt-clients`, which holds the handles. What this layer
-owns is not being interrupted by a timeout mid-operation — see
-`beginCriticalSection()` below.
+owns is not being interrupted by a deadline mid-operation: inside
+`beginCriticalSection()` a request carries none, not even the caller's.
 
 See [docs/USAGE.md — Session Lifecycle](./docs/USAGE.md#session-lifecycle).
 
@@ -733,6 +786,7 @@ See [docs/USAGE.md — Session Lifecycle](./docs/USAGE.md#session-lifecycle).
 - `setSessionType(type)`: Programmatically switch between stateful and stateless modes *(on the contract)*
 - `getSessionId()`: Returns the client-side conversation id, an auto-generated UUID *(on the contract)*
 - `getSessionMode()`: Returns current session mode *(HTTP classes only)*
+- `sessionCookies()`: The cookies of the instance's SAP session, as `createConnection({ …, session })` takes them — `null` before a session, after it ended, and over RFC. They act as the user while the session lives: keep them as a secret; the package never logs them *(this package's connectors)*
 
 #### `ILogger`
 
@@ -754,10 +808,12 @@ interface ILogger {
 Builds a NEW connection from what the caller states: `system` (`'cloud'` or
 `'onprem'`) and `transport` (`'http'`, `'legacy-http'` or `'rfc'`), plus
 `config`, `credential` and, optionally, `logger`, `wireLogger`, `sessionId`,
-`agentOptions` (HTTP) or `rfc` (`IRfcTransportOptions`). Nothing is inferred,
+`agentOptions` and `session` (HTTP) or `rfc` (`IRfcTransportOptions`). Nothing is inferred,
 not even from `config.connectionType`. A combination that does not exist is
-refused with a `TypeError`. One instance is one SAP session: call it again
-for a new one.
+refused with a `TypeError`, and so is `session` over RFC. One instance is one
+SAP session: call it again for a new one — or pass `session` (the string an
+instance's `sessionCookies()` returned) to build it on an existing session,
+which `connect()` then takes over instead of logging on.
 
 #### `rfcConversationFrom(config)`
 

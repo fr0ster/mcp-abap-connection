@@ -1,20 +1,13 @@
 /**
  * Critical section (uninterruptible lock → modify → unlock).
  *
- * A short per-request timeout must NOT abort a request while the connection is
- * inside a critical section. Not because the abort ends anything on the server:
- * it does not. A session is the server's, addressed by `SAP_SESSIONID`, and only
- * the server ends it — on an idle timeout this side cannot influence, or when
- * told. It outlives the socket, which is why SM04 shows sessions left behind by
- * connections that never said they were finished, and why a lock goes when its
- * session goes rather than when a connection drops.
- *
- * What the abort ends is what THIS side knows: whether the modification was
- * applied becomes unknowable, and the handle `unlock` needs is gone — while the
- * lock and the session holding it sit there until that server timeout. So the
- * lock is stranded by the session SURVIVING, not by anything dying. While in a
- * critical section, makeAdtRequest raises the effective timeout to the large
- * SAP_TIMEOUT_CRITICAL ceiling.
+ * No deadline may cut a request while the connection is inside a critical
+ * section — not even the caller's own. A client deadline closes the socket, and
+ * SAP then ends the synchronous request that was running on it: a write in it
+ * is lost. The session itself survives — it is the server's, addressed by
+ * `SAP_SESSIONID` — so the lock stays held in it, while what THIS side knew is
+ * gone: whether the modification was applied, and the handle `unlock` needs.
+ * While in a critical section, a request carries no timeout at all.
  */
 
 import type { SapConfig } from '../config/sapConfig.js';
@@ -46,15 +39,6 @@ function attachMockAxios(
 }
 
 describe('critical section (uninterruptible lock → unlock)', () => {
-  const prevCritical = process.env.SAP_TIMEOUT_CRITICAL;
-  beforeAll(() => {
-    process.env.SAP_TIMEOUT_CRITICAL = '600000';
-  });
-  afterAll(() => {
-    if (prevCritical === undefined) delete process.env.SAP_TIMEOUT_CRITICAL;
-    else process.env.SAP_TIMEOUT_CRITICAL = prevCritical;
-  });
-
   it('begin/end is reference-counted and clamped at zero', () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
@@ -74,7 +58,7 @@ describe('critical section (uninterruptible lock → unlock)', () => {
     expect(conn.isInCriticalSection()).toBe(false);
   });
 
-  it('uses the short per-request timeout when NOT in a critical section', async () => {
+  it('passes the caller’s own timeout through when NOT in a critical section', async () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     let captured: any;
@@ -92,7 +76,7 @@ describe('critical section (uninterruptible lock → unlock)', () => {
     expect(captured.timeout).toBe(30000);
   });
 
-  it('raises the timeout to the large ceiling while in a critical section, then restores it', async () => {
+  it('sends no timeout at all while in a critical section, then the caller’s again', async () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     let captured: any;
@@ -111,8 +95,9 @@ describe('critical section (uninterruptible lock → unlock)', () => {
     } finally {
       conn.endCriticalSection();
     }
-    // short 30s timeout was raised to the 600s critical-section ceiling
-    expect(captured.timeout).toBe(600000);
+    // The caller's 30 s is not applied: inside the section nothing may cut
+    // the request, and no ceiling of the library's own replaces it.
+    expect('timeout' in captured).toBe(false);
 
     // after the section ends, the normal per-request timeout applies again
     await conn.makeAdtRequest({

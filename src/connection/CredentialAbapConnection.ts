@@ -34,8 +34,10 @@ export abstract class CredentialAbapConnection<
     transport: IAdtTransport,
     logger: ILogger | null = null,
     sessionId?: string,
+    /** An existing session to take over; see `createConnection`'s `session`. */
+    session?: string,
   ) {
-    super(config, transport, logger, sessionId);
+    super(config, transport, logger, sessionId, session);
   }
 
   /**

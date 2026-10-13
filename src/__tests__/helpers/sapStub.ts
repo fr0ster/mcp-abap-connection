@@ -14,6 +14,11 @@
  * Everything else answers from queues: one for discovery, and one per work
  * path. A queue is consumed in order; an empty one answers 200. Every request
  * is recorded, refusals included.
+ *
+ * With `authenticate` on, it also does what SAP does with a request that
+ * proves nothing: one carrying neither `Authorization` nor the cookie of a
+ * session it holds is answered `401`. The ICF logoff ends the session its
+ * cookie names, and a session can be ended by hand (`sessions.delete`).
  */
 import { createServer, type Server } from 'node:http';
 
@@ -46,6 +51,10 @@ export interface SapStub {
   work(path: string, answers: StubAnswer[]): void;
   /** Every request, in arrival order. */
   requests: StubRequest[];
+  /** Refuse, with `401`, a request with no credential and no live session. */
+  authenticate: boolean;
+  /** The sessions alive, by `SAP_SESSIONID` value. */
+  sessions: Set<string>;
   /** The tokens issued, in order; the last one is the one SAP accepts. */
   tokens: string[];
   /** The work requests to `path`. */
@@ -82,7 +91,10 @@ export async function startSapStub(): Promise<SapStub> {
   const work = new Map<string, StubAnswer[]>();
   const requests: StubRequest[] = [];
   const tokens: string[] = [];
+  /** How many sessions were ever opened: an ended one's id is not reused. */
+  let opened = 0;
   const sessions = new Set<string>();
+  const flags = { authenticate: false };
 
   const server: Server = createServer((req, res) => {
     const path = (req.url ?? '').split('?')[0];
@@ -100,6 +112,23 @@ export async function startSapStub(): Promise<SapStub> {
     // The answer may await a `hold`, and nobody awaits this handler: whatever
     // it throws is caught here, never left as an unhandled rejection.
     const respond = async () => {
+      const held = heldSession(headers.cookie);
+      const live = held !== undefined && sessions.has(held);
+      if (path === '/sap/public/bc/icf/logoff' && live) sessions.delete(held);
+      if (
+        flags.authenticate &&
+        path !== '/sap/public/bc/icf/logoff' &&
+        !headers.authorization &&
+        !live
+      ) {
+        record(401);
+        res.writeHead(401, {
+          'content-type': 'text/plain',
+          'www-authenticate': 'Basic realm="SAP NetWeaver Application Server"',
+        });
+        res.end('Logon failed');
+        return;
+      }
       if (path.includes('/discovery')) {
         const next = discovery.shift();
         if (typeof next === 'object') await next.hold?.();
@@ -115,9 +144,8 @@ export async function startSapStub(): Promise<SapStub> {
         }
         const token = `TOKEN-${tokens.length + 1}`;
         tokens.push(token);
-        const held = heldSession(headers.cookie);
-        const session =
-          held && sessions.has(held) ? held : `S${sessions.size + 1}`;
+        const session = live ? held : `S${opened + 1}`;
+        if (!live) opened++;
         sessions.add(session);
         res.writeHead(200, {
           'content-type': 'application/atomsvc+xml',
@@ -163,6 +191,13 @@ export async function startSapStub(): Promise<SapStub> {
       work.set(path, [...(work.get(path) ?? []), ...answers]);
     },
     requests,
+    get authenticate() {
+      return flags.authenticate;
+    },
+    set authenticate(on: boolean) {
+      flags.authenticate = on;
+    },
+    sessions,
     tokens,
     sentTo: (path) => requests.filter((request) => request.path === path),
     close: () =>

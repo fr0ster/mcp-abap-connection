@@ -119,6 +119,33 @@ function absentEndpoint(error: unknown): boolean {
   return status === 404 || status === 501;
 }
 
+/** The cookie the CSRF token is bound to: re-earned with the token, never kept. */
+const XSRF_COOKIE_PREFIX = 'sap-XSRF_';
+
+/** Two fingerprints name the same session: the same cookies, the same values. */
+function sameSession(a: Map<string, string>, b: Map<string, string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [name, value] of a) {
+    if (b.get(name) !== value) return false;
+  }
+  return true;
+}
+
+/**
+ * SAP answered, but not as the session handed over. The answer rides on the
+ * error as `response`, as on any refusal; the words are fixed.
+ */
+function notTheSession(
+  response: IAdtTransportResponse,
+  what: string,
+): Error & { response: IAdtTransportResponse } {
+  const error = new Error(
+    `The session handed over did not answer as itself: ${what}. Nothing was logged on and nothing is logged off; this connection is spent.`,
+  ) as Error & { response: IAdtTransportResponse };
+  error.response = response;
+  return error;
+}
+
 const MATERIAL_FIELDS = ['cert', 'key', 'pfx', 'passphrase'] as const;
 
 /**
@@ -275,6 +302,100 @@ export class HttpTransport implements IAdtTransport {
   /** What to put on the `Cookie` header, or nothing if the jar is empty. */
   cookies(): string | null {
     return this.combined;
+  }
+
+  /**
+   * The session's cookies, for the caller to keep and hand back to
+   * `resume()`: the jar without `sap-XSRF_*`, which belongs to the CSRF token
+   * and is earned again with it. `SAP_SESSIONID_*`, `sap-usercontext`,
+   * `sap-contextid` — so a stateful request after the resume reaches the same
+   * ABAP context — and whatever else the server set to keep the session where
+   * it lives. `null` while the wire holds no live `SAP_SESSIONID`.
+   */
+  sessionCookies(): string | null {
+    if (!this.holdsSessionCookie()) return null;
+    const pairs = Array.from(this.jar.entries())
+      .filter(([name]) => !name.startsWith(XSRF_COOKIE_PREFIX))
+      .map(([name, value]) => (value ? `${name}=${value}` : name));
+    return pairs.join('; ');
+  }
+
+  /**
+   * Take over the session `session` names: see `IAdtTransport.resume`.
+   *
+   * The request is the CSRF fetch on the discovery endpoint — the fallback on
+   * a `404` there, as `establish()` does, in the same session — with no
+   * credential and no retry. On the cloud wire it says
+   * `x-sap-security-session: use`, because the seeded jar holds a session
+   * (`sessionHeaders`).
+   */
+  async resume(context: IAdtSessionContext, session: string): Promise<void> {
+    this.forgetSession();
+    this.ingest({
+      'set-cookie': session
+        .split(';')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== ''),
+    });
+    const handed = this.sessionFingerprint();
+    if (handed.size === 0) {
+      this.forgetSession();
+      throw new Error(
+        'The session handed over names no SAP_SESSIONID, so there is no session to take over; nothing was sent.',
+      );
+    }
+
+    const base = context.baseUrl.endsWith('/')
+      ? context.baseUrl.slice(0, -1)
+      : context.baseUrl;
+    const endpoints = [
+      `${base}${CSRF_CONFIG.ENDPOINT}`,
+      `${base}${CSRF_CONFIG.FALLBACK_ENDPOINT}`,
+    ];
+    let response: IAdtTransportResponse | undefined;
+    for (const [index, url] of endpoints.entries()) {
+      try {
+        // No `context.authorize`: the session's cookies are the only thing
+        // that may authenticate this request. And no redirect followed: a
+        // redirect is not the session answering — followed, a login page's
+        // 200, or a SAP_SESSIONID replaced on the way, would be judged
+        // instead of what SAP said. Not admitted, a 3xx rejects as it came.
+        const fixed = this.fix({
+          method: 'GET',
+          url,
+          headers: {
+            ...context.extraHeaders,
+            ...CSRF_CONFIG.REQUIRED_HEADERS,
+          },
+        });
+        response = await this.dispatch(fixed, this.dress(fixed), undefined, {
+          maxRedirects: 0,
+        });
+        break;
+      } catch (error) {
+        if (index === 0 && absentEndpoint(error)) continue;
+        // SAP's answer as it is — a 401 for a session that is gone.
+        throw error;
+      }
+    }
+    if (!response) throw new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
+
+    context.observe(response.headers);
+    this.ingest(response.headers as Record<string, unknown>);
+    if (!sameSession(handed, this.sessionFingerprint())) {
+      throw notTheSession(
+        response,
+        'the answer names another session, or none',
+      );
+    }
+    const token = (response.headers as Record<string, unknown>)['x-csrf-token'];
+    if (typeof token !== 'string' || token === '') {
+      throw notTheSession(response, 'the answer carries no CSRF token');
+    }
+    this.token = token;
+    // The credential's logon, now that the session has answered: what it
+    // brings — TLS material — is for the requests that follow.
+    await context.logon(this.logonTarget());
   }
 
   /**
@@ -436,7 +557,7 @@ export class HttpTransport implements IAdtTransport {
     for (const [index, url] of endpoints.entries()) {
       // The fallback exists for a system that HAS no
       // `/sap/bc/adt/core/discovery` — BASIS < 7.52 — which the server says by
-      // answering 404 there. Trying it after a refused connection or a timeout
+      // answering 404 there. Trying it after a refused connection or a network
       // asks a host that is not answering to answer a different path, which
       // doubles the wait before the caller is told what is actually wrong.
       if (index > 0 && !absentEndpoint(last)) break;
@@ -453,9 +574,6 @@ export class HttpTransport implements IAdtTransport {
               ...context.extraHeaders,
               ...CSRF_CONFIG.REQUIRED_HEADERS,
             },
-            ...(context.timeoutMs !== undefined
-              ? { timeout: context.timeoutMs }
-              : {}),
           });
 
           // Handed up BEFORE the token is read: the cookies are the session,
@@ -967,8 +1085,11 @@ export class HttpTransport implements IAdtTransport {
     request: IAdtTransportRequest,
     headers: Record<string, string>,
     written?: () => void,
+    /** `maxRedirects: 0` for the adoption probe alone; see `resume()`. */
+    redirects?: { maxRedirects: number },
   ): Promise<IAdtTransportResponse> {
     const response = await this.client()({
+      ...(redirects ?? {}),
       // The write is the point `disconnect()` resolves at: the request's
       // `finish`, emitted once its bytes are handed to the socket — not when
       // the server answers, which it may do minutes later or never.

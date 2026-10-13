@@ -18,7 +18,6 @@ import {
   sessionError,
 } from '../session/SessionLifecycle.js';
 import { isNetworkError } from '../utils/networkErrors.js';
-import { getCriticalSectionTimeout, getTimeout } from '../utils/timeouts.js';
 import type { AbapConnection, AbapRequestOptions } from './AbapConnection.js';
 import {
   AuthRefusedError,
@@ -125,14 +124,11 @@ abstract class AbstractAbapConnection
   private profilingRequest: string | null = 'server-time';
   /**
    * When true, requests are treated as part of an uninterruptible critical
-   * section (e.g. a lock → modify → unlock chain). In this state a short
-   * per-request timeout must NOT abort the request mid-flight: the abort ends
-   * nothing server-side — only the server ends an ABAP session, on an idle
-   * timeout this side cannot see — it ends what this side KNOWS. Whether the
-   * change was applied becomes unknowable, and the handle `unlock` needs is
-   * lost while the lock lives on in that session. While set, makeAdtRequest
-   * raises the effective timeout to CRITICAL_SECTION_TIMEOUT (a large ceiling)
-   * so the request runs to completion instead of being interrupted.
+   * section (e.g. a lock → modify → unlock chain). In this state a request
+   * carries no deadline at all, not even the caller's: a client deadline closes
+   * the socket, SAP then ends the request running on it — a write in it lost —
+   * and what this side knew goes with it: whether the change was applied, and
+   * the handle `unlock` needs, while the lock lives on in that session.
    */
   /**
    * The last goodbye this connection dispatched, so a caller can wait for it.
@@ -173,6 +169,13 @@ abstract class AbstractAbapConnection
     answered: Promise<void>;
     written: Promise<void>;
   } | null = null;
+
+  /**
+   * The existing session this instance takes over at `connect()`, instead of
+   * logging on: its cookies, as `sessionCookies()` handed them out. Dropped
+   * once the takeover is attempted — a session is taken over once.
+   */
+  private resumeFrom: string | null;
 
   private inCriticalSection = false;
   /** Reference count for nested beginCriticalSection()/endCriticalSection() pairs. */
@@ -236,7 +239,23 @@ abstract class AbstractAbapConnection
     readonly transport: IAdtTransport,
     protected readonly logger: ILogger | null,
     sessionId?: string,
+    /**
+     * An existing session to take over instead of logging on: the cookies
+     * `sessionCookies()` handed out for it. `connect()` then sends no logon
+     * and asks SAP, without the credential, whether that session is alive.
+     */
+    session?: string,
   ) {
+    // Fixed words: the session's cookies are never echoed.
+    if (
+      session !== undefined &&
+      (typeof session !== 'string' || session.trim() === '')
+    ) {
+      throw new TypeError(
+        'session: the cookies of an existing session, as sessionCookies() returned them; an empty one names no session.',
+      );
+    }
+    this.resumeFrom = session ?? null;
     // Generate sessionId (used for sap-adt-connection-id header)
     this.sessionId = sessionId || randomUUID();
 
@@ -300,14 +319,13 @@ abstract class AbstractAbapConnection
    * Enter an uninterruptible critical section.
    *
    * Call this BEFORE acquiring a lock (and pair it with endCriticalSection()
-   * in a finally, AFTER unlocking). While in a critical section, a short
-   * per-request timeout is not applied — makeAdtRequest uses a large ceiling
-   * (CRITICAL_SECTION_TIMEOUT, env SAP_TIMEOUT_CRITICAL) instead — so a slow
-   * PUT/activate/unlock is not aborted mid-flight. An abort does not end the
-   * ABAP session — that session is the server's, and only the server ends it,
-   * on an idle timeout this side cannot influence — it strands the caller:
-   * the outcome is unknown and the handle `unlock` needs is gone, while the
-   * lock survives inside the ABAP session that owns it.
+   * in a finally, AFTER unlocking). While in a critical section a request
+   * carries no deadline — the caller's `timeout` is not applied — so a slow
+   * PUT/activate/unlock is not cut mid-flight. A client deadline closes the
+   * socket, and SAP then ends the request that was running on it (a write in
+   * it lost); and it strands the caller: the outcome is unknown and the handle
+   * `unlock` needs is gone, while the lock survives inside the ABAP session
+   * that owns it.
    *
    * Nesting is reference-counted so nested begin/end pairs are safe.
    */
@@ -321,8 +339,8 @@ abstract class AbstractAbapConnection
 
   /**
    * Leave the uninterruptible critical section. See beginCriticalSection().
-   * Safe to call more times than begin (clamped at 0). Normal per-request
-   * timeouts resume once the outermost section ends.
+   * Safe to call more times than begin (clamped at 0). The caller's own
+   * per-request timeouts apply again once the outermost section ends.
    */
   endCriticalSection(): void {
     if (this.criticalSectionDepth > 0) {
@@ -411,6 +429,13 @@ abstract class AbstractAbapConnection
       // Before the wire opens, so that a credential which cannot get ready
       // sends nothing and the wire's logon has something to bring.
       await this.prepareCredential();
+
+      // An instance built on an existing session takes it over: no logon,
+      // and SAP's answer to one request says whether the session is alive.
+      if (this.resumeFrom !== null) {
+        await this.resumeAndCommit(baselineEpoch);
+        return;
+      }
 
       // The wire logs on inside, through the context, and then the session is
       // established: one step, which a refused logon repeats once.
@@ -905,6 +930,52 @@ abstract class AbstractAbapConnection
     this.lifecycle.markConnected(this.sessionFingerprint());
   }
 
+  /**
+   * Takes over the session `resumeFrom` names, and publishes it — the
+   * counterpart of `establishAndCommit` for an instance built on an existing
+   * session.
+   *
+   * No logon: the wire makes one request in that session without the
+   * credential (`IAdtTransport.resume`). Alive, the session is this
+   * instance's — its `SAP_SESSIONID`, and its `sap-contextid` when the caller
+   * kept one — and `disconnect()` logs it off as for any instance. Gone, or
+   * any answer that is not the session's: `connect()` rejects with SAP's
+   * answer as it is, nothing is logged off — nothing was opened — and the
+   * instance is spent.
+   */
+  private async resumeAndCommit(baselineEpoch: number): Promise<void> {
+    if (this.spent) throw spentError();
+    if (this.lifecycle.teardownEpoch !== baselineEpoch) {
+      throw sessionError(
+        ADT_SESSION_ERROR.NOT_CONNECTED,
+        'Establishment abandoned: a teardown was requested for this connection',
+      );
+    }
+    const session = this.resumeFrom as string;
+    this.resumeFrom = null;
+    this.lifecycle.forgetIdentity();
+    try {
+      await this.transport.resume(this.sessionContext(), session);
+    } catch (error) {
+      // Nothing was opened, so nothing is logged off: the session was the
+      // caller's, and whatever it is now, it stays theirs. What the wire was
+      // seeded with goes, and the instance is spent.
+      this.spent = true;
+      this.invalidateSession();
+      this.lifecycle.markDisconnected();
+      throw error;
+    }
+    if (this.lifecycle.teardownEpoch !== baselineEpoch) {
+      // As in `establishAndCommit`: the queued teardown clears, and — the
+      // session now being this instance's — logs it off.
+      throw sessionError(
+        ADT_SESSION_ERROR.NOT_CONNECTED,
+        'Establishment abandoned: a teardown was requested while it was in flight',
+      );
+    }
+    this.lifecycle.markConnected(this.sessionFingerprint());
+  }
+
   /** The teardown epoch, for a recovery to capture before it starts. */
   protected get teardownEpoch(): number {
     return this.lifecycle.teardownEpoch;
@@ -1084,6 +1155,19 @@ abstract class AbstractAbapConnection
    */
   protected sessionFingerprint(): Map<string, string> {
     return this.transport.sessionFingerprint();
+  }
+
+  /**
+   * The cookies of this instance's SAP session, for the caller to keep: the
+   * string `createConnection({ …, session })` takes to build a later instance
+   * on the same session. `null` before a session, after it ended, and over
+   * RFC, whose session is a conversation no cookie names.
+   *
+   * It authenticates as the session's user for as long as the session lives:
+   * keep it as a secret. Nothing here logs it.
+   */
+  sessionCookies(): string | null {
+    return this.transport.sessionCookies();
   }
 
   async getBaseUrl(): Promise<string> {
@@ -1270,16 +1354,13 @@ abstract class AbstractAbapConnection
       }
     }
 
-    // Inside an uninterruptible critical section (lock → modify → unlock), a
-    // short per-request timeout must not abort the request mid-flight — not
-    // because the abort ends the ABAP session (only the server does that), but
-    // because it leaves the outcome unknown and the unlock handle lost while
-    // the lock stays held in that session. Raise the effective
-    // timeout to the large critical-section ceiling for the whole request
-    // (also honoured on the retry paths below, which reuse requestConfig).
-    const effectiveTimeout = this.inCriticalSection
-      ? Math.max(timeout ?? 0, getCriticalSectionTimeout())
-      : timeout;
+    // The only deadline a request carries is the caller's own, and inside an
+    // uninterruptible critical section (lock → modify → unlock) not even that:
+    // a client deadline closes the socket, SAP then ends the request running
+    // on it — a write in it lost — and the outcome is unknown, the unlock
+    // handle lost while the lock stays held in that session. Decided once for
+    // the whole request: the retry paths below reuse requestConfig.
+    const callerTimeout = this.inCriticalSection ? undefined : timeout;
 
     const requestConfig: IAdtTransportRequest = {
       method: normalizedMethod,
@@ -1294,7 +1375,7 @@ abstract class AbstractAbapConnection
           throw this.staleOr(error, lease);
         },
       ),
-      timeout: effectiveTimeout,
+      ...(callerTimeout !== undefined ? { timeout: callerTimeout } : {}),
       // `unknown` on the caller's options, a record on the seam: the two
       // transports serialise a query differently and both need the pairs.
       params: params as Record<string, unknown> | undefined,
@@ -1817,7 +1898,6 @@ abstract class AbstractAbapConnection
         : this.leasedContext(fence)),
       retries: retryCount,
       retryDelayMs: retryDelay,
-      timeoutMs: getTimeout('csrf'),
       isFatal: (error) => this.endsTheExchange(error),
     });
 

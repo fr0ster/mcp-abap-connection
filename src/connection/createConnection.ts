@@ -12,6 +12,11 @@
  * session: after its `disconnect()` (or a logoff of its own) it is spent, and
  * a new session is a new call to this.
  *
+ * **Or an existing session.** `session` — the cookies an earlier instance's
+ * `sessionCookies()` returned — builds the instance on that session instead:
+ * `connect()` does not log on, and SAP's answer to its one request says
+ * whether the session is alive. HTTP wires only; over RFC it is refused here.
+ *
  * Every transport option is passed through as the caller gives it; what is
  * not given takes the constructor's own default, nothing more.
  */
@@ -52,6 +57,14 @@ interface HttpWireOptions {
    * the credential (its TLS material arrives at logon). Absent: none.
    */
   agentOptions?: (() => AgentOptions) | undefined;
+  /**
+   * An existing session to build the instance on, instead of logging on: the
+   * string an instance's `sessionCookies()` returned. `connect()` then sends
+   * no logon; it asks SAP, without the credential, whether that session is
+   * alive, and rejects with SAP's answer when it is not. Absent: `connect()`
+   * logs on and opens a new session.
+   */
+  session?: string | undefined;
 }
 
 export interface CloudHttpSpec<
@@ -78,6 +91,11 @@ export interface OnPremRfcSpec<
   transport: 'rfc';
   /** The RFC wire's own options (`logWire`, `maxLoggedBodyChars`). */
   rfc?: IRfcTransportOptions | undefined;
+  /**
+   * Not over RFC: its session is a conversation, which cannot be taken over.
+   * Refused at construction.
+   */
+  session?: undefined;
 }
 
 export type ConnectionSpec<TCredential extends IAuthProvider = IAuthProvider> =
@@ -109,6 +127,15 @@ export function createConnection<TCredential extends IAuthProvider>(
   spec: ConnectionSpec<TCredential>,
 ): CreatedConnection<TCredential> {
   const { system, transport } = stated(spec);
+  // Fixed words, before anything is built.
+  if (
+    transport === 'rfc' &&
+    (spec as { session?: unknown }).session !== undefined
+  ) {
+    throw new TypeError(
+      "createConnection: an RFC session cannot be taken over — it is a conversation, not something a cookie names. 'session' is for the HTTP wires; over RFC, connect() opens a new session.",
+    );
+  }
   const logger = spec.logger ?? null;
   const wireLogger = spec.wireLogger ?? null;
   const address = { client: spec.config.client, baseUrl: spec.config.url };
@@ -121,6 +148,7 @@ export function createConnection<TCredential extends IAuthProvider>(
       new CloudHttpTransport(http.agentOptions, wireLogger, address),
       logger,
       spec.sessionId,
+      http.session,
     );
   }
   if (system === 'onprem' && transport === 'http') {
@@ -131,6 +159,7 @@ export function createConnection<TCredential extends IAuthProvider>(
       new OnPremHttpTransport(http.agentOptions, wireLogger, address),
       logger,
       spec.sessionId,
+      http.session,
     );
   }
   if (system === 'onprem' && transport === 'legacy-http') {
@@ -141,6 +170,7 @@ export function createConnection<TCredential extends IAuthProvider>(
       new LegacyOnPremHttpTransport(http.agentOptions, wireLogger, address),
       logger,
       spec.sessionId,
+      http.session,
     );
   }
   if (system === 'onprem' && transport === 'rfc') {

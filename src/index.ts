@@ -81,9 +81,3 @@ export {
   rfcParamsFrom,
 } from './connection/rfcConversation.js';
 export type { ILogger } from './logger.js';
-// Timeouts
-export {
-  getTimeout,
-  getTimeoutConfig,
-  type TimeoutConfig,
-} from './utils/timeouts.js';

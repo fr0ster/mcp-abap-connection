@@ -32,7 +32,12 @@ export interface IAdtTransportRequest {
    * its query — silently, and only on one of the two wires.
    */
   params?: Record<string, unknown>;
-  /** Milliseconds; absent means the transport's own default. */
+  /**
+   * Milliseconds: the caller's own deadline, and the only one a request
+   * carries. Absent means none — no wire sets one of its own, because a
+   * client deadline closes the socket and SAP then ends the request running
+   * on it, a write in it lost.
+   */
   timeout?: number;
   /**
    * Which statuses resolve rather than throw. Absent means the default: 2xx
@@ -115,8 +120,6 @@ export interface IAdtEstablishContext extends IAdtSessionContext {
   retries?: number;
   /** Milliseconds between attempts. Absent means the transport's own default. */
   retryDelayMs?: number;
-  /** Milliseconds per attempt. Absent means the transport's own default. */
-  timeoutMs?: number;
   /**
    * Which failures must not be retried.
    *
@@ -196,6 +199,36 @@ export interface IAdtTransport {
 
   /** What to put on the `Cookie` header, or `null` for a wire that has none. */
   cookies(): string | null;
+
+  /**
+   * Take over a session that already exists, instead of logging on.
+   *
+   * `session` is what `sessionCookies()` handed out for it. The wire seeds its
+   * jar with those cookies and makes ONE request in that session **without
+   * the credential**, earning its CSRF token: a dead session must not quietly
+   * become a new one, and a credential on the request would open one (a dead
+   * cookie with a good password gets a new `SAP_SESSIONID`, measured). The
+   * credential's logon (`context.logon`) is offered only once the session has
+   * answered, so what it brings rides on the requests that follow, never on
+   * this one.
+   *
+   * Resolves when SAP answered as that session — a CSRF token, and the
+   * `SAP_SESSIONID` it was handed, unchanged. Rejects otherwise with SAP's
+   * answer as it is: a `401`, or an error carrying the `response` that did not
+   * belong to the session. Nothing is logged off either way: the wire opened
+   * nothing.
+   *
+   * A wire whose session is not something a cookie names — RFC, where it is a
+   * conversation — rejects without sending anything.
+   */
+  resume(context: IAdtSessionContext, session: string): Promise<void>;
+
+  /**
+   * The cookies of the session this wire is on, as `resume()` takes them, or
+   * `null` while it is on none (or on a wire whose session no cookie names).
+   * For the caller to keep; never logged.
+   */
+  sessionCookies(): string | null;
 
   /**
    * Which session this wire is on, as something comparable.

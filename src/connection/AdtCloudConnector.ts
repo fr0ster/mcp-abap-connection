@@ -40,7 +40,12 @@ export class AdtCloudConnector<
     transport: TTransport,
     logger: ILogger | null = null,
     sessionId?: string,
+    /**
+     * An existing session to take over instead of logging on: the cookies
+     * `sessionCookies()` returned for it. HTTP wires only.
+     */
+    session?: string,
   ) {
-    super(config, credential, transport, logger, sessionId);
+    super(config, credential, transport, logger, sessionId, session);
   }
 }

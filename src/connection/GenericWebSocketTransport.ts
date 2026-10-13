@@ -50,16 +50,22 @@ export class GenericWebSocketTransport implements IWebSocketTransport {
       return;
     }
 
-    const connectTimeoutMs = options?.connectTimeoutMs ?? 15000;
+    // The caller's deadline, or none: no default of this package's own.
+    const connectTimeoutMs = options?.connectTimeoutMs;
     const socket = this.factory.create(url, options?.protocols, options);
     this.socket = socket;
 
     await new Promise<void>((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        reject(
-          new Error(`WebSocket connect timeout after ${connectTimeoutMs}ms`),
-        );
-      }, connectTimeoutMs);
+      const timeoutId =
+        connectTimeoutMs === undefined
+          ? undefined
+          : setTimeout(() => {
+              reject(
+                new Error(
+                  `WebSocket connect timeout after ${connectTimeoutMs}ms`,
+                ),
+              );
+            }, connectTimeoutMs);
 
       socket.onopen = () => {
         clearTimeout(timeoutId);
