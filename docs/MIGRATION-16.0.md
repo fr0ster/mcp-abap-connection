@@ -15,8 +15,9 @@ nothing else. For a consumer on 15.x that means the following.
   neither cancels a request that reached it nor rolls back across requests,
   and a logoff releases the locks — so the signal protected nothing.
 - **One connection instance is one SAP session.** The instance is spent after
-  `disconnect()`, after a failed `connect()` that logged off the session it
-  had received, or after a lost session: `ADT_SESSION_REPLACED`, raised
+  `disconnect()`, after a failed `connect()` that received a session cookie
+  (a `SAP_SESSIONID_*`; over RFC, an open conversation) — whether or not a
+  logoff was sent for it —, or after a lost session: `ADT_SESSION_REPLACED`, raised
   exactly as in 15.0.1 for a changed `SAP_SESSIONID` or a 400 "session not
   found". On a spent instance, `connect()` and every request reject
   `ADT_SESSION_ERROR.NOT_CONNECTED`. The connector decides nothing beyond
@@ -25,8 +26,9 @@ nothing else. For a consumer on 15.x that means the following.
     `ADT_SESSION_ERROR.NOT_CONNECTED`: "This connection's SAP session has
     ended (it was disconnected, logged off or lost); one connection instance is one
     session. Create a new connection for a new session."
-  - A failed `connect()` that sent nothing (a 401, a network error, no session
-    cookie) leaves the instance usable, and `connect()` may be retried.
+  - A failed `connect()` that received no session cookie (a 401, a network
+    error, a 200 with only `sap-XSRF_*`) leaves the instance usable, and
+    `connect()` may be retried.
 - **No 401 opens a new session on the same instance.** Before 16.0.0, a
   mutation refused with a 401 while a CSRF token was cached (outside a
   critical section) discarded the session and retried in a new one, and a GET
@@ -37,10 +39,11 @@ nothing else. For a consumer on 15.x that means the following.
   token validation failed" (cookies kept) and the provider's re-ask stay.
 - **`disconnect()` resolves once the logoff is written.** It resolves when the
   bytes are handed to the socket over HTTP, or when the close call has
-  returned over RFC. It does not wait for SAP's answer, and it never throws.
-  - **Call it once per `connect()`.** A second call rejects with
+  returned over RFC. It does not wait for SAP's answer. The first call never
+  throws: a logoff that fails is logged.
+  - **Call it once per instance.** A second call rejects with
     `ADT_SESSION_ERROR.NOT_CONNECTED` ("disconnect() was already called for
-    this connection; call it once per connect()"), whether it comes while the
+    this connection; call it once per instance"), whether it comes while the
     first is still writing or after it. The first call is unaffected.
   - No timer bounds the write. A server that never takes the bytes holds
     `disconnect()` until the socket fails. That failure is logged, not thrown.

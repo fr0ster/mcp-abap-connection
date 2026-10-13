@@ -38,7 +38,9 @@ What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
   rolls back across requests, a connection is never shared between threads,
   and a logoff releases the locks — so the signal protected nothing.
 - **One connection instance is one SAP session.** After `disconnect()`, after
-  a failed `connect()` that logged off the session it had received, or after
+  a failed `connect()` that received a session cookie (a `SAP_SESSIONID_*`;
+  over RFC, an open conversation) — whether or not a logoff was sent for it —,
+  or after
   a lost session (`ADT_SESSION_REPLACED`, detected and raised exactly as in
   15.0.1), the instance is spent. On a spent instance, `connect()` rejects
   with `ADT_SESSION_ERROR.NOT_CONNECTED` in fixed words, telling the caller to
@@ -46,8 +48,8 @@ What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
   rejects `NOT_CONNECTED` too. After a lost session `disconnect()` is still
   owed once, and sends nothing: the loss already cleared the cookies. Every
   establishment attempt checks this, `connect()`'s internal logon retry
-  included. A failed `connect()` that sent nothing (401, network, no session
-  cookie) may be retried. A new session is a new instance, created by the
+  included. A failed `connect()` that received no session cookie (401,
+  network, a 200 with only `sap-XSRF_*`) may be retried. A new session is a new instance, created by the
   consumer (its own factory, or `createConnection`). Before 16.0.0 a
   disconnected instance could `connect()` again.
 - **No 401 opens a new session on the same instance.** Two recoveries are

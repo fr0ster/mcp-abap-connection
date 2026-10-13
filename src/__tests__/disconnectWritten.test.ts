@@ -300,7 +300,7 @@ describe('disconnect() resolves once the logoff is written', () => {
     const NOT_CONNECTED = {
       code: 'ADT_NOT_CONNECTED',
       message:
-        'disconnect() was already called for this connection; call it once per connect()',
+        'disconnect() was already called for this connection; call it once per instance',
     };
 
     it('a second call while the first is writing rejects; the first still resolves on the write', async () => {
@@ -498,6 +498,36 @@ describe('disconnect() resolves once the logoff is written', () => {
       await conn.disconnect();
       await expect(conn.connect()).rejects.toMatchObject(SPENT);
       expect(provider.calls.filter((c) => c.method === 'prepare')).toEqual([]);
+    });
+
+    it('connect() called in the same turn as disconnect(), after it, asks the credential nothing', async () => {
+      server = await standIn();
+      const { stubProvider } = await import('./helpers/stubProvider.js');
+      const { AdtOnPremConnector } = await import(
+        '../connection/AdtOnPremConnector.js'
+      );
+      const provider = stubProvider();
+      const conn = new AdtOnPremConnector(
+        configFor(server.baseUrl),
+        provider,
+        onPremHttpTransport(configFor(server.baseUrl)),
+        null,
+      );
+      await conn.connect();
+      const prepares = () =>
+        provider.calls.filter((c) => c.method === 'prepare').length;
+      expect(prepares()).toBe(1);
+      const establishments = server.establishments();
+
+      // Not awaited in between: the instance is spent only when the
+      // disconnect's transition runs, after connect()'s check at entry.
+      const disconnected = conn.disconnect();
+      const reconnected = expect(conn.connect()).rejects.toMatchObject(SPENT);
+      await disconnected;
+      await reconnected;
+
+      expect(prepares()).toBe(1);
+      expect(server.establishments()).toBe(establishments);
     });
 
     it('connect() after disconnect() on an instance that never connected is refused too', async () => {

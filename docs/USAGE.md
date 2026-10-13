@@ -491,7 +491,7 @@ holds `disconnect()` until the socket fails, and that failure is logged, not
 thrown. "Written" means handed to the operating system, on a connection of
 the logoff's own.
 
-**Call it once per `connect()`.** A second call, while the first is still
+**Call it once per instance.** A second call, while the first is still
 writing or after it, rejects with `ADT_SESSION_ERROR.NOT_CONNECTED`; the
 first call is unaffected. A `connect()` that failed after the server opened
 a session logs it off and rejects only after that logoff is written, so the
@@ -517,7 +517,10 @@ the logoff is the backstop, not the way to finish your work.
 
 1. `disconnect()` sends it iff the connection holds a live `SAP_SESSIONID_*` —
    received, not deleted by a past `expires` / `Max-Age=0`. After a successful
-   `connect()` it always does; with only `sap-XSRF_*` it sends nothing.
+   `connect()` over `http` (on-premise or cloud) it does: such a connect
+   requires one. Over `legacy-http` a `connect()` succeeds on a system that
+   names no session, and then there is no `SAP_SESSIONID_*` and nothing is
+   sent. With only `sap-XSRF_*` nothing is sent either.
 2. A failed `connect()` sends it itself only when both hold: the whole
    `connect()` failed (both `/sap/bc/adt/core/discovery` and the fallback
    `/sap/bc/adt/discovery`), and a live `SAP_SESSIONID_*` was received during
@@ -525,6 +528,13 @@ the logoff is the backstop, not the way to finish your work.
    `CL_HTTP_SERVER_NET->send_response` sets it whatever the status).
    `connect()` then rejects after the logoff is written. A 401 means no
    session: nothing.
+
+   **A failed `connect()` spends the instance whenever it received a session
+   cookie** — the wire reports a non-empty `SAP_SESSIONID_*` (over RFC, an
+   open conversation) — even when no logoff was sent: a custom wire's
+   `close()` may send none, and a logoff that fails is only logged. A failed
+   `connect()` that received none leaves the instance usable, and may be
+   retried.
 3. A successful `connect()` (200) sends no logoff; the session lives until
    `disconnect()`.
 
@@ -682,7 +692,9 @@ await next.connect(); // a new session is a new instance
 ```
 
 A connection that was connected must be disconnected, which is why this belongs
-in a `finally`. `disconnect()` never throws, so it is safe there.
+in a `finally`. The first `disconnect()` never throws, so it is safe there; a
+second call on the same instance rejects `NOT_CONNECTED`, so let one path own
+the call.
 
 ## Custom Logging
 

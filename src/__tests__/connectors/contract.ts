@@ -129,7 +129,7 @@ export function describeConnectorContract(
       ).rejects.toThrow(/ADT_NOT_CONNECTED/);
     });
 
-    it('rejects a repeat disconnect(): it is called once per connect()', async () => {
+    it('rejects a repeat disconnect(): it is called once per instance', async () => {
       const conn = fixture.build();
       await conn.connect();
 

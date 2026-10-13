@@ -193,7 +193,7 @@ If the provider says no, or the retry is refused too, the caller gets an `AuthRe
 provider. See [When the credential is refused](./USAGE.md#when-the-credential-is-refused).
 
 **One connection instance is one session.** After `disconnect()`, or a failed `connect()` that
-logged off the session it had received, the instance is spent and `connect()` on it rejects `NOT_CONNECTED`. A new
+received a session cookie (whether or not a logoff was sent for it), the instance is spent and `connect()` on it rejects `NOT_CONNECTED`. A new
 session is a new instance, created by the consumer (its own factory, or `createConnection`), and
 outside a lock window rather than inside one.
 

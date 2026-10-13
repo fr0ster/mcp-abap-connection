@@ -151,8 +151,8 @@ abstract class AbstractAbapConnection
    */
   private goodbye: Promise<void> = Promise.resolve();
   /**
-   * Whether `disconnect()` was called since the last `connect()`. A second
-   * call rejects: `disconnect()` is called once, and a caller that calls it
+   * Whether `disconnect()` was called on this instance. A second call
+   * rejects: `disconnect()` is called once per instance, and a caller that calls it
    * twice is told so rather than handed a success that waited for nothing.
    */
   private disconnectCalled = false;
@@ -401,6 +401,11 @@ abstract class AbstractAbapConnection
     if (this.spent) throw spentError();
     const baselineEpoch = this.lifecycle.teardownEpoch;
     await this.lifecycle.transition('connect', async () => {
+      // Again here: a disconnect() queued ahead of this connect — called in
+      // the same turn, before it — spends the instance only when its
+      // transition runs, after the check at entry. Nothing is asked of the
+      // credential on a spent instance.
+      if (this.spent) throw spentError();
       if (this.lifecycle.connected) return;
 
       // Before the wire opens, so that a credential which cannot get ready
@@ -504,7 +509,7 @@ abstract class AbstractAbapConnection
     if (this.disconnectCalled) {
       throw sessionError(
         ADT_SESSION_ERROR.NOT_CONNECTED,
-        'disconnect() was already called for this connection; call it once per connect()',
+        'disconnect() was already called for this connection; call it once per instance',
       );
     }
     this.disconnectCalled = true;
