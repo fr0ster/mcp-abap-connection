@@ -77,8 +77,8 @@ the RFC wire could not connect at all as a result.
   including its own renewal. The connection calls `prepare()` once before the wire
   opens, `establish(logon)` at each logon (through `IAdtSessionContext.logon`),
   `authorize(request)` before every attempt (through
-  `IAdtSessionContext.authorize`), and `rejected(rejection)` on a 401 that survived
-  the wire's session recovery or a refused logon. Ok means exactly one more
+  `IAdtSessionContext.authorize`), and `rejected(rejection)` on a 401 or a refused
+  logon. Ok means exactly one more
   attempt; a second refusal is `AuthRefusedError`, never a loop. A 403 never goes
   to the provider. The wire offers what it can carry (`ILogonTarget`: TLS material
   for HTTP, logon parameters for RFC), the provider writes, the connection decides
