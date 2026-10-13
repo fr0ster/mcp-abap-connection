@@ -70,6 +70,10 @@ nothing else. For a consumer on 15.x that means the following.
     it ended the context and released its lock.
   - A redirect answering the logoff counts as its answer: it is not
     followed.
+  - On cloud, a session the server linked no logoff resource for is logged
+    off through the platform's ICF logoff (`/sap/public/bc/icf/logoff`), as
+    on-prem, instead of being left to the server's timeout. A linked logoff
+    resource is used as before.
 - **`flushGoodbye(timeoutMs?)` has no default bound.** Without an argument it
   waits for SAP's answer to the logoff for as long as it takes. With
   `timeoutMs` it waits at most that long and returns without throwing.

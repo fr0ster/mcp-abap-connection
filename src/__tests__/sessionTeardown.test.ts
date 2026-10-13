@@ -149,7 +149,7 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     expect(seen.some((r) => r.method === 'DELETE')).toBe(false);
   });
 
-  it('cloud sends nothing to end a session the server linked no logoff for', async () => {
+  it('cloud ends a session the server linked no logoff for with the platform logoff, without sap-contextid, resolving on the write', async () => {
     const logger = makeLogger();
     const conn = new AdtCloudConnector(
       { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
@@ -161,21 +161,38 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
       makeLogger(),
     );
     const seen: Seen[] = [];
-    attachMockAxios(conn as never, seen, async () => ({
-      status: 200,
-      data: '<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom"><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/></http:session>',
-      headers: {
-        'x-csrf-token': 'TOKEN',
-        'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-      },
-    }));
+    attachMockAxios(conn as never, seen, async (cfg) =>
+      // The logoff's answer never comes: disconnect() resolves on its write.
+      String(cfg.url).includes('/icf/logoff')
+        ? new Promise(() => {})
+        : {
+            status: 200,
+            data: '<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom"><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/></http:session>',
+            headers: {
+              'x-csrf-token': 'TOKEN',
+              'set-cookie': [
+                'SAP_SESSIONID_STUB_100=abc%3d; path=/',
+                'sap-contextid=CTX; path=/',
+              ],
+            },
+          },
+    );
 
     await conn.connect();
     const before = seen.length;
     await conn.disconnect();
     await settled();
 
-    expect(seen.length).toBe(before);
+    const sent = seen.slice(before);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.method).toBe('GET');
+    expect(sent[0]?.url).toBe(
+      'https://sap.example.com/sap/public/bc/icf/logoff',
+    );
+    expect(sent[0]?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
+    expect(sent[0]?.headers.Cookie).not.toContain('sap-contextid');
+    expect(sent[0]?.headers['x-sap-security-session']).toBeUndefined();
+    expect(sent[0]?.headers.Authorization).toBeUndefined();
     expect(logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('published no logoff resource'),
     );
@@ -217,7 +234,7 @@ describe('the cloud logoff link', () => {
     );
   });
 
-  it('sends nothing for an href that is no URL, and the close still settles', async () => {
+  it('an href that is no URL is said once; the platform logoff goes instead, and the close still settles', async () => {
     const logger = makeLogger();
     const seen: Seen[] = [];
     const conn = cloudWithLogoffHref('http://[', logger, seen);
@@ -232,7 +249,10 @@ describe('the cloud logoff link', () => {
       transport.close({ baseUrl: 'https://sap.example.com' }),
     ).resolves.toBeUndefined();
 
-    expect(seen.length).toBe(before);
+    // One logoff, the platform's; the second close has no session left.
+    expect(seen.slice(before).map((r) => r.url)).toEqual([
+      'https://sap.example.com/sap/public/bc/icf/logoff',
+    ]);
     expect(logger.debug).toHaveBeenCalledWith(
       expect.stringContaining('logoff link that is no URL'),
     );

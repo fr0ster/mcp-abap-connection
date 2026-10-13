@@ -39,6 +39,12 @@ const SESSION_DOCUMENT =
   '<atom:link href="/sap/public/bc/icf/logoff" rel="http://www.sap.com/adt/categories/core/http/sessions/logoff"/>' +
   '</http:session>';
 
+/** A session document that publishes the session and no logoff link. */
+const NO_LOGOFF_DOCUMENT =
+  '<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom">' +
+  '<atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/>' +
+  '</http:session>';
+
 interface StandIn {
   baseUrl: string;
   /** Settles when the logoff request has reached the server. */
@@ -77,6 +83,8 @@ async function standIn(
     fallbackStatus?: number;
     /** Paths answered 200, each with the `Set-Cookie` given. */
     routes?: Record<string, string[]>;
+    /** The cloud session document, instead of one that links a logoff. */
+    sessionDocument?: string;
   } = {},
 ): Promise<StandIn> {
   const sessionCookie = options.sessionCookie ?? true;
@@ -118,7 +126,7 @@ async function standIn(
         'content-type': 'application/vnd.sap.adt.core.http.session.v3+xml',
         'set-cookie': cookies,
       });
-      res.end(SESSION_DOCUMENT);
+      res.end(options.sessionDocument ?? SESSION_DOCUMENT);
       return;
     }
     establishment = req.socket;
@@ -871,6 +879,74 @@ describe('disconnect() resolves once the logoff is written', () => {
       expect(cookie).not.toContain('sap-contextid');
       server.answerLogoff();
     });
+
+    it('cloud: a session whose document linked no logoff gets the platform logoff, without sap-contextid, and disconnect() resolves on its write', async () => {
+      server = await standIn({
+        sessionDocument: NO_LOGOFF_DOCUMENT,
+        cookies: [
+          'SAP_SESSIONID_STUB_100=S1; Path=/',
+          'sap-contextid=CTX; Path=/',
+        ],
+      });
+      const config = {
+        ...configFor(server.baseUrl),
+        authType: 'jwt',
+        jwtToken: 'TOKEN',
+      } as SapConfig;
+      const conn = new AdtCloudConnector(
+        config,
+        TokenAuthProvider.fixed('TOKEN'),
+        cloudHttpTransport(config, null),
+        null,
+      );
+      await conn.connect();
+
+      const disconnected = watched(conn.disconnect());
+      const logoff = await server.logoffArrived;
+      // The answer is held: disconnect() resolved on the write alone.
+      await drained();
+      expect(disconnected()).toBe(true);
+      expect(logoff.url).toBe('/sap/public/bc/icf/logoff');
+      const cookie = String(logoff.headers.cookie ?? '');
+      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S1');
+      expect(cookie).not.toContain('sap-contextid');
+      // Exactly as the on-prem wire sends it: no session header of the
+      // cloud's own, and no credential.
+      expect(logoff.headers['x-sap-security-session']).toBeUndefined();
+      expect(logoff.headers.authorization).toBeUndefined();
+      expect(server.logoffs()).toBe(1);
+      server.answerLogoff();
+      await conn.flushGoodbye(60_000);
+    });
+
+    it('cloud: connect() failing after a preflight session with no logoff link sends the platform logoff before it rejects', async () => {
+      server = await standIn({
+        sessionDocument: NO_LOGOFF_DOCUMENT,
+        discoveryStatus: 404,
+        fallbackStatus: 404,
+      });
+      const config = {
+        ...configFor(server.baseUrl),
+        authType: 'jwt',
+        jwtToken: 'TOKEN',
+      } as SapConfig;
+      const conn = new AdtCloudConnector(
+        config,
+        TokenAuthProvider.fixed('TOKEN'),
+        cloudHttpTransport(config, null),
+        null,
+      );
+
+      await expect(conn.connect()).rejects.toBeDefined();
+      // It rejected after the write: the logoff is on its way or arrived.
+      const logoff = await server.logoffArrived;
+      expect(logoff.url).toBe('/sap/public/bc/icf/logoff');
+      expect(String(logoff.headers.cookie ?? '')).toContain(
+        'SAP_SESSIONID_STUB_100=S1',
+      );
+      expect(server.logoffs()).toBe(1);
+      server.answerLogoff();
+    }, 30_000);
 
     it('cloud: a context in the jar stays off the logoff', async () => {
       server = await standIn();

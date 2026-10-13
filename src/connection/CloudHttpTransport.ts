@@ -22,6 +22,13 @@
  * back to the platform logoff — an inference, and the only one left in this
  * layer. A consumer that reaches an on-prem system with this transport has
  * taken the wrong one, and finds out rather than being silently downgraded.
+ *
+ * **The platform logoff when no link was published.** Not an inference about
+ * the system: `/sap/public/bc/icf/logoff` ends a cloud security session too
+ * (measured on a BTP trial with bare HTTP, 2026-10-13: a preflight answered
+ * without a logoff link yet set a live `SAP_SESSIONID`; after that logoff the
+ * same cookies got `401`, before it `200`). So a held session with no link is
+ * logged off there, as the on-prem wire does.
  */
 
 import { mergeCookieHeaders } from '../utils/cookies.js';
@@ -123,8 +130,8 @@ export class CloudHttpTransport
         return;
       }
 
-      // Published only while its ICF service is active; without it there is
-      // nothing that ends this session, and the close says so.
+      // Published only while its ICF service is active; without it the close
+      // sends the platform's own logoff instead.
       this.logoff = this.resolveLink(
         this.linkHref(response.data, LOGOFF_REL),
         `${context.baseUrl}${SESSIONS_PATH}`,
@@ -168,11 +175,13 @@ export class CloudHttpTransport
       return;
     }
     if (!logoff) {
-      // A session was opened, but the server linked no logoff resource: it
-      // stays until the server's own timeout.
+      // A session is held, but the server linked no logoff resource (a
+      // preflight that published none, or failed): the platform's own logoff
+      // ends it, sent exactly as the on-prem wire sends it.
       this.logger?.debug(
-        'The server published no logoff resource; the security session is left to its timeout',
+        'The server published no logoff resource; sending the platform logoff',
       );
+      await this.sendIcfLogoff(context, { cookies, affinity }, written);
       return;
     }
 

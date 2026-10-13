@@ -74,6 +74,9 @@ function deletesCookie(attributes: string[]): boolean {
 /** The cookie that names a stateful ABAP context. */
 const CONTEXT_COOKIE = 'sap-contextid';
 
+/** The platform's logoff, which answers `200` while expiring the session cookie. */
+const ICF_LOGOFF_PATH = '/sap/public/bc/icf/logoff';
+
 /**
  * A `Cookie` header without `sap-contextid`, for a request that is not stateful.
  *
@@ -811,6 +814,28 @@ export class HttpTransport implements IAdtTransport {
    * about THIS session; and when the logoff cannot end one, the reason is an
    * error message whose status the ICF kernel picks, which no ABAP source shows.
    */
+  /**
+   * The platform's own logoff, `/sap/public/bc/icf/logoff`: the session's
+   * cookies (taken by the caller before its first await, without
+   * `sap-contextid`), no session headers, its write reported through
+   * `written`. On-prem it is the only goodbye; on cloud it is the goodbye when
+   * the server linked no logoff resource of its own — it ends a cloud security
+   * session too (measured on a BTP trial with bare HTTP, 2026-10-13: the same
+   * cookies were refused with 401 right after it, accepted before).
+   */
+  protected async sendIcfLogoff(
+    context: IAdtSessionContext,
+    snapshot: { cookies: string; affinity: Record<string, string> },
+    written?: () => void,
+  ): Promise<void> {
+    await this.sendLogoff(
+      context,
+      `${context.baseUrl}${ICF_LOGOFF_PATH}`,
+      { ...snapshot, session: {} },
+      written,
+    );
+  }
+
   protected async sendLogoff(
     context: IAdtSessionContext,
     url: string,

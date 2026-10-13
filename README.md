@@ -48,7 +48,8 @@ The package uses a clean separation of concerns:
 - **`AdtCloudConnector`** (concrete, exported):
   - An ABAP Cloud system: a session is a resource, opened at
     `/sap/bc/adt/core/http/sessions` and given back through the logoff resource its answer
-    links to (a `DELETE` on the session's own address answers `200` and ends nothing)
+    links to, or the platform's ICF logoff when it links none (a `DELETE` on the
+    session's own address answers `200` and ends nothing)
   - Takes an auth provider, same as above
 
   **Which one you take is how you say where you are dialling.** Nothing is probed:

@@ -102,6 +102,14 @@ What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).
   - A 401 or a 200 with only `sap-XSRF_*` carries no session, and nothing is
     sent.
   - The on-prem rule used to be "established and holding any cookie".
+  - On cloud, a session whose server linked no logoff resource is logged off
+    through the platform's ICF logoff (`/sap/public/bc/icf/logoff`), sent
+    exactly as on-prem: the session's cookies without `sap-contextid`, no
+    session header, the write reported the same way. It used to be left to
+    the server's timeout. Measured on a BTP trial with bare HTTP
+    (2026-10-13): a preflight answered without a logoff link yet set a live
+    `SAP_SESSIONID`; after the ICF logoff the same cookies got `401`, before
+    it `200`. A linked logoff resource is used as before.
   - Evidence (on-premise ABAP code and measurement): `CL_HTTP_SERVER_NET->send_response`
     sets `SAP_SESSIONID` only when a security session was created, whatever
     the status, and the ICF logoff ends a session only when that cookie is

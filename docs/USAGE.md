@@ -537,6 +537,11 @@ the logoff is the backstop, not the way to finish your work.
    retried.
 3. A successful `connect()` (200) sends no logoff; the session lives until
    `disconnect()`.
+4. Where it goes: on-premise, the platform's ICF logoff
+   (`/sap/public/bc/icf/logoff`). On cloud, the logoff resource the session
+   document links to; when it links none, the same ICF logoff, sent exactly as
+   on-premise. Nothing is left to the server's timeout while a live
+   `SAP_SESSIONID_*` is held.
 
 The logoff never carries `sap-contextid` — only `SAP_SESSIONID_*`,
 `sap-usercontext` and the affinity it needs. Measured on an on-premise system with bare HTTP
@@ -877,7 +882,8 @@ class AdtCloudConnector<
 The difference is what each does with the session: on-prem takes it from the
 establishing call and gives it back with the platform's ICF logoff; cloud opens
 one at `/sap/bc/adt/core/http/sessions` and gives it back through the logoff
-resource the server links to in the same answer. Not by `DELETE` on the
+resource the server links to in the same answer — or, when it links none, with
+the platform's ICF logoff, sent exactly as on-prem. Not by `DELETE` on the
 session's own address: from inside that session it answers `200` and ends
 nothing (measured on a BTP trial, 2026-10-12).
 

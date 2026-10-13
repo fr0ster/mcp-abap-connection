@@ -19,8 +19,6 @@
 import { HttpTransport } from './HttpTransport.js';
 import type { IAdtSessionContext, IOnPremTransport } from './IAdtTransport.js';
 
-const ICF_LOGOFF_PATH = '/sap/public/bc/icf/logoff';
-
 export class OnPremHttpTransport
   extends HttpTransport
   implements IOnPremTransport
@@ -66,15 +64,6 @@ export class OnPremHttpTransport
       return;
     }
 
-    await this.sendLogoff(
-      context,
-      `${context.baseUrl}${ICF_LOGOFF_PATH}`,
-      {
-        cookies,
-        affinity,
-        session: {},
-      },
-      written,
-    );
+    await this.sendIcfLogoff(context, { cookies, affinity }, written);
   }
 }
