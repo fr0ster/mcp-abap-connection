@@ -12,7 +12,7 @@
    session is alive. The cookies of the instance's session are readable (`sessionCookies()`),
    for the caller to keep.
 3. **Requests.** Each carries the credential the `IAuthProvider` hands over, the CSRF token
-   and the session's cookies. A request is sent stateful (`LOCK`, `UNLOCK`, activation) or
+   and the session's cookies. A request is sent stateful (`LOCK`, `UNLOCK`) or
    stateless; nothing else of the session is kept between requests. A request carries no
    deadline but the caller's own timeout.
 4. **SAP's answer** reaches the caller as SAP gave it.
