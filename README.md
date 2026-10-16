@@ -161,6 +161,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 18.0.0](./docs/MIGRATION-18.0.md)** - `rfcParamsFrom` returns `RfcAddress` (application server or message server): narrow before reading `.ashost` / `.sysnr`; RFC through a message server and a logon group (`mshost`, `msserv` | `sysid`, `group`, `saprouter`)
 - 🚚 **[Migration to 17.0.0](./docs/MIGRATION-17.0.md)** - no deadline of the package's own: `getTimeout`, `getTimeoutConfig` and `SAP_TIMEOUT_*` are gone, and a request inside a critical section carries none at all; an instance can be built on an existing session (`session`, `sessionCookies()`)
 - 🚚 **[Migration to 16.0.0](./docs/MIGRATION-16.0.md)** - the per-request `signal` (15.1.0) and `ADT_REQUEST_ABORTED` are removed; `disconnect()` resolves once the logoff is written, not answered — a process about to exit awaits it; `flushGoodbye()` when the answer matters
 - 🚚 **[Migration to 15.0.0](./docs/MIGRATION-15.0.md)** - on `@mcp-abap-adt/interfaces-adt-connection` 2: `makeAdtRequest`'s answer is `unknown` unless its type is named; nothing changes at run time
@@ -817,9 +818,17 @@ which `connect()` then takes over instead of logging on.
 
 #### `rfcConversationFrom(config)`
 
-What `RfcTransport` is constructed with. Derives `ashost` from the url and
-`sysnr` from the HTTP port by the SAP convention that `80XX` is the ICM port for
-system `XX`, which `SAP_SYSNR` overrides for a port that follows no convention.
+What `RfcTransport` is constructed with. The address is one of two:
+
+- **One application server** (default): `ashost` from the url and `sysnr` from
+  the HTTP port by the SAP convention that `80XX` is the ICM port for system
+  `XX`, which `SAP_SYSNR` overrides for a port that follows no convention.
+- **A message server and a logon group**, when the config states `mshost`: the
+  config's `mshost`, `msserv` or `sysid` (one of the two is required) and
+  `group` (default `PUBLIC`) go to the SDK as they are, and the url gives no
+  host or system number — the message server picks the application server.
+
+`saprouter` goes with either.
 
 The SAP NW RFC SDK is loaded when a conversation opens, not when this is called,
 so a machine without it fails at `connect()` with a message saying what to
@@ -829,7 +838,8 @@ install rather than at construction.
 function rfcConversationFrom(
   config: SapConfig,
 ): (logon: Readonly<Record<string, string>>) => IRfcConversation;
-function rfcParamsFrom(config: SapConfig): RfcConnectionParams; // the address only
+function rfcParamsFrom(config: SapConfig): RfcAddress; // the address only
+// RfcAddress = RfcConnectionParams (ashost, sysnr) | RfcMessageServerParams (mshost, msserv | sysid, group)
 ```
 
 ```typescript

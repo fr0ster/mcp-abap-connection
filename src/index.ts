@@ -76,7 +76,9 @@ export {
 // The front door to the RFC wire: the derivation a consumer would otherwise
 // copy, and the SDK loaded only when a conversation is opened.
 export {
+  type RfcAddress,
   type RfcConnectionParams,
+  type RfcMessageServerParams,
   rfcConversationFrom,
   rfcParamsFrom,
 } from './connection/rfcConversation.js';

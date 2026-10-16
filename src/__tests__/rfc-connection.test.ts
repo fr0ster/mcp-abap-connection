@@ -17,6 +17,9 @@
  *   - for SNC: Windows or macOS with the Secure Login Client, and
  *     SAP_SNC_PARTNERNAME in the env file (optional SAP_SNC_QOP, SAP_SNC_LIB,
  *     SAP_SNC_MYNAME)
+ *   - for SNC through a message server: the SNC settings, plus SAP_MSHOST and
+ *     SAP_MSSERV or SAP_SYSID (optional SAP_GROUP, default PUBLIC, and
+ *     SAP_SAPROUTER)
  *
  * Each block states where it can run; elsewhere it is skipped with the reason
  * in its title — not being runnable on this machine is not a failure.
@@ -125,6 +128,21 @@ function sncUnavailable(): string | null {
   );
   if (missing.length) return `${envFile} lacks ${missing.join(', ')}`;
   return rfcUnavailable();
+}
+
+/**
+ * The same SNC logon, dialled through a message server and a logon group —
+ * SAP_MSHOST plus SAP_MSSERV or SAP_SYSID, SAP_GROUP optional — instead of the
+ * application server the url names.
+ */
+function messageServerUnavailable(): string | null {
+  const snc = sncUnavailable();
+  if (snc) return snc;
+  if (!process.env.SAP_MSHOST) return `${envFile} lacks SAP_MSHOST`;
+  if (!process.env.SAP_MSSERV && !process.env.SAP_SYSID) {
+    return `${envFile} lacks SAP_MSSERV or SAP_SYSID`;
+  }
+  return null;
 }
 
 /** Run the block, or skip it with the reason in its title. */
@@ -310,6 +328,52 @@ describeWhere(
     });
 
     it('logs on without a password and is answered', async () => {
+      const response = await conn.makeAdtRequest({
+        url: '/sap/bc/adt/compatibility/graph',
+        method: 'GET',
+        timeout: 15_000,
+      });
+      expect(response.status).toBe(200);
+    });
+  },
+);
+
+describeWhere(
+  'SNC over RFC through a message server and a logon group (integration)',
+  messageServerUnavailable(),
+  () => {
+    let conn: AdtOnPremConnector<IAuthProvider, RfcTransport>;
+
+    beforeAll(async () => {
+      const config: SapConfig = {
+        url: process.env.SAP_URL as string,
+        client: process.env.SAP_CLIENT as string,
+        authType: 'basic',
+        mshost: process.env.SAP_MSHOST as string,
+        msserv: process.env.SAP_MSSERV || undefined,
+        sysid: process.env.SAP_SYSID || undefined,
+        group: process.env.SAP_GROUP || undefined,
+        saprouter: process.env.SAP_SAPROUTER || undefined,
+      };
+      conn = new AdtOnPremConnector(
+        config,
+        SncLogonProvider.forSecureLoginClient({
+          partnerName: process.env.SAP_SNC_PARTNERNAME as string,
+          qop: process.env.SAP_SNC_QOP || undefined,
+          sncLib: process.env.SAP_SNC_LIB || undefined,
+          myName: process.env.SAP_SNC_MYNAME || undefined,
+        }),
+        new RfcTransport(rfcConversationFrom(config), logger),
+        logger,
+      );
+      await conn.connect();
+    }, 60_000);
+
+    afterAll(async () => {
+      await conn?.disconnect();
+    });
+
+    it('logs on through the message server and is answered', async () => {
       const response = await conn.makeAdtRequest({
         url: '/sap/bc/adt/compatibility/graph',
         method: 'GET',

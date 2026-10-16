@@ -9,7 +9,20 @@
  * `ashost` and `sysnr` themselves — which is exactly the derivation the class
  * this replaces already did, and would now be copied into every consumer.
  */
-import { rfcParamsFrom } from '../connection/rfcConversation.js';
+import {
+  type RfcConnectionParams,
+  rfcParamsFrom,
+} from '../connection/rfcConversation.js';
+
+/** The application-server address, or a failed expectation: the result is a union. */
+function appServer(
+  config: Parameters<typeof rfcParamsFrom>[0],
+): RfcConnectionParams {
+  const params = rfcParamsFrom(config);
+  if (!('ashost' in params))
+    throw new Error('expected an application-server address');
+  return params;
+}
 
 const base = {
   url: 'http://saphost:8000',
@@ -21,30 +34,26 @@ const base = {
 
 describe('the connection parameters an RFC conversation needs', () => {
   it('takes the host out of the url', () => {
-    expect(rfcParamsFrom(base).ashost).toBe('saphost');
+    expect(appServer(base).ashost).toBe('saphost');
   });
 
   it('reads the system number off the HTTP port, by SAP convention', () => {
     // 80XX is the ICM port for system XX. Not a guess about the deployment —
     // it is the convention the port itself follows.
-    expect(rfcParamsFrom({ ...base, url: 'http://saphost:8042' }).sysnr).toBe(
-      '42',
-    );
+    expect(appServer({ ...base, url: 'http://saphost:8042' }).sysnr).toBe('42');
   });
 
   it('pads a single digit, because sysnr is two', () => {
-    expect(rfcParamsFrom({ ...base, url: 'http://saphost:8001' }).sysnr).toBe(
-      '01',
-    );
+    expect(appServer({ ...base, url: 'http://saphost:8001' }).sysnr).toBe('01');
   });
 
   it('lets SAP_SYSNR override it, for a port that follows no convention', () => {
     const previous = process.env.SAP_SYSNR;
     process.env.SAP_SYSNR = '11';
     try {
-      expect(
-        rfcParamsFrom({ ...base, url: 'https://saphost:50400' }).sysnr,
-      ).toBe('11');
+      expect(appServer({ ...base, url: 'https://saphost:50400' }).sysnr).toBe(
+        '11',
+      );
     } finally {
       if (previous === undefined) delete process.env.SAP_SYSNR;
       else process.env.SAP_SYSNR = previous;
@@ -64,5 +73,83 @@ describe('the connection parameters an RFC conversation needs', () => {
 
   it('refuses a config it cannot dial', () => {
     expect(() => rfcParamsFrom({ ...base, url: '' })).toThrow(/url/i);
+  });
+
+  it('carries a SAProuter string with one application server', () => {
+    expect(
+      rfcParamsFrom({ ...base, saprouter: '/H/router.example.com/S/3299/H/' }),
+    ).toStrictEqual({
+      ashost: 'saphost',
+      sysnr: '00',
+      client: '100',
+      lang: 'EN',
+      saprouter: '/H/router.example.com/S/3299/H/',
+    });
+  });
+});
+
+describe('the address of an RFC conversation through a message server', () => {
+  const ms = { ...base, mshost: 'msgserver.example.com' };
+
+  it('dials the message server with the logon group, and takes nothing from the url', () => {
+    expect(
+      rfcParamsFrom({
+        ...ms,
+        msserv: '3600',
+        group: 'SPACE',
+        url: 'http://saphost:8042',
+      }),
+    ).toStrictEqual({
+      mshost: 'msgserver.example.com',
+      msserv: '3600',
+      group: 'SPACE',
+      client: '100',
+      lang: 'EN',
+    });
+  });
+
+  it('takes sysid when msserv is absent', () => {
+    expect(rfcParamsFrom({ ...ms, sysid: 'ABC' })).toStrictEqual({
+      mshost: 'msgserver.example.com',
+      sysid: 'ABC',
+      group: 'PUBLIC',
+      client: '100',
+      lang: 'EN',
+    });
+  });
+
+  it('defaults the logon group to PUBLIC', () => {
+    expect(rfcParamsFrom({ ...ms, msserv: '3600' })).toMatchObject({
+      group: 'PUBLIC',
+    });
+  });
+
+  it('carries a SAProuter string', () => {
+    expect(
+      rfcParamsFrom({ ...ms, msserv: '3600', saprouter: '/H/r/S/3299/H/' }),
+    ).toMatchObject({ saprouter: '/H/r/S/3299/H/' });
+  });
+
+  it('needs no url', () => {
+    expect(rfcParamsFrom({ ...ms, msserv: '3600', url: '' })).toMatchObject({
+      mshost: 'msgserver.example.com',
+    });
+  });
+
+  it('ignores SAP_SYSNR, which belongs to one application server', () => {
+    const previous = process.env.SAP_SYSNR;
+    process.env.SAP_SYSNR = '11';
+    try {
+      expect(rfcParamsFrom({ ...ms, msserv: '3600' })).not.toHaveProperty(
+        'sysnr',
+      );
+    } finally {
+      if (previous === undefined) delete process.env.SAP_SYSNR;
+      else process.env.SAP_SYSNR = previous;
+    }
+  });
+
+  it('refuses a message server without msserv or sysid, naming both', () => {
+    expect(() => rfcParamsFrom(ms)).toThrow(/msserv or sysid/);
   });
 });
