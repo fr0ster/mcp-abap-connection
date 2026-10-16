@@ -9,7 +9,20 @@
  * `ashost` and `sysnr` themselves — which is exactly the derivation the class
  * this replaces already did, and would now be copied into every consumer.
  */
-import { rfcParamsFrom } from '../connection/rfcConversation.js';
+import {
+  type RfcConnectionParams,
+  rfcParamsFrom,
+} from '../connection/rfcConversation.js';
+
+/** The application-server address, or a failed expectation: the result is a union. */
+function appServer(
+  config: Parameters<typeof rfcParamsFrom>[0],
+): RfcConnectionParams {
+  const params = rfcParamsFrom(config);
+  if (!('ashost' in params))
+    throw new Error('expected an application-server address');
+  return params;
+}
 
 const base = {
   url: 'http://saphost:8000',
@@ -21,30 +34,26 @@ const base = {
 
 describe('the connection parameters an RFC conversation needs', () => {
   it('takes the host out of the url', () => {
-    expect(rfcParamsFrom(base).ashost).toBe('saphost');
+    expect(appServer(base).ashost).toBe('saphost');
   });
 
   it('reads the system number off the HTTP port, by SAP convention', () => {
     // 80XX is the ICM port for system XX. Not a guess about the deployment —
     // it is the convention the port itself follows.
-    expect(rfcParamsFrom({ ...base, url: 'http://saphost:8042' }).sysnr).toBe(
-      '42',
-    );
+    expect(appServer({ ...base, url: 'http://saphost:8042' }).sysnr).toBe('42');
   });
 
   it('pads a single digit, because sysnr is two', () => {
-    expect(rfcParamsFrom({ ...base, url: 'http://saphost:8001' }).sysnr).toBe(
-      '01',
-    );
+    expect(appServer({ ...base, url: 'http://saphost:8001' }).sysnr).toBe('01');
   });
 
   it('lets SAP_SYSNR override it, for a port that follows no convention', () => {
     const previous = process.env.SAP_SYSNR;
     process.env.SAP_SYSNR = '11';
     try {
-      expect(
-        rfcParamsFrom({ ...base, url: 'https://saphost:50400' }).sysnr,
-      ).toBe('11');
+      expect(appServer({ ...base, url: 'https://saphost:50400' }).sysnr).toBe(
+        '11',
+      );
     } finally {
       if (previous === undefined) delete process.env.SAP_SYSNR;
       else process.env.SAP_SYSNR = previous;
