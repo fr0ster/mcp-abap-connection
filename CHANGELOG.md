@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **RFC through a message server and a logon group.** With `mshost` in the config,
+  `rfcParamsFrom` / `rfcConversationFrom` dial the message server: `mshost`, `msserv` or
+  `sysid` (one is required; a config with neither is refused naming both), and `group`
+  (default `PUBLIC`), passed to the SAP NW RFC SDK as its own keys. The url then gives no host
+  and no system number, and `SAP_SYSNR` is not read. `saprouter` is carried with either
+  addressing. Needs `@mcp-abap-adt/interfaces-auth-sap` with those `ISapConfig` fields.
+- `RfcMessageServerParams` and `RfcAddress` (`RfcConnectionParams | RfcMessageServerParams`)
+  are exported; `RfcConnectionParams` gains an optional `saprouter`.
+
+### Changed
+
+- **`rfcParamsFrom` returns `RfcAddress`** instead of `RfcConnectionParams`. A caller that
+  read `.ashost` / `.sysnr` from its result narrows first (`'ashost' in params`).
+
 ## [17.1.0] - 2026-10-13
 
 What this package answers for is listed in [docs/SCOPE.md](./docs/SCOPE.md).

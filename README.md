@@ -817,9 +817,17 @@ which `connect()` then takes over instead of logging on.
 
 #### `rfcConversationFrom(config)`
 
-What `RfcTransport` is constructed with. Derives `ashost` from the url and
-`sysnr` from the HTTP port by the SAP convention that `80XX` is the ICM port for
-system `XX`, which `SAP_SYSNR` overrides for a port that follows no convention.
+What `RfcTransport` is constructed with. The address is one of two:
+
+- **One application server** (default): `ashost` from the url and `sysnr` from
+  the HTTP port by the SAP convention that `80XX` is the ICM port for system
+  `XX`, which `SAP_SYSNR` overrides for a port that follows no convention.
+- **A message server and a logon group**, when the config states `mshost`: the
+  config's `mshost`, `msserv` or `sysid` (one of the two is required) and
+  `group` (default `PUBLIC`) go to the SDK as they are, and the url gives no
+  host or system number — the message server picks the application server.
+
+`saprouter` goes with either.
 
 The SAP NW RFC SDK is loaded when a conversation opens, not when this is called,
 so a machine without it fails at `connect()` with a message saying what to
@@ -829,7 +837,8 @@ install rather than at construction.
 function rfcConversationFrom(
   config: SapConfig,
 ): (logon: Readonly<Record<string, string>>) => IRfcConversation;
-function rfcParamsFrom(config: SapConfig): RfcConnectionParams; // the address only
+function rfcParamsFrom(config: SapConfig): RfcAddress; // the address only
+// RfcAddress = RfcConnectionParams (ashost, sysnr) | RfcMessageServerParams (mshost, msserv | sysid, group)
 ```
 
 ```typescript
