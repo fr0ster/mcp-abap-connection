@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [18.0.0] - 2026-10-16
+
+Migrating from 17.x: [docs/MIGRATION-18.0.md](./docs/MIGRATION-18.0.md).
+
 ### Added
 
 - **RFC through a message server and a logon group.** With `mshost` in the config,
@@ -17,11 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   addressing. Needs `@mcp-abap-adt/interfaces-auth-sap` ^3.4.0, which adds those `ISapConfig` fields; the dependency is raised to it.
 - `RfcMessageServerParams` and `RfcAddress` (`RfcConnectionParams | RfcMessageServerParams`)
   are exported; `RfcConnectionParams` gains an optional `saprouter`.
+- **Not yet run against a live message server.** The address follows the SDK's own parameters
+  and is unit-tested; `mshost` + `msserv` without `sysid` is accepted but unconfirmed. If the SDK
+  refuses it, add `sysid`. The gated integration test covers it on a system that has one.
 
-### Changed
+### Changed (breaking)
 
-- **`rfcParamsFrom` returns `RfcAddress`** instead of `RfcConnectionParams`. A caller that
-  read `.ashost` / `.sysnr` from its result narrows first (`'ashost' in params`).
+- **`rfcParamsFrom` returns `RfcAddress`** instead of `RfcConnectionParams`. Nothing changes at
+  run time for a config without `mshost`, but a caller that read `.ashost` / `.sysnr` straight
+  from the result no longer compiles: narrow first (`'ashost' in params`). See the migration note.
 
 ## [17.1.0] - 2026-10-13
 
@@ -2664,7 +2672,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v17.1.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.0...HEAD
+[18.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v17.1.0...v18.0.0
 [17.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v17.0.0...v17.1.0
 [17.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v16.0.0...v17.0.0
 [16.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v15.1.0...v16.0.0
