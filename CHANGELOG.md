@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sysid` (one is required; a config with neither is refused naming both), and `group`
   (default `PUBLIC`), passed to the SAP NW RFC SDK as its own keys. The url then gives no host
   and no system number, and `SAP_SYSNR` is not read. `saprouter` is carried with either
-  addressing. Needs `@mcp-abap-adt/interfaces-auth-sap` with those `ISapConfig` fields.
+  addressing. Needs `@mcp-abap-adt/interfaces-auth-sap` ^3.4.0, which adds those `ISapConfig` fields; the dependency is raised to it.
 - `RfcMessageServerParams` and `RfcAddress` (`RfcConnectionParams | RfcMessageServerParams`)
   are exported; `RfcConnectionParams` gains an optional `saprouter`.
 
