@@ -891,7 +891,10 @@ abstract class AbstractAbapConnection
       // the status). A failed connect() takes no ENQUEUE lock. The answer is not
       // waited for, as a teardown does not wait for one; its failure was
       // absorbed above, so nothing goes unhandled.
-      await goodbye.written;
+      // With the instance's earlier logoff, when it sent one: a session the
+      // establishment found replaced was logged off as it was found
+      // (`applyIdentityPolicy`), and this connect() is what it failed.
+      await Promise.all([goodbye.written, this.ended?.written]);
       throw error;
     }
 
@@ -1146,6 +1149,23 @@ abstract class AbstractAbapConnection
   ): void {
     if (classification !== 'replaced') return;
 
+    // The answer that replaced the session brought a session of its own,
+    // which SAP opened and which nothing here will ever use: it is logged off
+    // now, while the wire still holds its cookie, as `disconnect()` logs off
+    // any session — its `SAP_SESSIONID`, no `sap-contextid`, the answer not
+    // read. The loss clears the cookies next, so a later `disconnect()` has
+    // none to send, and without this the replacing session stayed in SM05
+    // until its idle timeout — one per replacement. The old session is SAP's
+    // to have ended. Kept with the instance's goodbye: `disconnect()` waits
+    // for its write, `flushGoodbye()` for its answer — and a `connect()` this
+    // replacement fails rejects only once it is written.
+    //
+    // The cookies go at once, as `disconnect()` drops them right after its
+    // logoff: the wire took its snapshot synchronously, and any other path
+    // that would end the session — a failed `connect()`'s logoff above all —
+    // must find nothing left to send, or the same session is logged off twice.
+    this.endSession(this.sessionContext());
+    this.clearSessionState();
     this.raiseSessionLost('the session cookie changed under us');
     throw sessionError(
       ADT_SESSION_ERROR.SESSION_REPLACED,
