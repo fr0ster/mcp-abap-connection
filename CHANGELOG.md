@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [18.0.1] - 2026-10-20
+
+### Fixed
+
+- **A replaced session no longer leaks the session that replaced it.** When an answer
+  carried another session's `SAP_SESSIONID` (`ADT_SESSION_REPLACED` by the identity
+  policy), the connection cleared its cookies and sent nothing, so a later `disconnect()`
+  had no `SAP_SESSIONID` to log off and the session SAP opened under that answer stayed in
+  SM05 until its idle timeout — one per replacement. That session is now logged off at
+  the replacement, with the logoff `disconnect()` sends (its cookie, no `sap-contextid`,
+  the answer not read), and then the cookies are cleared as before. `disconnect()` waits
+  for its write and `flushGoodbye()` for its answer; a `connect()` whose establishment
+  found the session replaced rejects once it is written, and sends no second logoff for
+  it. A session reported gone (`400 "Session not found"`) and a `401` send nothing new.
+  `ADT_SESSION_REPLACED` reaches the caller as before; no retry, no timer. Over RFC no
+  answer can replace the conversation, so nothing changes there.
+
 ## [18.0.0] - 2026-10-16
 
 Migrating from 17.x: [docs/MIGRATION-18.0.md](./docs/MIGRATION-18.0.md).
@@ -2672,7 +2689,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.1...HEAD
+[18.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.0...v18.0.1
 [18.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v17.1.0...v18.0.0
 [17.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v17.0.0...v17.1.0
 [17.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v16.0.0...v17.0.0
