@@ -692,6 +692,18 @@ After either of these, `connect()` and every request on the instance reject
 still holds a live `SAP_SESSIONID`, and after a loss the connection has
 already cleared its cookies, so it sends nothing.
 
+**A replacement logs the replacing session off** (since 18.0.1). The answer
+that replaced the session carried the `SAP_SESSIONID` of a new one, which SAP
+opened and nothing will use; the connection sends it the same logoff
+`disconnect()` sends — that cookie, no `sap-contextid`, the answer not read —
+before it clears the cookies, so it does not stay in SM05 until its idle
+timeout. `disconnect()` waits for that logoff's write, `flushGoodbye()` for
+its answer; a `connect()` that found its session replaced rejects once it is
+written. The old session SAP already ended, and a session reported gone
+(`400 "Session not found"`) brought no new one: nothing is sent for either.
+`ADT_SESSION_REPLACED` reaches the caller as before. Over RFC the
+conversation is the session and no answer can replace it.
+
 ## Advanced Features
 
 ### Session ID Management

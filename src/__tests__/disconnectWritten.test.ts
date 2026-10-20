@@ -49,6 +49,8 @@ interface StandIn {
   baseUrl: string;
   /** Settles when the logoff request has reached the server. */
   logoffArrived: Promise<IncomingMessage>;
+  /** The `Cookie` header of each logoff, in arrival order. */
+  logoffCookies: () => string[];
   /** How many logoff requests reached the server. */
   logoffs: () => number;
   /** How many establishing (discovery) requests reached the server. */
@@ -83,6 +85,8 @@ async function standIn(
     fallbackStatus?: number;
     /** Paths answered 200, each with the `Set-Cookie` given. */
     routes?: Record<string, string[]>;
+    /** The status a path of `routes` is answered with, instead of 200. */
+    routeStatus?: Record<string, number>;
     /** The cloud session document, instead of one that links a logoff. */
     sessionDocument?: string;
   } = {},
@@ -100,12 +104,14 @@ async function standIn(
       ? ['SAP_SESSIONID_STUB_100=S1; Path=/']
       : ['sap-XSRF_STUB_100=X1; Path=/']);
   let logoffs = 0;
+  const logoffCookies: string[] = [];
   let establishments = 0;
   const fallbackCookies: string[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? '';
     if (url.includes('/logoff')) {
       logoffs += 1;
+      logoffCookies.push(String(req.headers.cookie ?? ''));
       arrived(req);
       if (options.logoffStatus !== undefined) {
         res.writeHead(options.logoffStatus, { location: '/goodbye' });
@@ -117,7 +123,11 @@ async function standIn(
     }
     const route = options.routes?.[url.split('?')[0] ?? ''];
     if (route) {
-      res.writeHead(200, { 'content-type': 'text/plain', 'set-cookie': route });
+      const status = options.routeStatus?.[url.split('?')[0] ?? ''] ?? 200;
+      res.writeHead(status, {
+        'content-type': 'text/plain',
+        'set-cookie': route,
+      });
       res.end('');
       return;
     }
@@ -158,6 +168,7 @@ async function standIn(
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     logoffArrived,
+    logoffCookies: () => logoffCookies,
     logoffs: () => logoffs,
     establishments: () => establishments,
     fallbackCookies: () => fallbackCookies,
@@ -210,7 +221,10 @@ function bytesNeverTaken(transport: unknown): {
   fail: () => void;
   /** Settles when the wire has opened its logoff request. */
   requested: Promise<void>;
+  /** The options of every logoff request the wire opened, in order. */
+  logoffs: Record<string, unknown>[];
 } {
+  const logoffs: Record<string, unknown>[] = [];
   let opened!: () => void;
   const requested = new Promise<void>((resolve) => {
     opened = resolve;
@@ -236,6 +250,7 @@ function bytesNeverTaken(transport: unknown): {
       ) => unknown;
     }
   ).logoffRequest = (options, onResponse) => {
+    logoffs.push(options);
     opened();
     return httpRequest(
       { ...options, agent: undefined, createConnection: () => socket } as never,
@@ -245,6 +260,7 @@ function bytesNeverTaken(transport: unknown): {
   return {
     fail: () => socket.destroy(new Error('the server never took the bytes')),
     requested,
+    logoffs,
   };
 }
 
@@ -451,10 +467,152 @@ describe('disconnect() resolves once the logoff is written', () => {
       await expect(
         conn.makeAdtRequest(work('/sap/bc/adt/work')),
       ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+      await server.logoffArrived;
+      server.answerLogoff();
       await spentAfterLoss(conn);
       expect(server.establishments()).toBe(establishments);
       await turns(5);
+      // The replacing session's logoff, and nothing more: disconnect() found
+      // the jar cleared and sent none of its own.
+      expect(server.logoffs()).toBe(1);
+    });
+
+    it("a replaced SAP_SESSIONID: the replacing session is logged off — its cookie, no sap-contextid — and flushGoodbye() waits for that logoff's answer", async () => {
+      server = await standIn({
+        routes: {
+          '/sap/bc/adt/work': [
+            'SAP_SESSIONID_STUB_100=S2; Path=/',
+            'sap-contextid=CTX2; Path=/',
+          ],
+        },
+      });
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await conn.connect();
+
+      await expect(
+        conn.makeAdtRequest(work('/sap/bc/adt/work')),
+      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+      // Sent at the loss, without waiting for disconnect().
+      await server.logoffArrived;
+      expect(server.logoffs()).toBe(1);
+      const [cookie] = server.logoffCookies();
+      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S2');
+      expect(cookie).not.toContain('S1');
+      expect(cookie).not.toContain('sap-contextid');
+
+      // The answer is held: flushGoodbye() has not resolved.
+      const flushed = watched(conn.flushGoodbye());
+      await turns(5);
+      expect(flushed()).toBe(false);
+      server.answerLogoff();
+      await conn.flushGoodbye();
+
+      // disconnect() owes nothing more: the cookies were forgotten.
+      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await turns(5);
+      expect(server.logoffs()).toBe(1);
+    });
+
+    it('cloud: a replaced SAP_SESSIONID logs the replacing session off through the linked logoff, with its cookie and no sap-contextid', async () => {
+      server = await standIn({
+        routes: {
+          '/sap/bc/adt/work': [
+            'SAP_SESSIONID_STUB_100=S2; Path=/',
+            'sap-contextid=CTX2; Path=/',
+          ],
+        },
+      });
+      const config = {
+        ...configFor(server.baseUrl),
+        authType: 'jwt',
+        jwtToken: 'TOKEN',
+      } as SapConfig;
+      const conn = new AdtCloudConnector(
+        config,
+        TokenAuthProvider.fixed('TOKEN'),
+        cloudHttpTransport(config, null),
+        null,
+      );
+      await conn.connect();
+
+      await expect(
+        conn.makeAdtRequest(work('/sap/bc/adt/work')),
+      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+      const logoff = await server.logoffArrived;
+      expect(logoff.url).toBe('/sap/public/bc/icf/logoff');
+      expect(logoff.headers['x-sap-security-session']).toBe('use');
+      const [cookie] = server.logoffCookies();
+      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S2');
+      expect(cookie).not.toContain('S1');
+      expect(cookie).not.toContain('sap-contextid');
+
+      const flushed = watched(conn.flushGoodbye());
+      await turns(5);
+      expect(flushed()).toBe(false);
+      server.answerLogoff();
+      await conn.flushGoodbye();
+      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await turns(5);
+      expect(server.logoffs()).toBe(1);
+    });
+
+    it('a session replaced while connect() establishes it: one logoff, for the replacing session, written before connect() rejects', async () => {
+      // Core discovery answers 404 in session S1; its fallback, which runs in
+      // the same session, comes back naming S2.
+      server = await standIn({
+        discoveryStatus: 404,
+        routes: {
+          '/sap/bc/adt/discovery': ['SAP_SESSIONID_STUB_100=S2; Path=/'],
+        },
+      });
+      const conn = onPrem(configFor(server.baseUrl), null);
+      const wire = bytesNeverTaken(conn.transport);
+
+      const connecting = conn.connect();
+      const rejected = watched(connecting);
+      await wire.requested;
+      await turns(20);
+      // The logoff is not written yet: connect() has not rejected.
+      expect(rejected()).toBe(false);
+      wire.fail();
+      await expect(connecting).rejects.toMatchObject({
+        code: 'ADT_SESSION_REPLACED',
+      });
+      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await conn.flushGoodbye();
+      await turns(5);
+      // One logoff and only one: the replacement's. The failed connect()
+      // found the cookies already forgotten and sent none of its own.
       expect(server.logoffs()).toBe(0);
+      expect(wire.logoffs).toHaveLength(1);
+      const headers = (wire.logoffs[0]?.headers ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const cookie = String(headers.Cookie ?? headers.cookie ?? '');
+      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S2');
+      expect(cookie).not.toContain('S1');
+    }, 30_000);
+
+    it('a 401 answering a request is no replacement: no logoff is sent for it, and disconnect() logs the session off once', async () => {
+      server = await standIn({
+        routes: { '/sap/bc/adt/refused': ['sap-XSRF_STUB_100=X2; Path=/'] },
+        routeStatus: { '/sap/bc/adt/refused': 401 },
+        logoffStatus: 200,
+      });
+      const conn = onPrem(configFor(server.baseUrl), null);
+      await conn.connect();
+
+      await expect(
+        conn.makeAdtRequest(work('/sap/bc/adt/refused')),
+      ).rejects.toBeDefined();
+      await turns(5);
+      expect(server.logoffs()).toBe(0);
+
+      await conn.disconnect();
+      await conn.flushGoodbye();
+      expect(server.logoffs()).toBe(1);
+      expect(server.logoffCookies()[0]).toContain('SAP_SESSIONID_STUB_100=S1');
     });
 
     it('after a plain disconnect(), a request throws NOT_CONNECTED', async () => {
