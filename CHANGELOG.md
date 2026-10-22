@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [18.0.2] - 2026-10-22
+
+### Changed
+
+- **`@mcp-abap-adt/sap-rfc-lite` `^0.3.2`** (optional dependency, was `^0.2.2`). 0.3 installs with
+  no install script — `npm install` and `npm ci` compile nothing — and loads its prebuilt binding
+  for linux-x64 (glibc), win32-x64 and darwin-arm64; on another platform the binding is built from
+  its repository. It needs Node.js 20 or newer (this package needs 22). At run time the RFC
+  library is SAP GUI's 64-bit `sapnwrfc.dll` on Windows where installed, otherwise the SAP NW RFC
+  SDK. The RFC wire's behaviour is unchanged. README, "RFC", says so.
+
 ## [18.0.1] - 2026-10-20
 
 ### Fixed
@@ -2690,6 +2701,7 @@ const connection = createAbapConnection(config, logger);
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
 [Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.1...HEAD
+[18.0.2]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.1...v18.0.2
 [18.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.0...v18.0.1
 [18.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v17.1.0...v18.0.0
 [17.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v17.0.0...v17.1.0
