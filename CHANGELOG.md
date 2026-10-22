@@ -55,6 +55,9 @@ the repository's own install, lockfile, tests and workflows.
   or several: `node scripts/run-tests.mjs rfcLogon shapeCheck`; anything after `--` goes to
   `node --test`. The plain-node scenario of `dispatchedGoodbye` now runs compiled, without the
   transpiling `register.cjs`.
+- **Every CI and release job is capped at 20 minutes** (`timeout-minutes`): on Node.js 22,
+  `node:test` bounds no single test (`--test-timeout` there bounds a whole file), so a hung test
+  would otherwise run until GitHub's 6-hour limit.
 
 ## [19.0.0] - 2026-10-22
 

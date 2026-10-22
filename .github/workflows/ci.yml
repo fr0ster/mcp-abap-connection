@@ -17,6 +17,9 @@ jobs:
     # package came to be unable to start on the one platform nobody here runs.
     # The same class of defect this repo already fixed once, in #36.
     runs-on: ${{ matrix.os }}
+    # node:test on Node 22 bounds no single test (--test-timeout there bounds a whole
+    # file), so a hung test is capped here instead of by GitHub's 6-hour default.
+    timeout-minutes: 20
     strategy:
       fail-fast: false # a failure on one platform must not hide the other's
       matrix:

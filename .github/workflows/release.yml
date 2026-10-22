@@ -11,6 +11,9 @@ permissions:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    # node:test on Node 22 bounds no single test (--test-timeout there bounds a whole
+    # file), so a hung test is capped here instead of by GitHub's 6-hour default.
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code
