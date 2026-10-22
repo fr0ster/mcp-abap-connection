@@ -25,7 +25,7 @@
  * in its title — not being runnable on this machine is not a failure.
  *
  * Run:
- *   SAP_ENV_FILE=e19.env npx jest --testPathPatterns=rfc-connection
+ *   SAP_ENV_FILE=e19.env npm run test:ci -- --testPathPatterns=rfc-connection
  */
 
 import {

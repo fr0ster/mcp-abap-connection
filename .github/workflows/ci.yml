@@ -33,7 +33,10 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: 'npm'
 
-      - run: npm ci
+      # --ignore-scripts on every npm: the Node 22 runner's npm 10 does not read
+      # package.json `allowScripts`, and no dependency's install script is
+      # needed to lint, build or test.
+      - run: npm ci --ignore-scripts
 
       # Read-only: formatting is fixed by the author, not by CI, so a build that
       # would fail locally fails here too rather than being quietly repaired.
@@ -41,11 +44,16 @@ jobs:
 
       - run: npm run build
 
-      # --no-cache because ts-jest once served a compile from before a
-      # dependency bump and reported 35 green suites for code that did not
-      # compile.
-      - run: npx jest --no-cache
+      # test:ci is `jest --no-cache`: --no-cache because ts-jest once served a
+      # compile from before a dependency bump and reported 35 green suites for
+      # code that did not compile.
+      - run: npm run test:ci
 
       - run: npm run check:docs
 
       - run: npm run check:pack
+
+      # Any known advisory of moderate severity or above fails the job, dev
+      # dependencies included: they run here and on every developer's machine.
+      # Last, so a run that fails here still shows whether the gate passed.
+      - run: npm audit --audit-level=moderate
