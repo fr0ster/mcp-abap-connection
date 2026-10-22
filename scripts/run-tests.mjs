@@ -80,4 +80,12 @@ if (files.length === 0) {
   );
   process.exit(1);
 }
-run(['--test', ...nodeArgs, ...files]);
+// Jest's default: a test that does not settle within 5 s fails rather than
+// holding the run until the job's own limit. A test that needs longer says so
+// with its own `timeout`, which wins over this. Node.js 22 applies
+// --test-timeout to each FILE as a whole (measured with 22.23.4: a file of two
+// 3 s tests is cancelled), so there it is left out and a test is bounded only
+// by its own `timeout`; from 24 it bounds each test (measured with 24.22.1).
+const major = Number(process.versions.node.split('.')[0]);
+const perTest = major >= 24 ? ['--test-timeout=5000'] : [];
+run(['--test', ...perTest, ...nodeArgs, ...files]);

@@ -14,7 +14,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it, mock } from 'node:test';
+import { after, before, describe, it, mock } from 'node:test';
 import type { SapConfig } from '../config/sapConfig.js';
 import { onPrem } from './helpers/onPrem.js';
 import { markConnectedForTest } from './helpers/session.js';
@@ -48,6 +48,18 @@ function suspendedClose(connection: { transport: unknown }) {
 }
 
 describe('flushGoodbye', () => {
+  // The budget's timer is unref'd — the library must not hold a process open —
+  // and the goodbye here never answers. node:test on Node.js 22 ends a file
+  // whose event loop has emptied, a test still pending, so the suite holds the
+  // loop open itself while it runs, as Jest's runner did.
+  let held: NodeJS.Timeout | undefined;
+  before(() => {
+    held = setInterval(() => {}, 60_000);
+  });
+  after(() => {
+    clearInterval(held);
+  });
+
   it('waits for the goodbye that disconnect only dispatched', async () => {
     const connection = onPrem(config);
     seedCookies(connection, 'SAP_SESSIONID_E19_100=first');

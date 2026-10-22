@@ -905,7 +905,9 @@ describe('disconnect() resolves once the logoff is written', () => {
     const RETRIES = 30_000;
 
     for (const status of [404, 403]) {
-      it(`connect() answered ${status} after logon, with SAP_SESSIONID: the logoff is sent, and connect() rejects once it is written`, async () => {
+      it(`connect() answered ${status} after logon, with SAP_SESSIONID: the logoff is sent, and connect() rejects once it is written`, {
+        timeout: RETRIES,
+      }, async () => {
         server = await standIn({ discoveryStatus: status });
         const conn = onPrem(configFor(server.baseUrl), null);
 

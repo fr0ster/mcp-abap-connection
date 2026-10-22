@@ -42,7 +42,9 @@ the repository's own install, lockfile, tests and workflows.
 - **The tests run on Node.js's own test runner (`node:test`), not Jest.** `npm test` (and
   `test:ci`, `test:shape`) runs `scripts/run-tests.mjs`: it compiles `src` with the tests by `tsc`
   (`tsconfig.test.json`) into the git-ignored `.test-build/`, afresh on every run, and hands the
-  compiled `*.test.js` files to `node --test`. `jest`, `ts-jest`, `@types/jest` and `jest-util`
+  compiled `*.test.js` files to `node --test` — with Jest's default bound of 5 s a test from
+  Node.js 24 on (`--test-timeout`; Node.js 22 applies that flag to a whole file, so there a test is
+  bounded only by its own `timeout`); every `timeout` a test set under Jest is kept. `jest`, `ts-jest`, `@types/jest` and `jest-util`
   are no longer dev dependencies, `jest.config.js` is gone, and with them 1,600-odd packages of
   the dev tree. Every suite is converted as it was: `expect` → `node:assert/strict` (Jest's
   `toMatchObject` as `helpers/assertions.ts`'s `assertMatchObject`, the asymmetric matchers as
