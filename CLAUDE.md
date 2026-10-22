@@ -11,10 +11,12 @@ npm run build          # Clean + biome lint (error-level) + tsc compile
 npm run build:fast     # tsc only (skip clean and lint, for rapid iteration)
 npm run lint           # Biome auto-fix (src and scripts)
 npm run lint:check     # Biome read-only check (src and scripts)
-npm run test:shape     # The auth contract's shape check (rules 4,5,6), as a Jest test
-npm test               # Jest (all tests)
-npx jest --testPathPatterns=rfcTransport      # Run a single test file
-SAP_ENV_FILE=e19.env npx jest --testPathPatterns=rfc-connection  # live, needs an on-prem system
+npm run test:shape     # The auth contract's shape check (rules 4,5,6), as a node:test file
+npm test               # check:docs, then every test on node:test (scripts/run-tests.mjs)
+npm run test:ci        # every test on node:test, without check:docs
+npm run test:ci -- rfcTransport               # Run the test files whose name matches
+npm run test:ci -- -- --test-name-pattern=CSRF  # after a second --, arguments go to node --test
+SAP_ENV_FILE=e19.env npm run test:ci -- rfc-connection  # live, needs an on-prem system
 ```
 
 Live suites read an env file from the repo root and skip themselves when it is
@@ -93,7 +95,7 @@ the RFC wire could not connect at all as a result.
   the targets answer `logon-target`, connection's own are `connection`
   (`providerFailed(at)`, `refusedAgain(at)`, `NO_CREDENTIAL_TO_RENEW` in
   `authErrors.ts`). An object literal does not compile; no type assertion to a
-  contract type, no spread of an error, no diagnostics — a Jest test
+  contract type, no spread of an error, no diagnostics — a test
   (`src/__tests__/shapeCheck.test.ts`) runs the contract's shape check (rules
   4, 5, 6) through `@mcp-abap-adt/auth-errors/shape-check` over the whole
   tree, with empty site lists, and each fixture under `tools/__fixtures__` is
@@ -160,19 +162,20 @@ over them at each open) and loads the SDK lazily, so a machine without it fails 
 - Single quotes, semicolons always, 2-space indent
 - Node built-ins use `node:` prefix (e.g., `node:https`, `node:crypto`)
 - Local imports use `.js` extension (CommonJS output, ESM-compatible paths)
-- Tests in `src/__tests__/*.test.ts`, excluded from tsc compilation
+- Tests in `src/__tests__/*.test.ts`, on Node's own runner (`node:test`, `node:assert/strict`;
+  no test framework is installed): `scripts/run-tests.mjs` compiles them with
+  `tsconfig.test.json` into the git-ignored `.test-build/` and runs the compiled files with
+  `node --test`; `tsconfig.json` (the published build) leaves them out
 - Tests use `(instance as any).method()` to access protected members
 - Stub a transport UNDER what you are testing, not instead of it: replacing
   `transport.send` skips everything the wire adds to its own requests, so
   replace `transport.client` when the subject is cookies or affinity headers
-- "Nothing is left unhandled" is proven under plain node, never inside Jest:
-  Jest hands a test a copy of `process`, and the real one's
-  `unhandledRejection` never reaches a listener on the copy, so such an
-  assertion in a Jest test cannot fail. `helpers/plainNode/run.ts`
-  (`runScenario`, `recordUnhandled`) runs a scenario through
-  `register.cjs` (TypeScript transpiled with the repo's own `typescript`);
-  each scenario has a control run that leaves one rejection unhandled on
-  purpose. `connection/dispatchedGoodbye.test.ts` is the first user
+- "Nothing is left unhandled" is proven in a separate plain-node process: under
+  `node:test`, an unhandled rejection in the test's own process is reported as a failure
+  of whatever test is running, so the scenario that must leave nothing unhandled runs in
+  a child process. `helpers/plainNode/run.ts` (`runScenario`, `recordUnhandled`) runs a
+  scenario's compiled file there; each scenario has a control run that leaves one
+  rejection unhandled on purpose. `connection/dispatchedGoodbye.test.ts` is the first user
 - `src/__tests__/helpers/transportStub.ts` carries the session half of
   `IAdtTransport` for stubs whose subject is something else
 
