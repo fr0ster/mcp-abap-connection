@@ -10,6 +10,8 @@
  * an on-prem system got the cloud one. Both rows below are those cases.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import {
   BasicAuthProvider,
   SamlAuthProvider,
@@ -33,10 +35,10 @@ const config: SapConfig = {
 
 function makeLogger(): ILogger {
   return {
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-    debug: jest.fn(),
+    info: mock.fn(),
+    warn: mock.fn(),
+    error: mock.fn(),
+    debug: mock.fn(),
   };
 }
 
@@ -81,8 +83,8 @@ function serverAnsweringEverything(conn: object, seen: Seen[]): void {
     };
   };
   (instance as unknown as { interceptors: unknown }).interceptors = {
-    request: { clear: jest.fn() },
-    response: { clear: jest.fn() },
+    request: { clear: mock.fn() },
+    response: { clear: mock.fn() },
   };
   (conn as any).transport.instance = instance;
 }
@@ -104,8 +106,12 @@ describe('the consumer decides the session mechanism, by which connector it take
 
     // Never touched, even though this stub answers it — which is the whole
     // point: on-prem answers it too, so a probe would have chosen wrongly.
-    expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(false);
-    expect(seen.some((r) => r.url.includes('/sap/public/bc/icf/logoff'))).toBe(
+    assert.strictEqual(
+      seen.some((r) => r.url.includes('/core/http/sessions')),
+      false,
+    );
+    assert.strictEqual(
+      seen.some((r) => r.url.includes('/sap/public/bc/icf/logoff')),
       true,
     );
   });
@@ -125,17 +131,21 @@ describe('the consumer decides the session mechanism, by which connector it take
     await settled();
 
     const opened = seen.find((r) => r.url.includes('/core/http/sessions?'));
-    expect(opened?.headers['x-sap-security-session']).toBe('create');
-    expect(opened?.headers['sap-adt-purpose']).toBe('preflight_logon');
+    assert.strictEqual(opened?.headers['x-sap-security-session'], 'create');
+    assert.strictEqual(opened?.headers['sap-adt-purpose'], 'preflight_logon');
     // Given back through the logoff the session document links to, never by
     // a DELETE on the session's own address.
-    expect(
+    assert.strictEqual(
       seen.some(
         (r) =>
           r.method === 'GET' && r.url.includes('/sap/public/bc/icf/logoff'),
       ),
-    ).toBe(true);
-    expect(seen.some((r) => r.method === 'DELETE')).toBe(false);
+      true,
+    );
+    assert.strictEqual(
+      seen.some((r) => r.method === 'DELETE'),
+      false,
+    );
   });
 });
 
@@ -153,7 +163,7 @@ describe('the credential is what it authenticates with, and nothing more', () =>
     await conn.connect();
 
     const expected = `Basic ${Buffer.from('u:p').toString('base64')}`;
-    expect(seen[0].headers.Authorization).toBe(expected);
+    assert.strictEqual(seen[0].headers.Authorization, expected);
   });
 
   /**
@@ -169,7 +179,7 @@ describe('the credential is what it authenticates with, and nothing more', () =>
     // an implementation detail, and a test that depends on the count would
     // break for reasons that are not about renewal.
     let renewed = false;
-    const getToken = jest.fn(async () => (renewed ? 'RENEWED' : 'FIRST'));
+    const getToken = mock.fn(async () => (renewed ? 'RENEWED' : 'FIRST'));
     const seen: Seen[] = [];
     const conn = new AdtOnPremConnector(
       config,
@@ -192,10 +202,10 @@ describe('the credential is what it authenticates with, and nothing more', () =>
       timeout: 5000,
     });
 
-    expect(before).toBe('Bearer FIRST');
+    assert.strictEqual(before, 'Bearer FIRST');
     // No reconnect, no new session — the provider simply answered differently,
     // and the next request carried it.
-    expect(seen.at(-1)?.headers.Authorization).toBe('Bearer RENEWED');
+    assert.strictEqual(seen.at(-1)?.headers.Authorization, 'Bearer RENEWED');
   });
 });
 
@@ -208,7 +218,7 @@ describe('the credential is what it authenticates with, and nothing more', () =>
  * was recommended over authenticated with nothing at all.
  */
 describe('cookie credentials reach the wire', () => {
-  it.each([
+  for (const [_name, build] of [
     [
       'on-prem',
       (p: IAuthProvider) =>
@@ -229,27 +239,29 @@ describe('cookie credentials reach the wire', () => {
           makeLogger(),
         ),
     ],
-  ])('%s sends the SAML cookies on every request', async (_name, build) => {
-    const seen: Seen[] = [];
-    const conn = build(
-      new SamlAuthProvider('MYSAPSSO2=ticket; sap-usercontext=x'),
-    );
-    serverAnsweringEverything(conn, seen);
+  ] as const) {
+    it(`${_name} sends the SAML cookies on every request`, async () => {
+      const seen: Seen[] = [];
+      const conn = build(
+        new SamlAuthProvider('MYSAPSSO2=ticket; sap-usercontext=x'),
+      );
+      serverAnsweringEverything(conn, seen);
 
-    await conn.connect();
-    await conn.makeAdtRequest({
-      url: '/sap/bc/adt/discovery',
-      method: 'GET',
-      timeout: 5000,
+      await conn.connect();
+      await conn.makeAdtRequest({
+        url: '/sap/bc/adt/discovery',
+        method: 'GET',
+        timeout: 5000,
+      });
+
+      // Every one of them: the preflight and the establishing call included. A
+      // session not presented to those is a session the server never sees us in.
+      assert.ok(seen.length > 1);
+      for (const request of seen) {
+        assert.ok((request.headers.Cookie ?? '').includes('MYSAPSSO2=ticket'));
+      }
     });
-
-    // Every one of them: the preflight and the establishing call included. A
-    // session not presented to those is a session the server never sees us in.
-    expect(seen.length).toBeGreaterThan(1);
-    for (const request of seen) {
-      expect(request.headers.Cookie ?? '').toContain('MYSAPSSO2=ticket');
-    }
-  });
+  }
 });
 
 /**
@@ -293,8 +305,8 @@ function serverRejectingUntilShared(
     throw error;
   };
   (instance as unknown as { interceptors: unknown }).interceptors = {
-    request: { clear: jest.fn() },
-    response: { clear: jest.fn() },
+    request: { clear: mock.fn() },
+    response: { clear: mock.fn() },
   };
   (conn as any).transport.instance = instance;
 }
@@ -324,10 +336,10 @@ describe('the token provider is used the way its contract says', () => {
   function refresherSpy(tokens: string[]) {
     let i = 0;
     return {
-      getToken: jest.fn(async () => tokens[i] ?? tokens[tokens.length - 1]),
+      getToken: mock.fn(async () => tokens[i] ?? tokens[tokens.length - 1]),
       // A real one mints a new token here and caches it, so the next getToken
       // returns the new one. Modelled exactly that way.
-      refreshToken: jest.fn(async () => {
+      refreshToken: mock.fn(async () => {
         i = Math.min(i + 1, tokens.length - 1);
         return tokens[i];
       }),
@@ -351,8 +363,8 @@ describe('the token provider is used the way its contract says', () => {
     // A forced refresh can be expensive — with authorization_code it may reach
     // for a refresh token, or fall back to an interactive login — so it is
     // asked for only when the server has actually refused something.
-    expect(refresher.refreshToken).not.toHaveBeenCalled();
-    expect(refresher.getToken).toHaveBeenCalled();
+    assert.strictEqual(refresher.refreshToken.mock.callCount(), 0);
+    assert.notStrictEqual(refresher.getToken.mock.callCount(), 0);
   });
 });
 
@@ -376,7 +388,7 @@ describe('a late refusal does not undo a session somebody else rebuilt', () => {
  * provider it also doubles the work behind every call.
  */
 describe('a request is built from one reading of the credential', () => {
-  it.each([
+  for (const [_name, build] of [
     [
       'on-prem',
       (p: IAuthProvider) =>
@@ -397,26 +409,28 @@ describe('a request is built from one reading of the credential', () => {
           makeLogger(),
         ),
     ],
-  ])('%s asks once per request it sends', async (_name, build) => {
-    const seen: Seen[] = [];
-    let reads = 0;
-    const conn = build(
-      TokenAuthProvider.from({
-        getToken: async () => {
-          reads += 1;
-          return 'T';
-        },
-        refreshToken: async () => 'T',
-      }),
-    );
-    serverAnsweringEverything(conn, seen);
+  ] as const) {
+    it(`${_name} asks once per request it sends`, async () => {
+      const seen: Seen[] = [];
+      let reads = 0;
+      const conn = build(
+        TokenAuthProvider.from({
+          getToken: async () => {
+            reads += 1;
+            return 'T';
+          },
+          refreshToken: async () => 'T',
+        }),
+      );
+      serverAnsweringEverything(conn, seen);
 
-    await conn.connect();
-    await conn.disconnect();
-    await settled();
+      await conn.connect();
+      await conn.disconnect();
+      await settled();
 
-    // Never more than one read per request that actually went out. More means
-    // some request was assembled from two different answers.
-    expect(reads).toBeLessThanOrEqual(seen.length);
-  });
+      // Never more than one read per request that actually went out. More means
+      // some request was assembled from two different answers.
+      assert.ok(reads <= seen.length);
+    });
+  }
 });

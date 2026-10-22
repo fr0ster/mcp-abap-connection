@@ -7,11 +7,13 @@
  * can reject — its `context.authorize` throws `AuthRefusedError` by design —
  * and a rejection nobody handles ends a Node process.
  *
- * Observed under plain node (`helpers/plainNode/goodbyeScenario.ts`): Jest
- * gives a test a copy of `process`, and a listener on the copy never hears
- * the real one's `unhandledRejection`, so an assertion made here could not
- * fail. The control run leaves one unhandled on purpose.
+ * Observed in a process of its own (`helpers/plainNode/goodbyeScenario.ts`):
+ * in the test's own process node:test reports an unhandled rejection as a
+ * failure of whichever test is running, so it could not be counted here. The
+ * control run leaves one unhandled on purpose.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { runScenario } from '../helpers/plainNode/run.js';
 
 interface GoodbyeReport {
@@ -20,22 +22,26 @@ interface GoodbyeReport {
 }
 
 describe('a dispatched goodbye whose close() rejects', () => {
-  it('the run sees an unhandled rejection when there is one (the control)', () => {
-    const report = runScenario<GoodbyeReport>('goodbyeScenario.ts', {
+  it('the run sees an unhandled rejection when there is one (the control)', {
+    timeout: 60000,
+  }, () => {
+    const report = runScenario<GoodbyeReport>('goodbyeScenario.js', {
       INJECT_UNHANDLED: '1',
     });
-    expect(report.unhandled).toEqual(['injected']);
-  }, 60000);
+    assert.deepStrictEqual(report.unhandled, ['injected']);
+  });
 
-  it('after a failed establishment, and when the server opened no session, is absorbed', () => {
-    const report = runScenario<GoodbyeReport>('goodbyeScenario.ts');
-    expect(report.failed).toBeUndefined();
-    expect(report.failedEstablishment).toEqual({
+  it('after a failed establishment, and when the server opened no session, is absorbed', {
+    timeout: 60000,
+  }, () => {
+    const report = runScenario<GoodbyeReport>('goodbyeScenario.js');
+    assert.strictEqual(report.failed, undefined);
+    assert.deepStrictEqual(report.failedEstablishment, {
       connect: 'the wire would not open',
       closes: 1,
     });
-    expect(report.noSession?.closes).toBe(1);
-    expect(report.noSession?.connect).toContain('opened no ABAP session');
-    expect(report.unhandled).toEqual([]);
-  }, 60000);
+    assert.strictEqual(report.noSession?.closes, 1);
+    assert.ok(report.noSession?.connect.includes('opened no ABAP session'));
+    assert.deepStrictEqual(report.unhandled, []);
+  });
 });

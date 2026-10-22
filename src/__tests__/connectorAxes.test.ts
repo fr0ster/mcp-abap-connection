@@ -11,6 +11,8 @@
  * the host name, or by asking the server.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import {
   BasicAuthProvider,
   TokenAuthProvider,
@@ -44,7 +46,7 @@ describe('the on-prem connector', () => {
   it('takes a transport, because on-prem is where that is a real choice', () => {
     const conn = new AdtOnPremConnector(config, credential, transport, null);
 
-    expect(conn).toBeInstanceOf(AdtOnPremConnector);
+    assert.ok(conn instanceof AdtOnPremConnector);
   });
 
   it('travels over HTTP when the caller names no transport', () => {
@@ -57,7 +59,7 @@ describe('the on-prem connector', () => {
 
     // Not an inference: the connector's documented default, which a caller
     // overrides by naming one. Nothing is decided by looking at the config.
-    expect((conn as any).adtTransport).toBeUndefined();
+    assert.strictEqual((conn as any).adtTransport, undefined);
   });
 });
 
@@ -70,7 +72,7 @@ describe('the cloud connector', () => {
       null,
     );
 
-    expect(conn).toBeInstanceOf(AdtCloudConnector);
+    assert.ok(conn instanceof AdtCloudConnector);
   });
 
   it('refuses an on-prem wire, and the compiler says so', () => {

@@ -12,7 +12,7 @@
  * POSIX box, and a rule that only holds where it was written is the defect.
  *
  * CommonJS with a hand-written .d.ts: check-docs.mjs runs before any build, so
- * this cannot be TypeScript, and jest has to load it too. No `'use strict'`:
+ * this cannot be TypeScript, and its test loads it too. No `'use strict'`:
  * biome reads a bare `.js` as a module, where it is redundant, and would strip
  * it on the next `npm run lint` anyway. Nothing here can tell the difference.
  */

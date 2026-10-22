@@ -8,6 +8,8 @@
  * the client-side id stays stable while the server sees an unrelated request.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
@@ -15,10 +17,10 @@ import { onPrem } from './helpers/onPrem.js';
 import { markConnectedForTest } from './helpers/session.js';
 
 const mockLogger: ILogger = {
-  info: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn(),
-  debug: jest.fn(),
+  info: mock.fn(),
+  warn: mock.fn(),
+  error: mock.fn(),
+  debug: mock.fn(),
 };
 
 const baseConfig: SapConfig = {
@@ -59,9 +61,12 @@ describe('CSRF fetch stays in the ADT conversation', () => {
     });
 
     const fetches = seen.filter((r) => r.headers['x-csrf-token'] === 'fetch');
-    expect(fetches.length).toBeGreaterThan(0);
+    assert.ok(fetches.length > 0);
     for (const fetch of fetches) {
-      expect(fetch.headers['sap-adt-connection-id']).toBe(conn.getSessionId());
+      assert.strictEqual(
+        fetch.headers['sap-adt-connection-id'],
+        conn.getSessionId(),
+      );
     }
   });
 
@@ -89,7 +94,7 @@ describe('CSRF fetch stays in the ADT conversation', () => {
     const ids = seen
       .map((h) => h['sap-adt-connection-id'])
       .filter((v): v is string => Boolean(v));
-    expect(ids.length).toBeGreaterThan(1);
-    expect(new Set(ids).size).toBe(1);
+    assert.ok(ids.length > 1);
+    assert.strictEqual(new Set(ids).size, 1);
   });
 });

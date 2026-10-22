@@ -8,6 +8,8 @@
  *
  * No SAP, no HTTP, no RFC: this unit knows about none of them.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
 import { SessionLifecycle } from '../session/SessionLifecycle.js';
 
@@ -36,18 +38,22 @@ function connected() {
 describe('SessionLifecycle — admission', () => {
   it('refuses requests before connect', () => {
     const lifecycle = new SessionLifecycle();
-    expect(() => lifecycle.admitRequest()).toThrow(
-      ADT_SESSION_ERROR.NOT_CONNECTED,
+    assert.throws(
+      () => lifecycle.admitRequest(),
+      (e: unknown) =>
+        (e as Error).message.includes(ADT_SESSION_ERROR.NOT_CONNECTED),
     );
   });
 
   it('refuses a request the moment a teardown is requested', () => {
     const lifecycle = connected();
     lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-    expect(() => lifecycle.admitRequest()).toThrow(
-      ADT_SESSION_ERROR.NOT_CONNECTED,
+    assert.throws(
+      () => lifecycle.admitRequest(),
+      (e: unknown) =>
+        (e as Error).message.includes(ADT_SESSION_ERROR.NOT_CONNECTED),
     );
-    expect(lifecycle.connected).toBe(false);
+    assert.strictEqual(lifecycle.connected, false);
   });
 
   // The teardown intent applies synchronously, before any transition is queued:
@@ -64,8 +70,10 @@ describe('SessionLifecycle — admission', () => {
     });
 
     // The disconnect body has not run — it is queued behind the connect.
-    expect(() => lifecycle.admitRequest()).toThrow(
-      ADT_SESSION_ERROR.NOT_CONNECTED,
+    assert.throws(
+      () => lifecycle.admitRequest(),
+      (e: unknown) =>
+        (e as Error).message.includes(ADT_SESSION_ERROR.NOT_CONNECTED),
     );
     blocked.resolve();
     await settle();
@@ -74,10 +82,10 @@ describe('SessionLifecycle — admission', () => {
   it('counts an admitted request in flight until it is released', () => {
     const lifecycle = connected();
     const lease = lifecycle.admitRequest();
-    expect(lifecycle.requestsInFlight).toBe(1);
+    assert.strictEqual(lifecycle.requestsInFlight, 1);
     lease.release();
     lease.release(); // idempotent
-    expect(lifecycle.requestsInFlight).toBe(0);
+    assert.strictEqual(lifecycle.requestsInFlight, 0);
   });
 });
 
@@ -86,22 +94,22 @@ describe('SessionLifecycle — reconnect', () => {
     const lifecycle = connected();
     lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
     lifecycle.markDisconnected();
-    expect(lifecycle.connected).toBe(false);
+    assert.strictEqual(lifecycle.connected, false);
 
     lifecycle.markConnected(fp({ SAP_SESSIONID: 'S2' }));
-    expect(lifecycle.connected).toBe(true);
-    expect(() => lifecycle.admitRequest()).not.toThrow();
+    assert.strictEqual(lifecycle.connected, true);
+    assert.doesNotThrow(() => lifecycle.admitRequest());
   });
 
   it('is usable again after a session-lost teardown', () => {
     const lifecycle = connected();
     lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
     lifecycle.markDisconnected();
-    expect(lifecycle.identity).toBeNull();
+    assert.strictEqual(lifecycle.identity, null);
 
     lifecycle.markConnected(fp({ SAP_SESSIONID: 'S2' }));
-    expect(lifecycle.connected).toBe(true);
-    expect(lifecycle.identity).toBe('SAP_SESSIONID=S2');
+    assert.strictEqual(lifecycle.connected, true);
+    assert.strictEqual(lifecycle.identity, 'SAP_SESSIONID=S2');
   });
 });
 
@@ -111,10 +119,10 @@ describe('SessionLifecycle — session generation', () => {
   it('goes stale for a lease taken before a teardown', () => {
     const lifecycle = connected();
     const lease = lifecycle.admitRequest();
-    expect(lifecycle.isCurrent(lease)).toBe(true);
+    assert.strictEqual(lifecycle.isCurrent(lease), true);
 
     lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-    expect(lifecycle.isCurrent(lease)).toBe(false);
+    assert.strictEqual(lifecycle.isCurrent(lease), false);
   });
 
   // The gap an earlier design left: counting only at markConnected() leaves a
@@ -126,7 +134,7 @@ describe('SessionLifecycle — session generation', () => {
     lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
     lifecycle.markDisconnected();
 
-    expect(lifecycle.isCurrent(lease)).toBe(false);
+    assert.strictEqual(lifecycle.isCurrent(lease), false);
   });
 
   it('goes stale across a session-lost teardown and its recovery', () => {
@@ -137,18 +145,18 @@ describe('SessionLifecycle — session generation', () => {
     const epochBefore = lifecycle.teardownEpoch;
     lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
     lifecycle.markConnected(fp({ SAP_SESSIONID: 'S2' }));
-    expect(lifecycle.teardownEpoch).toBe(epochBefore);
+    assert.strictEqual(lifecycle.teardownEpoch, epochBefore);
 
     // ...which is exactly why the fence cannot be built on it.
-    expect(lifecycle.isCurrent(lease)).toBe(false);
+    assert.strictEqual(lifecycle.isCurrent(lease), false);
   });
 
   it('stays current for a lease of the session in hand', () => {
     const lifecycle = connected();
     const lease = lifecycle.admitRequest();
-    expect(lifecycle.isCurrent(lease)).toBe(true);
+    assert.strictEqual(lifecycle.isCurrent(lease), true);
     lease.release();
-    expect(lifecycle.isCurrent(lease)).toBe(true);
+    assert.strictEqual(lifecycle.isCurrent(lease), true);
   });
 });
 
@@ -168,7 +176,7 @@ describe('SessionLifecycle — transitions', () => {
     gate.resolve();
     await Promise.all([a, b]);
 
-    expect(runs).toBe(1);
+    assert.strictEqual(runs, 1);
   });
 
   // 8 — a join must never overtake a transition queued behind the tail.
@@ -191,7 +199,7 @@ describe('SessionLifecycle — transitions', () => {
     first.resolve();
     await Promise.all([c1, d, c2]);
 
-    expect(order).toStrictEqual(['connect#1', 'disconnect', 'connect#2']);
+    assert.deepStrictEqual(order, ['connect#1', 'disconnect', 'connect#2']);
   });
 
   // 28 (join half) — a caller's disconnect must not be swallowed by an
@@ -208,7 +216,7 @@ describe('SessionLifecycle — transitions', () => {
     });
     await Promise.all([cleanup, caller]);
 
-    expect(order).toStrictEqual(['cleanup', 'caller disconnect']);
+    assert.deepStrictEqual(order, ['cleanup', 'caller disconnect']);
   });
   // 15 — two cleanups with different baselines must decide independently.
   it('never joins recoveries', async () => {
@@ -223,7 +231,7 @@ describe('SessionLifecycle — transitions', () => {
       lifecycle.transition('cleanup', run),
     ]);
 
-    expect(runs).toBe(2);
+    assert.strictEqual(runs, 2);
   });
 
   it('runs the next transition even when one rejects', async () => {
@@ -241,7 +249,7 @@ describe('SessionLifecycle — transitions', () => {
     });
 
     await Promise.all([failing, next]);
-    expect(order).toStrictEqual(['failed', 'next']);
+    assert.deepStrictEqual(order, ['failed', 'next']);
   });
 });
 
@@ -252,9 +260,9 @@ describe('SessionLifecycle — epoch', () => {
     const lifecycle = connected();
     const lease = lifecycle.admitRequest();
 
-    expect(lease.epoch).toBe(lifecycle.teardownEpoch);
+    assert.strictEqual(lease.epoch, lifecycle.teardownEpoch);
     lifecycle.beginTeardown({ origin: 'caller', sessionLost: false });
-    expect(lease.epoch).not.toBe(lifecycle.teardownEpoch);
+    assert.notStrictEqual(lease.epoch, lifecycle.teardownEpoch);
   });
 
   // 13 — an internal cleanup must not cancel the recovery it just set up.
@@ -263,34 +271,41 @@ describe('SessionLifecycle — epoch', () => {
     const lease = lifecycle.admitRequest();
 
     lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
-    expect(lease.epoch).toBe(lifecycle.teardownEpoch);
+    assert.strictEqual(lease.epoch, lifecycle.teardownEpoch);
   });
 });
 
 describe('SessionLifecycle — identity', () => {
   it('classifies an unchanged fingerprint', () => {
     const lifecycle = connected();
-    expect(lifecycle.observe(fp({ SAP_SESSIONID: 'S1' }))).toBe('unchanged');
+    assert.strictEqual(
+      lifecycle.observe(fp({ SAP_SESSIONID: 'S1' })),
+      'unchanged',
+    );
   });
 
   // The LOCK response adds a second identifier for the SAME session: additive,
   // never a replacement, or every lock would blow up right after succeeding.
   it('treats a newly appearing name as established, not replaced', () => {
     const lifecycle = connected();
-    expect(
+    assert.strictEqual(
       lifecycle.observe(fp({ SAP_SESSIONID: 'S1', 'sap-contextid': 'C1' })),
-    ).toBe('established');
+      'established',
+    );
   });
 
   it('classifies a changed value as replaced', () => {
     const lifecycle = connected();
-    expect(lifecycle.observe(fp({ SAP_SESSIONID: 'S2' }))).toBe('replaced');
+    assert.strictEqual(
+      lifecycle.observe(fp({ SAP_SESSIONID: 'S2' })),
+      'replaced',
+    );
   });
 
   it('reports no identity when nothing is tracked', () => {
     const lifecycle = new SessionLifecycle();
     lifecycle.markConnected();
-    expect(lifecycle.identity).toBeNull();
-    expect(lifecycle.observe(new Map())).toBe('unchanged');
+    assert.strictEqual(lifecycle.identity, null);
+    assert.strictEqual(lifecycle.observe(new Map()), 'unchanged');
   });
 });

@@ -9,6 +9,8 @@
  * conversation and the PUT on another pass twice in a row only when the PUT's
  * conversation is fresh each time.
  */
+import assert from 'node:assert/strict';
+import { describe, it, type Mock, mock } from 'node:test';
 import { RfcTransport } from '../connection/RfcTransport.js';
 
 const ok = {
@@ -24,19 +26,19 @@ function conversations(
   answer: () => Promise<Record<string, unknown>> = async () => ok,
 ) {
   const opened: Array<{
-    open: jest.Mock;
-    close: jest.Mock;
-    call: jest.Mock;
+    open: Mock<(...args: any[]) => any>;
+    close: Mock<(...args: any[]) => any>;
+    call: Mock<(...args: any[]) => any>;
     alive: boolean;
   }> = [];
   const connect = () => {
     const conversation = {
       alive: true,
-      open: jest.fn(async () => {}),
-      close: jest.fn(async () => {
+      open: mock.fn(async () => {}),
+      close: mock.fn(async () => {
         conversation.alive = false;
       }),
-      call: jest.fn(async () => answer()),
+      call: mock.fn(async () => answer()),
     };
     opened.push(conversation);
     return conversation;
@@ -58,9 +60,9 @@ describe('RFC: one stateful conversation, one conversation per other call', () =
     await transport.send(request(true));
     await transport.send(request(true));
 
-    expect(opened).toHaveLength(1);
-    expect(opened[0].call).toHaveBeenCalledTimes(2);
-    expect(opened[0].close).not.toHaveBeenCalled();
+    assert.strictEqual(opened.length, 1);
+    assert.strictEqual(opened[0].call.mock.callCount(), 2);
+    assert.strictEqual(opened[0].close.mock.callCount(), 0);
   });
 
   it('carries each other request on a conversation of its own, closed after', async () => {
@@ -70,12 +72,12 @@ describe('RFC: one stateful conversation, one conversation per other call', () =
     await transport.send(request(false));
     await transport.send(request(false));
 
-    expect(opened).toHaveLength(3);
-    expect(opened[0].call).not.toHaveBeenCalled();
+    assert.strictEqual(opened.length, 3);
+    assert.strictEqual(opened[0].call.mock.callCount(), 0);
     for (const own of opened.slice(1)) {
-      expect(own.open).toHaveBeenCalledTimes(1);
-      expect(own.call).toHaveBeenCalledTimes(1);
-      expect(own.close).toHaveBeenCalledTimes(1);
+      assert.strictEqual(own.open.mock.callCount(), 1);
+      assert.strictEqual(own.call.mock.callCount(), 1);
+      assert.strictEqual(own.close.mock.callCount(), 1);
     }
   });
 
@@ -87,9 +89,9 @@ describe('RFC: one stateful conversation, one conversation per other call', () =
     await transport.send(request(false));
     await transport.send(request(true));
 
-    expect(opened[0].call).toHaveBeenCalledTimes(2);
-    expect(opened).toHaveLength(2);
-    expect(opened[1].call).toHaveBeenCalledTimes(1);
+    assert.strictEqual(opened[0].call.mock.callCount(), 2);
+    assert.strictEqual(opened.length, 2);
+    assert.strictEqual(opened[1].call.mock.callCount(), 1);
   });
 
   it('closes its own conversation when the call fails', async () => {
@@ -98,8 +100,10 @@ describe('RFC: one stateful conversation, one conversation per other call', () =
     });
     await transport.open();
 
-    await expect(transport.send(request(false))).rejects.toThrow(/boom/);
-    expect(opened[1].close).toHaveBeenCalledTimes(1);
+    await assert.rejects(transport.send(request(false)), (e: unknown) =>
+      /boom/.test((e as Error).message),
+    );
+    assert.strictEqual(opened[1].close.mock.callCount(), 1);
   });
 
   it('a caller that wrote the session header itself stays on the lock conversation', async () => {
@@ -114,8 +118,8 @@ describe('RFC: one stateful conversation, one conversation per other call', () =
       headers: { 'X-sap-adt-sessiontype': 'stateful' },
     });
 
-    expect(opened).toHaveLength(1);
-    expect(opened[0].call).toHaveBeenCalledTimes(1);
+    assert.strictEqual(opened.length, 1);
+    assert.strictEqual(opened[0].call.mock.callCount(), 1);
   });
 
   it('sends nothing when the wire is closed while its own conversation logs on', async () => {
@@ -123,18 +127,21 @@ describe('RFC: one stateful conversation, one conversation per other call', () =
     const logon = new Promise<void>((resolve) => {
       releaseLogon = resolve;
     });
-    const opened: Array<{ call: jest.Mock; close: jest.Mock }> = [];
+    const opened: Array<{
+      call: Mock<(...args: any[]) => any>;
+      close: Mock<(...args: any[]) => any>;
+    }> = [];
     const connect = () => {
       const isFirst = opened.length === 0;
       const conversation = {
         alive: true,
-        open: jest.fn(async () => {
+        open: mock.fn(async () => {
           if (!isFirst) await logon;
         }),
-        close: jest.fn(async () => {
+        close: mock.fn(async () => {
           conversation.alive = false;
         }),
-        call: jest.fn(async () => ok),
+        call: mock.fn(async () => ok),
       };
       opened.push(conversation);
       return conversation;
@@ -146,17 +153,19 @@ describe('RFC: one stateful conversation, one conversation per other call', () =
     await transport.close();
     releaseLogon();
 
-    await expect(sending).rejects.toThrow(
-      /closed while the call was being opened/,
+    await assert.rejects(sending, (e: unknown) =>
+      /closed while the call was being opened/.test((e as Error).message),
     );
-    expect(opened[1].call).not.toHaveBeenCalled();
-    expect(opened[1].close).toHaveBeenCalledTimes(1);
+    assert.strictEqual(opened[1].call.mock.callCount(), 0);
+    assert.strictEqual(opened[1].close.mock.callCount(), 1);
   });
 
   it('refuses before connect(), stateless or not', async () => {
     const { opened, transport } = conversations();
 
-    await expect(transport.send(request(false))).rejects.toThrow(/not open/);
-    expect(opened).toHaveLength(0);
+    await assert.rejects(transport.send(request(false)), (e: unknown) =>
+      /not open/.test((e as Error).message),
+    );
+    assert.strictEqual(opened.length, 0);
   });
 });

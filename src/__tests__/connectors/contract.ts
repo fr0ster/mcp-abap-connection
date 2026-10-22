@@ -17,10 +17,13 @@
  * Anything that is true of only one of them does NOT belong here. It goes in
  * that combination's own file, where naming the mechanism is the point.
  */
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import type {
   IAbapConnection,
   ISessionLifecycleAware,
 } from '@mcp-abap-adt/interfaces-adt-connection';
+import { assertMatchObject } from '../helpers/assertions.js';
 
 export type Connection = IAbapConnection & ISessionLifecycleAware;
 
@@ -60,8 +63,8 @@ export function describeConnectorContract(
     it('holds no session before connect()', () => {
       const conn = fixture.build();
 
-      expect(conn.isConnected()).toBe(false);
-      expect(conn.getSessionIdentity()).toBeNull();
+      assert.strictEqual(conn.isConnected(), false);
+      assert.strictEqual(conn.getSessionIdentity(), null);
     });
 
     it('is usable and on a session after connect()', async () => {
@@ -69,10 +72,10 @@ export function describeConnectorContract(
 
       await conn.connect();
 
-      expect(conn.isConnected()).toBe(true);
+      assert.strictEqual(conn.isConnected(), true);
       // Non-null on every wire, though what names the session differs: a
       // SAP_SESSIONID on HTTP, the conversation on RFC.
-      expect(conn.getSessionIdentity()).not.toBeNull();
+      assert.notStrictEqual(conn.getSessionIdentity(), null);
     });
 
     it('stays on the same session across requests', async () => {
@@ -88,7 +91,7 @@ export function describeConnectorContract(
 
       // A CHANGED identity is a replacement, which is the failure this exists
       // to expose. Unchanged is the whole assertion.
-      expect(conn.getSessionIdentity()).toBe(established);
+      assert.strictEqual(conn.getSessionIdentity(), established);
     });
 
     it('opens exactly one session for one connect()', async () => {
@@ -96,20 +99,20 @@ export function describeConnectorContract(
 
       await conn.connect();
 
-      expect(fixture.sessionsOpened()).toBe(1);
+      assert.strictEqual(fixture.sessionsOpened(), 1);
     });
 
     it('refuses to connect when no session is established', async () => {
       const conn = fixture.build();
       fixture.refuseNext();
 
-      await expect(conn.connect()).rejects.toThrow();
+      await assert.rejects(conn.connect());
 
       // And keeps nothing: a resolved connect() must mean a usable session
       // exists, and a failed one must leave no debris for the next attempt to
       // trip over.
-      expect(conn.isConnected()).toBe(false);
-      expect(conn.getSessionIdentity()).toBeNull();
+      assert.strictEqual(conn.isConnected(), false);
+      assert.strictEqual(conn.getSessionIdentity(), null);
     });
 
     it('is unusable after disconnect()', async () => {
@@ -118,15 +121,16 @@ export function describeConnectorContract(
 
       await conn.disconnect();
 
-      expect(conn.isConnected()).toBe(false);
-      expect(conn.getSessionIdentity()).toBeNull();
-      await expect(
+      assert.strictEqual(conn.isConnected(), false);
+      assert.strictEqual(conn.getSessionIdentity(), null);
+      await assert.rejects(
         conn.makeAdtRequest({
           url: '/sap/bc/adt/discovery',
           method: 'GET',
           timeout: 5000,
         }),
-      ).rejects.toThrow(/ADT_NOT_CONNECTED/);
+        (e: unknown) => /ADT_NOT_CONNECTED/.test((e as Error).message),
+      );
     });
 
     it('rejects a repeat disconnect(): it is called once per instance', async () => {
@@ -135,15 +139,18 @@ export function describeConnectorContract(
 
       await conn.disconnect();
 
-      await expect(conn.disconnect()).rejects.toMatchObject({
-        code: 'ADT_NOT_CONNECTED',
+      await assert.rejects(conn.disconnect(), (e: unknown) => {
+        assertMatchObject(e, {
+          code: 'ADT_NOT_CONNECTED',
+        });
+        return true;
       });
     });
 
     it('settles disconnect() on a connection that never connected', async () => {
       const conn = fixture.build();
 
-      await expect(conn.disconnect()).resolves.toBeUndefined();
+      assert.strictEqual(await conn.disconnect(), undefined);
     });
 
     it('settles without waiting for the server to answer', async () => {
@@ -153,8 +160,8 @@ export function describeConnectorContract(
       // It notifies; the answer is not acted on, so there is nothing to wait
       // for and no deadline to pass. What must hold is that it settles and
       // leaves the connection unusable.
-      await expect(conn.disconnect()).resolves.toBeUndefined();
-      expect(conn.isConnected()).toBe(false);
+      assert.strictEqual(await conn.disconnect(), undefined);
+      assert.strictEqual(conn.isConnected(), false);
     });
 
     it('refuses connect() after disconnect(): one instance is one session', async () => {
@@ -162,14 +169,17 @@ export function describeConnectorContract(
       await conn.connect();
       await conn.disconnect();
 
-      await expect(conn.connect()).rejects.toMatchObject({
-        code: 'ADT_NOT_CONNECTED',
-        message:
-          "This connection's SAP session has ended (it was disconnected, logged off or lost); one connection instance is one session. Create a new connection for a new session.",
+      await assert.rejects(conn.connect(), (e: unknown) => {
+        assertMatchObject(e, {
+          code: 'ADT_NOT_CONNECTED',
+          message:
+            "This connection's SAP session has ended (it was disconnected, logged off or lost); one connection instance is one session. Create a new connection for a new session.",
+        });
+        return true;
       });
-      expect(conn.isConnected()).toBe(false);
+      assert.strictEqual(conn.isConnected(), false);
       // Nothing was asked of the server for it.
-      expect(fixture.sessionsOpened()).toBe(1);
+      assert.strictEqual(fixture.sessionsOpened(), 1);
     });
 
     it('a new session is a new instance', async () => {
@@ -179,7 +189,7 @@ export function describeConnectorContract(
 
       const next = fixture.build();
       await next.connect();
-      expect(next.isConnected()).toBe(true);
+      assert.strictEqual(next.isConnected(), true);
     });
   });
 }

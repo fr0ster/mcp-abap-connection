@@ -7,9 +7,12 @@
  * only the answer tells. Both must end the same way for a caller holding a lock.
  */
 
+import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { SapConfig } from '../../config/sapConfig.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
+import { assertMatchObject } from '../helpers/assertions.js';
 import { onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
@@ -125,11 +128,14 @@ describe('a replaced session cookie', () => {
 
     stub.rotateSession = true;
 
-    await expect(get(conn)).rejects.toMatchObject({
-      code: 'ADT_SESSION_REPLACED',
+    await assert.rejects(get(conn), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_SESSION_REPLACED',
+      });
+      return true;
     });
     // and the session is gone, not merely reported: admission is shut
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   // An earlier version tolerated a replacement "when no lock is held", deciding
@@ -143,10 +149,13 @@ describe('a replaced session cookie', () => {
 
     stub.rotateSession = true;
 
-    await expect(get(conn)).rejects.toMatchObject({
-      code: 'ADT_SESSION_REPLACED',
+    await assert.rejects(get(conn), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_SESSION_REPLACED',
+      });
+      return true;
     });
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   // The decision must not rest on the wire header either: another handler can
@@ -159,8 +168,11 @@ describe('a replaced session cookie', () => {
 
     stub.rotateSession = true;
 
-    await expect(get(conn)).rejects.toMatchObject({
-      code: 'ADT_SESSION_REPLACED',
+    await assert.rejects(get(conn), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_SESSION_REPLACED',
+      });
+      return true;
     });
   });
 });
@@ -186,10 +198,13 @@ describe('a replacement arriving on a non-200 response', () => {
     stub.rotateSession = true;
     stub.rotateStatus = 404;
 
-    await expect(get(conn)).rejects.toMatchObject({
-      code: 'ADT_SESSION_REPLACED',
+    await assert.rejects(get(conn), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_SESSION_REPLACED',
+      });
+      return true;
     });
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(conn.isConnected(), false);
   });
 });
 
@@ -241,20 +256,24 @@ describe('a session verdict raised during a retry', () => {
       };
     };
 
-    await expect(
+    await assert.rejects(
       conn.makeAdtRequest({
         url: '/sap/bc/adt/work',
         method: 'PUT',
         timeout: 5000,
         data: 'x',
       }),
-    ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+      (e: unknown) => {
+        assertMatchObject(e, { code: 'ADT_SESSION_REPLACED' });
+        return true;
+      },
+    );
 
     // One attempt, not two: the replacement is now detected at the token
     // refetch, before the retry goes out. Sending a write into a session
     // already known to be gone would be the internal retry this design
     // forbids, so stopping earlier is the stricter answer, not a weaker one.
-    expect(attempts).toBe(1);
+    assert.strictEqual(attempts, 1);
   });
 });
 
@@ -276,12 +295,15 @@ describe('a dead session', () => {
 
     stub.deadSession = true;
 
-    await expect(get(conn)).rejects.toMatchObject({
-      code: 'ADT_SESSION_REPLACED',
+    await assert.rejects(get(conn), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_SESSION_REPLACED',
+      });
+      return true;
     });
     // Comparison could never have seen this: nothing about the cookie changed.
-    expect(identityBefore).toBe('SAP_SESSIONID_STUB_100=S1');
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(identityBefore, 'SAP_SESSIONID_STUB_100=S1');
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('does not retry the request internally', async () => {
@@ -296,11 +318,14 @@ describe('a dead session', () => {
     };
 
     stub.deadSession = true;
-    await expect(get(conn)).rejects.toMatchObject({
-      code: 'ADT_SESSION_REPLACED',
+    await assert.rejects(get(conn), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_SESSION_REPLACED',
+      });
+      return true;
     });
 
     // A blind retry here is what produced further locks in the field.
-    expect(attempts).toBe(1);
+    assert.strictEqual(attempts, 1);
   });
 });

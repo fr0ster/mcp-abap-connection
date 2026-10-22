@@ -5,6 +5,8 @@
  * No network: constructing a connection sends nothing, and the RFC wire loads
  * its SDK only when a conversation is opened.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
@@ -33,7 +35,7 @@ function address(transport: unknown) {
 
 describe('createConnection', () => {
   it('is exported from the package index', () => {
-    expect(exported).toBe(createConnection);
+    assert.strictEqual(exported, createConnection);
   });
 
   it('cloud + http: the cloud connector over the cloud HTTP wire', () => {
@@ -43,14 +45,14 @@ describe('createConnection', () => {
       config,
       credential,
     });
-    expect(conn).toBeInstanceOf(AdtCloudConnector);
-    expect(conn.transport).toBeInstanceOf(CloudHttpTransport);
-    expect(conn.transport.kind).toBe(new CloudHttpTransport().kind);
-    expect(address(conn.transport)).toEqual({
+    assert.ok(conn instanceof AdtCloudConnector);
+    assert.ok(conn.transport instanceof CloudHttpTransport);
+    assert.strictEqual(conn.transport.kind, new CloudHttpTransport().kind);
+    assert.deepStrictEqual(address(conn.transport), {
       client: '200',
       baseUrl: 'https://sap.example.com:44300',
     });
-    expect(conn.credential).toBe(credential);
+    assert.strictEqual(conn.credential, credential);
   });
 
   it('onprem + http: the on-prem connector over the on-prem HTTP wire', () => {
@@ -60,10 +62,10 @@ describe('createConnection', () => {
       config,
       credential,
     });
-    expect(conn).toBeInstanceOf(AdtOnPremConnector);
-    expect(conn.transport).toBeInstanceOf(OnPremHttpTransport);
-    expect(conn.transport).not.toBeInstanceOf(LegacyOnPremHttpTransport);
-    expect(address(conn.transport)).toEqual({
+    assert.ok(conn instanceof AdtOnPremConnector);
+    assert.ok(conn.transport instanceof OnPremHttpTransport);
+    assert.ok(!(conn.transport instanceof LegacyOnPremHttpTransport));
+    assert.deepStrictEqual(address(conn.transport), {
       client: '200',
       baseUrl: 'https://sap.example.com:44300',
     });
@@ -76,9 +78,9 @@ describe('createConnection', () => {
       config,
       credential,
     });
-    expect(conn).toBeInstanceOf(AdtOnPremConnector);
-    expect(conn.transport).toBeInstanceOf(LegacyOnPremHttpTransport);
-    expect(address(conn.transport)).toEqual({
+    assert.ok(conn instanceof AdtOnPremConnector);
+    assert.ok(conn.transport instanceof LegacyOnPremHttpTransport);
+    assert.deepStrictEqual(address(conn.transport), {
       client: '200',
       baseUrl: 'https://sap.example.com:44300',
     });
@@ -97,10 +99,11 @@ describe('createConnection', () => {
       credential,
       rfc: options,
     });
-    expect(conn).toBeInstanceOf(AdtOnPremConnector);
-    expect(conn.transport).toBeInstanceOf(RfcTransport);
-    expect(conn.transport.kind).toBe('rfc');
-    expect((conn.transport as unknown as { options: unknown }).options).toBe(
+    assert.ok(conn instanceof AdtOnPremConnector);
+    assert.ok(conn.transport instanceof RfcTransport);
+    assert.strictEqual(conn.transport.kind, 'rfc');
+    assert.strictEqual(
+      (conn.transport as unknown as { options: unknown }).options,
       options,
     );
   });
@@ -126,24 +129,29 @@ describe('createConnection', () => {
       agentOptions: unknown;
       logger: unknown;
     };
-    expect(wire.agentOptions).toBe(agentOptions);
-    expect(wire.logger).toBe(wireLogger);
-    expect(conn.getSessionId()).toBe('my-conversation');
+    assert.strictEqual(wire.agentOptions, agentOptions);
+    assert.strictEqual(wire.logger, wireLogger);
+    assert.strictEqual(conn.getSessionId(), 'my-conversation');
   });
 
-  it.each([
+  for (const [system, transport] of [
     ['cloud', 'rfc'],
     ['cloud', 'legacy-http'],
     ['onprem', 'websocket'],
     ['mainframe', 'http'],
     [undefined, undefined],
-  ])('refuses %s + %s at construction, in fixed words', (system, transport) => {
-    expect(() =>
-      createConnection({ system, transport, config, credential } as never),
-    ).toThrow(
-      "createConnection: no such combination of system and transport. ABAP Cloud has one wire, 'http'; on-prem takes 'http', 'legacy-http' or 'rfc'. Both are stated by the caller, never inferred.",
-    );
-  });
+  ]) {
+    it(`refuses ${system} + ${transport} at construction, in fixed words`, () => {
+      assert.throws(
+        () =>
+          createConnection({ system, transport, config, credential } as never),
+        (e: unknown) =>
+          (e as Error).message.includes(
+            "createConnection: no such combination of system and transport. ABAP Cloud has one wire, 'http'; on-prem takes 'http', 'legacy-http' or 'rfc'. Both are stated by the caller, never inferred.",
+          ),
+      );
+    });
+  }
 
   it('gives a new instance, with a wire of its own, on every call', () => {
     const spec = {
@@ -154,8 +162,8 @@ describe('createConnection', () => {
     } as const;
     const first = createConnection(spec);
     const second = createConnection(spec);
-    expect(second).not.toBe(first);
-    expect(second.transport).not.toBe(first.transport);
+    assert.notStrictEqual(second, first);
+    assert.notStrictEqual(second.transport, first.transport);
   });
 
   it('infers nothing from the config: connectionType does not pick the wire', () => {
@@ -165,6 +173,6 @@ describe('createConnection', () => {
       config: { ...config, connectionType: 'rfc' } as SapConfig,
       credential,
     });
-    expect(conn.transport).toBeInstanceOf(OnPremHttpTransport);
+    assert.ok(conn.transport instanceof OnPremHttpTransport);
   });
 });

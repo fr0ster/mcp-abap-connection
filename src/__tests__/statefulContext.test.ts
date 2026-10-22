@@ -12,6 +12,8 @@
  * The session header and the context cookie are HTTP's, and go on stateful
  * requests only — the way Eclipse's trace shows them on `LOCK` and `UNLOCK`.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { LegacyOnPremHttpTransport } from '../connection/LegacyOnPremHttpTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 
@@ -50,10 +52,11 @@ describe('the stateful context over HTTP', () => {
     );
     await transport.send({ method: 'POST', url: '/lock', stateful: true });
 
-    expect(sessionType(seen[0])).toBe('stateful');
-    expect(cookieNames(seen[0])).toEqual(
-      expect.arrayContaining(['SAP_SESSIONID_E19_100', 'sap-contextid']),
-    );
+    assert.strictEqual(sessionType(seen[0]), 'stateful');
+    const names = cookieNames(seen[0]);
+    for (const name of ['SAP_SESSIONID_E19_100', 'sap-contextid']) {
+      assert.ok(names.includes(name));
+    }
   });
 
   it('a request that is not stateful carries neither', async () => {
@@ -62,9 +65,9 @@ describe('the stateful context over HTTP', () => {
     );
     await transport.send({ method: 'PUT', url: '/put' });
 
-    expect(sessionType(seen[0])).toBeUndefined();
-    expect(cookieNames(seen[0])).toContain('SAP_SESSIONID_E19_100');
-    expect(cookieNames(seen[0])).not.toContain('sap-contextid');
+    assert.strictEqual(sessionType(seen[0]), undefined);
+    assert.ok(cookieNames(seen[0]).includes('SAP_SESSIONID_E19_100'));
+    assert.ok(!cookieNames(seen[0]).includes('sap-contextid'));
   });
 
   it('keeps the context for the stateful requests that follow', async () => {
@@ -75,7 +78,7 @@ describe('the stateful context over HTTP', () => {
     await transport.send({ method: 'PUT', url: '/put' });
     await transport.send({ method: 'POST', url: '/unlock', stateful: true });
 
-    expect(cookieNames(seen[1])).toContain('sap-contextid');
+    assert.ok(cookieNames(seen[1]).includes('sap-contextid'));
   });
 
   it('treats a request that already carries the session header as stateful', async () => {
@@ -88,7 +91,7 @@ describe('the stateful context over HTTP', () => {
       headers: { 'x-sap-adt-sessiontype': 'stateful' },
     });
 
-    expect(cookieNames(seen[0])).toContain('sap-contextid');
+    assert.ok(cookieNames(seen[0]).includes('sap-contextid'));
   });
 
   it('a stateless retry that hands the whole jar back still leaves the context out', async () => {
@@ -98,7 +101,7 @@ describe('the stateful context over HTTP', () => {
       new OnPremHttpTransport(() => ({}), null, { baseUrl: 'https://h' }),
     );
     const jar = transport.cookies() ?? '';
-    expect(jar).toContain('sap-contextid');
+    assert.ok(jar.includes('sap-contextid'));
 
     await transport.send({
       method: 'PUT',
@@ -112,11 +115,12 @@ describe('the stateful context over HTTP', () => {
     });
 
     for (const headers of seen) {
-      expect(cookieNames(headers)).toContain('SAP_SESSIONID_E19_100');
-      expect(cookieNames(headers)).not.toContain('sap-contextid');
-      expect(
-        Object.keys(headers).filter((k) => k.toLowerCase() === 'cookie'),
-      ).toHaveLength(1);
+      assert.ok(cookieNames(headers).includes('SAP_SESSIONID_E19_100'));
+      assert.ok(!cookieNames(headers).includes('sap-contextid'));
+      assert.strictEqual(
+        Object.keys(headers).filter((k) => k.toLowerCase() === 'cookie').length,
+        1,
+      );
     }
   });
 
@@ -133,8 +137,8 @@ describe('the stateful context over HTTP', () => {
       headers: { 'x-sap-adt-sessiontype': 'stateful' },
     });
 
-    expect(sessionType(seen[0])).toBeUndefined();
-    expect(cookieNames(seen[0])).toContain('sap-contextid');
+    assert.strictEqual(sessionType(seen[0]), undefined);
+    assert.ok(cookieNames(seen[0]).includes('sap-contextid'));
   });
 
   it('the legacy wire asks with no header, and keeps the context', async () => {
@@ -143,7 +147,7 @@ describe('the stateful context over HTTP', () => {
     );
     await transport.send({ method: 'POST', url: '/lock', stateful: true });
 
-    expect(sessionType(seen[0])).toBeUndefined();
-    expect(cookieNames(seen[0])).toContain('sap-contextid');
+    assert.strictEqual(sessionType(seen[0]), undefined);
+    assert.ok(cookieNames(seen[0]).includes('sap-contextid'));
   });
 });

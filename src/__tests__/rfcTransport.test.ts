@@ -13,10 +13,14 @@
  * the two copies would disagree.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
+import { isDeepStrictEqual } from 'node:util';
 import type { IAdtTransport } from '../connection/IAdtTransport.js';
 import type { IRfcTransportOptions } from '../connection/RfcTransport.js';
 import { RfcTransport } from '../connection/RfcTransport.js';
 import type { ILogger } from '../logger.js';
+import { assertMatchObject } from './helpers/assertions.js';
 
 type Call = { fm: string; params: Record<string, any> };
 
@@ -27,9 +31,9 @@ function fakeClient(response: Record<string, unknown>) {
     calls,
     client: {
       alive: true,
-      open: jest.fn(async () => {}),
-      close: jest.fn(async () => {}),
-      call: jest.fn(async (fm: string, params: Record<string, any>) => {
+      open: mock.fn(async () => {}),
+      close: mock.fn(async () => {}),
+      call: mock.fn(async (fm: string, params: Record<string, any>) => {
         calls.push({ fm, params });
         return response;
       }),
@@ -59,7 +63,7 @@ describe('RfcTransport', () => {
   it('names itself rfc', () => {
     const { transport } = transportWith(okResponse);
 
-    expect(transport.kind).toBe('rfc');
+    assert.strictEqual(transport.kind, 'rfc');
   });
 
   it('carries the request as a request line, header fields and a body', async () => {
@@ -73,18 +77,23 @@ describe('RfcTransport', () => {
       data: 'source',
     });
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0].fm).toBe('SADT_REST_RFC_ENDPOINT');
-    expect(calls[0].params.REQUEST.REQUEST_LINE).toEqual({
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].fm, 'SADT_REST_RFC_ENDPOINT');
+    assert.deepStrictEqual(calls[0].params.REQUEST.REQUEST_LINE, {
       METHOD: 'POST',
       URI: '/sap/bc/adt/oo/classes/ZCL_X',
       VERSION: 'HTTP/1.1',
     });
-    expect(calls[0].params.REQUEST.HEADER_FIELDS).toContainEqual({
-      NAME: 'x-csrf-token',
-      VALUE: 'TOKEN',
-    });
-    expect(calls[0].params.REQUEST.MESSAGE_BODY.toString('utf-8')).toBe(
+    assert.ok(
+      calls[0].params.REQUEST.HEADER_FIELDS.some((item: unknown) =>
+        isDeepStrictEqual(item, {
+          NAME: 'x-csrf-token',
+          VALUE: 'TOKEN',
+        }),
+      ),
+    );
+    assert.strictEqual(
+      calls[0].params.REQUEST.MESSAGE_BODY.toString('utf-8'),
       'source',
     );
   });
@@ -102,10 +111,14 @@ describe('RfcTransport', () => {
       url: '/sap/bc/adt/core/discovery',
     });
 
-    expect(calls[0].params.REQUEST.HEADER_FIELDS).toContainEqual({
-      NAME: 'Accept',
-      VALUE: '*/*',
-    });
+    assert.ok(
+      calls[0].params.REQUEST.HEADER_FIELDS.some((item: unknown) =>
+        isDeepStrictEqual(item, {
+          NAME: 'Accept',
+          VALUE: '*/*',
+        }),
+      ),
+    );
   });
 
   it('leaves an Accept the caller named alone', async () => {
@@ -121,7 +134,7 @@ describe('RfcTransport', () => {
     const accepts = calls[0].params.REQUEST.HEADER_FIELDS.filter(
       (h: { NAME: string }) => h.NAME.toLowerCase() === 'accept',
     );
-    expect(accepts).toEqual([
+    assert.deepStrictEqual(accepts, [
       { NAME: 'Accept', VALUE: 'application/atomsvc+xml' },
     ]);
   });
@@ -135,10 +148,10 @@ describe('RfcTransport', () => {
       url: '/sap/bc/adt/discovery',
     });
 
-    expect(response.status).toBe(200);
-    expect(response.statusText).toBe('OK');
-    expect(response.headers).toEqual({ 'x-csrf-token': 'TOKEN' });
-    expect(response.data).toBe('<service/>');
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(response.statusText, 'OK');
+    assert.deepStrictEqual(response.headers, { 'x-csrf-token': 'TOKEN' });
+    assert.strictEqual(response.data, '<service/>');
   });
 
   it('throws with the response attached, as the classification above expects', async () => {
@@ -151,9 +164,13 @@ describe('RfcTransport', () => {
     });
     await transport.open();
 
-    await expect(
+    await assert.rejects(
       transport.send({ method: 'GET', url: '/sap/bc/adt/discovery' }),
-    ).rejects.toMatchObject({ response: { status: 401 } });
+      (e: unknown) => {
+        assertMatchObject(e, { response: { status: 401 } });
+        return true;
+      },
+    );
   });
 
   it('reads a status out of ADT exception XML when STATUS_LINE is empty', async () => {
@@ -171,17 +188,22 @@ describe('RfcTransport', () => {
     });
     await transport.open();
 
-    await expect(
+    await assert.rejects(
       transport.send({ method: 'GET', url: '/sap/bc/adt/oo/classes/ZCL_NOPE' }),
-    ).rejects.toMatchObject({ response: { status: 404 } });
+      (e: unknown) => {
+        assertMatchObject(e, { response: { status: 404 } });
+        return true;
+      },
+    );
   });
 
   it('refuses to send before it is open', async () => {
     const { transport } = transportWith(okResponse);
 
-    await expect(
+    await assert.rejects(
       transport.send({ method: 'GET', url: '/sap/bc/adt/discovery' }),
-    ).rejects.toThrow(/not open/i);
+      (e: unknown) => /not open/i.test((e as Error).message),
+    );
   });
 
   it('closes the conversation, and a repeat close is a no-op', async () => {
@@ -191,7 +213,7 @@ describe('RfcTransport', () => {
     await transport.close();
     await transport.close();
 
-    expect(client.close).toHaveBeenCalledTimes(1);
+    assert.strictEqual(client.close.mock.callCount(), 1);
   });
 });
 
@@ -210,7 +232,8 @@ describe('query parameters', () => {
       params: { operation: 'quickSearch', query: 'CL_ABAP*', maxResults: 3 },
     });
 
-    expect(calls[0].params.REQUEST.REQUEST_LINE.URI).toBe(
+    assert.strictEqual(
+      calls[0].params.REQUEST.REQUEST_LINE.URI,
       '/sap/bc/adt/repository/informationsystem/search' +
         // URLSearchParams leaves `*` alone — it is legal in a query, and this is
         // byte for byte what the class this replaced produced.
@@ -228,7 +251,8 @@ describe('query parameters', () => {
       params: { more: '2' },
     });
 
-    expect(calls[0].params.REQUEST.REQUEST_LINE.URI).toBe(
+    assert.strictEqual(
+      calls[0].params.REQUEST.REQUEST_LINE.URI,
       '/sap/bc/adt/x?already=1&more=2',
     );
   });
@@ -239,7 +263,8 @@ describe('query parameters', () => {
 
     await transport.send({ method: 'GET', url: '/sap/bc/adt/discovery' });
 
-    expect(calls[0].params.REQUEST.REQUEST_LINE.URI).toBe(
+    assert.strictEqual(
+      calls[0].params.REQUEST.REQUEST_LINE.URI,
       '/sap/bc/adt/discovery',
     );
   });
@@ -258,10 +283,10 @@ describe('the RFC wire log', () => {
   function recordingLogger() {
     const lines: string[] = [];
     const logger: ILogger = {
-      info: jest.fn(),
-      error: jest.fn(),
-      warn: jest.fn(),
-      debug: jest.fn((message: string) => {
+      info: mock.fn(),
+      error: mock.fn(),
+      warn: mock.fn(),
+      debug: mock.fn((message: string) => {
         lines.push(message);
       }),
     };
@@ -299,18 +324,19 @@ describe('the RFC wire log', () => {
     });
 
     const headers = lineStartingWith(lines, 'RFC HEADERS:');
-    expect(headers).toBeDefined();
-    expect(headers).not.toContain('ZGV2ZWxvcGVyOnNlY3JldA==');
-    expect(headers).not.toContain('SAP_SESSIONID_E19_100');
-    expect(headers).not.toContain('TOKEN-VALUE');
-    expect(headers).not.toContain('KEY-VALUE');
+    assert.notStrictEqual(headers, undefined);
+    if (headers === undefined) return;
+    assert.ok(!headers.includes('ZGV2ZWxvcGVyOnNlY3JldA=='));
+    assert.ok(!headers.includes('SAP_SESSIONID_E19_100'));
+    assert.ok(!headers.includes('TOKEN-VALUE'));
+    assert.ok(!headers.includes('KEY-VALUE'));
     // The name survives: that the header was sent at all is half of what the
     // line is read for.
-    expect(headers).toContain('Authorization');
-    expect(headers).toContain('x-csrf-token');
+    assert.ok(headers.includes('Authorization'));
+    assert.ok(headers.includes('x-csrf-token'));
     // And a header that is not a credential is left alone, or the line says
     // nothing.
-    expect(headers).toContain('application/xml');
+    assert.ok(headers.includes('application/xml'));
   });
 
   it('says nothing about the wire unless the caller asked for it', async () => {
@@ -325,11 +351,14 @@ describe('the RFC wire log', () => {
     });
 
     // `ILogger` has no level predicate, so this is the only opt-in there is.
-    expect(lineStartingWith(lines, 'RFC HEADERS:')).toBeUndefined();
-    expect(lineStartingWith(lines, 'RFC BODY')).toBeUndefined();
-    expect(lineStartingWith(lines, 'RFC RESPONSE BODY:')).toBeUndefined();
+    assert.strictEqual(lineStartingWith(lines, 'RFC HEADERS:'), undefined);
+    assert.strictEqual(lineStartingWith(lines, 'RFC BODY'), undefined);
+    assert.strictEqual(
+      lineStartingWith(lines, 'RFC RESPONSE BODY:'),
+      undefined,
+    );
     // What was already there stays there.
-    expect(lines).toContain('RFC → POST /sap/bc/adt/oo/classes/ZCL_X');
+    assert.ok(lines.includes('RFC → POST /sap/bc/adt/oo/classes/ZCL_X'));
   });
 
   it('clips a body to the ceiling rather than emitting megabytes', async () => {
@@ -353,10 +382,12 @@ describe('the RFC wire log', () => {
     });
 
     // The full size is still stated; only the bytes are cut.
-    expect(lineStartingWith(lines, 'RFC BODY')).toBe(
+    assert.strictEqual(
+      lineStartingWith(lines, 'RFC BODY'),
       `RFC BODY (5000 chars): ${'x'.repeat(10)}… (+4990 more chars)`,
     );
-    expect(lineStartingWith(lines, 'RFC RESPONSE BODY:')).toBe(
+    assert.strictEqual(
+      lineStartingWith(lines, 'RFC RESPONSE BODY:'),
       `RFC RESPONSE BODY: ${'x'.repeat(10)}… (+4990 more chars)`,
     );
   });
@@ -378,7 +409,8 @@ describe('the RFC wire log', () => {
       data: big,
     });
 
-    expect(lineStartingWith(lines, 'RFC BODY')).toBe(
+    assert.strictEqual(
+      lineStartingWith(lines, 'RFC BODY'),
       `RFC BODY (2500 chars): ${'x'.repeat(2000)}… (+500 more chars)`,
     );
   });
@@ -397,7 +429,8 @@ describe('the RFC wire log', () => {
       data: big,
     });
 
-    expect(lineStartingWith(lines, 'RFC BODY')).toBe(
+    assert.strictEqual(
+      lineStartingWith(lines, 'RFC BODY'),
       `RFC BODY (2500 chars): ${big}`,
     );
   });
@@ -408,7 +441,7 @@ describe('the RFC wire log', () => {
 
     await transport.send({ method: 'GET', url: '/sap/bc/adt/discovery' });
 
-    expect(lineStartingWith(lines, 'RFC BODY')).toBeUndefined();
-    expect(lineStartingWith(lines, 'RFC HEADERS:')).toBeDefined();
+    assert.strictEqual(lineStartingWith(lines, 'RFC BODY'), undefined);
+    assert.notStrictEqual(lineStartingWith(lines, 'RFC HEADERS:'), undefined);
   });
 });

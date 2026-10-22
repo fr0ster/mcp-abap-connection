@@ -3,8 +3,10 @@
  * through the module of @mcp-abap-adt/auth-errors: each fixture is refused by
  * exactly its own rule, a clean file and connection's own source pass.
  */
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
+import { describe, it } from 'node:test';
 import {
   checkProviderShape,
   reportLines,
@@ -13,8 +15,9 @@ import {
   type ShapeFinding,
 } from '@mcp-abap-adt/auth-errors/shape-check';
 import ts from 'typescript';
+import { REPO_ROOT } from './helpers/repoRoot.js';
 
-const ROOT = resolve(__dirname, '../..');
+const ROOT = REPO_ROOT;
 
 /** The whole configuration of the check in this repository. */
 const SHAPE_CHECK = {
@@ -44,42 +47,43 @@ function check(...files: string[]): readonly ShapeFinding[] {
 describe('the shape check', () => {
   it('the site lists are empty: connection asserts no contract type and passes no diagnostics', () => {
     for (const list of ['assertion-sites.json', 'diagnostic-sites.json']) {
-      expect(
+      assert.deepStrictEqual(
         JSON.parse(readFileSync(join(ROOT, 'tools', list), 'utf8')),
-      ).toStrictEqual([]);
+        [],
+      );
     }
   });
 
-  it.each([
+  for (const [rule, fixture] of [
     [4, 'tools/__fixtures__/rule4.ts'],
     [5, 'tools/__fixtures__/rule5.ts'],
     [6, 'tools/__fixtures__/rule6.ts'],
-  ] as const)(
-    'refuses the rule %s fixture (%s) with that rule alone',
-    (rule, fixture) => {
+  ] as const) {
+    it(`refuses the rule ${rule} fixture (${fixture}) with that rule alone`, () => {
       const findings = check(fixture);
 
-      expect(findings.length).toBeGreaterThan(0);
+      assert.ok(findings.length > 0);
       for (const finding of findings) {
-        expect(finding.rule).toBe(rule);
-        expect(finding.file).toBe(fixture);
+        assert.strictEqual(finding.rule, rule);
+        assert.strictEqual(finding.file, fixture);
       }
-    },
-  );
+    });
+  }
 
   it('passes a file that relays a minted error as it is', () => {
-    expect(check('tools/__fixtures__/clean.ts')).toStrictEqual([]);
+    assert.deepStrictEqual(check('tools/__fixtures__/clean.ts'), []);
   });
 
-  it("passes connection's own source", () => {
-    expect(
+  it("passes connection's own source", { timeout: 120_000 }, () => {
+    assert.deepStrictEqual(
       reportLines(
         checkProviderShape({
           ...SHAPE_CHECK,
         }),
       ),
-    ).toEqual([]);
-  }, 120_000);
+      [],
+    );
+  });
 
   describe('the publishing gate', () => {
     const scripts: Record<string, string> = JSON.parse(
@@ -87,20 +91,21 @@ describe('the shape check', () => {
     ).scripts;
 
     it('test:shape runs this test file alone', () => {
-      expect(scripts['test:shape']).toBe(
-        'jest src/__tests__/shapeCheck.test.ts',
+      assert.strictEqual(
+        scripts['test:shape'],
+        'node scripts/run-tests.mjs src/__tests__/shapeCheck.test.ts',
       );
     });
 
     it('prepublishOnly runs the shape check through test:shape', () => {
-      expect(scripts.prepublishOnly?.split(' && ')).toContain(
-        'npm run test:shape',
+      assert.ok(
+        scripts.prepublishOnly?.split(' && ').includes('npm run test:shape'),
       );
     });
 
     it('lint:check is Biome alone: it names no checking script', () => {
-      for (const checking of ['node ', 'jest', 'test:shape', 'shape']) {
-        expect(scripts['lint:check']).not.toContain(checking);
+      for (const checking of ['node ', 'run-tests', 'test:shape', 'shape']) {
+        assert.ok(!scripts['lint:check'].includes(checking));
       }
     });
   });

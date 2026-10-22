@@ -28,6 +28,8 @@
  *   SAP_ENV_FILE=e19.env npm run test:ci -- --testPathPatterns=rfc-connection
  */
 
+import assert from 'node:assert/strict';
+import { after, before, describe, it, mock } from 'node:test';
 import {
   BasicAuthProvider,
   SncLogonProvider,
@@ -48,10 +50,10 @@ const envFile = process.env.SAP_ENV_FILE || 'e19.env';
 dotenv.config({ path: envFile });
 
 const logger: ILogger = {
-  info: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn(),
-  debug: jest.fn(),
+  info: mock.fn(),
+  warn: mock.fn(),
+  error: mock.fn(),
+  debug: mock.fn(),
 };
 
 function buildConfig(): SapConfig {
@@ -145,53 +147,75 @@ function messageServerUnavailable(): string | null {
   return null;
 }
 
-/** Run the block, or skip it with the reason in its title. */
+/** What a block registers its tests and hooks with. */
+type Live = { it: typeof it; before: typeof before; after: typeof after };
+
+/**
+ * Run the block, or skip it with the reason in its title. Skipped, each of its
+ * tests is still listed — skipped, with the reason — and none of its hooks is
+ * registered, so nothing reaches a system: node:test runs a suite's `before`
+ * even when every test in it is skipped.
+ */
 function describeWhere(
   title: string,
   unavailable: string | null,
-  body: () => void,
+  body: (live: Live) => void,
 ): void {
-  if (unavailable) describe.skip(`${title} — skipped: ${unavailable}`, body);
-  else describe(title, body);
+  if (unavailable === null) {
+    describe(title, () => body({ it, before, after }));
+    return;
+  }
+  const skip = `skipped: ${unavailable}`;
+  describe(`${title} — ${skip}`, () =>
+    body({
+      it: ((name: string) => it(name, { skip })) as typeof it,
+      before: (() => {}) as typeof before,
+      after: (() => {}) as typeof after,
+    }));
 }
 
 describeWhere(
   'the on-prem connector over RFC (integration)',
   basicUnavailable(),
-  () => {
+  ({ it, before, after }) => {
     let conn: ReturnType<typeof overRfc>;
 
-    beforeAll(async () => {
-      conn = overRfc(buildConfig());
-      await conn.connect();
-    }, 15_000);
+    before(
+      async () => {
+        conn = overRfc(buildConfig());
+        await conn.connect();
+      },
+      { timeout: 15_000 },
+    );
 
-    afterAll(async () => {
+    after(async () => {
       await conn?.disconnect();
     });
 
     it('travels over the wire it was given', () => {
-      expect(conn.transport.kind).toBe('rfc');
+      assert.strictEqual(conn.transport.kind, 'rfc');
     });
 
     it('is on a session, and it is the conversation', () => {
       // Not a cookie: this wire is never issued one. The conversation IS the
       // session, so the connection is on one for as long as it is open.
-      expect(conn.getSessionIdentity()).toMatch(/^rfc-conversation=/);
+      assert.match(conn.getSessionIdentity() ?? '', /^rfc-conversation=/);
     });
 
     it('should return base URL matching config', async () => {
       const baseUrl = await conn.getBaseUrl();
-      expect(baseUrl).toBe(process.env.SAP_URL);
+      assert.strictEqual(baseUrl, process.env.SAP_URL);
     });
 
     it('should return a session ID', () => {
       const sessionId = conn.getSessionId();
-      expect(sessionId).toBeTruthy();
-      expect(typeof sessionId).toBe('string');
+      assert.ok(sessionId);
+      assert.strictEqual(typeof sessionId, 'string');
     });
 
-    it('should GET /sap/bc/adt/compatibility/graph', async () => {
+    it('should GET /sap/bc/adt/compatibility/graph', {
+      timeout: 15_000,
+    }, async () => {
       const resp = await conn.makeAdtRequest({
         method: 'GET',
         url: '/sap/bc/adt/compatibility/graph',
@@ -199,11 +223,13 @@ describeWhere(
         timeout: 10_000,
       });
 
-      expect(resp.status).toBe(200);
-      expect(typeof resp.data).toBe('string');
-    }, 15_000);
+      assert.strictEqual(resp.status, 200);
+      assert.strictEqual(typeof resp.data, 'string');
+    });
 
-    it('asks with no Accept of its own, and is still answered', async () => {
+    it('asks with no Accept of its own, and is still answered', {
+      timeout: 15_000,
+    }, async () => {
       // Without a default, ADT refuses this with
       // `400 ExceptionResourceBadRequest: Accept header missing` — axios supplies
       // one over HTTP and nobody noticed until this wire had to.
@@ -213,10 +239,10 @@ describeWhere(
         timeout: 10_000,
       });
 
-      expect(resp.status).toBe(200);
-    }, 15_000);
+      assert.strictEqual(resp.status, 200);
+    });
 
-    it('should return response headers', async () => {
+    it('should return response headers', { timeout: 15_000 }, async () => {
       const resp = await conn.makeAdtRequest({
         method: 'GET',
         url: '/sap/bc/adt/compatibility/graph',
@@ -224,13 +250,14 @@ describeWhere(
         timeout: 10_000,
       });
 
-      expect(resp.headers).toBeDefined();
-      expect(
+      assert.notStrictEqual(resp.headers, undefined);
+      assert.notStrictEqual(
         (resp.headers as Record<string, unknown>)['content-type'],
-      ).toBeDefined();
-    }, 15_000);
+        undefined,
+      );
+    });
 
-    it('should handle query params', async () => {
+    it('should handle query params', { timeout: 15_000 }, async () => {
       const resp = await conn.makeAdtRequest({
         method: 'GET',
         url: '/sap/bc/adt/compatibility/graph',
@@ -239,19 +266,23 @@ describeWhere(
         timeout: 10_000,
       });
 
-      expect(resp.status).toBe(200);
-    }, 15_000);
+      assert.strictEqual(resp.status, 200);
+    });
 
-    it('should return 404 for non-existent resource', async () => {
-      await expect(
+    it('should return 404 for non-existent resource', {
+      timeout: 15_000,
+    }, async () => {
+      await assert.rejects(
         conn.makeAdtRequest({
           method: 'GET',
           url: '/sap/bc/adt/programs/programs/ZZZZ_NONEXISTENT_99999',
           headers: { Accept: 'application/xml' },
           timeout: 10_000,
         }),
-      ).rejects.toThrow(/4(0[0-9]|1[0-9]|2[0-9]|[0-9]{2})/);
-    }, 15_000);
+        (e: unknown) =>
+          /4(0[0-9]|1[0-9]|2[0-9]|[0-9]{2})/.test((e as Error).message),
+      );
+    });
 
     it('should support stateful session type', () => {
       conn.setSessionType('stateful');
@@ -259,19 +290,22 @@ describeWhere(
       conn.setSessionType('stateless');
     });
 
-    it('refuses a call once the conversation has been given back', async () => {
+    it('refuses a call once the conversation has been given back', {
+      timeout: 20_000,
+    }, async () => {
       const other = overRfc(buildConfig());
       await other.connect();
       await other.disconnect();
 
-      await expect(
+      await assert.rejects(
         other.makeAdtRequest({
           method: 'GET',
           url: '/sap/bc/adt/compatibility/graph',
           timeout: 10_000,
         }),
-      ).rejects.toThrow(/ADT_NOT_CONNECTED/);
-    }, 20_000);
+        (e: unknown) => /ADT_NOT_CONNECTED/.test((e as Error).message),
+      );
+    });
   },
 );
 
@@ -287,43 +321,49 @@ describe('the parameters the conversation is dialled with', () => {
   };
 
   it('refuses a config with no url to take a host from', () => {
-    expect(() => rfcParamsFrom({ ...config, url: '' })).toThrow(/url/i);
+    assert.throws(
+      () => rfcParamsFrom({ ...config, url: '' }),
+      (e: unknown) => /url/i.test((e as Error).message),
+    );
   });
 
   it('takes a config with no credentials: the provider brings those', () => {
-    expect(() =>
+    assert.doesNotThrow(() =>
       rfcParamsFrom({ ...config, username: '', password: '' }),
-    ).not.toThrow();
+    );
   });
 });
 
 describeWhere(
   'SNC over RFC, through the Secure Login Client (integration)',
   sncUnavailable(),
-  () => {
+  ({ it, before, after }) => {
     let conn: AdtOnPremConnector<IAuthProvider, RfcTransport>;
 
-    beforeAll(async () => {
-      const config: SapConfig = {
-        url: process.env.SAP_URL as string,
-        client: process.env.SAP_CLIENT as string,
-        authType: 'basic',
-      };
-      conn = new AdtOnPremConnector(
-        config,
-        SncLogonProvider.forSecureLoginClient({
-          partnerName: process.env.SAP_SNC_PARTNERNAME as string,
-          qop: process.env.SAP_SNC_QOP || undefined,
-          sncLib: process.env.SAP_SNC_LIB || undefined,
-          myName: process.env.SAP_SNC_MYNAME || undefined,
-        }),
-        new RfcTransport(rfcConversationFrom(config), logger),
-        logger,
-      );
-      await conn.connect();
-    }, 60_000);
+    before(
+      async () => {
+        const config: SapConfig = {
+          url: process.env.SAP_URL as string,
+          client: process.env.SAP_CLIENT as string,
+          authType: 'basic',
+        };
+        conn = new AdtOnPremConnector(
+          config,
+          SncLogonProvider.forSecureLoginClient({
+            partnerName: process.env.SAP_SNC_PARTNERNAME as string,
+            qop: process.env.SAP_SNC_QOP || undefined,
+            sncLib: process.env.SAP_SNC_LIB || undefined,
+            myName: process.env.SAP_SNC_MYNAME || undefined,
+          }),
+          new RfcTransport(rfcConversationFrom(config), logger),
+          logger,
+        );
+        await conn.connect();
+      },
+      { timeout: 60_000 },
+    );
 
-    afterAll(async () => {
+    after(async () => {
       await conn?.disconnect();
     });
 
@@ -333,7 +373,7 @@ describeWhere(
         method: 'GET',
         timeout: 15_000,
       });
-      expect(response.status).toBe(200);
+      assert.strictEqual(response.status, 200);
     });
   },
 );
@@ -341,35 +381,38 @@ describeWhere(
 describeWhere(
   'SNC over RFC through a message server and a logon group (integration)',
   messageServerUnavailable(),
-  () => {
+  ({ it, before, after }) => {
     let conn: AdtOnPremConnector<IAuthProvider, RfcTransport>;
 
-    beforeAll(async () => {
-      const config: SapConfig = {
-        url: process.env.SAP_URL as string,
-        client: process.env.SAP_CLIENT as string,
-        authType: 'basic',
-        mshost: process.env.SAP_MSHOST as string,
-        msserv: process.env.SAP_MSSERV || undefined,
-        sysid: process.env.SAP_SYSID || undefined,
-        group: process.env.SAP_GROUP || undefined,
-        saprouter: process.env.SAP_SAPROUTER || undefined,
-      };
-      conn = new AdtOnPremConnector(
-        config,
-        SncLogonProvider.forSecureLoginClient({
-          partnerName: process.env.SAP_SNC_PARTNERNAME as string,
-          qop: process.env.SAP_SNC_QOP || undefined,
-          sncLib: process.env.SAP_SNC_LIB || undefined,
-          myName: process.env.SAP_SNC_MYNAME || undefined,
-        }),
-        new RfcTransport(rfcConversationFrom(config), logger),
-        logger,
-      );
-      await conn.connect();
-    }, 60_000);
+    before(
+      async () => {
+        const config: SapConfig = {
+          url: process.env.SAP_URL as string,
+          client: process.env.SAP_CLIENT as string,
+          authType: 'basic',
+          mshost: process.env.SAP_MSHOST as string,
+          msserv: process.env.SAP_MSSERV || undefined,
+          sysid: process.env.SAP_SYSID || undefined,
+          group: process.env.SAP_GROUP || undefined,
+          saprouter: process.env.SAP_SAPROUTER || undefined,
+        };
+        conn = new AdtOnPremConnector(
+          config,
+          SncLogonProvider.forSecureLoginClient({
+            partnerName: process.env.SAP_SNC_PARTNERNAME as string,
+            qop: process.env.SAP_SNC_QOP || undefined,
+            sncLib: process.env.SAP_SNC_LIB || undefined,
+            myName: process.env.SAP_SNC_MYNAME || undefined,
+          }),
+          new RfcTransport(rfcConversationFrom(config), logger),
+          logger,
+        );
+        await conn.connect();
+      },
+      { timeout: 60_000 },
+    );
 
-    afterAll(async () => {
+    after(async () => {
       await conn?.disconnect();
     });
 
@@ -379,7 +422,7 @@ describeWhere(
         method: 'GET',
         timeout: 15_000,
       });
-      expect(response.status).toBe(200);
+      assert.strictEqual(response.status, 200);
     });
   },
 );

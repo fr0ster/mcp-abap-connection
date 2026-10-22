@@ -8,11 +8,14 @@
  * LOCK, handing back a handle the next request cannot use.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it, type Mock, mock } from 'node:test';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
+import { assertMatchObject } from './helpers/assertions.js';
 import { reportableLogoff, wroteIt } from './helpers/logoffWrite.js';
 import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
 import { settled } from './helpers/settled.js';
@@ -27,10 +30,10 @@ const baseConfig: SapConfig = {
 
 function makeLogger(): ILogger {
   return {
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-    debug: jest.fn(),
+    info: mock.fn(),
+    warn: mock.fn(),
+    error: mock.fn(),
+    debug: mock.fn(),
   };
 }
 
@@ -66,8 +69,8 @@ function attachMockAxios(
   // clearSessionState() detaches interceptors before dropping the instance, so
   // the double has to carry them — the earlier doubles never reached teardown.
   (instance as any).interceptors = {
-    request: { clear: jest.fn() },
-    response: { clear: jest.fn() },
+    request: { clear: mock.fn() },
+    response: { clear: mock.fn() },
   };
   (conn as any).transport.instance = instance;
   reportableLogoff((conn as any).transport);
@@ -100,13 +103,17 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     await settled();
 
     // Nothing was asked of the session resource, and the goodbye is the ICF one.
-    expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(false);
-    expect(
+    assert.strictEqual(
+      seen.some((r) => r.url.includes('/core/http/sessions')),
+      false,
+    );
+    assert.strictEqual(
       seen.some(
         (r) =>
           r.url.includes('/sap/public/bc/icf/logoff') && r.method === 'GET',
       ),
-    ).toBe(true);
+      true,
+    );
   });
 
   it('cloud opens the session resource and gives it back through the logoff it links to', async () => {
@@ -133,20 +140,26 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     await conn.disconnect();
     await settled();
 
-    expect(seen.some((r) => r.url.includes('/core/http/sessions'))).toBe(true);
+    assert.strictEqual(
+      seen.some((r) => r.url.includes('/core/http/sessions')),
+      true,
+    );
     const goodbye = seen.find((r) =>
       r.url.includes('/sap/public/bc/icf/logoff'),
     );
-    expect(goodbye?.method).toBe('GET');
-    expect(goodbye?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
-    expect(goodbye?.headers['x-sap-security-session']).toBe('use');
-    expect(goodbye?.headers.Authorization).toBeUndefined();
-    expect(goodbye?.headers.Accept).toBe('*/*');
-    expect(goodbye?.headers['sap-cancel-on-close']).toBe('true');
-    expect(goodbye?.headers['sap-adt-request-id']).toMatch(/^[0-9a-f]{32}$/);
+    assert.strictEqual(goodbye?.method, 'GET');
+    assert.ok(goodbye?.headers.Cookie.includes('SAP_SESSIONID_STUB_100'));
+    assert.strictEqual(goodbye?.headers['x-sap-security-session'], 'use');
+    assert.strictEqual(goodbye?.headers.Authorization, undefined);
+    assert.strictEqual(goodbye?.headers.Accept, '*/*');
+    assert.strictEqual(goodbye?.headers['sap-cancel-on-close'], 'true');
+    assert.match(goodbye?.headers['sap-adt-request-id'], /^[0-9a-f]{32}$/);
     // Never the DELETE on the session's own address: from inside that session
     // it answers 200 and ends nothing (measured on a BTP trial, 2026-10-12).
-    expect(seen.some((r) => r.method === 'DELETE')).toBe(false);
+    assert.strictEqual(
+      seen.some((r) => r.method === 'DELETE'),
+      false,
+    );
   });
 
   it('cloud ends a session the server linked no logoff for with the platform logoff, without sap-contextid, resolving on the write', async () => {
@@ -184,17 +197,25 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     await settled();
 
     const sent = seen.slice(before);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.method).toBe('GET');
-    expect(sent[0]?.url).toBe(
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0]?.method, 'GET');
+    assert.strictEqual(
+      sent[0]?.url,
       'https://sap.example.com/sap/public/bc/icf/logoff',
     );
-    expect(sent[0]?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
-    expect(sent[0]?.headers.Cookie).not.toContain('sap-contextid');
-    expect(sent[0]?.headers['x-sap-security-session']).toBeUndefined();
-    expect(sent[0]?.headers.Authorization).toBeUndefined();
-    expect(logger.debug).toHaveBeenCalledWith(
-      expect.stringContaining('published no logoff resource'),
+    assert.ok(sent[0]?.headers.Cookie.includes('SAP_SESSIONID_STUB_100'));
+    assert.ok(!sent[0]?.headers.Cookie.includes('sap-contextid'));
+    assert.strictEqual(sent[0]?.headers['x-sap-security-session'], undefined);
+    assert.strictEqual(sent[0]?.headers.Authorization, undefined);
+    assert.ok(
+      (
+        logger.debug as unknown as Mock<(...args: any[]) => void>
+      ).mock.calls.some(
+        ({ arguments: args }) =>
+          args.length === 1 &&
+          typeof args[0] === 'string' &&
+          args[0].includes('published no logoff resource'),
+      ),
     );
   });
 });
@@ -229,7 +250,8 @@ describe('the cloud logoff link', () => {
     await conn.disconnect();
     await settled();
 
-    expect(seen.at(-1)?.url).toBe(
+    assert.strictEqual(
+      seen.at(-1)?.url,
       'https://sap.example.com/sap/bc/adt/core/http/logoff',
     );
   });
@@ -242,19 +264,28 @@ describe('the cloud logoff link', () => {
     await conn.connect();
     const before = seen.length;
     const transport = (conn as any).transport;
-    await expect(conn.disconnect()).resolves.toBeUndefined();
+    assert.strictEqual(await conn.disconnect(), undefined);
     await settled();
     // And the wire's own close, asked again, has nothing left that can throw.
-    await expect(
-      transport.close({ baseUrl: 'https://sap.example.com' }),
-    ).resolves.toBeUndefined();
+    assert.strictEqual(
+      await transport.close({ baseUrl: 'https://sap.example.com' }),
+      undefined,
+    );
 
     // One logoff, the platform's; the second close has no session left.
-    expect(seen.slice(before).map((r) => r.url)).toEqual([
-      'https://sap.example.com/sap/public/bc/icf/logoff',
-    ]);
-    expect(logger.debug).toHaveBeenCalledWith(
-      expect.stringContaining('logoff link that is no URL'),
+    assert.deepStrictEqual(
+      seen.slice(before).map((r) => r.url),
+      ['https://sap.example.com/sap/public/bc/icf/logoff'],
+    );
+    assert.ok(
+      (
+        logger.debug as unknown as Mock<(...args: any[]) => void>
+      ).mock.calls.some(
+        ({ arguments: args }) =>
+          args.length === 1 &&
+          typeof args[0] === 'string' &&
+          args[0].includes('logoff link that is no URL'),
+      ),
     );
   });
 
@@ -278,11 +309,11 @@ describe('the cloud logoff link', () => {
       return { status: 200, data: '', headers: {} };
     };
     (instance as any).interceptors = {
-      request: { clear: jest.fn() },
-      response: { clear: jest.fn() },
+      request: { clear: mock.fn() },
+      response: { clear: mock.fn() },
     };
     (transport as any).instance = instance;
-    const authorize = jest.fn();
+    const authorize = mock.fn();
 
     await transport.close({
       baseUrl: 'https://sap.example.com',
@@ -293,11 +324,11 @@ describe('the cloud logoff link', () => {
       },
     } as never);
 
-    expect(seen).toHaveLength(1);
+    assert.strictEqual(seen.length, 1);
     const names = Object.keys(seen[0].headers).map((n) => n.toLowerCase());
-    expect(names).not.toContain('authorization');
-    expect(seen[0].headers['sap-adt-connection-id']).toBe('C-1');
-    expect(authorize).not.toHaveBeenCalled();
+    assert.ok(!names.includes('authorization'));
+    assert.strictEqual(seen[0].headers['sap-adt-connection-id'], 'C-1');
+    assert.strictEqual(authorize.mock.callCount(), 0);
   });
 });
 
@@ -326,9 +357,11 @@ describe('a connection the server gave no session says so', () => {
       },
     }));
 
-    await expect(conn.connect()).rejects.toThrow(/opened no ABAP session/);
-    expect(conn.isConnected()).toBe(false);
-    expect(conn.getSessionIdentity()).toBeNull();
+    await assert.rejects(conn.connect(), (e: unknown) =>
+      /opened no ABAP session/.test((e as Error).message),
+    );
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(conn.getSessionIdentity(), null);
   });
 
   // The message is the whole point: this is reported so the caller can decide,
@@ -347,15 +380,15 @@ describe('a connection the server gave no session says so', () => {
 
     const error = await conn.connect().catch((e: Error) => e);
 
-    expect(error).toBeInstanceOf(Error);
+    assert.ok(error instanceof Error);
     const message = (error as Error).message;
     // Names the WIRE rather than the cookie: what a session is addressed by is
     // the wire's business, and the base no longer knows that HTTP's answer is a
     // SAP_SESSIONID.
-    expect(message).toMatch(/wire reports it is on none/); // what was missing
-    expect(message).toMatch(/lock/i); // what it costs
-    expect(message).toMatch(/limited per user/); // the likely cause
-    expect(message).toMatch(/does not retry/); // whose call it is
+    assert.match(message, /wire reports it is on none/); // what was missing
+    assert.match(message, /lock/i); // what it costs
+    assert.match(message, /limited per user/); // the likely cause
+    assert.match(message, /does not retry/); // whose call it is
   });
 
   it('stays quiet when a session was established', async () => {
@@ -365,10 +398,17 @@ describe('a connection the server gave no session says so', () => {
 
     await conn.connect();
 
-    expect(logger.warn).not.toHaveBeenCalledWith(
-      expect.stringContaining('no SAP_SESSIONID'),
+    assert.ok(
+      !(
+        logger.warn as unknown as Mock<(...args: any[]) => void>
+      ).mock.calls.some(
+        ({ arguments: args }) =>
+          args.length === 1 &&
+          typeof args[0] === 'string' &&
+          args[0].includes('no SAP_SESSIONID'),
+      ),
     );
-    expect(conn.getSessionIdentity()).not.toBeNull();
+    assert.notStrictEqual(conn.getSessionIdentity(), null);
   });
 });
 
@@ -400,8 +440,8 @@ describe('every session of a reconnect cycle is released', () => {
       return answer(cfg);
     };
     (instance as any).interceptors = {
-      request: { clear: jest.fn() },
-      response: { clear: jest.fn() },
+      request: { clear: mock.fn() },
+      response: { clear: mock.fn() },
     };
     (conn as any).transport.instance = instance;
     reportableLogoff((conn as any).transport);
@@ -441,14 +481,17 @@ describe('every session of a reconnect cycle is released', () => {
     await conn.connect();
     await conn.disconnect();
     // One instance is one session: a second session is a new instance.
-    await expect(conn.connect()).rejects.toMatchObject({
-      code: 'ADT_NOT_CONNECTED',
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_NOT_CONNECTED',
+      });
+      return true;
     });
     await settled();
 
     const logoffs = seen.filter((r) => r.url.includes('/logoff'));
-    expect(logoffs).toHaveLength(1);
-    expect(logoffs[0].headers.Cookie).toContain('S1');
+    assert.strictEqual(logoffs.length, 1);
+    assert.ok(logoffs[0].headers.Cookie.includes('S1'));
   });
 
   /**
@@ -491,12 +534,15 @@ describe('every session of a reconnect cycle is released', () => {
     await conn.disconnect();
     // Nothing reconnected, so there is no second session to close: the
     // repeat is refused — disconnect() is called once — and asks nothing.
-    await expect(conn.disconnect()).rejects.toMatchObject({
-      code: 'ADT_NOT_CONNECTED',
+    await assert.rejects(conn.disconnect(), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_NOT_CONNECTED',
+      });
+      return true;
     });
     await settled();
 
-    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
+    assert.strictEqual(seen.filter((r) => r.url.includes('/logoff')).length, 1);
   });
 });
 
@@ -550,15 +596,18 @@ describe('requests stay on the server the session lives on', () => {
     // Every request asks, because a restart can move us and the answer is how
     // we find out.
     for (const request of seen) {
-      expect(request.headers['sap-adt-saplb']).toBe('fetch');
+      assert.strictEqual(request.headers['sap-adt-saplb'], 'fetch');
     }
     // The name can only be sent once it has been answered, so the first
     // request cannot carry it — every one after it must.
     const afterNamed = seen.slice(1);
-    expect(afterNamed.length).toBeGreaterThan(0);
+    assert.ok(afterNamed.length > 0);
     for (const request of afterNamed) {
-      expect(request.headers.saplb).toBe('appserver-c5zhg');
-      expect(request.headers['saplb-options']).toBe('REDISPATCH_ON_SHUTDOWN');
+      assert.strictEqual(request.headers.saplb, 'appserver-c5zhg');
+      assert.strictEqual(
+        request.headers['saplb-options'],
+        'REDISPATCH_ON_SHUTDOWN',
+      );
     }
   });
 
@@ -572,7 +621,7 @@ describe('requests stay on the server the session lives on', () => {
     // Never invented: a single-node system names nobody, and a guessed
     // `saplb` would pin us to a server that may not exist.
     for (const request of seen) {
-      expect(request.headers.saplb).toBeUndefined();
+      assert.strictEqual(request.headers.saplb, undefined);
     }
   });
 
@@ -582,7 +631,10 @@ describe('requests stay on the server the session lives on', () => {
     pinning(conn, seen, 'appserver-c5zhg');
 
     await conn.connect();
-    expect(conn.transport.affinityHeaders().saplb).toBe('appserver-c5zhg');
+    assert.strictEqual(
+      conn.transport.affinityHeaders().saplb,
+      'appserver-c5zhg',
+    );
     // The session is lost (a dead session, a changed SAP_SESSIONID): the wire
     // forgets the server it lived on, and asks again rather than asserting it.
     (conn as unknown as { raiseSessionLost(r: string): void }).raiseSessionLost(
@@ -590,8 +642,11 @@ describe('requests stay on the server the session lives on', () => {
     );
     await settled();
 
-    expect(conn.transport.affinityHeaders().saplb).toBeUndefined();
-    expect(conn.transport.affinityHeaders()['sap-adt-saplb']).toBe('fetch');
+    assert.strictEqual(conn.transport.affinityHeaders().saplb, undefined);
+    assert.strictEqual(
+      conn.transport.affinityHeaders()['sap-adt-saplb'],
+      'fetch',
+    );
   });
 });
 
@@ -637,8 +692,8 @@ describe('a session opened before a failed connect is not abandoned', () => {
       throw new Error('establishment refused');
     };
     (instance as any).interceptors = {
-      request: { clear: jest.fn() },
-      response: { clear: jest.fn() },
+      request: { clear: mock.fn() },
+      response: { clear: mock.fn() },
     };
     (conn as any).transport.instance = instance;
   }
@@ -659,7 +714,7 @@ describe('a session opened before a failed connect is not abandoned', () => {
     const seen: Seen[] = [];
     cloudThenFailing(conn as never, seen);
 
-    await expect(conn.connect()).rejects.toThrow();
+    await assert.rejects(conn.connect());
     // The goodbye is dispatched but not awaited — the caller is owed the
     // establishment error, not a round trip.
     await new Promise((r) => setTimeout(r, 20));
@@ -667,10 +722,10 @@ describe('a session opened before a failed connect is not abandoned', () => {
     const goodbye = seen.find(
       (r) => r.method === 'GET' && r.url.includes('/sap/public/bc/icf/logoff'),
     );
-    expect(goodbye).toBeDefined();
+    assert.notStrictEqual(goodbye, undefined);
     // With the cookie that is the whole permission to close it, taken before
     // the local state was cleared.
-    expect(goodbye?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
+    assert.ok(goodbye?.headers.Cookie.includes('SAP_SESSIONID_STUB_100'));
   });
 
   it('says nothing when the preflight opened nothing', async () => {
@@ -698,8 +753,8 @@ describe('a session opened before a failed connect is not abandoned', () => {
       throw new Error('establishment refused');
     };
     (instance as any).interceptors = {
-      request: { clear: jest.fn() },
-      response: { clear: jest.fn() },
+      request: { clear: mock.fn() },
+      response: { clear: mock.fn() },
     };
     (conn as any).transport.instance = instance;
     // The debris: a cookie left behind by the response that rejected us. It
@@ -708,11 +763,17 @@ describe('a session opened before a failed connect is not abandoned', () => {
     (conn as unknown as { cookies: string }).cookies =
       'SAP_SESSIONID_STUB_100=junk%3d';
 
-    await expect(conn.connect()).rejects.toThrow();
+    await assert.rejects(conn.connect());
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(seen.some((r) => r.url.includes('/icf/logoff'))).toBe(false);
-    expect(seen.some((r) => r.method === 'DELETE')).toBe(false);
+    assert.strictEqual(
+      seen.some((r) => r.url.includes('/icf/logoff')),
+      false,
+    );
+    assert.strictEqual(
+      seen.some((r) => r.method === 'DELETE'),
+      false,
+    );
   });
 });
 
@@ -729,16 +790,16 @@ describe('disconnect ends the server session', () => {
     const logoff = seen.find((r) =>
       r.url.includes('/sap/public/bc/icf/logoff'),
     );
-    expect(logoff).toBeDefined();
-    expect(logoff?.headers.Cookie).toContain('SAP_SESSIONID_STUB_100');
+    assert.notStrictEqual(logoff, undefined);
+    assert.ok(logoff?.headers.Cookie.includes('SAP_SESSIONID_STUB_100'));
     // As Eclipse sends it: the cookie and nothing that logs on — the service
     // answers `sap-authenticated: not required`.
-    expect(logoff?.headers.Authorization).toBeUndefined();
-    expect(logoff?.headers.Accept).toBe('*/*');
-    expect(logoff?.headers['sap-cancel-on-close']).toBe('true');
-    expect(logoff?.headers['sap-adt-request-id']).toMatch(/^[0-9a-f]{32}$/);
+    assert.strictEqual(logoff?.headers.Authorization, undefined);
+    assert.strictEqual(logoff?.headers.Accept, '*/*');
+    assert.strictEqual(logoff?.headers['sap-cancel-on-close'], 'true');
+    assert.match(logoff?.headers['sap-adt-request-id'], /^[0-9a-f]{32}$/);
     // On-prem names no security session: its session arrives with the logon.
-    expect(logoff?.headers['x-sap-security-session']).toBeUndefined();
+    assert.strictEqual(logoff?.headers['x-sap-security-session'], undefined);
   });
 
   it('disconnects anyway when the logoff fails', async () => {
@@ -761,9 +822,9 @@ describe('disconnect ends the server session', () => {
     });
 
     await conn.connect();
-    await expect(conn.disconnect()).resolves.toBeUndefined();
-    expect(conn.isConnected()).toBe(false);
-    expect(conn.getSessionIdentity()).toBeNull();
+    assert.strictEqual(await conn.disconnect(), undefined);
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(conn.getSessionIdentity(), null);
   });
 
   /**
@@ -793,8 +854,11 @@ describe('disconnect ends the server session', () => {
     await conn.disconnect();
     await settled();
 
-    expect(seen.some((r) => r.url.includes('/logoff'))).toBe(true);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(
+      seen.some((r) => r.url.includes('/logoff')),
+      true,
+    );
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   /**
@@ -821,11 +885,14 @@ describe('disconnect ends the server session', () => {
 
     await conn.connect();
     await conn.disconnect();
-    await expect(conn.disconnect()).rejects.toMatchObject({
-      code: 'ADT_NOT_CONNECTED',
+    await assert.rejects(conn.disconnect(), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_NOT_CONNECTED',
+      });
+      return true;
     });
 
-    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
+    assert.strictEqual(seen.filter((r) => r.url.includes('/logoff')).length, 1);
   });
 
   it('refuses a repeat call while the release is still in flight, and opens no second', async () => {
@@ -851,11 +918,14 @@ describe('disconnect ends the server session', () => {
     await conn.connect();
     // Detaches while the logoff is still on its way.
     await conn.disconnect();
-    await expect(conn.disconnect()).rejects.toMatchObject({
-      code: 'ADT_NOT_CONNECTED',
+    await assert.rejects(conn.disconnect(), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_NOT_CONNECTED',
+      });
+      return true;
     });
 
-    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
+    assert.strictEqual(seen.filter((r) => r.url.includes('/logoff')).length, 1);
     releaseLogoff?.();
   });
 
@@ -884,10 +954,10 @@ describe('disconnect ends the server session', () => {
       throw new Error('no material to build the agent from');
     };
 
-    await expect(conn.disconnect()).resolves.toBeUndefined();
+    assert.strictEqual(await conn.disconnect(), undefined);
     await settled();
-    expect(conn.isConnected()).toBe(false);
-    expect(conn.getSessionIdentity()).toBeNull();
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(conn.getSessionIdentity(), null);
   });
 
   it('asks nothing of the credential to say goodbye', async () => {
@@ -903,9 +973,9 @@ describe('disconnect ends the server session', () => {
       throw new Error('no credential to build a header from');
     };
 
-    await expect(conn.disconnect()).resolves.toBeUndefined();
+    assert.strictEqual(await conn.disconnect(), undefined);
     await settled();
-    expect(seen.filter((r) => r.url.includes('/logoff'))).toHaveLength(1);
+    assert.strictEqual(seen.filter((r) => r.url.includes('/logoff')).length, 1);
   });
 
   it('sends nothing when there is no session to end', async () => {
@@ -915,6 +985,6 @@ describe('disconnect ends the server session', () => {
 
     await conn.disconnect();
 
-    expect(seen).toHaveLength(0);
+    assert.strictEqual(seen.length, 0);
   });
 });

@@ -5,6 +5,8 @@
  * A real `OnPremHttpTransport` (or `CloudHttpTransport`) against a local SAP,
  * with a stub provider that records every call.
  */
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
@@ -18,6 +20,7 @@ import { AuthRefusedError } from '../../connection/authErrors.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
 import { HttpTransport } from '../../connection/HttpTransport.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
+import { assertMatchObject } from '../helpers/assertions.js';
 import { type SapStub, startSapStub } from '../helpers/sapStub.js';
 import { type StubScript, stubProvider } from '../helpers/stubProvider.js';
 
@@ -77,12 +80,12 @@ describe('connect() orders the credential around the wire', () => {
 
     await conn.connect();
 
-    expect(order().slice(0, 3)).toStrictEqual([
+    assert.deepStrictEqual(order().slice(0, 3), [
       'prepare',
       'establish',
       'authorize',
     ]);
-    expect(conn.isConnected()).toBe(true);
+    assert.strictEqual(conn.isConnected(), true);
   });
 
   it('sends nothing and never logs on when prepare says no', async () => {
@@ -90,12 +93,12 @@ describe('connect() orders the credential around the wire', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).at).toBe('prepare');
-    expect((error as AuthRefusedError).refusal).toStrictEqual(REFUSAL);
-    expect(order()).toStrictEqual(['prepare']);
-    expect(stub.requests).toHaveLength(0);
-    expect(conn.isConnected()).toBe(false);
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual((error as AuthRefusedError).at, 'prepare');
+    assert.deepStrictEqual((error as AuthRefusedError).refusal, REFUSAL);
+    assert.deepStrictEqual(order(), ['prepare']);
+    assert.strictEqual(stub.requests.length, 0);
+    assert.strictEqual(conn.isConnected(), false);
   });
 });
 
@@ -124,7 +127,7 @@ describe('the HTTP logon target', () => {
       t.tlsMaterial({ cert: 'C', key: 'K' }),
     );
 
-    expect(outcome).toStrictEqual({ ok: true });
+    assert.deepStrictEqual(outcome, { ok: true });
   });
 
   it('refuses logon parameters, in the fixed words', async () => {
@@ -134,7 +137,7 @@ describe('the HTTP logon target', () => {
       t.logonParameters({ snc_mode: '1' }),
     );
 
-    expect(outcome).toStrictEqual({
+    assert.deepStrictEqual(outcome, {
       ok: false,
       refusal: authError['logon-target']({
         wire: 'http',
@@ -142,15 +145,16 @@ describe('the HTTP logon target', () => {
       }),
     });
     if (outcome.ok) throw new Error('expected a refusal');
-    expect(outcome.refusal.kind).toBe('logon-target');
-    expect(outcome.refusal.facts).toStrictEqual({
+    assert.strictEqual(outcome.refusal.kind, 'logon-target');
+    assert.deepStrictEqual(outcome.refusal.facts, {
       wire: 'http',
       refused: 'logon-parameters',
     });
-    expect(outcome.refusal.reason).toBe(
+    assert.strictEqual(
+      outcome.refusal.reason,
       'this wire takes no logon parameters (HTTP)',
     );
-    expect(outcome.refusal.hint).toBeUndefined();
+    assert.strictEqual(outcome.refusal.hint, undefined);
   });
 
   const agentOf = (transport: HttpTransport) =>
@@ -169,10 +173,10 @@ describe('the HTTP logon target', () => {
     );
 
     const options = agentOf(transport).options;
-    expect(options.ca).toBe('THE-CA');
-    expect(options.cert).toBe('THE-CERT');
-    expect(options.key).toBe('THE-KEY');
-    expect(options.passphrase).toBe('mine');
+    assert.strictEqual(options.ca, 'THE-CA');
+    assert.strictEqual(options.cert, 'THE-CERT');
+    assert.strictEqual(options.key, 'THE-KEY');
+    assert.strictEqual(options.passphrase, 'mine');
   });
 
   it('takes only the material fields: an extra key or an explicit undefined does not override agentOptions', async () => {
@@ -193,11 +197,11 @@ describe('the HTTP logon target', () => {
     );
 
     const options = agentOf(transport).options;
-    expect(options.cert).toBe('THE-CERT');
-    expect(options.key).toBe('THE-KEY');
-    expect(options.ca).toBe('THE-CA');
-    expect(options.rejectUnauthorized).toBe(true);
-    expect(options.passphrase).toBe('from-options');
+    assert.strictEqual(options.cert, 'THE-CERT');
+    assert.strictEqual(options.key, 'THE-KEY');
+    assert.strictEqual(options.ca, 'THE-CA');
+    assert.strictEqual(options.rejectUnauthorized, true);
+    assert.strictEqual(options.passphrase, 'from-options');
   });
 
   it('keeps the client when a first logon offers nothing but undefined fields', async () => {
@@ -206,7 +210,7 @@ describe('the HTTP logon target', () => {
 
     await logonWith(transport, (t) => t.tlsMaterial({ cert: undefined }));
 
-    expect((transport as any).client()).toBe(first);
+    assert.strictEqual((transport as any).client(), first);
   });
 
   it('keeps the client for the same material, compared by value', async () => {
@@ -220,7 +224,7 @@ describe('the HTTP logon target', () => {
       t.tlsMaterial({ pfx: Buffer.from('bytes'), passphrase: 'p' }),
     );
 
-    expect((transport as any).client()).toBe(first);
+    assert.strictEqual((transport as any).client(), first);
   });
 
   it('rebuilds the client for different material, and the cookie jar survives', async () => {
@@ -233,10 +237,10 @@ describe('the HTTP logon target', () => {
     await logonWith(transport, (t) => t.tlsMaterial({ cert: 'TWO', key: 'K' }));
 
     const second = (transport as any).client();
-    expect(second).not.toBe(first);
-    expect(agentOf(transport).options.cert).toBe('TWO');
-    expect(transport.cookies()).toBe('SAP_SESSIONID_X_100=S1');
-    expect(transport.csrfToken()).toBe('TOKEN');
+    assert.notStrictEqual(second, first);
+    assert.strictEqual(agentOf(transport).options.cert, 'TWO');
+    assert.strictEqual(transport.cookies(), 'SAP_SESSIONID_X_100=S1');
+    assert.strictEqual(transport.csrfToken(), 'TOKEN');
   });
 });
 
@@ -247,11 +251,14 @@ describe('a 401 while establishing', () => {
 
     await conn.connect();
 
-    expect(rejections()).toHaveLength(1);
-    expect(rejections()[0]).toMatchObject({ at: 'logon', status: 401 });
-    expect(discoveryRequests().map((r) => r.status)).toStrictEqual([401, 200]);
-    expect(discoveryRequests()[1].headers.authorization).toBe('Stub 1');
-    expect(conn.isConnected()).toBe(true);
+    assert.strictEqual(rejections().length, 1);
+    assertMatchObject(rejections()[0], { at: 'logon', status: 401 });
+    assert.deepStrictEqual(
+      discoveryRequests().map((r) => r.status),
+      [401, 200],
+    );
+    assert.strictEqual(discoveryRequests()[1].headers.authorization, 'Stub 1');
+    assert.strictEqual(conn.isConnected(), true);
   });
 
   it('logs on once per attempt: the renewed credential meets a fresh logon', async () => {
@@ -260,7 +267,7 @@ describe('a 401 while establishing', () => {
 
     await conn.connect();
 
-    expect(order().filter((m) => m === 'establish')).toHaveLength(2);
+    assert.strictEqual(order().filter((m) => m === 'establish').length, 2);
   });
 
   it('raises the provider’s words at logon when it says no, keeping the wire’s error', async () => {
@@ -269,15 +276,16 @@ describe('a 401 while establishing', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).at).toBe('logon');
-    expect((error as AuthRefusedError).refusal).toStrictEqual(REFUSAL);
-    expect(
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual((error as AuthRefusedError).at, 'logon');
+    assert.deepStrictEqual((error as AuthRefusedError).refusal, REFUSAL);
+    assert.strictEqual(
       ((error as AuthRefusedError).cause as { response?: { status?: number } })
         .response?.status,
-    ).toBe(401);
-    expect(rejections()).toHaveLength(1);
-    expect(conn.isConnected()).toBe(false);
+      401,
+    );
+    assert.strictEqual(rejections().length, 1);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('a rejected() that throws is PROVIDER_FAILED at logon, the throw as cause', async () => {
@@ -293,12 +301,12 @@ describe('a 401 while establishing', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).at).toBe('logon');
-    expect((error as AuthRefusedError).refusal).toMatchObject(PROVIDER_FAILED);
-    expect((error as AuthRefusedError).cause).toBe(boom);
-    expect(rejections()).toHaveLength(1);
-    expect(conn.isConnected()).toBe(false);
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual((error as AuthRefusedError).at, 'logon');
+    assertMatchObject((error as AuthRefusedError).refusal, PROVIDER_FAILED);
+    assert.strictEqual((error as AuthRefusedError).cause, boom);
+    assert.strictEqual(rejections().length, 1);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('is refused again after Ok: the verdict, and rejected was asked once', async () => {
@@ -307,37 +315,44 @@ describe('a 401 while establishing', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
-    expect((error as AuthRefusedError).refusal).toMatchObject({
+    assert.ok(error instanceof AuthRefusedError);
+    assertMatchObject((error as AuthRefusedError).refusal, REFUSED_AGAIN);
+    assertMatchObject((error as AuthRefusedError).refusal, {
       facts: { at: 'logon' },
     });
-    expect((error as AuthRefusedError).at).toBe('logon');
-    expect(rejections()).toHaveLength(1);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual((error as AuthRefusedError).at, 'logon');
+    assert.strictEqual(rejections().length, 1);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
-  it('leaves a 500 to the wire’s own retry, and never asks rejected', async () => {
+  it('leaves a 500 to the wire’s own retry, and never asks rejected', {
+    timeout: 10000,
+  }, async () => {
     const { conn, rejections } = onPremWith();
     stub.discovery.push(500);
 
     await conn.connect();
 
-    expect(rejections()).toHaveLength(0);
-    expect(discoveryRequests().map((r) => r.status)).toStrictEqual([500, 200]);
-  }, 10000);
+    assert.strictEqual(rejections().length, 0);
+    assert.deepStrictEqual(
+      discoveryRequests().map((r) => r.status),
+      [500, 200],
+    );
+  });
 
-  it('lets the provider’s refusal to authorize through untouched, unretried', async () => {
+  it('lets the provider’s refusal to authorize through untouched, unretried', {
+    timeout: 10000,
+  }, async () => {
     // authorize says no on the establishing request itself.
     const { conn, rejections } = onPremWith({ authorize: [NO] });
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).at).toBe('request');
-    expect(discoveryRequests()).toHaveLength(0);
-    expect(rejections()).toHaveLength(0);
-  }, 10000);
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual((error as AuthRefusedError).at, 'request');
+    assert.strictEqual(discoveryRequests().length, 0);
+    assert.strictEqual(rejections().length, 0);
+  });
 });
 
 describe('the wire’s establishment', () => {
@@ -361,8 +376,8 @@ describe('the wire’s establishment', () => {
       })
       .catch((e: unknown) => e);
 
-    expect(error).toBe(refusal);
-    expect(asked).toBe(1);
+    assert.strictEqual(error, refusal);
+    assert.strictEqual(asked, 1);
   });
 });
 
@@ -382,10 +397,11 @@ describe('the goodbye', () => {
     await conn.disconnect();
     await conn.flushGoodbye();
 
-    expect(stub.sentTo(LOGOFF)).toHaveLength(1);
-    expect(stub.sentTo(LOGOFF)[0].headers.authorization).toBeUndefined();
-    expect(stub.sentTo(LOGOFF)[0].headers.cookie).toContain('SAP_SESSIONID');
-    expect(provider.calls.filter((c) => c.method === 'authorize').length).toBe(
+    assert.strictEqual(stub.sentTo(LOGOFF).length, 1);
+    assert.strictEqual(stub.sentTo(LOGOFF)[0].headers.authorization, undefined);
+    assert.ok(stub.sentTo(LOGOFF)[0].headers.cookie.includes('SAP_SESSIONID'));
+    assert.strictEqual(
+      provider.calls.filter((c) => c.method === 'authorize').length,
       before,
     );
   });
@@ -396,10 +412,10 @@ describe('the goodbye', () => {
     });
     await conn.connect();
 
-    await expect(conn.disconnect()).resolves.toBeUndefined();
-    await expect(conn.flushGoodbye()).resolves.toBeUndefined();
+    assert.strictEqual(await conn.disconnect(), undefined);
+    assert.strictEqual(await conn.flushGoodbye(), undefined);
 
-    expect(stub.sentTo(LOGOFF)).toHaveLength(1);
+    assert.strictEqual(stub.sentTo(LOGOFF).length, 1);
   });
 });
 
@@ -424,13 +440,13 @@ describe('the cloud wire', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).at).toBe('logon');
-    expect(stub.requests).toHaveLength(0);
-    expect(provider.calls.map((c) => c.method)).toStrictEqual([
-      'prepare',
-      'establish',
-    ]);
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual((error as AuthRefusedError).at, 'logon');
+    assert.strictEqual(stub.requests.length, 0);
+    assert.deepStrictEqual(
+      provider.calls.map((c) => c.method),
+      ['prepare', 'establish'],
+    );
   });
 
   it('lets a request the provider will not authorize through the preflight', async () => {
@@ -438,9 +454,9 @@ describe('the cloud wire', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).at).toBe('request');
-    expect(stub.requests).toHaveLength(0);
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual((error as AuthRefusedError).at, 'request');
+    assert.strictEqual(stub.requests.length, 0);
   });
 
   it('still swallows a preflight the system fails, as before', async () => {
@@ -449,6 +465,6 @@ describe('the cloud wire', () => {
 
     await conn.connect();
 
-    expect(conn.isConnected()).toBe(true);
+    assert.strictEqual(conn.isConnected(), true);
   });
 });

@@ -20,6 +20,8 @@
  * axis only — the cloud connector has one transport and is not touched.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
@@ -92,7 +94,7 @@ describe('connect() over an RFC transport', () => {
   it('establishes without a CSRF token, because the wire never returns one', async () => {
     const { conn } = onPremOverRfc();
 
-    await expect(conn.connect()).resolves.toBeUndefined();
+    assert.strictEqual(await conn.connect(), undefined);
   });
 
   it('does not spend requests fetching a token that cannot arrive', async () => {
@@ -108,7 +110,7 @@ describe('connect() over an RFC transport', () => {
           ] ?? '',
         ) === 'fetch',
     );
-    expect(csrfAttempts).toHaveLength(0);
+    assert.strictEqual(csrfAttempts.length, 0);
   });
 
   it('addresses the wire with a path, never an absolute URL', async () => {
@@ -119,7 +121,7 @@ describe('connect() over an RFC transport', () => {
     await conn.connect();
 
     for (const request of sent) {
-      expect(request.url.startsWith('/')).toBe(true);
+      assert.strictEqual(request.url.startsWith('/'), true);
     }
   });
 });
@@ -135,12 +137,12 @@ describe('disconnect() over an RFC transport', () => {
     const logoffs = sent.filter((request) =>
       request.url.includes('/sap/public/bc/icf/logoff'),
     );
-    expect(logoffs).toHaveLength(0);
+    assert.strictEqual(logoffs.length, 0);
   });
 
   it('closes the transport it was given', async () => {
     const { transport, sent } = rfcTransport();
-    const closed = jest.fn(async () => {});
+    const closed = mock.fn(async () => {});
     transport.close = closed;
     const conn = new AdtOnPremConnector(config, credential, transport, null);
     await conn.connect();
@@ -148,7 +150,7 @@ describe('disconnect() over an RFC transport', () => {
 
     await conn.disconnect();
 
-    expect(closed).toHaveBeenCalled();
+    assert.notStrictEqual(closed.mock.callCount(), 0);
   });
 });
 
@@ -176,6 +178,9 @@ describe('a mutation over an RFC transport', () => {
       data: '<x/>',
     });
 
-    expect(errors.filter((m) => /csrf/i.test(m))).toEqual([]);
+    assert.deepStrictEqual(
+      errors.filter((m) => /csrf/i.test(m)),
+      [],
+    );
   });
 });

@@ -9,8 +9,6 @@ tsconfig.tsbuildinfo
 __tests__/
 *.test.ts
 *.test.js
-jest.config.js
-jest.setup.js
 
 # Development
 .vscode/

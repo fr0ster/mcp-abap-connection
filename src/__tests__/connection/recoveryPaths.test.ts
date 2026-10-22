@@ -9,8 +9,11 @@
  *     401 reaches the caller as SAP gave it, in the same session.
  */
 
+import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { SapConfig } from '../../config/sapConfig.js';
+import { assertMatchObject } from '../helpers/assertions.js';
 import { onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
@@ -102,25 +105,29 @@ describe('path C — a login-form 401 on a mutation', () => {
   it('opens no second session: the 401 reaches the caller, the session stays S1', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
-    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S1');
+    assert.strictEqual(conn.getSessionIdentity(), 'SAP_SESSIONID_STUB_100=S1');
 
     stub.nextWorkStatus = 401;
-    await expect(
+    await assert.rejects(
       conn.makeAdtRequest({
         url: '/sap/bc/adt/work',
         method: 'PUT',
         timeout: 5000,
         data: 'x',
       }),
-    ).rejects.toMatchObject({
-      name: 'AuthRefusedError',
-      cause: { response: { status: 401 } },
-    });
+      (e: unknown) => {
+        assertMatchObject(e, {
+          name: 'AuthRefusedError',
+          cause: { response: { status: 401 } },
+        });
+        return true;
+      },
+    );
 
     // No discovery after the connect's: nothing was re-established.
-    expect(stub.issued).toBe(1);
-    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S1');
-    expect(conn.isConnected()).toBe(true);
+    assert.strictEqual(stub.issued, 1);
+    assert.strictEqual(conn.getSessionIdentity(), 'SAP_SESSIONID_STUB_100=S1');
+    assert.strictEqual(conn.isConnected(), true);
   });
 });
 
@@ -140,21 +147,25 @@ describe('path D — a 401 on a GET', () => {
     await conn.connect();
 
     stub.nextWorkStatus = 401;
-    await expect(
+    await assert.rejects(
       conn.makeAdtRequest({
         url: '/sap/bc/adt/work',
         method: 'GET',
         timeout: 5000,
       }),
-    ).rejects.toMatchObject({
-      name: 'AuthRefusedError',
-      cause: { response: { status: 401 } },
-    });
+      (e: unknown) => {
+        assertMatchObject(e, {
+          name: 'AuthRefusedError',
+          cause: { response: { status: 401 } },
+        });
+        return true;
+      },
+    );
 
     // One GET: the Basic provider answers no, so nothing is resent.
-    expect(stub.works).toBe(1);
-    expect(stub.issued).toBe(1);
-    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S1');
-    expect(conn.isConnected()).toBe(true);
+    assert.strictEqual(stub.works, 1);
+    assert.strictEqual(stub.issued, 1);
+    assert.strictEqual(conn.getSessionIdentity(), 'SAP_SESSIONID_STUB_100=S1');
+    assert.strictEqual(conn.isConnected(), true);
   });
 });

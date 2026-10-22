@@ -34,3 +34,4 @@ mcp-abap-adt-connection*.tgz
 
 # Git worktrees
 .worktrees/
+.test-build/

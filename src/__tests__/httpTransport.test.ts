@@ -12,14 +12,17 @@
  * credential (`ca`, `rejectUnauthorized`), and is read when the client is
  * first built.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { HttpTransport } from '../connection/HttpTransport.js';
 import type { IAdtTransport } from '../connection/IAdtTransport.js';
+import { assertMatchObject } from './helpers/assertions.js';
 
 describe('HttpTransport', () => {
   it('names itself http', () => {
     const transport: IAdtTransport = new HttpTransport();
 
-    expect(transport.kind).toBe('http');
+    assert.strictEqual(transport.kind, 'http');
   });
 
   it('offers its logon on open and has nothing to give back', async () => {
@@ -35,8 +38,8 @@ describe('HttpTransport', () => {
     // rather than asking whether they are there. A bare HTTP wire offers the
     // credential its logon on open and nothing else: a request opens its own
     // socket, and there is no session resource to give back.
-    await expect(transport.open(context)).resolves.toBeUndefined();
-    await expect(transport.close(context)).resolves.toBeUndefined();
+    assert.strictEqual(await transport.open(context), undefined);
+    assert.strictEqual(await transport.close(context), undefined);
   });
 
   it('reads its agentOptions when it builds the client, not before', () => {
@@ -46,13 +49,13 @@ describe('HttpTransport', () => {
       return { ca: 'PEM' };
     });
 
-    expect(asked).toBe(0);
+    assert.strictEqual(asked, 0);
 
     // Building the client is what asks. Asking in the constructor would read
     // options the caller may not have loaded yet; the credential's material
     // is not among them — the provider offers it at logon.
     (transport as any).client();
-    expect(asked).toBe(1);
+    assert.strictEqual(asked, 1);
   });
 
   it('builds the client once and keeps it', () => {
@@ -61,7 +64,7 @@ describe('HttpTransport', () => {
     const first = (transport as any).client();
     const second = (transport as any).client();
 
-    expect(second).toBe(first);
+    assert.strictEqual(second, first);
   });
 
   it('carries the request through to the client', async () => {
@@ -80,24 +83,20 @@ describe('HttpTransport', () => {
       timeout: 1234,
     });
 
-    expect(seen[0]).toEqual(
-      expect.objectContaining({
-        method: 'GET',
-        // The params serialised into the URL, once, by axios — what the client
-        // guard checks is what goes out.
-        url: 'https://h/sap/bc/adt/discovery?q=1',
-        // The caller's headers, plus what the wire adds of its own accord —
-        // today the affinity ask, and the cookies once it holds any.
-        headers: expect.objectContaining({
-          Accept: 'application/xml',
-          'sap-adt-saplb': 'fetch',
-        }),
-        timeout: 1234,
-      }),
-    );
-    expect(seen[0]).not.toHaveProperty('params');
-    expect(response).toEqual(
-      expect.objectContaining({ status: 200, data: 'ok' }),
-    );
+    assertMatchObject(seen[0], {
+      method: 'GET',
+      // The params serialised into the URL, once, by axios — what the client
+      // guard checks is what goes out.
+      url: 'https://h/sap/bc/adt/discovery?q=1',
+      // The caller's headers, plus what the wire adds of its own accord —
+      // today the affinity ask, and the cookies once it holds any.
+      headers: {
+        Accept: 'application/xml',
+        'sap-adt-saplb': 'fetch',
+      },
+      timeout: 1234,
+    });
+    assert.ok(!('params' in seen[0]));
+    assertMatchObject(response, { status: 200, data: 'ok' });
   });
 });

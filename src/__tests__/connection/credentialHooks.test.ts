@@ -2,6 +2,8 @@
  * The lifecycle's three credential hooks, on a connector holding a stub
  * provider, and the base class that has no credential at all.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import { AbstractAbapConnection } from '../../connection/AbstractAbapConnection.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
@@ -9,6 +11,7 @@ import {
   AuthRefusedError,
   NO_CREDENTIAL_TO_RENEW,
 } from '../../connection/authErrors.js';
+import { assertMatchObject } from '../helpers/assertions.js';
 import { onPremHttpTransport } from '../helpers/onPrem.js';
 import { stubProvider } from '../helpers/stubProvider.js';
 
@@ -46,42 +49,50 @@ describe('the credential hooks on a connector', () => {
     const conn = connectorOn(stubProvider());
     const headers: Record<string, string> = {};
     await conn.credentialHeaders(headers);
-    expect(Object.entries(headers)).toEqual([['Authorization', 'Stub 0']]);
-    expect(await conn.getAuthHeaders()).toEqual(headers);
+    assert.deepStrictEqual(Object.entries(headers), [
+      ['Authorization', 'Stub 0'],
+    ]);
+    assert.deepStrictEqual(await conn.getAuthHeaders(), headers);
   });
 
   it('an authorize Oops is an AuthRefusedError at request with the provider refusal', async () => {
     const conn = connectorOn(stubProvider({ authorize: [NO] }));
     const error = await conn.getAuthHeaders().catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect(error.at).toBe('request');
-    expect(error.refusal).toBe(NO.refusal);
-    expect(error.message).toBe('the token was refused — obtain a new token');
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual(error.at, 'request');
+    assert.strictEqual(error.refusal, NO.refusal);
+    assert.strictEqual(
+      error.message,
+      'the token was refused — obtain a new token',
+    );
   });
 
   it('a prepare Oops is an AuthRefusedError at prepare', async () => {
     const conn = connectorOn(stubProvider({ prepare: [NO] }));
     const error = await conn.prepareCredential().catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect(error.at).toBe('prepare');
-    expect(error.refusal).toBe(NO.refusal);
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual(error.at, 'prepare');
+    assert.strictEqual(error.refusal, NO.refusal);
   });
 
   it('an establish Oops is an AuthRefusedError at logon, and rejected is not asked', async () => {
     const provider = stubProvider({ establish: [NO] });
     const conn = connectorOn(provider);
     const error = await conn.logon({} as any).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect(error.at).toBe('logon');
-    expect(error.refusal).toBe(NO.refusal);
-    expect(provider.calls.map((c) => c.method)).toEqual(['establish']);
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual(error.at, 'logon');
+    assert.strictEqual(error.refusal, NO.refusal);
+    assert.deepStrictEqual(
+      provider.calls.map((c) => c.method),
+      ['establish'],
+    );
   });
 
   it('hands the logon target to establish as it is', async () => {
     const provider = stubProvider();
     const target = {} as any;
     await connectorOn(provider).logon(target);
-    expect(provider.calls[0]).toEqual({
+    assert.deepStrictEqual(provider.calls[0], {
       method: 'establish',
       argument: target,
     });
@@ -93,14 +104,14 @@ describe('the credential hooks on a connector', () => {
     const rejection = { at: 'request', status: 401, error: new Error('x') };
     const refused = await conn.credentialRejected(rejection);
     // The answer re-checked by classifyOutcome: a new outcome, the same refusal.
-    expect(refused.outcome).toStrictEqual(NO);
-    expect(refused.outcome.refusal).toBe(NO.refusal);
-    expect('thrown' in refused).toBe(false);
-    expect(provider.calls[0].argument).toBe(rejection);
-    expect(await conn.credentialRejected(rejection)).toEqual({
+    assert.deepStrictEqual(refused.outcome, NO);
+    assert.strictEqual(refused.outcome.refusal, NO.refusal);
+    assert.strictEqual('thrown' in refused, false);
+    assert.strictEqual(provider.calls[0].argument, rejection);
+    assert.deepStrictEqual(await conn.credentialRejected(rejection), {
       outcome: { ok: true },
     });
-    expect(provider.renewals()).toBe(1);
+    assert.strictEqual(provider.renewals(), 1);
   });
 
   it('a provider that throws is PROVIDER_FAILED, the throw kept as cause', async () => {
@@ -122,21 +133,21 @@ describe('the credential hooks on a connector', () => {
       [() => conn.getAuthHeaders(), 'request'],
     ] as const) {
       const error = await call().catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(AuthRefusedError);
-      expect(error.at).toBe(at);
-      expect(error.refusal).toMatchObject(PROVIDER_FAILED);
-      expect(error.refusal.facts.at).toBe(at);
-      expect(error.cause).toBe(boom);
+      assert.ok(error instanceof AuthRefusedError);
+      assert.strictEqual(error.at, at);
+      assertMatchObject(error.refusal, PROVIDER_FAILED);
+      assert.strictEqual(error.refusal.facts.at, at);
+      assert.strictEqual(error.cause, boom);
     }
     const answer = await conn.credentialRejected({ at: 'request', error: 1 });
-    expect(answer.outcome).toMatchObject({
+    assertMatchObject(answer.outcome, {
       ok: false,
       refusal: {
         ...PROVIDER_FAILED,
         facts: { ...PROVIDER_FAILED.facts, at: 'request' },
       },
     });
-    expect(answer.thrown).toBe(boom);
+    assert.strictEqual(answer.thrown, boom);
   });
 });
 
@@ -153,10 +164,13 @@ describe('the base class alone', () => {
 
   it('writes nothing and answers NO_CREDENTIAL_TO_RENEW', async () => {
     const conn = bare();
-    expect(await conn.getAuthHeaders()).toEqual({});
-    await expect(conn.logon({})).resolves.toBeUndefined();
-    expect(await conn.credentialRejected({ at: 'request', error: 1 })).toEqual({
-      outcome: { ok: false, refusal: NO_CREDENTIAL_TO_RENEW },
-    });
+    assert.deepStrictEqual(await conn.getAuthHeaders(), {});
+    assert.strictEqual(await conn.logon({}), undefined);
+    assert.deepStrictEqual(
+      await conn.credentialRejected({ at: 'request', error: 1 }),
+      {
+        outcome: { ok: false, refusal: NO_CREDENTIAL_TO_RENEW },
+      },
+    );
   });
 });

@@ -14,6 +14,8 @@
  * stub to have. A seam the tests already need is a seam.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
@@ -67,8 +69,11 @@ describe('the transport a connection sends through', () => {
 
     await conn.connect();
 
-    expect(seen.length).toBeGreaterThan(0);
-    expect(seen.some((r) => String(r.url).includes('/sap/bc/adt/'))).toBe(true);
+    assert.ok(seen.length > 0);
+    assert.strictEqual(
+      seen.some((r) => String(r.url).includes('/sap/bc/adt/')),
+      true,
+    );
   });
 
   it('carries the request the caller made', async () => {
@@ -88,17 +93,19 @@ describe('the transport a connection sends through', () => {
       timeout: 30000,
     });
 
-    expect(seen).toContainEqual(
-      expect.objectContaining({
-        method: 'GET',
-        url: expect.stringContaining('/sap/bc/adt/repository/nodestructure'),
-      }),
+    assert.ok(
+      seen.some(
+        (request) =>
+          request.method === 'GET' &&
+          typeof request.url === 'string' &&
+          request.url.includes('/sap/bc/adt/repository/nodestructure'),
+      ),
     );
   });
 
   it('names itself, so which one ran is never inferred from behaviour', () => {
     const { transport } = recordingTransport();
 
-    expect(transport.kind).toBe('test');
+    assert.strictEqual(transport.kind, 'test');
   });
 });

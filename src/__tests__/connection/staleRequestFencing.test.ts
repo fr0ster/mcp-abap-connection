@@ -10,7 +10,9 @@
  * No SAP: a local stub, and the request is held open until the test says so.
  */
 
+import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { SapConfig } from '../../config/sapConfig.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { onPrem } from '../helpers/onPrem.js';
@@ -140,7 +142,7 @@ describe('a request that settles after its session was replaced', () => {
 
     await new Promise((r) => setTimeout(r, 10));
     await conn.disconnect();
-    expect(stub.sessions).toStrictEqual(['S1']);
+    assert.deepStrictEqual(stub.sessions, ['S1']);
 
     stub.workStatus = status;
     stub.workBody = body;
@@ -155,9 +157,9 @@ describe('a request that settles after its session was replaced', () => {
   it('does not act on a dead-session answer from an ended session', async () => {
     const conn = await staleRequest(400, 'Session not found');
 
-    expect(conn.isConnected()).toBe(false);
-    expect(conn.getSessionIdentity()).toBeNull();
-    expect(stub.sessions).toStrictEqual(['S1']);
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(conn.getSessionIdentity(), null);
+    assert.deepStrictEqual(stub.sessions, ['S1']);
   });
 
   // The 403 path calls invalidateSession(), fetches a token and RETRIES. On a
@@ -166,11 +168,11 @@ describe('a request that settles after its session was replaced', () => {
   it('does not invalidate or refetch on a late CSRF complaint', async () => {
     const conn = await staleRequest(403, 'CSRF token validation failed', 'PUT');
 
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(conn.isConnected(), false);
     // Exactly the one the connect made: no second /discovery, so nothing went
     // looking for a fresh token after the session ended.
-    expect(stub.sessions).toStrictEqual(['S1']);
-    expect(conn.getSessionIdentity()).toBeNull();
+    assert.deepStrictEqual(stub.sessions, ['S1']);
+    assert.strictEqual(conn.getSessionIdentity(), null);
   });
 
   // The worst of the three: a mutation from a dead session replayed inside the
@@ -179,7 +181,7 @@ describe('a request that settles after its session was replaced', () => {
   it('does not replay a stale mutation after its session ended', async () => {
     const conn = await staleRequest(401, 'unauthorized', 'PUT');
 
-    expect(conn.isConnected()).toBe(false);
-    expect(stub.sessions).toStrictEqual(['S1']);
+    assert.strictEqual(conn.isConnected(), false);
+    assert.deepStrictEqual(stub.sessions, ['S1']);
   });
 });

@@ -8,14 +8,17 @@
  *
  * Against the local SAP stand-in with `authenticate` on.
  */
+import assert from 'node:assert/strict';
 import { request as httpRequest, type IncomingMessage } from 'node:http';
 import { Duplex } from 'node:stream';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { createConnection } from '../connection/createConnection.js';
+import { assertMatchObject } from './helpers/assertions.js';
 import { cloudHttpTransport, onPremHttpTransport } from './helpers/onPrem.js';
 import { type SapStub, startSapStub } from './helpers/sapStub.js';
 import { stubProvider } from './helpers/stubProvider.js';
@@ -126,20 +129,24 @@ describe('disconnect() without connect() on an instance built on a session', () 
     await conn.flushGoodbye();
 
     const sent = stub.requests.slice(before);
-    expect(sent.map((request) => request.path)).toStrictEqual([LOGOFF]);
+    assert.deepStrictEqual(
+      sent.map((request) => request.path),
+      [LOGOFF],
+    );
     const cookie = pairs(sent[0]?.headers.cookie);
-    expect(cookie.has(`${COOKIE}=S1`)).toBe(true);
-    expect([...cookie].some((pair) => pair.startsWith('sap-contextid'))).toBe(
+    assert.strictEqual(cookie.has(`${COOKIE}=S1`), true);
+    assert.strictEqual(
+      [...cookie].some((pair) => pair.startsWith('sap-contextid')),
       false,
     );
-    expect(sent[0]?.headers.authorization).toBeUndefined();
-    expect(sent[0]?.headers['x-csrf-token']).toBeUndefined();
+    assert.strictEqual(sent[0]?.headers.authorization, undefined);
+    assert.strictEqual(sent[0]?.headers['x-csrf-token'], undefined);
     // The credential was asked nothing — prepare() above all.
-    expect(provider.calls).toStrictEqual([]);
+    assert.deepStrictEqual(provider.calls, []);
     // The session is gone on the server.
-    expect(stub.sessions.has('S1')).toBe(false);
-    expect(conn.isConnected()).toBe(false);
-    expect(conn.sessionCookies()).toBeNull();
+    assert.strictEqual(stub.sessions.has('S1'), false);
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(conn.sessionCookies(), null);
   });
 
   it('on the cloud wire: the ICF logoff, and nothing before it', async () => {
@@ -151,11 +158,17 @@ describe('disconnect() without connect() on an instance built on a session', () 
     await conn.flushGoodbye();
 
     const sent = stub.requests.slice(before);
-    expect(sent.map((request) => request.path)).toStrictEqual([LOGOFF]);
-    expect(pairs(sent[0]?.headers.cookie).has(`${COOKIE}=S1`)).toBe(true);
-    expect(sent[0]?.headers.authorization).toBeUndefined();
-    expect(provider.calls).toStrictEqual([]);
-    expect(stub.sessions.has('S1')).toBe(false);
+    assert.deepStrictEqual(
+      sent.map((request) => request.path),
+      [LOGOFF],
+    );
+    assert.strictEqual(
+      pairs(sent[0]?.headers.cookie).has(`${COOKIE}=S1`),
+      true,
+    );
+    assert.strictEqual(sent[0]?.headers.authorization, undefined);
+    assert.deepStrictEqual(provider.calls, []);
+    assert.strictEqual(stub.sessions.has('S1'), false);
   });
 
   it('through createConnection, as built for a kept session', async () => {
@@ -172,10 +185,11 @@ describe('disconnect() without connect() on an instance built on a session', () 
     await conn.disconnect();
     await conn.flushGoodbye();
 
-    expect(
+    assert.deepStrictEqual(
       stub.requests.slice(before).map((request) => request.path),
-    ).toStrictEqual([LOGOFF]);
-    expect(stub.sessions.has('S1')).toBe(false);
+      [LOGOFF],
+    );
+    assert.strictEqual(stub.sessions.has('S1'), false);
   });
 
   it('resolves once the logoff is written, before SAP answers; flushGoodbye() waits for the answer', async () => {
@@ -210,11 +224,11 @@ describe('disconnect() without connect() on an instance built on a session', () 
     for (let turn = 0; turn < 20; turn += 1) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
-    expect(flushed).toBe(false);
+    assert.strictEqual(flushed, false);
 
     release();
     await flush;
-    expect(flushed).toBe(true);
+    assert.strictEqual(flushed, true);
   });
 
   it('does not resolve before the logoff is written', async () => {
@@ -230,12 +244,12 @@ describe('disconnect() without connect() on an instance built on a session', () 
     for (let turn = 0; turn < 20; turn += 1) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
-    expect(settled).toBe(false);
+    assert.strictEqual(settled, false);
 
     // The socket fails: logged, not thrown, and disconnect() settles.
     never.fail();
     await disconnected;
-    expect(settled).toBe(true);
+    assert.strictEqual(settled, true);
   });
 
   it('is once: a second disconnect() rejects, and connect() after it is refused', async () => {
@@ -243,12 +257,18 @@ describe('disconnect() without connect() on an instance built on a session', () 
     const { conn, provider } = onPremOn(session);
 
     await conn.disconnect();
-    await expect(conn.disconnect()).rejects.toMatchObject(TWICE);
-    await expect(conn.connect()).rejects.toMatchObject(SPENT);
+    await assert.rejects(conn.disconnect(), (e: unknown) => {
+      assertMatchObject(e, TWICE);
+      return true;
+    });
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, SPENT);
+      return true;
+    });
     await conn.flushGoodbye();
 
-    expect(stub.sentTo(LOGOFF)).toHaveLength(1);
-    expect(provider.calls).toStrictEqual([]);
+    assert.strictEqual(stub.sentTo(LOGOFF).length, 1);
+    assert.deepStrictEqual(provider.calls, []);
   });
 
   it('sends nothing when the string names no SAP_SESSIONID, and the instance is spent', async () => {
@@ -260,9 +280,12 @@ describe('disconnect() without connect() on an instance built on a session', () 
     await conn.disconnect();
     await conn.flushGoodbye();
 
-    expect(stub.requests.length).toBe(before);
-    expect(provider.calls).toStrictEqual([]);
-    await expect(conn.connect()).rejects.toMatchObject(SPENT);
+    assert.strictEqual(stub.requests.length, before);
+    assert.deepStrictEqual(provider.calls, []);
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, SPENT);
+      return true;
+    });
   });
 
   it('an instance built without a session still sends nothing', async () => {
@@ -273,11 +296,14 @@ describe('disconnect() without connect() on an instance built on a session', () 
     await conn.disconnect();
     await conn.flushGoodbye();
 
-    expect(stub.requests.length).toBe(before);
-    expect(provider.calls).toStrictEqual([]);
-    await expect(conn.connect()).rejects.toMatchObject(SPENT);
+    assert.strictEqual(stub.requests.length, before);
+    assert.deepStrictEqual(provider.calls, []);
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, SPENT);
+      return true;
+    });
     // The other process's session is untouched.
-    expect(stub.sessions.has('S1')).toBe(true);
+    assert.strictEqual(stub.sessions.has('S1'), true);
   });
 
   it('after connect() took the session over, logs it off once, as before', async () => {
@@ -288,8 +314,8 @@ describe('disconnect() without connect() on an instance built on a session', () 
     await conn.disconnect();
     await conn.flushGoodbye();
 
-    expect(stub.sentTo(LOGOFF)).toHaveLength(1);
-    expect(stub.sessions.has('S1')).toBe(false);
+    assert.strictEqual(stub.sentTo(LOGOFF).length, 1);
+    assert.strictEqual(stub.sessions.has('S1'), false);
   });
 });
 
