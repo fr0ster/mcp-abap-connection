@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing here ships: the published package's code and its dependency ranges are unchanged. It is
+the repository's own install, lockfile and workflows.
+
+### Security
+
+- **The lockfile is refreshed within the declared ranges.** `follow-redirects` (under `axios`)
+  1.16.0 → 1.16.1 (GHSA-q3jh-wrc6-jgq8, GHSA-8r9p-f939-6h3c); `handlebars` (under `ts-jest`)
+  4.7.9 → 4.7.10 (GHSA-xw65-4hp5-5hc7, GHSA-8r5x-fm3f-whwj, GHSA-p8wg-vrv2-v86f); `ts-jest`
+  29.4.15, `@biomejs/biome` 2.5.15, `@types/node` 25.9.9. `npm audit --omit=dev` finds nothing.
+  What remains is `sprintf-js` (GHSA-hp3w-g68c-fv3c, moderate, no fixed release) under Jest's
+  `babel-plugin-istanbul` → `@istanbuljs/load-nyc-config` → `js-yaml` 3 → `argparse` 1, which no
+  update within the declared ranges removes.
+- **No dependency runs an install script.** `allowScripts` in `package.json` denies the two that
+  have one, `@parcel/watcher` (it compiles only when asked to build from source; its binary comes
+  from its platform package) and `unrs-resolver` (its `postinstall` fetches a binding only when
+  the platform package is missing), and `.npmrc` sets `strict-allow-scripts=true`, so a new
+  dependency with an unreviewed install script fails the install instead of running it. CI and
+  the release workflow install with `--ignore-scripts`, since the Node 22 runner's npm 10 does not
+  read `allowScripts`.
+- **New versions age before they are resolved.** `.npmrc` sets `min-release-age=7`, except for
+  the project's own `@mcp-abap-adt/*` scope, whose packages are released to each other the same
+  day (`min-release-age-exclude`); their dependencies still wait the 7 days.
+- **CI and the release workflow run `npm audit --audit-level=moderate`**, dev dependencies
+  included, and call Jest through `npm run test:ci` (`jest --no-cache`) instead of `npx`; the
+  package scripts call Biome and `tsc` from the installed dependencies instead of through `npx`.
+
 ## [19.0.0] - 2026-10-22
 
 ### Changed (breaking)
