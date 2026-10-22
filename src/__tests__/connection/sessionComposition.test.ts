@@ -11,11 +11,14 @@
  * an unconnected connection still goes through here.
  */
 
+import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
+import { assertMatchObject } from '../helpers/assertions.js';
 import { cloudHttpTransport, onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
@@ -123,16 +126,16 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
 
   it('starts disconnected, with no identity', () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
-    expect(conn.isConnected()).toBe(false);
-    expect(conn.getSessionIdentity()).toBeNull();
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(conn.getSessionIdentity(), null);
   });
 
   it('publishes usability and the identity after connect()', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
-    expect(conn.isConnected()).toBe(true);
-    expect(conn.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S1');
+    assert.strictEqual(conn.isConnected(), true);
+    assert.strictEqual(conn.getSessionIdentity(), 'SAP_SESSIONID_STUB_100=S1');
   });
 
   // The CSRF cookie changes on a token refresh WITHIN one session, so folding
@@ -141,17 +144,18 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
-    expect(conn.getSessionIdentity()).not.toContain('XSRF');
+    const identity = conn.getSessionIdentity();
+    assert.ok(identity !== null && !identity.includes('XSRF'));
   });
 
   it('establishes once for concurrent connects, and once more is a no-op', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
 
     await Promise.all([conn.connect(), conn.connect()]);
-    expect(stub.sessions).toHaveLength(1);
+    assert.strictEqual(stub.sessions.length, 1);
 
     await conn.connect();
-    expect(stub.sessions).toHaveLength(1);
+    assert.strictEqual(stub.sessions.length, 1);
   });
 
   it('reports not-connected and drops the identity after disconnect()', async () => {
@@ -159,8 +163,8 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
     await conn.connect();
 
     await conn.disconnect();
-    expect(conn.isConnected()).toBe(false);
-    expect(conn.getSessionIdentity()).toBeNull();
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(conn.getSessionIdentity(), null);
   });
 
   it('refuses to connect again after a disconnect; a new instance opens the next session', async () => {
@@ -168,15 +172,18 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
     await conn.connect();
     await conn.disconnect();
 
-    await expect(conn.connect()).rejects.toMatchObject({
-      code: 'ADT_NOT_CONNECTED',
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_NOT_CONNECTED',
+      });
+      return true;
     });
-    expect(stub.sessions).toStrictEqual(['S1']);
+    assert.deepStrictEqual(stub.sessions, ['S1']);
 
     const next = onPrem(configFor(stub.baseUrl), null);
     await next.connect();
-    expect(next.getSessionIdentity()).toBe('SAP_SESSIONID_STUB_100=S2');
-    expect(stub.sessions).toStrictEqual(['S1', 'S2']);
+    assert.strictEqual(next.getSessionIdentity(), 'SAP_SESSIONID_STUB_100=S2');
+    assert.deepStrictEqual(stub.sessions, ['S1', 'S2']);
   });
 
   // Joining shares the answer, not just the execution. Building the report
@@ -198,13 +205,16 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
 
     const first = conn.disconnect();
     // disconnect() is called once; a second call is told so.
-    await expect(conn.disconnect()).rejects.toMatchObject({
-      code: 'ADT_NOT_CONNECTED',
+    await assert.rejects(conn.disconnect(), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_NOT_CONNECTED',
+      });
+      return true;
     });
     await first;
 
-    expect(cleared).toBe(1);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(cleared, 1);
+    assert.strictEqual(conn.isConnected(), false);
   });
 });
 
@@ -229,7 +239,9 @@ describe('a credential refused while establishing', () => {
   // calling connect(), which runs establishment as a joinable transition — so
   // the nested call joined the one already in flight, which was itself, and
   // waited forever.
-  it('renews through the provider and connects on the second logon', async () => {
+  it('renews through the provider and connects on the second logon', {
+    timeout: 20000,
+  }, async () => {
     let refreshed = 0;
     stub.rejectDiscovery = true;
 
@@ -256,10 +268,10 @@ describe('a credential refused while establishing', () => {
     // A hang is a failure: the test's own timeout bounds it.
     await conn.connect();
 
-    expect(refreshed).toBe(1);
-    expect(stub.discoveryAttempts).toBe(2);
-    expect(conn.isConnected()).toBe(true);
-  }, 20000);
+    assert.strictEqual(refreshed, 1);
+    assert.strictEqual(stub.discoveryAttempts, 2);
+    assert.strictEqual(conn.isConnected(), true);
+  });
 });
 
 describe('explicit connect is required', () => {
@@ -276,38 +288,47 @@ describe('explicit connect is required', () => {
   it('refuses a request when connect() was never called', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
 
-    await expect(
+    await assert.rejects(
       conn.makeAdtRequest({
         url: '/sap/bc/adt/x',
         method: 'GET',
         timeout: 5000,
       }),
-    ).rejects.toMatchObject({ code: 'ADT_NOT_CONNECTED' });
+      (e: unknown) => {
+        assertMatchObject(e, { code: 'ADT_NOT_CONNECTED' });
+        return true;
+      },
+    );
     // and nothing reached the server: the refusal is local
-    expect(stub.sessions).toStrictEqual([]);
+    assert.deepStrictEqual(stub.sessions, []);
   });
 
   it('serves requests after connect(), and refuses them after disconnect()', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
-    await expect(
-      conn.makeAdtRequest({
+    assertMatchObject(
+      await conn.makeAdtRequest({
         url: '/sap/bc/adt/x',
         method: 'GET',
         timeout: 5000,
       }),
-    ).resolves.toMatchObject({ status: 200 });
+      { status: 200 },
+    );
 
     await conn.disconnect();
 
-    await expect(
+    await assert.rejects(
       conn.makeAdtRequest({
         url: '/sap/bc/adt/x',
         method: 'GET',
         timeout: 5000,
       }),
-    ).rejects.toMatchObject({ code: 'ADT_NOT_CONNECTED' });
+      (e: unknown) => {
+        assertMatchObject(e, { code: 'ADT_NOT_CONNECTED' });
+        return true;
+      },
+    );
   });
 
   // The swallow used to hide this: connect() resolved over a broken system and
@@ -318,8 +339,8 @@ describe('explicit connect is required', () => {
       null,
     );
 
-    await expect(conn.connect()).rejects.toThrow();
-    expect(conn.isConnected()).toBe(false);
+    await assert.rejects(conn.connect());
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   // A rejection can still carry a Set-Cookie, and every subclass reads a cookie
@@ -340,12 +361,13 @@ describe('explicit connect is required', () => {
 
     try {
       const conn = onPrem(configFor(`http://127.0.0.1:${port}`), null);
-      await expect(conn.connect()).rejects.toThrow();
+      await assert.rejects(conn.connect());
 
-      expect(
+      assert.strictEqual(
         (conn as unknown as { getCookies(): string | null }).getCookies(),
-      ).toBeNull();
-      expect(conn.getSessionIdentity()).toBeNull();
+        null,
+      );
+      assert.strictEqual(conn.getSessionIdentity(), null);
     } finally {
       await new Promise<void>((resolve, reject) =>
         rejecting.close((e) => (e ? reject(e) : resolve())),
@@ -372,10 +394,10 @@ describe('explicit connect is required', () => {
     const teardown = conn.disconnect().then(() => order.push('teardown'));
 
     await teardown;
-    expect(order).toStrictEqual(['teardown']);
+    assert.deepStrictEqual(order, ['teardown']);
 
     await request;
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(conn.isConnected(), false);
   });
 });
 
@@ -430,11 +452,14 @@ describe('a teardown requested during establishment', () => {
     const teardown = conn.disconnect();
     release();
 
-    await expect(connecting).rejects.toMatchObject({
-      code: 'ADT_NOT_CONNECTED',
+    await assert.rejects(connecting, (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_NOT_CONNECTED',
+      });
+      return true;
     });
     await teardown;
-    expect(conn.isConnected()).toBe(false);
-    expect(conn.getSessionIdentity()).toBeNull();
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(conn.getSessionIdentity(), null);
   });
 });

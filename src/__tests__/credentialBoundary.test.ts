@@ -19,10 +19,13 @@
  * through `rejected()`, and the provider decides: Ok buys one more attempt,
  * and a refusal after that is the verdict, never a loop.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
+import { assertMatchObject } from './helpers/assertions.js';
 import { credentialWriting } from './helpers/credentials.js';
 
 const config: SapConfig = {
@@ -99,21 +102,25 @@ describe('a credential the server refuses', () => {
     const { conn } = connected(credential);
     await conn.connect();
 
-    await expect(
+    await assert.rejects(
       conn.makeAdtRequest({ url: '/work', method: 'GET', timeout: 5000 }),
-    ).rejects.toMatchObject({
-      name: 'AuthRefusedError',
-      refusal: {
-        reason:
-          'the credential was refused again after the provider renewed it',
+      (e: unknown) => {
+        assertMatchObject(e, {
+          name: 'AuthRefusedError',
+          refusal: {
+            reason:
+              'the credential was refused again after the provider renewed it',
+          },
+          cause: { response: { status: 401 } },
+        });
+        return true;
       },
-      cause: { response: { status: 401 } },
-    });
+    );
 
     // The one assertion that matters: the provider was asked once, and not
     // again after the retry it bought was refused — asking again would invite
     // a second renewal, and a server that refuses everything would loop.
-    expect(asked.renew).toBe(1);
+    assert.strictEqual(asked.renew, 1);
   });
 
   it('leaves the connection usable, because the session is not what failed', async () => {
@@ -127,8 +134,8 @@ describe('a credential the server refuses', () => {
 
     // A refused credential is not a lost session. Tearing the connection down
     // over it would throw away a session the server never complained about.
-    expect(conn.isConnected()).toBe(true);
-    expect(conn.getSessionIdentity()).not.toBeNull();
+    assert.strictEqual(conn.isConnected(), true);
+    assert.notStrictEqual(conn.getSessionIdentity(), null);
   });
 
   it('asks the credential per request, which is where a refresh happens', async () => {
@@ -143,6 +150,6 @@ describe('a credential the server refuses', () => {
 
     // Asked again rather than replayed from a cached value — which is the whole
     // mechanism by which a provider renews without anyone arranging it.
-    expect(asked.header).toBeGreaterThan(afterConnect);
+    assert.ok(asked.header > afterConnect);
   });
 });

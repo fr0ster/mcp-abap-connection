@@ -8,6 +8,8 @@
  * `POST …/unpublishjobs`, a read and a write, both stateless, both saying
  * `use`.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import type { SapConfig } from '../config/sapConfig.js';
 import { cloudHttpTransport, onPremHttpTransport } from './helpers/onPrem.js';
 
@@ -34,18 +36,24 @@ function dressed(
 describe('CloudHttpTransport — the session it is already in', () => {
   it('says nothing before a session exists', () => {
     const wire = cloudHttpTransport(config);
-    expect(dressed(wire as never)['x-sap-security-session']).toBeUndefined();
+    assert.strictEqual(
+      dressed(wire as never)['x-sap-security-session'],
+      undefined,
+    );
   });
 
   it('says `use` on every request once one does', () => {
     const wire = cloudHttpTransport(config);
     wire.ingest({ 'set-cookie': ['SAP_SESSIONID_TRL_100=abc; path=/'] });
-    expect(dressed(wire as never)['x-sap-security-session']).toBe('use');
+    assert.strictEqual(dressed(wire as never)['x-sap-security-session'], 'use');
   });
 
   it('leaves on-prem alone — its session arrives with the logon', () => {
     const wire = onPremHttpTransport(config);
     wire.ingest({ 'set-cookie': ['SAP_SESSIONID_E19_100=abc; path=/'] });
-    expect(dressed(wire as never)['x-sap-security-session']).toBeUndefined();
+    assert.strictEqual(
+      dressed(wire as never)['x-sap-security-session'],
+      undefined,
+    );
   });
 });

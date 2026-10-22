@@ -12,6 +12,8 @@
  * A real `OnPremHttpTransport` against a local SAP that enforces CSRF.
  */
 
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import type {
   AuthOutcome,
   IAuthProvider,
@@ -118,12 +120,12 @@ describe('after rejected() → Ok', () => {
 
     const response = await get(conn);
 
-    expect(response.status).toBe(200);
+    assert.strictEqual(response.status, 200);
     const resend = lastSent();
-    expect(resend.headers.authorization).toBeUndefined();
-    expect(cookiesOf(resend.headers).get('MYSSO')).toEqual(['new']);
-    expect(cookiesOf(resend.headers).get(SESSION)).toEqual(['S1']);
-    expect(resend.headers['sap-client']).toBe('100');
+    assert.strictEqual(resend.headers.authorization, undefined);
+    assert.deepStrictEqual(cookiesOf(resend.headers).get('MYSSO'), ['new']);
+    assert.deepStrictEqual(cookiesOf(resend.headers).get(SESSION), ['S1']);
+    assert.strictEqual(resend.headers['sap-client'], '100');
   });
 
   it('a provider whose cookie changes value: only the new value is sent', async () => {
@@ -137,8 +139,8 @@ describe('after rejected() → Ok', () => {
     await get(conn);
 
     const resend = lastSent();
-    expect(cookiesOf(resend.headers).get('MYSSO')).toEqual(['v1']);
-    expect(cookiesOf(resend.headers).get(SESSION)).toEqual(['S1']);
+    assert.deepStrictEqual(cookiesOf(resend.headers).get('MYSSO'), ['v1']);
+    assert.deepStrictEqual(cookiesOf(resend.headers).get(SESSION), ['S1']);
   });
 
   it('a provider whose cookie is renamed: the old one is not sent', async () => {
@@ -153,10 +155,10 @@ describe('after rejected() → Ok', () => {
 
     const resend = lastSent();
     const cookies = cookiesOf(resend.headers);
-    expect(cookies.get('SSO_NEW')).toEqual(['2']);
-    expect(cookies.has('SSO_OLD')).toBe(false);
-    expect(cookies.get(SESSION)).toEqual(['S1']);
-    expect(resend.headers['sap-client']).toBe('100');
+    assert.deepStrictEqual(cookies.get('SSO_NEW'), ['2']);
+    assert.strictEqual(cookies.has('SSO_OLD'), false);
+    assert.deepStrictEqual(cookies.get(SESSION), ['S1']);
+    assert.strictEqual(resend.headers['sap-client'], '100');
   });
 
   it('the one more attempt after a refused logon carries the new token, the jar, and only the new credential', async () => {
@@ -172,13 +174,13 @@ describe('after rejected() → Ok', () => {
 
     const response = await post(conn);
 
-    expect(response.status).toBe(200);
+    assert.strictEqual(response.status, 200);
     const resend = lastSent();
-    expect(resend.headers['x-csrf-token']).toBe(stub.tokens.at(-1));
-    expect(resend.headers.authorization).toBeUndefined();
-    expect(cookiesOf(resend.headers).get('MYSSO')).toEqual(['new']);
-    expect(cookiesOf(resend.headers).get(SESSION)).toBeDefined();
-    expect(resend.headers['sap-client']).toBe('100');
+    assert.strictEqual(resend.headers['x-csrf-token'], stub.tokens.at(-1));
+    assert.strictEqual(resend.headers.authorization, undefined);
+    assert.deepStrictEqual(cookiesOf(resend.headers).get('MYSSO'), ['new']);
+    assert.notStrictEqual(cookiesOf(resend.headers).get(SESSION), undefined);
+    assert.strictEqual(resend.headers['sap-client'], '100');
   });
 });
 
@@ -197,14 +199,14 @@ describe("the wire's own recovery", () => {
 
     const response = await post(conn);
 
-    expect(response.status).toBe(200);
+    assert.strictEqual(response.status, 200);
     const [first, resend] = stub.sentTo(WORK);
-    expect(first.headers.authorization).toBe('Bearer old');
-    expect(resend.headers.authorization).toBeUndefined();
-    expect(resend.headers['x-csrf-token']).toBe(stub.tokens.at(-1));
-    expect(cookiesOf(resend.headers).get('MYSSO')).toEqual(['new']);
-    expect(cookiesOf(resend.headers).get(SESSION)).toBeDefined();
-    expect(resend.headers['sap-client']).toBe('100');
+    assert.strictEqual(first.headers.authorization, 'Bearer old');
+    assert.strictEqual(resend.headers.authorization, undefined);
+    assert.strictEqual(resend.headers['x-csrf-token'], stub.tokens.at(-1));
+    assert.deepStrictEqual(cookiesOf(resend.headers).get('MYSSO'), ['new']);
+    assert.notStrictEqual(cookiesOf(resend.headers).get(SESSION), undefined);
+    assert.strictEqual(resend.headers['sap-client'], '100');
   });
 
   it('a GET 401 with cookies at hand goes to the provider: the resend carries only the credential written for it', async () => {
@@ -219,13 +221,13 @@ describe("the wire's own recovery", () => {
 
     const response = await get(conn);
 
-    expect(response.status).toBe(200);
+    assert.strictEqual(response.status, 200);
     const [first, resend] = stub.sentTo(WORK);
-    expect(first.headers.authorization).toBe('Bearer old');
-    expect(resend.headers.authorization).toBeUndefined();
-    expect(cookiesOf(resend.headers).get('MYSSO')).toEqual(['new']);
-    expect(cookiesOf(resend.headers).get(SESSION)).toEqual(['S1']);
-    expect(resend.headers['sap-client']).toBe('100');
+    assert.strictEqual(first.headers.authorization, 'Bearer old');
+    assert.strictEqual(resend.headers.authorization, undefined);
+    assert.deepStrictEqual(cookiesOf(resend.headers).get('MYSSO'), ['new']);
+    assert.deepStrictEqual(cookiesOf(resend.headers).get(SESSION), ['S1']);
+    assert.strictEqual(resend.headers['sap-client'], '100');
   });
 
   it('a GET 401 on a wire holding no cookies: the renewed resend carries only the credential written for it', async () => {
@@ -244,14 +246,14 @@ describe("the wire's own recovery", () => {
 
     const response = await get(conn);
 
-    expect(response.status).toBe(200);
+    assert.strictEqual(response.status, 200);
     const [first, resend] = stub.sentTo(WORK);
-    expect(first.headers.authorization).toBe('Bearer old');
-    expect(resend.headers.authorization).toBeUndefined();
-    expect(cookiesOf(resend.headers).get('MYSSO')).toEqual(['new']);
+    assert.strictEqual(first.headers.authorization, 'Bearer old');
+    assert.strictEqual(resend.headers.authorization, undefined);
+    assert.deepStrictEqual(cookiesOf(resend.headers).get('MYSSO'), ['new']);
     // No session cookie was earned on a fresh jar.
-    expect(cookiesOf(resend.headers).get(SESSION)).toBeUndefined();
-    expect(resend.headers['sap-client']).toBe('100');
+    assert.strictEqual(cookiesOf(resend.headers).get(SESSION), undefined);
+    assert.strictEqual(resend.headers['sap-client'], '100');
   });
 });
 
@@ -271,14 +273,20 @@ describe('what outranks the credential', () => {
 
     const response = await post(conn);
 
-    expect(response.status).toBe(200);
+    assert.strictEqual(response.status, 200);
     const sent = stub.sentTo(WORK);
-    expect(sent.map((request) => request.status)).toEqual([401, 200]);
+    assert.deepStrictEqual(
+      sent.map((request) => request.status),
+      [401, 200],
+    );
     for (const request of sent) {
-      expect(request.headers['x-csrf-token']).toMatch(/^TOKEN-\d+$/);
-      expect(request.headers['content-type']).toBe('text/plain; charset=utf-8');
+      assert.match(request.headers['x-csrf-token'], /^TOKEN-\d+$/);
+      assert.strictEqual(
+        request.headers['content-type'],
+        'text/plain; charset=utf-8',
+      );
     }
-    expect(sent[1].headers['x-csrf-token']).toBe(stub.tokens.at(-1));
-    expect(sent[1].headers.authorization).toBe('Bearer 1');
+    assert.strictEqual(sent[1].headers['x-csrf-token'], stub.tokens.at(-1));
+    assert.strictEqual(sent[1].headers.authorization, 'Bearer 1');
   });
 });

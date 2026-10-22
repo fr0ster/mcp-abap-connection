@@ -12,6 +12,8 @@
  * so what is asserted is what would have gone out, whatever the layers above
  * did on the way.
  */
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { AbapRequestOptions } from '../connection/AbapConnection.js';
@@ -114,9 +116,9 @@ function recordAxios(
 describe('no built-in deadline', () => {
   it('exports nothing that hands out a deadline', () => {
     const exported = api as Record<string, unknown>;
-    expect(exported.getTimeout).toBeUndefined();
-    expect(exported.getTimeoutConfig).toBeUndefined();
-    expect(exported.getCriticalSectionTimeout).toBeUndefined();
+    assert.strictEqual(exported.getTimeout, undefined);
+    assert.strictEqual(exported.getTimeoutConfig, undefined);
+    assert.strictEqual(exported.getCriticalSectionTimeout, undefined);
   });
 
   it('reads no SAP_TIMEOUT_* variable: a configured one changes nothing', async () => {
@@ -136,7 +138,10 @@ describe('no built-in deadline', () => {
       await conn.makeAdtRequest(
         untimed({ url: '/sap/bc/adt/x', method: 'GET' }),
       );
-      expect(sent.every((request) => !request.hasTimeout)).toBe(true);
+      assert.strictEqual(
+        sent.every((request) => !request.hasTimeout),
+        true,
+      );
     } finally {
       process.env = saved;
     }
@@ -149,8 +154,8 @@ describe('no built-in deadline', () => {
     await conn.connect();
 
     const fetches = sent.filter((request) => request.url.includes('discovery'));
-    expect(fetches).toHaveLength(1);
-    expect(fetches[0].hasTimeout).toBe(false);
+    assert.strictEqual(fetches.length, 1);
+    assert.strictEqual(fetches[0].hasTimeout, false);
   });
 
   it('the CSRF fetch a refused token triggers carries no deadline, though the request has the caller’s', async () => {
@@ -167,11 +172,17 @@ describe('no built-in deadline', () => {
 
     const fetches = sent.filter((request) => request.url.includes('discovery'));
     // connect()'s, and the one the 403 asked for.
-    expect(fetches).toHaveLength(2);
-    expect(fetches.every((request) => !request.hasTimeout)).toBe(true);
+    assert.strictEqual(fetches.length, 2);
+    assert.strictEqual(
+      fetches.every((request) => !request.hasTimeout),
+      true,
+    );
     const posts = sent.filter((request) => request.method === 'POST');
-    expect(posts).toHaveLength(2);
-    expect(posts.every((request) => request.timeout === 7000)).toBe(true);
+    assert.strictEqual(posts.length, 2);
+    assert.strictEqual(
+      posts.every((request) => request.timeout === 7000),
+      true,
+    );
   });
 
   it('the cloud preflight carries no deadline', async () => {
@@ -188,8 +199,8 @@ describe('no built-in deadline', () => {
     const preflight = sent.filter((request) =>
       request.url.includes('/core/http/sessions'),
     );
-    expect(preflight).toHaveLength(1);
-    expect(preflight[0].hasTimeout).toBe(false);
+    assert.strictEqual(preflight.length, 1);
+    assert.strictEqual(preflight[0].hasTimeout, false);
   });
 
   it('a request outside a critical section carries the caller’s timeout, and none when the caller passed none', async () => {
@@ -211,10 +222,10 @@ describe('no built-in deadline', () => {
 
     const at = (path: string) =>
       sent.find((request) => request.url.endsWith(path));
-    expect(at('/sap/bc/adt/x')?.timeout).toBe(30000);
-    expect(at('/sap/bc/adt/y')?.hasTimeout).toBe(false);
+    assert.strictEqual(at('/sap/bc/adt/x')?.timeout, 30000);
+    assert.strictEqual(at('/sap/bc/adt/y')?.hasTimeout, false);
     // `0` is the caller's own value, passed as it is: axios reads it as none.
-    expect(at('/sap/bc/adt/z')?.timeout).toBe(0);
+    assert.strictEqual(at('/sap/bc/adt/z')?.timeout, 0);
   });
 
   it('a request inside a critical section carries no deadline, not even the caller’s', async () => {
@@ -246,10 +257,10 @@ describe('no built-in deadline', () => {
 
     const at = (path: string) =>
       sent.find((request) => request.url.endsWith(path));
-    expect(at('/sap/bc/adt/locked')?.hasTimeout).toBe(false);
-    expect(at('/sap/bc/adt/written')?.hasTimeout).toBe(false);
+    assert.strictEqual(at('/sap/bc/adt/locked')?.hasTimeout, false);
+    assert.strictEqual(at('/sap/bc/adt/written')?.hasTimeout, false);
     // The section over, the caller's own applies again.
-    expect(at('/sap/bc/adt/after')?.timeout).toBe(30000);
+    assert.strictEqual(at('/sap/bc/adt/after')?.timeout, 30000);
   });
 
   it('the CSRF recovery inside a critical section carries no deadline either', async () => {
@@ -271,8 +282,11 @@ describe('no built-in deadline', () => {
 
     const puts = sent.filter((request) => request.method === 'PUT');
     // The refused one and its resend, both without a deadline.
-    expect(puts).toHaveLength(2);
-    expect(puts.every((request) => !request.hasTimeout)).toBe(true);
+    assert.strictEqual(puts.length, 2);
+    assert.strictEqual(
+      puts.every((request) => !request.hasTimeout),
+      true,
+    );
   });
 });
 
@@ -298,19 +312,19 @@ describe('the WebSocket connect', () => {
     const transport = new GenericWebSocketTransport({
       create: () => socket as never,
     });
-    const timers = jest.spyOn(global, 'setTimeout');
+    const timers = mock.method(global, 'setTimeout');
     try {
       const connecting = transport.connect('wss://sap.example.com/ws');
-      expect(timers).not.toHaveBeenCalled();
+      assert.strictEqual(timers.mock.callCount(), 0);
       socket.open();
       await connecting;
     } finally {
-      timers.mockRestore();
+      timers.mock.restore();
     }
   });
 
   it('keeps the caller’s connectTimeoutMs', async () => {
-    jest.useFakeTimers();
+    mock.timers.enable({ apis: ['setTimeout'] });
     try {
       const transport = new GenericWebSocketTransport({
         create: () => fakeSocket() as never,
@@ -318,13 +332,13 @@ describe('the WebSocket connect', () => {
       const connecting = transport.connect('wss://sap.example.com/ws', {
         connectTimeoutMs: 50,
       });
-      const failed = expect(connecting).rejects.toThrow(
-        'WebSocket connect timeout after 50ms',
+      const failed = assert.rejects(connecting, (e: unknown) =>
+        (e as Error).message.includes('WebSocket connect timeout after 50ms'),
       );
-      jest.advanceTimersByTime(50);
+      mock.timers.tick(50);
       await failed;
     } finally {
-      jest.useRealTimers();
+      mock.timers.reset();
     }
   });
 });

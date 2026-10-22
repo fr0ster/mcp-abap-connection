@@ -11,6 +11,8 @@
  * be folded in at all, and what a changed fingerprint MEANS. Those are session
  * lifecycle, not wire state.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { HttpTransport } from '../connection/HttpTransport.js';
 
 const setCookie = (...entries: string[]) => ({ 'set-cookie': entries });
@@ -21,7 +23,7 @@ describe('the cookies the wire holds', () => {
 
     transport.ingest(setCookie('SAP_SESSIONID_E19_100=ABC; path=/'));
 
-    expect(transport.cookies()).toContain('SAP_SESSIONID_E19_100=ABC');
+    assert.ok(transport.cookies()?.includes('SAP_SESSIONID_E19_100=ABC'));
   });
 
   it('keeps earlier cookies a later response did not mention', () => {
@@ -30,12 +32,12 @@ describe('the cookies the wire holds', () => {
     transport.ingest(setCookie('SAP_SESSIONID_E19_100=ABC'));
     transport.ingest(setCookie('MYSAPSSO2=TICKET'));
 
-    expect(transport.cookies()).toContain('SAP_SESSIONID_E19_100=ABC');
-    expect(transport.cookies()).toContain('MYSAPSSO2=TICKET');
+    assert.ok(transport.cookies()?.includes('SAP_SESSIONID_E19_100=ABC'));
+    assert.ok(transport.cookies()?.includes('MYSAPSSO2=TICKET'));
   });
 
   it('holds nothing before a response has set anything', () => {
-    expect(new HttpTransport().cookies()).toBeNull();
+    assert.strictEqual(new HttpTransport().cookies(), null);
   });
 
   it('holds nothing when a response set no cookie', () => {
@@ -45,7 +47,7 @@ describe('the cookies the wire holds', () => {
 
     transport.ingest({ 'content-type': 'application/xml' });
 
-    expect(transport.cookies()).toBeNull();
+    assert.strictEqual(transport.cookies(), null);
   });
 
   it('insists on the client it was configured with', () => {
@@ -56,7 +58,7 @@ describe('the cookies the wire holds', () => {
 
     transport.ingest(setCookie('sap-usercontext=sap-client=000'));
 
-    expect(transport.cookies()).toContain('sap-usercontext=sap-client=100');
+    assert.ok(transport.cookies()?.includes('sap-usercontext=sap-client=100'));
   });
 });
 
@@ -68,9 +70,10 @@ describe('the session the wire is on', () => {
       setCookie('SAP_SESSIONID_E19_100=ABC', 'sap-usercontext=sap-client=100'),
     );
 
-    expect([...transport.sessionFingerprint()]).toEqual([
-      ['SAP_SESSIONID_E19_100', 'ABC'],
-    ]);
+    assert.deepStrictEqual(
+      [...transport.sessionFingerprint()],
+      [['SAP_SESSIONID_E19_100', 'ABC']],
+    );
   });
 
   it('is empty until the server issues one', () => {
@@ -78,7 +81,7 @@ describe('the session the wire is on', () => {
 
     transport.ingest(setCookie('sap-usercontext=sap-client=100'));
 
-    expect(transport.sessionFingerprint().size).toBe(0);
+    assert.strictEqual(transport.sessionFingerprint().size, 0);
   });
 
   it('shows the new value when the server replaces the session', () => {
@@ -87,7 +90,8 @@ describe('the session the wire is on', () => {
 
     transport.ingest(setCookie('SAP_SESSIONID_E19_100=SECOND'));
 
-    expect(transport.sessionFingerprint().get('SAP_SESSIONID_E19_100')).toBe(
+    assert.strictEqual(
+      transport.sessionFingerprint().get('SAP_SESSIONID_E19_100'),
       'SECOND',
     );
   });
@@ -95,7 +99,7 @@ describe('the session the wire is on', () => {
 
 describe('staying on the server the session lives on', () => {
   it('asks the server to name itself', () => {
-    expect(new HttpTransport().affinityHeaders()).toEqual({
+    assert.deepStrictEqual(new HttpTransport().affinityHeaders(), {
       'sap-adt-saplb': 'fetch',
     });
   });
@@ -105,7 +109,7 @@ describe('staying on the server the session lives on', () => {
 
     transport.ingest({ 'sap-adt-saplb': 'epbyminsd0654_E19_00' });
 
-    expect(transport.affinityHeaders()).toEqual({
+    assert.deepStrictEqual(transport.affinityHeaders(), {
       'sap-adt-saplb': 'fetch',
       saplb: 'epbyminsd0654_E19_00',
       'saplb-options': 'REDISPATCH_ON_SHUTDOWN',
@@ -132,7 +136,7 @@ describe('what the wire puts on its own requests', () => {
 
     await transport.send({ method: 'GET', url: '/x' });
 
-    expect(seen[0].Cookie).toContain('SAP_SESSIONID_E19_100=ABC');
+    assert.ok(seen[0].Cookie.includes('SAP_SESSIONID_E19_100=ABC'));
   });
 
   it('merges with a Cookie the caller set, rather than replacing it', async () => {
@@ -148,8 +152,8 @@ describe('what the wire puts on its own requests', () => {
       headers: { Cookie: 'MYSAPSSO2=ticket' },
     });
 
-    expect(seen[0].Cookie).toContain('MYSAPSSO2=ticket');
-    expect(seen[0].Cookie).toContain('SAP_SESSIONID_E19_100=ABC');
+    assert.ok(seen[0].Cookie.includes('MYSAPSSO2=ticket'));
+    assert.ok(seen[0].Cookie.includes('SAP_SESSIONID_E19_100=ABC'));
   });
 
   it('asks the server to name itself, and sends the name back', async () => {
@@ -160,8 +164,8 @@ describe('what the wire puts on its own requests', () => {
     transport.ingest({ 'sap-adt-saplb': 'epbyminsd0654_E19_00' });
     await transport.send({ method: 'GET', url: '/y' });
 
-    expect(seen[0]['sap-adt-saplb']).toBe('fetch');
-    expect(seen[1].saplb).toBe('epbyminsd0654_E19_00');
+    assert.strictEqual(seen[0]['sap-adt-saplb'], 'fetch');
+    assert.strictEqual(seen[1].saplb, 'epbyminsd0654_E19_00');
   });
 
   it('sends no Cookie header when it holds nothing', async () => {
@@ -170,7 +174,7 @@ describe('what the wire puts on its own requests', () => {
 
     await transport.send({ method: 'GET', url: '/x' });
 
-    expect(seen[0].Cookie).toBeUndefined();
+    assert.strictEqual(seen[0].Cookie, undefined);
   });
 });
 
@@ -184,8 +188,10 @@ describe('giving the wire state back', () => {
 
     transport.forgetSession();
 
-    expect(transport.cookies()).toBeNull();
-    expect(transport.sessionFingerprint().size).toBe(0);
-    expect(transport.affinityHeaders()).toEqual({ 'sap-adt-saplb': 'fetch' });
+    assert.strictEqual(transport.cookies(), null);
+    assert.strictEqual(transport.sessionFingerprint().size, 0);
+    assert.deepStrictEqual(transport.affinityHeaders(), {
+      'sap-adt-saplb': 'fetch',
+    });
   });
 });

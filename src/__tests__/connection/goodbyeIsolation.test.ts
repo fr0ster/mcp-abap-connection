@@ -13,10 +13,13 @@
  * overwrote the snapshot and the logoff closed the session that had just been
  * opened.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
+import { assertMatchObject } from '../helpers/assertions.js';
 import { credentialWriting } from '../helpers/credentials.js';
 
 const config: SapConfig = {
@@ -94,7 +97,7 @@ describe('a logoff still in flight when the next session opens', () => {
     const conn = new AdtOnPremConnector(config, credential, transport, null);
 
     await conn.connect();
-    expect(conn.getSessionIdentity()).toContain('S1');
+    assert.ok(conn.getSessionIdentity()?.includes('S1'));
 
     // Dispatched — and since 16.0.0 a disconnected instance is spent: a
     // reconnect cannot overtake the goodbye on the same instance at all.
@@ -102,19 +105,22 @@ describe('a logoff still in flight when the next session opens', () => {
     await conn.disconnect();
 
     slow = false;
-    await expect(conn.connect()).rejects.toMatchObject({
-      code: 'ADT_NOT_CONNECTED',
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_NOT_CONNECTED',
+      });
+      return true;
     });
 
     await w.logoffReached;
     await new Promise((r) => setTimeout(r, 60));
 
     const logoff = w.sent.find((r) => r.url.includes('/icf/logoff'));
-    expect(logoff).toBeDefined();
+    assert.notStrictEqual(logoff, undefined);
     // The one assertion that matters. S2 here means the goodbye for the first
     // session closed the second one — a live session, with work possibly
     // running on it, ended by a message meant for a session already gone.
-    expect(logoff?.cookie).toContain('S1');
-    expect(logoff?.cookie).not.toContain('S2');
+    assert.ok(logoff?.cookie?.includes('S1'));
+    assert.ok(logoff?.cookie !== undefined && !logoff.cookie.includes('S2'));
   });
 });

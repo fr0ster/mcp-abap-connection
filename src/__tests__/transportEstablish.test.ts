@@ -12,6 +12,8 @@
  * connection, it was one implementation for both wires, and the RFC one could
  * not succeed: four attempts, four ABAP dumps, and a `connect()` that refused.
  */
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { WireLogonError } from '../connection/authErrors.js';
 import { HttpTransport } from '../connection/HttpTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
@@ -60,10 +62,11 @@ describe('establishing over HTTP', () => {
 
     await transport.establish(context());
 
-    expect(sent[0].url).toBe(
+    assert.strictEqual(
+      sent[0].url,
       'https://sap.example.com/sap/bc/adt/core/discovery',
     );
-    expect(sent[0].headers?.['x-csrf-token']).toBe('fetch');
+    assert.strictEqual(sent[0].headers?.['x-csrf-token'], 'fetch');
   });
 
   it('addresses the endpoint with the base url the caller named', async () => {
@@ -77,7 +80,10 @@ describe('establishing over HTTP', () => {
       context({ baseUrl: 'https://other.example.com' }),
     );
 
-    expect(sent[0].url.startsWith('https://other.example.com/')).toBe(true);
+    assert.strictEqual(
+      sent[0].url.startsWith('https://other.example.com/'),
+      true,
+    );
   });
 
   it('carries the credential the caller handed it', async () => {
@@ -86,7 +92,7 @@ describe('establishing over HTTP', () => {
 
     await transport.establish(context());
 
-    expect(sent[0].headers?.Authorization).toBe('Basic dTpw');
+    assert.strictEqual(sent[0].headers?.Authorization, 'Basic dTpw');
   });
 
   it('keeps the token, so a mutation can present it', async () => {
@@ -95,7 +101,7 @@ describe('establishing over HTTP', () => {
 
     await transport.establish(context());
 
-    expect(transport.csrfToken()).toBe('TOKEN');
+    assert.strictEqual(transport.csrfToken(), 'TOKEN');
   });
 
   it('keeps the cookies that came with it', async () => {
@@ -104,7 +110,10 @@ describe('establishing over HTTP', () => {
 
     await transport.establish(context());
 
-    expect(transport.sessionFingerprint().get('SAP_SESSIONID_X')).toBe('1');
+    assert.strictEqual(
+      transport.sessionFingerprint().get('SAP_SESSIONID_X'),
+      '1',
+    );
   });
 
   it('hands the answer up, so the connection can fence and classify it', async () => {
@@ -118,7 +127,7 @@ describe('establishing over HTTP', () => {
       context({ observe: (h: unknown) => seen.push(h) }),
     );
 
-    expect(seen).toHaveLength(1);
+    assert.strictEqual(seen.length, 1);
   });
 
   it('falls back to the legacy endpoint when the first has none', async () => {
@@ -138,10 +147,11 @@ describe('establishing over HTTP', () => {
 
     await transport.establish(context());
 
-    expect(sent.at(-1)?.url).toBe(
+    assert.strictEqual(
+      sent.at(-1)?.url,
       'https://sap.example.com/sap/bc/adt/discovery',
     );
-    expect(transport.csrfToken()).toBe('TOKEN');
+    assert.strictEqual(transport.csrfToken(), 'TOKEN');
   });
 
   it('does not ask a second path of a host that is not answering', async () => {
@@ -150,19 +160,15 @@ describe('establishing over HTTP', () => {
       throw new Error('connect ECONNREFUSED');
     });
 
-    await expect(
-      transport.establish(context({ retries: 0 })),
-    ).rejects.toThrow();
-    expect(sent).toHaveLength(1);
+    await assert.rejects(transport.establish(context({ retries: 0 })));
+    assert.strictEqual(sent.length, 1);
   });
 
   it('refuses when the server answers without a token', async () => {
     const transport = new HttpTransport();
     intercept(transport, async () => ({ status: 200, headers: {}, data: '' }));
 
-    await expect(
-      transport.establish(context({ retries: 0 })),
-    ).rejects.toThrow();
+    await assert.rejects(transport.establish(context({ retries: 0 })));
   });
 
   it('is a no-op once the wire already holds a token', async () => {
@@ -174,7 +180,7 @@ describe('establishing over HTTP', () => {
 
     await transport.establish(context());
 
-    expect(sent).toHaveLength(1);
+    assert.strictEqual(sent.length, 1);
   });
 
   it('forgets the token when the session it was bound to is gone', async () => {
@@ -184,7 +190,7 @@ describe('establishing over HTTP', () => {
 
     transport.forgetSession();
 
-    expect(transport.csrfToken()).toBeNull();
+    assert.strictEqual(transport.csrfToken(), null);
   });
 });
 
@@ -206,7 +212,7 @@ describe('addressing the wire', () => {
 
     await transport.send({ method: 'GET', url: '/sap/bc/adt/discovery' });
 
-    expect(seen[0]).toBe('https://sap.example.com/sap/bc/adt/discovery');
+    assert.strictEqual(seen[0], 'https://sap.example.com/sap/bc/adt/discovery');
   });
 
   it('leaves an address that is already absolute alone', async () => {
@@ -225,7 +231,10 @@ describe('addressing the wire', () => {
       url: 'https://other.example.com/sap/bc/adt/discovery',
     });
 
-    expect(seen[0]).toBe('https://other.example.com/sap/bc/adt/discovery');
+    assert.strictEqual(
+      seen[0],
+      'https://other.example.com/sap/bc/adt/discovery',
+    );
   });
 
   it('writes the path into the RFC request line as it stands', async () => {
@@ -252,7 +261,7 @@ describe('addressing the wire', () => {
 
     await transport.send({ method: 'GET', url: '/sap/bc/adt/discovery' });
 
-    expect(uri).toBe('/sap/bc/adt/discovery');
+    assert.strictEqual(uri, '/sap/bc/adt/discovery');
   });
 });
 
@@ -275,7 +284,7 @@ describe('establishing over RFC', () => {
 
     await transport.establish(context());
 
-    expect(calls).toEqual([]);
+    assert.deepStrictEqual(calls, []);
   });
 
   it('holds no token, because the wire never returns one', async () => {
@@ -292,7 +301,7 @@ describe('establishing over RFC', () => {
 
     await transport.establish(context());
 
-    expect(transport.csrfToken()).toBeNull();
+    assert.strictEqual(transport.csrfToken(), null);
   });
 });
 
@@ -339,17 +348,18 @@ describe('a refused logon over HTTP', () => {
       })
       .catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(WireLogonError);
-    expect((error as WireLogonError).status).toBe(401);
-    expect(
+    assert.ok(error instanceof WireLogonError);
+    assert.strictEqual((error as WireLogonError).status, 401);
+    assert.strictEqual(
       ((error as WireLogonError).cause as { response?: { status?: number } })
         .response?.status,
-    ).toBe(401);
-    expect(transport.cookies()).toContain('sap-login-XSRF_STUB=L1');
-    expect(observed).toHaveLength(1);
+      401,
+    );
+    assert.ok(transport.cookies()?.includes('sap-login-XSRF_STUB=L1'));
+    assert.strictEqual(observed.length, 1);
     // Not retried: asking again with the credential just refused tells the
     // system nothing new.
-    expect(stub.sentTo('/sap/bc/adt/core/discovery')).toHaveLength(1);
+    assert.strictEqual(stub.sentTo('/sap/bc/adt/core/discovery').length, 1);
   });
 
   it('still retries a 500', async () => {
@@ -365,7 +375,7 @@ describe('a refused logon over HTTP', () => {
       retryDelayMs: 0,
     });
 
-    expect(transport.csrfToken()).toBe('TOKEN-1');
-    expect(stub.sentTo('/sap/bc/adt/core/discovery')).toHaveLength(2);
+    assert.strictEqual(transport.csrfToken(), 'TOKEN-1');
+    assert.strictEqual(stub.sentTo('/sap/bc/adt/core/discovery').length, 2);
   });
 });

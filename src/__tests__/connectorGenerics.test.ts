@@ -10,6 +10,8 @@
  * there is no cloud RFC.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import {
   BasicAuthProvider,
   CertificateAuthProvider,
@@ -61,7 +63,7 @@ describe('on-prem carries both axes in its type', () => {
 
     // Inferred, not asserted: no cast at this call site.
     needsRfc(conn);
-    expect(conn.transport).toBe(rfc);
+    assert.strictEqual(conn.transport, rfc);
   });
 
   it('defaults to HTTP in the type as well as at runtime', () => {
@@ -72,7 +74,7 @@ describe('on-prem carries both axes in its type', () => {
     );
 
     needsHttp(conn);
-    expect(conn.transport).toBeInstanceOf(OnPremHttpTransport);
+    assert.ok(conn.transport instanceof OnPremHttpTransport);
   });
 
   it('refuses the wrong combination at compile time', () => {
@@ -100,8 +102,8 @@ describe('on-prem carries both axes in its type', () => {
 
     // Typed as CertificateAuthProvider, so what it is stays visible without
     // narrowing.
-    expect(conn.credential).toBe(credential);
-    expect(conn.credential.kind).toBe('certificate');
+    assert.strictEqual(conn.credential, credential);
+    assert.strictEqual(conn.credential.kind, 'certificate');
   });
 });
 
@@ -115,6 +117,6 @@ describe('cloud carries one', () => {
       null,
     );
 
-    expect(conn.credential).toBe(credential);
+    assert.strictEqual(conn.credential, credential);
   });
 });

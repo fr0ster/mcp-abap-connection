@@ -12,6 +12,8 @@
  * itself, with nobody deciding anything.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
@@ -44,16 +46,14 @@ describe('a credential that does not', () => {
       onPremHttpTransport(config, null),
       null,
     );
-    const wire = jest
-      .spyOn((conn as any).transport, 'establish')
-      .mockImplementation(async () => {
-        (conn as any).transport.adoptCsrfToken('CSRF-FROM-THE-WIRE');
-      });
+    const wire = mock.method((conn as any).transport, 'establish', async () => {
+      (conn as any).transport.adoptCsrfToken('CSRF-FROM-THE-WIRE');
+    });
 
     await (conn as any).establishSession();
 
-    expect(wire).toHaveBeenCalledTimes(1);
-    expect((conn as any).getCsrfToken()).toBe('CSRF-FROM-THE-WIRE');
+    assert.strictEqual(wire.mock.callCount(), 1);
+    assert.strictEqual((conn as any).getCsrfToken(), 'CSRF-FROM-THE-WIRE');
   });
 
   it('hands the wire the server, the credential, and somewhere to report', async () => {
@@ -67,21 +67,23 @@ describe('a credential that does not', () => {
       onPremHttpTransport(config, null),
       null,
     );
-    const wire = jest
-      .spyOn((conn as any).transport, 'establish')
-      .mockResolvedValue(undefined);
+    const wire = mock.method(
+      (conn as any).transport,
+      'establish',
+      async (..._args: any[]) => undefined,
+    );
 
     await (conn as any).establishSession();
 
-    const context = wire.mock.calls[0][0] as {
+    const context = wire.mock.calls[0].arguments[0] as {
       baseUrl: string;
       authorize: (headers: Record<string, string>) => Promise<void>;
       observe: unknown;
     };
-    expect(context.baseUrl).toBe(config.url);
+    assert.strictEqual(context.baseUrl, config.url);
     const headers: Record<string, string> = {};
     await context.authorize(headers);
-    expect(headers.Authorization).toBe('Basic dTpw');
-    expect(typeof context.observe).toBe('function');
+    assert.strictEqual(headers.Authorization, 'Basic dTpw');
+    assert.strictEqual(typeof context.observe, 'function');
   });
 });

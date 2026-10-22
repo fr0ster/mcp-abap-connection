@@ -4,6 +4,8 @@
  * A fake conversation factory records the parameters of every open and refuses
  * chosen ones with a raw error; a stub provider writes the logon parameters.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type { AuthOutcome, ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
 import type { SapConfig } from '../config/sapConfig.js';
@@ -15,6 +17,8 @@ import {
   RfcTransport,
 } from '../connection/RfcTransport.js';
 import { rfcConversationFrom } from '../connection/rfcConversation.js';
+import { assertMatchObject } from './helpers/assertions.js';
+import { withModule } from './helpers/moduleCache.js';
 import { stubProvider } from './helpers/stubProvider.js';
 
 /** connection's `refused-after-renewal` (I4), whatever the moment. */
@@ -93,7 +97,7 @@ describe('the RFC wire opens with what the provider wrote', () => {
 
     await transport.open(contextOffering(writes({ user: 'U', passwd: 'P' })));
 
-    expect(opens).toStrictEqual([{ user: 'U', passwd: 'P' }]);
+    assert.deepStrictEqual(opens, [{ user: 'U', passwd: 'P' }]);
   });
 
   it('passes the four SNC keys unchanged', async () => {
@@ -108,7 +112,7 @@ describe('the RFC wire opens with what the provider wrote', () => {
 
     await transport.open(contextOffering(writes(snc)));
 
-    expect(opens).toStrictEqual([snc]);
+    assert.deepStrictEqual(opens, [snc]);
   });
 
   it('refuses TLS material in the fixed words', async () => {
@@ -120,7 +124,7 @@ describe('the RFC wire opens with what the provider wrote', () => {
       contextOffering((t) => t.tlsMaterial({ cert: 'C', key: 'K' }), seen),
     );
 
-    expect(seen).toStrictEqual([
+    assert.deepStrictEqual(seen, [
       {
         ok: false,
         refusal: authError['logon-target']({
@@ -133,15 +137,16 @@ describe('the RFC wire opens with what the provider wrote', () => {
     if (outcome === undefined || outcome.ok) {
       throw new Error('expected a refusal');
     }
-    expect(outcome.refusal.kind).toBe('logon-target');
-    expect(outcome.refusal.facts).toStrictEqual({
+    assert.strictEqual(outcome.refusal.kind, 'logon-target');
+    assert.deepStrictEqual(outcome.refusal.facts, {
       wire: 'rfc',
       refused: 'tls-material',
     });
-    expect(outcome.refusal.reason).toBe(
+    assert.strictEqual(
+      outcome.refusal.reason,
       'this wire carries no TLS material (RFC)',
     );
-    expect(outcome.refusal.hint).toBeUndefined();
+    assert.strictEqual(outcome.refusal.hint, undefined);
   });
 
   it('throws the raw error inside a WireLogonError when the open fails', async () => {
@@ -152,9 +157,9 @@ describe('the RFC wire opens with what the provider wrote', () => {
       .open(contextOffering(writes({ user: 'U' })))
       .catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(WireLogonError);
-    expect((error as WireLogonError).cause).toBe(RAW);
-    expect((error as Error).message).not.toMatch(/Failed to open RFC/);
+    assert.ok(error instanceof WireLogonError);
+    assert.strictEqual((error as WireLogonError).cause, RAW);
+    assert.doesNotMatch((error as Error).message, /Failed to open RFC/);
   });
 
   it('logs on once per open: a per-call conversation asks the provider too', async () => {
@@ -172,8 +177,8 @@ describe('the RFC wire opens with what the provider wrote', () => {
     // The fake has no resetServerContext, so a non-stateful call opens its own.
     await transport.send({ method: 'GET', url: '/sap/bc/adt/x', headers: {} });
 
-    expect(asked).toStrictEqual([1, 2]);
-    expect(opens).toStrictEqual([{ user: 'U1' }, { user: 'U2' }]);
+    assert.deepStrictEqual(asked, [1, 2]);
+    assert.deepStrictEqual(opens, [{ user: 'U1' }, { user: 'U2' }]);
   });
 
   it('throws the raw error inside a WireLogonError when a per-call open fails', async () => {
@@ -185,8 +190,8 @@ describe('the RFC wire opens with what the provider wrote', () => {
       .send({ method: 'GET', url: '/sap/bc/adt/x', headers: {} })
       .catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(WireLogonError);
-    expect((error as WireLogonError).cause).toBe(RAW);
+    assert.ok(error instanceof WireLogonError);
+    assert.strictEqual((error as WireLogonError).cause, RAW);
   });
 
   it('can be driven without a lifecycle: open() takes no context', async () => {
@@ -196,31 +201,28 @@ describe('the RFC wire opens with what the provider wrote', () => {
     await transport.open();
     await transport.send({ method: 'GET', url: '/sap/bc/adt/x', headers: {} });
 
-    expect(opens).toStrictEqual([{}, {}]);
+    assert.deepStrictEqual(opens, [{}, {}]);
   });
 });
 
 describe('the RFC factory from the config', () => {
   it('spreads the logon over the address', () => {
     const constructed: Record<string, unknown>[] = [];
-    jest.doMock(
+    withModule(
       '@mcp-abap-adt/sap-rfc-lite',
-      () => ({
+      {
         Client: class {
           constructor(params: Record<string, unknown>) {
             constructed.push(params);
           }
         },
-      }),
-      { virtual: true },
+      },
+      () => {
+        rfcConversationFrom(config)({ user: 'U', passwd: 'P' });
+      },
     );
-    try {
-      rfcConversationFrom(config)({ user: 'U', passwd: 'P' });
-    } finally {
-      jest.dontMock('@mcp-abap-adt/sap-rfc-lite');
-    }
 
-    expect(constructed).toStrictEqual([
+    assert.deepStrictEqual(constructed, [
       {
         ashost: 'saphost',
         sysnr: '00',
@@ -258,11 +260,14 @@ describe('through a connector', () => {
 
     await conn.connect();
 
-    expect(rejections()).toHaveLength(1);
-    expect(rejections()[0].argument).toMatchObject({ at: 'logon' });
-    expect((rejections()[0].argument as { error: unknown }).error).toBe(RAW);
-    expect(opens).toHaveLength(2);
-    expect(conn.isConnected()).toBe(true);
+    assert.strictEqual(rejections().length, 1);
+    assertMatchObject(rejections()[0].argument, { at: 'logon' });
+    assert.strictEqual(
+      (rejections()[0].argument as { error: unknown }).error,
+      RAW,
+    );
+    assert.strictEqual(opens.length, 2);
+    assert.strictEqual(conn.isConnected(), true);
   });
 
   it('an Oops from rejected ends the connect in the provider’s words', async () => {
@@ -276,9 +281,9 @@ describe('through a connector', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toStrictEqual(refusal);
-    expect((error as AuthRefusedError).at).toBe('logon');
+    assert.ok(error instanceof AuthRefusedError);
+    assert.deepStrictEqual((error as AuthRefusedError).refusal, refusal);
+    assert.strictEqual((error as AuthRefusedError).at, 'logon');
   });
 
   it('refused again after Ok is REFUSED_AGAIN', async () => {
@@ -288,11 +293,11 @@ describe('through a connector', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
-    expect((error as AuthRefusedError).refusal).toMatchObject({
+    assertMatchObject((error as AuthRefusedError).refusal, REFUSED_AGAIN);
+    assertMatchObject((error as AuthRefusedError).refusal, {
       facts: { at: 'logon' },
     });
-    expect(rejections()).toHaveLength(1);
+    assert.strictEqual(rejections().length, 1);
   });
 
   it('a per-call open refused after connect goes to rejected with the raw error, then one resend answers 200', async () => {
@@ -317,11 +322,14 @@ describe('through a connector', () => {
       timeout: 30000,
     });
 
-    expect(response.status).toBe(200);
-    expect(rejections()).toHaveLength(1);
-    expect(rejections()[0].argument).toMatchObject({ at: 'logon' });
-    expect((rejections()[0].argument as { error: unknown }).error).toBe(RAW);
-    expect(opens.length).toBeGreaterThan(before);
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(rejections().length, 1);
+    assertMatchObject(rejections()[0].argument, { at: 'logon' });
+    assert.strictEqual(
+      (rejections()[0].argument as { error: unknown }).error,
+      RAW,
+    );
+    assert.ok(opens.length > before);
   });
 
   it('an establish Oops ends the connect in its words; rejected is never asked', async () => {
@@ -335,9 +343,9 @@ describe('through a connector', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toStrictEqual(refusal);
-    expect(rejections()).toHaveLength(0);
+    assert.ok(error instanceof AuthRefusedError);
+    assert.deepStrictEqual((error as AuthRefusedError).refusal, refusal);
+    assert.strictEqual(rejections().length, 0);
   });
 });
 
@@ -355,6 +363,9 @@ describe('an open() that throws instead of rejecting', () => {
         }) as never,
       null,
     );
-    await expect(transport.open()).rejects.toBeInstanceOf(WireLogonError);
+    await assert.rejects(
+      transport.open(),
+      (e: unknown) => e instanceof WireLogonError,
+    );
   });
 });

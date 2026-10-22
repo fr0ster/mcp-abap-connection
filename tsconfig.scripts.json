@@ -4,8 +4,7 @@
     "noEmit": true,
     "rootDir": ".",
     "types": [
-      "node",
-      "jest"
+      "node"
     ],
     "composite": false,
     "incremental": false

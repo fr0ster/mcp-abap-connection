@@ -13,6 +13,8 @@
  * IAbapConnection, which is what the atom was always for.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type {
   IAbapConnection,
@@ -109,8 +111,8 @@ describe('narrowing to a connection capability', () => {
         onPremHttpTransport(httpConfig, null),
         null,
       );
-    expect(typeof conn.disconnect).toBe('function');
-    expect(typeof conn.getSessionIdentity).toBe('function');
+    assert.strictEqual(typeof conn.disconnect, 'function');
+    assert.strictEqual(typeof conn.getSessionIdentity, 'function');
   });
 
   // Claim 2: RFC carries it too. What RFC has none of is a session RESOURCE to
@@ -120,13 +122,13 @@ describe('narrowing to a connection capability', () => {
   it('an RFC connection carries the atom, with nothing to tell the server', async () => {
     const conn: IAbapConnection = onPremOverRfc();
 
-    expect(supportsSessionLifecycle(conn)).toBe(true);
+    assert.strictEqual(supportsSessionLifecycle(conn), true);
     if (!supportsSessionLifecycle(conn)) throw new Error('unreachable');
 
     // Never connected, so there is nothing owed — and it still settles.
-    expect(conn.isConnected()).toBe(false);
-    expect(conn.getSessionIdentity()).toBeNull();
-    await expect(conn.disconnect()).resolves.toBeUndefined();
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(conn.getSessionIdentity(), null);
+    assert.strictEqual(await conn.disconnect(), undefined);
   });
 
   it('the predicate admits an HTTP connection', () => {
@@ -136,8 +138,8 @@ describe('narrowing to a connection capability', () => {
       onPremHttpTransport(httpConfig, null),
       null,
     );
-    expect(supportsSessionLifecycle(conn)).toBe(true);
-    expect(supportsSessionLifecycle(conn)).toBe(true);
+    assert.strictEqual(supportsSessionLifecycle(conn), true);
+    assert.strictEqual(supportsSessionLifecycle(conn), true);
   });
 
   // Claim 3: a PARTIAL implementation must fail the guard.
@@ -160,8 +162,8 @@ describe('narrowing to a connection capability', () => {
       disconnect: undefined,
     } as unknown as IAbapConnection;
 
-    expect(supportsSessionLifecycle(half)).toBe(false);
-    expect(supportsSessionLifecycle(half)).toBe(false);
+    assert.strictEqual(supportsSessionLifecycle(half), false);
+    assert.strictEqual(supportsSessionLifecycle(half), false);
   });
 
   // Claim 4: the branch that matters. A consumer holding only an
@@ -179,6 +181,6 @@ describe('narrowing to a connection capability', () => {
       await conn.disconnect();
       tornDown = true;
     }
-    expect(tornDown).toBe(false);
+    assert.strictEqual(tornDown, false);
   });
 });

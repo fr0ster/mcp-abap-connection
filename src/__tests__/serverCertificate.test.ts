@@ -12,13 +12,24 @@
  * certificate is a committed throwaway fixture that nothing trusts (see
  * `fixtures/tls/README.md`).
  */
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import type { AgentOptions } from 'node:https';
 import { createServer, type Server } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
+import {
+  after,
+  afterEach,
+  before,
+  beforeEach,
+  describe,
+  it,
+  mock,
+} from 'node:test';
 import { CloudHttpTransport } from '../connection/CloudHttpTransport.js';
 import { HttpTransport } from '../connection/HttpTransport.js';
+import { assertMatchObject } from './helpers/assertions.js';
 
 const fixtures = join(__dirname, 'fixtures', 'tls');
 const cert = readFileSync(join(fixtures, 'server.crt'), 'utf8');
@@ -31,7 +42,7 @@ describe('the server certificate', () => {
   let baseUrl: string;
   const saved: Record<string, string | undefined> = {};
 
-  beforeAll(async () => {
+  before(async () => {
     server = createServer({ cert, key }, (_req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end('reached');
@@ -42,7 +53,7 @@ describe('the server certificate', () => {
     baseUrl = `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
 
-  afterAll(async () => {
+  after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
@@ -80,76 +91,87 @@ describe('the server certificate', () => {
   it('is verified by default: an untrusted one is refused before any response', async () => {
     const error = await refusal(wire());
 
-    expect(error).toMatchObject({ code: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
-    expect((error as { response?: unknown }).response).toBeUndefined();
+    assertMatchObject(error, { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
+    assert.strictEqual((error as { response?: unknown }).response, undefined);
   });
 
   it('is verified on the cloud wire too', async () => {
     const transport = new CloudHttpTransport(() => ({}), null, { baseUrl });
 
-    await expect(get(transport)).rejects.toMatchObject({
-      code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+    await assert.rejects(get(transport), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+      });
+      return true;
     });
   });
 
   it('is trusted through agentOptions.ca, with verification on', async () => {
     const response = await get(wire({ ca: cert }));
 
-    expect(response.data).toBe('reached');
+    assert.strictEqual(response.data, 'reached');
   });
 
   it('is not verified with TLS_REJECT_UNAUTHORIZED=0', async () => {
     process.env.TLS_REJECT_UNAUTHORIZED = '0';
 
-    await expect(get(wire())).resolves.toMatchObject({ data: 'reached' });
+    assertMatchObject(await get(wire()), { data: 'reached' });
   });
 
   it('is not verified with NODE_TLS_REJECT_UNAUTHORIZED=0', async () => {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-    await expect(get(wire())).resolves.toMatchObject({ data: 'reached' });
+    assertMatchObject(await get(wire()), { data: 'reached' });
   });
 
   it('is not verified with agentOptions.rejectUnauthorized false', async () => {
-    await expect(
-      get(wire({ rejectUnauthorized: false })),
-    ).resolves.toMatchObject({ data: 'reached' });
+    assertMatchObject(await get(wire({ rejectUnauthorized: false })), {
+      data: 'reached',
+    });
   });
 
   it('agentOptions wins over the environment: rejectUnauthorized true verifies under an env opt-out', async () => {
     process.env.TLS_REJECT_UNAUTHORIZED = '0';
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-    await expect(get(wire({ rejectUnauthorized: true }))).rejects.toMatchObject(
-      { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' },
+    await assert.rejects(
+      get(wire({ rejectUnauthorized: true })),
+      (e: unknown) => {
+        assertMatchObject(e, { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
+        return true;
+      },
     );
   });
 
-  it.each(['1', 'false', 'no', '', ' 0'])(
-    'is verified when TLS_REJECT_UNAUTHORIZED is %j',
-    async (value) => {
+  for (const value of ['1', 'false', 'no', '', ' 0']) {
+    it(`is verified when TLS_REJECT_UNAUTHORIZED is ${JSON.stringify(value)}`, async () => {
       process.env.TLS_REJECT_UNAUTHORIZED = value;
 
-      await expect(get(wire())).rejects.toMatchObject({
-        code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+      await assert.rejects(get(wire()), (e: unknown) => {
+        assertMatchObject(e, {
+          code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+        });
+        return true;
       });
-    },
-  );
+    });
+  }
 
-  it.each(['1', 'false', 'no'])(
-    'is verified when NODE_TLS_REJECT_UNAUTHORIZED is %j',
-    async (value) => {
+  for (const value of ['1', 'false', 'no']) {
+    it(`is verified when NODE_TLS_REJECT_UNAUTHORIZED is ${JSON.stringify(value)}`, async () => {
       process.env.NODE_TLS_REJECT_UNAUTHORIZED = value;
 
-      await expect(get(wire())).rejects.toMatchObject({
-        code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+      await assert.rejects(get(wire()), (e: unknown) => {
+        assertMatchObject(e, {
+          code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+        });
+        return true;
       });
-    },
-  );
+    });
+  }
 
   it('says once, in fixed words, that verification is off', async () => {
     process.env.TLS_REJECT_UNAUTHORIZED = '0';
-    const debug = jest.fn();
+    const debug = mock.fn();
     const logger = { info() {}, warn() {}, error() {}, debug };
     const transport = new HttpTransport(() => ({}), logger, { baseUrl });
 
@@ -159,16 +181,18 @@ describe('the server certificate', () => {
     (transport as any).instance = null;
     await get(transport);
 
-    const off = debug.mock.calls.filter(([message]) =>
-      String(message).includes('not verified'),
-    );
-    expect(off).toEqual([
+    const off = debug.mock.calls
+      .filter(({ arguments: [message] }) =>
+        String(message).includes('not verified'),
+      )
+      .map((call) => call.arguments);
+    assert.deepStrictEqual(off, [
       ['TLS: the server certificate is not verified (explicit opt-out)'],
     ]);
   });
 
   it('says nothing about an opt-out when verification is on', async () => {
-    const debug = jest.fn();
+    const debug = mock.fn();
     const logger = { info() {}, warn() {}, error() {}, debug };
     const transport = new HttpTransport(() => ({ ca: cert }), logger, {
       baseUrl,
@@ -176,10 +200,11 @@ describe('the server certificate', () => {
 
     await get(transport);
 
-    expect(
-      debug.mock.calls.some(([message]) =>
+    assert.strictEqual(
+      debug.mock.calls.some(({ arguments: [message] }) =>
         String(message).includes('not verified'),
       ),
-    ).toBe(false);
+      false,
+    );
   });
 });

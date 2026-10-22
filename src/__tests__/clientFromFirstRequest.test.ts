@@ -10,7 +10,9 @@
  *
  * A local server that picks the client the way ICF does, for each HTTP wire.
  */
+import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
@@ -144,26 +146,29 @@ afterEach(async () => {
   await icf.close();
 });
 
-describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
-  'the %s wire addresses its client',
-  (wire) => {
+for (const wire of ['onprem', 'legacy-onprem', 'cloud'] as Wire[]) {
+  describe(`the ${wire} wire addresses its client`, () => {
     it('on the very first request, with the sap-client header and the sap-usercontext cookie', async () => {
       const conn = connectorFor(wire, icf.baseUrl, '200');
 
       await conn.connect();
 
       const first = icf.seen[0];
-      expect(first).toBeDefined();
+      assert.notStrictEqual(first, undefined);
       // The cloud wire's first request is its session preflight; on-prem's is
       // the discovery that earns the token. Either way it is the first.
-      expect(first.path).toBe(
+      assert.strictEqual(
+        first.path,
         wire === 'cloud' ? SESSIONS : '/sap/bc/adt/core/discovery',
       );
-      expect(first.headers['sap-client']).toBe('200');
-      expect(first.headers.cookie).toContain('sap-usercontext=sap-client=200');
-      expect(first.headers['x-sap-client']).toBeUndefined();
+      assert.strictEqual(first.headers['sap-client'], '200');
+      assert.ok(
+        first.headers.cookie.includes('sap-usercontext=sap-client=200'),
+      );
+      assert.strictEqual(first.headers['x-sap-client'], undefined);
       // Every request landed in the client that was asked for.
-      expect(icf.seen.map((request) => request.client)).toEqual(
+      assert.deepStrictEqual(
+        icf.seen.map((request) => request.client),
         icf.seen.map(() => '200'),
       );
 
@@ -172,9 +177,9 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
 
       // The goodbye is sent detached, not dressed — and says the client too.
       const goodbye = icf.seen[icf.seen.length - 1];
-      expect(goodbye.path).toBe('/sap/public/bc/icf/logoff');
-      expect(goodbye.headers['sap-client']).toBe('200');
-      expect(goodbye.client).toBe('200');
+      assert.strictEqual(goodbye.path, '/sap/public/bc/icf/logoff');
+      assert.strictEqual(goodbye.headers['sap-client'], '200');
+      assert.strictEqual(goodbye.client, '200');
     });
 
     it('a client the system does not have fails the first request, and nothing follows it', async () => {
@@ -182,23 +187,25 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
 
       if (wire === 'cloud') {
         // The preflight is not fatal by design; the establishment after it is.
-        await expect(conn.connect()).rejects.toBeDefined();
-        expect(icf.seen.every((request) => request.client === '999')).toBe(
+        await assert.rejects(conn.connect(), (e: unknown) => e !== undefined);
+        assert.strictEqual(
+          icf.seen.every((request) => request.client === '999'),
           true,
         );
-        expect(icf.seen[0].path).toBe(SESSIONS);
+        assert.strictEqual(icf.seen[0].path, SESSIONS);
       } else {
-        await expect(conn.connect()).rejects.toBeDefined();
-        expect(icf.seen).toHaveLength(1);
-        expect(icf.seen[0].client).toBe('999');
+        await assert.rejects(conn.connect(), (e: unknown) => e !== undefined);
+        assert.strictEqual(icf.seen.length, 1);
+        assert.strictEqual(icf.seen[0].client, '999');
       }
       // Never the default client: nothing reached a session there.
-      expect(
+      assert.strictEqual(
         icf.seen.some((request) => request.client === DEFAULT_CLIENT),
-      ).toBe(false);
+        false,
+      );
     });
-  },
-);
+  });
+}
 
 /**
  * The client belongs to the connection. Another client is another logon — its
@@ -206,9 +213,8 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
  * names a different one is refused before anything is sent, rather than
  * landing a request in one client with the session and credential of another.
  */
-describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
-  'the %s wire keeps the client its connection was given',
-  (wire) => {
+for (const wire of ['onprem', 'legacy-onprem', 'cloud'] as Wire[]) {
+  describe(`the ${wire} wire keeps the client its connection was given`, () => {
     const CALLER_ADDRESSED: ReadonlyArray<
       [
         string,
@@ -263,14 +269,13 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
       ],
     ];
 
-    it.each(CALLER_ADDRESSED)(
-      'refuses %s naming another client, and sends nothing',
-      async (_label, request) => {
+    for (const [_label, request] of CALLER_ADDRESSED) {
+      it(`refuses ${_label} naming another client, and sends nothing`, async () => {
         const conn = connectorFor(wire, icf.baseUrl, '200');
         await conn.connect();
         const before = icf.seen.length;
 
-        await expect(
+        await assert.rejects(
           conn.makeAdtRequest({
             url: request.url ?? '/sap/bc/adt/x',
             method: 'GET',
@@ -278,13 +283,18 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
             ...(request.headers ? { headers: request.headers } : {}),
             ...(request.params ? { params: request.params } : {}),
           }),
-        ).rejects.toThrow(/client 100.*connection.*client 200/);
-        expect(icf.seen.length).toBe(before);
-        expect(icf.seen.some((seen) => seen.client === '100')).toBe(false);
+          (e: unknown) =>
+            /client 100.*connection.*client 200/.test((e as Error).message),
+        );
+        assert.strictEqual(icf.seen.length, before);
+        assert.strictEqual(
+          icf.seen.some((seen) => seen.client === '100'),
+          false,
+        );
 
         await conn.disconnect();
-      },
-    );
+      });
+    }
 
     it('lets a caller name the same client, and sends it once', async () => {
       const conn = connectorFor(wire, icf.baseUrl, '200');
@@ -299,13 +309,13 @@ describe.each<Wire>(['onprem', 'legacy-onprem', 'cloud'])(
       });
 
       const last = icf.seen[icf.seen.length - 1];
-      expect(last.client).toBe('200');
-      expect(last.headers['sap-client']).toBe('200');
+      assert.strictEqual(last.client, '200');
+      assert.strictEqual(last.headers['sap-client'], '200');
 
       await conn.disconnect();
     });
-  },
-);
+  });
+}
 
 describe('a wire given no client', () => {
   it('refuses a caller that names one: the client is the connection’s', async () => {
@@ -319,31 +329,37 @@ describe('a wire given no client', () => {
     await conn.connect();
     const before = icf.seen.length;
 
-    await expect(
+    await assert.rejects(
       conn.makeAdtRequest({
         url: '/sap/bc/adt/x',
         method: 'GET',
         timeout: 5000,
         headers: { 'sap-client': '200' },
       }),
-    ).rejects.toThrow(/client 200.*connection.*no client/);
-    await expect(
+      (e: unknown) =>
+        /client 200.*connection.*no client/.test((e as Error).message),
+    );
+    await assert.rejects(
       conn.makeAdtRequest({
         url: '/sap/bc/adt/x',
         method: 'GET',
         timeout: 5000,
         params: { 'sap-client': '200' },
       }),
-    ).rejects.toThrow(/client 200.*connection.*no client/);
-    await expect(
+      (e: unknown) =>
+        /client 200.*connection.*no client/.test((e as Error).message),
+    );
+    await assert.rejects(
       conn.makeAdtRequest({
         url: '/sap/bc/adt/x',
         method: 'GET',
         timeout: 5000,
         params: { ' SAP-Client ': '200' },
       }),
-    ).rejects.toThrow(/client 200.*connection.*no client/);
-    expect(icf.seen.length).toBe(before);
+      (e: unknown) =>
+        /client 200.*connection.*no client/.test((e as Error).message),
+    );
+    assert.strictEqual(icf.seen.length, before);
 
     await conn.disconnect();
   });
@@ -353,21 +369,25 @@ describe('a wire given no client', () => {
       baseUrl: icf.baseUrl,
     });
 
-    await expect(
+    await assert.rejects(
       transport.send({
         url: '/sap/bc/adt/core/discovery',
         method: 'GET',
         headers: { Cookie: 'sap-usercontext=sap-client=200' },
       }),
-    ).rejects.toThrow(/client 200.*connection.*no client/);
-    await expect(
+      (e: unknown) =>
+        /client 200.*connection.*no client/.test((e as Error).message),
+    );
+    await assert.rejects(
       transport.send({
         url: '/sap/bc/adt/core/discovery',
         method: 'GET',
         headers: { ' Cookie ': 'sap-usercontext=sap-client=200' },
       }),
-    ).rejects.toThrow(/client 200.*connection.*no client/);
-    expect(icf.seen).toHaveLength(0);
+      (e: unknown) =>
+        /client 200.*connection.*no client/.test((e as Error).message),
+    );
+    assert.strictEqual(icf.seen.length, 0);
   });
 
   it('reads the params once: what is checked is what goes out', async () => {
@@ -388,10 +408,10 @@ describe('a wire given no client', () => {
       params,
     });
 
-    expect(reads).toBe(1);
-    expect(icf.seen).toHaveLength(1);
-    expect(icf.seen[0].target).not.toContain('sap-client');
-    expect(icf.seen[0].client).toBe(DEFAULT_CLIENT);
+    assert.strictEqual(reads, 1);
+    assert.strictEqual(icf.seen.length, 1);
+    assert.ok(!icf.seen[0].target.includes('sap-client'));
+    assert.strictEqual(icf.seen[0].client, DEFAULT_CLIENT);
   });
 
   it('admits the client its jar holds — the connection’s own retries send it', async () => {
@@ -410,7 +430,7 @@ describe('a wire given no client', () => {
       timeout: 5000,
       headers: { Cookie: `sap-usercontext=sap-client=${DEFAULT_CLIENT}` },
     });
-    expect(icf.seen[icf.seen.length - 1].client).toBe(DEFAULT_CLIENT);
+    assert.strictEqual(icf.seen[icf.seen.length - 1].client, DEFAULT_CLIENT);
 
     await conn.disconnect();
   });
@@ -427,9 +447,9 @@ describe('a wire given no client', () => {
     await conn.connect();
 
     const first = icf.seen[0];
-    expect(first.headers['sap-client']).toBeUndefined();
-    expect(first.headers.cookie).toBeUndefined();
-    expect(first.client).toBe(DEFAULT_CLIENT);
+    assert.strictEqual(first.headers['sap-client'], undefined);
+    assert.strictEqual(first.headers.cookie, undefined);
+    assert.strictEqual(first.client, DEFAULT_CLIENT);
 
     await conn.disconnect();
   });

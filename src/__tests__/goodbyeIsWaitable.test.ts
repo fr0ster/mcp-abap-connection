@@ -13,6 +13,8 @@
  * nothing a caller could hold.
  */
 
+import assert from 'node:assert/strict';
+import { after, before, describe, it, mock } from 'node:test';
 import type { SapConfig } from '../config/sapConfig.js';
 import { onPrem } from './helpers/onPrem.js';
 import { markConnectedForTest } from './helpers/session.js';
@@ -37,7 +39,7 @@ function suspendedClose(connection: { transport: unknown }) {
   });
   let started = false;
   const transport = connection.transport as { close: unknown };
-  transport.close = jest.fn(async (_context: unknown, written?: () => void) => {
+  transport.close = mock.fn(async (_context: unknown, written?: () => void) => {
     started = true;
     written?.();
     await arrived;
@@ -46,6 +48,18 @@ function suspendedClose(connection: { transport: unknown }) {
 }
 
 describe('flushGoodbye', () => {
+  // The budget's timer is unref'd — the library must not hold a process open —
+  // and the goodbye here never answers. node:test on Node.js 22 ends a file
+  // whose event loop has emptied, a test still pending, so the suite holds the
+  // loop open itself while it runs, as Jest's runner did.
+  let held: NodeJS.Timeout | undefined;
+  before(() => {
+    held = setInterval(() => {}, 60_000);
+  });
+  after(() => {
+    clearInterval(held);
+  });
+
   it('waits for the goodbye that disconnect only dispatched', async () => {
     const connection = onPrem(config);
     seedCookies(connection, 'SAP_SESSIONID_E19_100=first');
@@ -58,7 +72,7 @@ describe('flushGoodbye', () => {
     await connection.disconnect();
     // disconnect() has returned once the logoff was written, its answer still
     // to come — that is the behaviour, not the defect.
-    expect(goodbye.started()).toBe(true);
+    assert.strictEqual(goodbye.started(), true);
 
     let flushed = false;
     const waiting = connection.flushGoodbye(1000).then(() => {
@@ -67,11 +81,11 @@ describe('flushGoodbye', () => {
 
     // Still waiting: nothing has answered yet.
     await Promise.resolve();
-    expect(flushed).toBe(false);
+    assert.strictEqual(flushed, false);
 
     goodbye.release();
     await waiting;
-    expect(flushed).toBe(true);
+    assert.strictEqual(flushed, true);
   });
 
   it('without a budget waits for the answer as long as it takes, and creates no timer', async () => {
@@ -83,23 +97,23 @@ describe('flushGoodbye', () => {
     );
     await connection.disconnect();
 
-    const timers = jest.spyOn(global, 'setTimeout');
+    const timers = mock.method(global, 'setTimeout');
     let flushed = false;
     const waiting = connection.flushGoodbye().then(() => {
       flushed = true;
     });
     // No bound of the library's own choosing: nothing was scheduled.
-    expect(timers).not.toHaveBeenCalled();
-    timers.mockRestore();
+    assert.strictEqual(timers.mock.callCount(), 0);
+    timers.mock.restore();
 
     for (let turn = 0; turn < 10; turn += 1) {
       await new Promise((resolve) => setImmediate(resolve));
     }
-    expect(flushed).toBe(false);
+    assert.strictEqual(flushed, false);
 
     goodbye.release();
     await waiting;
-    expect(flushed).toBe(true);
+    assert.strictEqual(flushed, true);
   });
 
   it("with the caller's budget, schedules exactly that bound", async () => {
@@ -109,11 +123,16 @@ describe('flushGoodbye', () => {
     suspendedClose(connection as unknown as { transport: unknown });
     await connection.disconnect();
 
-    const timers = jest.spyOn(global, 'setTimeout');
+    const timers = mock.method(global, 'setTimeout');
     const waiting = connection.flushGoodbye(50);
-    expect(timers).toHaveBeenCalledWith(expect.any(Function), 50);
-    timers.mockRestore();
-    await expect(waiting).resolves.toBeUndefined();
+    assert.ok(
+      timers.mock.calls.some(
+        ({ arguments: args }) =>
+          args.length === 2 && typeof args[0] === 'function' && args[1] === 50,
+      ),
+    );
+    timers.mock.restore();
+    assert.strictEqual(await waiting, undefined);
   });
 
   it('gives up on its own budget rather than hanging', async () => {
@@ -129,12 +148,12 @@ describe('flushGoodbye', () => {
     // hostage to a server that has stopped replying.
     const started = Date.now();
     await connection.flushGoodbye(50);
-    expect(Date.now() - started).toBeLessThan(2000);
+    assert.ok(Date.now() - started < 2000);
   });
 
   it('returns immediately when nothing was ever dispatched', async () => {
     const connection = onPrem(config);
-    await expect(connection.flushGoodbye(50)).resolves.toBeUndefined();
+    assert.strictEqual(await connection.flushGoodbye(50), undefined);
   });
 
   it('does not surface a failed goodbye as a rejection', async () => {
@@ -144,13 +163,13 @@ describe('flushGoodbye', () => {
     const transport = (
       connection as unknown as { transport: { close: unknown } }
     ).transport;
-    transport.close = jest.fn(async () => {
+    transport.close = mock.fn(async () => {
       throw new Error('the server hung up');
     });
 
     await connection.disconnect();
     // Holding the promise must not turn a failed goodbye into an unhandled
     // rejection, and must not make the caller's next step fail either.
-    await expect(connection.flushGoodbye(50)).resolves.toBeUndefined();
+    assert.strictEqual(await connection.flushGoodbye(50), undefined);
   });
 });

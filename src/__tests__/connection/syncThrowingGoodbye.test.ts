@@ -14,6 +14,8 @@
  * after dispatching the goodbye: a close deferred to a later turn would go out
  * without the session it is ending — or not at all.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
@@ -92,23 +94,27 @@ describe('a close() that throws synchronously', () => {
     failAfterEstablishing(transport);
     const closes = closeThrowsSynchronously(transport);
 
-    await expect(conn.connect()).rejects.toThrow('established, then failed');
+    await assert.rejects(conn.connect(), (e: unknown) =>
+      (e as Error).message.includes('established, then failed'),
+    );
 
-    expect(closes()).toBe(1);
-    expect(conn.isConnected()).toBe(false);
-    expect(transport.cookies()).toBeNull();
-    expect(conn.getSessionIdentity()).toBeNull();
+    assert.strictEqual(closes(), 1);
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(transport.cookies(), null);
+    assert.strictEqual(conn.getSessionIdentity(), null);
   });
 
   it('when the server opened no session, the caller gets that refusal and no cookie survives', async () => {
     const { conn, transport } = onPremWire(NO_SESSION);
     const closes = closeThrowsSynchronously(transport);
 
-    await expect(conn.connect()).rejects.toThrow(/opened no ABAP session/);
+    await assert.rejects(conn.connect(), (e: unknown) =>
+      /opened no ABAP session/.test((e as Error).message),
+    );
 
-    expect(closes()).toBe(1);
-    expect(conn.isConnected()).toBe(false);
-    expect(transport.cookies()).toBeNull();
+    assert.strictEqual(closes(), 1);
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(transport.cookies(), null);
   });
 
   it('disconnect() settles, never throws, and drops the session', async () => {
@@ -116,12 +122,12 @@ describe('a close() that throws synchronously', () => {
     await conn.connect();
     const closes = closeThrowsSynchronously(transport);
 
-    await expect(conn.disconnect()).resolves.toBeUndefined();
+    assert.strictEqual(await conn.disconnect(), undefined);
 
-    expect(closes()).toBe(1);
-    expect(conn.isConnected()).toBe(false);
-    expect(transport.cookies()).toBeNull();
-    await expect(conn.flushGoodbye(100)).resolves.toBeUndefined();
+    assert.strictEqual(closes(), 1);
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(transport.cookies(), null);
+    assert.strictEqual(await conn.flushGoodbye(100), undefined);
   });
 });
 
@@ -130,22 +136,26 @@ describe('the goodbye is still called synchronously', () => {
     const { conn, transport, logoffs } = onPremWire(SESSION);
     failAfterEstablishing(transport);
 
-    await expect(conn.connect()).rejects.toThrow('established, then failed');
+    await assert.rejects(conn.connect(), (e: unknown) =>
+      (e as Error).message.includes('established, then failed'),
+    );
     await settled();
 
-    expect(logoffs()).toHaveLength(1);
-    expect(logoffs()[0].cookie).toContain('SAP_SESSIONID_STUB_100=S1');
+    assert.strictEqual(logoffs().length, 1);
+    assert.ok(logoffs()[0].cookie?.includes('SAP_SESSIONID_STUB_100=S1'));
   });
 
   it('when the server opened no session, nothing is sent: no SAP_SESSIONID, nothing to end', async () => {
     const { conn, logoffs } = onPremWire(NO_SESSION);
 
-    await expect(conn.connect()).rejects.toThrow(/opened no ABAP session/);
+    await assert.rejects(conn.connect(), (e: unknown) =>
+      /opened no ABAP session/.test((e as Error).message),
+    );
     await settled();
 
     // `sap-XSRF_*` alone names no security session, and the ICF logoff ends
     // one only when `SAP_SESSIONID` is present: a logoff would end nothing.
-    expect(logoffs()).toHaveLength(0);
+    assert.strictEqual(logoffs().length, 0);
   });
 
   it('on disconnect(), it carries the session cookie', async () => {
@@ -155,7 +165,7 @@ describe('the goodbye is still called synchronously', () => {
     await conn.disconnect();
     await conn.flushGoodbye(1000);
 
-    expect(logoffs()).toHaveLength(1);
-    expect(logoffs()[0].cookie).toContain('SAP_SESSIONID_STUB_100=S1');
+    assert.strictEqual(logoffs().length, 1);
+    assert.ok(logoffs()[0].cookie?.includes('SAP_SESSIONID_STUB_100=S1'));
   });
 });

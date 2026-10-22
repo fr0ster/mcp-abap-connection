@@ -11,6 +11,8 @@
  * These are compile-time assertions with a runtime line each, so a member that
  * disappears fails the build rather than a test nobody reads.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import type {
   IAbapConnection,
   ICriticalSection,
@@ -35,19 +37,19 @@ describe('the connection is the atoms it declares', () => {
       ICriticalSection &
       IRequestProfiling = onPrem(config, null);
 
-    expect(typeof conn.disconnect).toBe('function');
-    expect(typeof conn.flushGoodbye).toBe('function');
-    expect(typeof conn.beginCriticalSection).toBe('function');
-    expect(typeof conn.endCriticalSection).toBe('function');
-    expect(typeof conn.setProfilingRequest).toBe('function');
-    expect(typeof conn.getProfilingRequest).toBe('function');
+    assert.strictEqual(typeof conn.disconnect, 'function');
+    assert.strictEqual(typeof conn.flushGoodbye, 'function');
+    assert.strictEqual(typeof conn.beginCriticalSection, 'function');
+    assert.strictEqual(typeof conn.endCriticalSection, 'function');
+    assert.strictEqual(typeof conn.setProfilingRequest, 'function');
+    assert.strictEqual(typeof conn.getProfilingRequest, 'function');
   });
 
   it('answers through the contract, not only through the class', () => {
     const conn: IAbapConnection & IRequestProfiling = onPrem(config, null);
 
-    expect(conn.getProfilingRequest()).toBe('server-time');
+    assert.strictEqual(conn.getProfilingRequest(), 'server-time');
     conn.setProfilingRequest(null);
-    expect(conn.getProfilingRequest()).toBeNull();
+    assert.strictEqual(conn.getProfilingRequest(), null);
   });
 });

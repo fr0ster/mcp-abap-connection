@@ -10,6 +10,8 @@
  * Both were one option on the connection, `skipSessionType`, carried in the
  * class every wire shares. A deployment is a transport, so this is one.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { LegacyOnPremHttpTransport } from '../connection/LegacyOnPremHttpTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 
@@ -43,9 +45,11 @@ describe('the legacy on-prem wire', () => {
 
     // The caller's other headers are untouched; only the one that would move a
     // lock somewhere it cannot be released is dropped.
-    expect(seen[0].Accept).toBe('application/xml');
-    expect(Object.keys(seen[0]).map((k) => k.toLowerCase())).not.toContain(
-      'x-sap-adt-sessiontype',
+    assert.strictEqual(seen[0].Accept, 'application/xml');
+    assert.ok(
+      !Object.keys(seen[0])
+        .map((k) => k.toLowerCase())
+        .includes('x-sap-adt-sessiontype'),
     );
   });
 
@@ -57,15 +61,15 @@ describe('the legacy on-prem wire', () => {
     // The ordinary on-prem wire says no until the server names one; this one
     // says yes, because there is nothing to be named. Answering "no session"
     // would refuse a system that works.
-    expect(transport.sessionEstablished()).toBe(true);
-    expect(new OnPremHttpTransport().sessionEstablished()).toBe(false);
+    assert.strictEqual(transport.sessionEstablished(), true);
+    assert.strictEqual(new OnPremHttpTransport().sessionEstablished(), false);
   });
 
   it('is still an on-prem wire, so it fits where one fits', () => {
     const transport = new LegacyOnPremHttpTransport();
 
-    expect(transport.system).toBe('onprem');
-    expect(transport.kind).toBe('onprem-http-legacy');
+    assert.strictEqual(transport.system, 'onprem');
+    assert.strictEqual(transport.kind, 'onprem-http-legacy');
   });
 
   it('keeps the platform logoff it inherits', async () => {
@@ -85,7 +89,7 @@ describe('the legacy on-prem wire', () => {
 
     // Inherited rather than reimplemented: what differs on 7.40 is the header
     // and the session naming, not how a session is given back.
-    expect(seen).toHaveLength(1);
-    expect(seen[0].Cookie).toContain('SAP_SESSIONID_X_100');
+    assert.strictEqual(seen.length, 1);
+    assert.ok(seen[0].Cookie.includes('SAP_SESSIONID_X_100'));
   });
 });

@@ -10,6 +10,8 @@
  * While in a critical section, a request carries no timeout at all.
  */
 
+import assert from 'node:assert/strict';
+import { describe, it, mock } from 'node:test';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
@@ -17,10 +19,10 @@ import { onPrem } from './helpers/onPrem.js';
 import { markConnectedForTest } from './helpers/session.js';
 
 const mockLogger: ILogger = {
-  info: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn(),
-  debug: jest.fn(),
+  info: mock.fn(),
+  warn: mock.fn(),
+  error: mock.fn(),
+  debug: mock.fn(),
 };
 
 const baseConfig: SapConfig = {
@@ -42,20 +44,20 @@ describe('critical section (uninterruptible lock → unlock)', () => {
   it('begin/end is reference-counted and clamped at zero', () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
-    expect(conn.isInCriticalSection()).toBe(false);
+    assert.strictEqual(conn.isInCriticalSection(), false);
 
     conn.beginCriticalSection();
     conn.beginCriticalSection();
-    expect(conn.isInCriticalSection()).toBe(true);
+    assert.strictEqual(conn.isInCriticalSection(), true);
 
     conn.endCriticalSection();
-    expect(conn.isInCriticalSection()).toBe(true); // still nested
+    assert.strictEqual(conn.isInCriticalSection(), true); // still nested
 
     conn.endCriticalSection();
-    expect(conn.isInCriticalSection()).toBe(false);
+    assert.strictEqual(conn.isInCriticalSection(), false);
 
     conn.endCriticalSection(); // extra end is harmless
-    expect(conn.isInCriticalSection()).toBe(false);
+    assert.strictEqual(conn.isInCriticalSection(), false);
   });
 
   it('passes the caller’s own timeout through when NOT in a critical section', async () => {
@@ -73,7 +75,7 @@ describe('critical section (uninterruptible lock → unlock)', () => {
       timeout: 30000,
     });
 
-    expect(captured.timeout).toBe(30000);
+    assert.strictEqual(captured.timeout, 30000);
   });
 
   it('sends no timeout at all while in a critical section, then the caller’s again', async () => {
@@ -97,7 +99,7 @@ describe('critical section (uninterruptible lock → unlock)', () => {
     }
     // The caller's 30 s is not applied: inside the section nothing may cut
     // the request, and no ceiling of the library's own replaces it.
-    expect('timeout' in captured).toBe(false);
+    assert.strictEqual('timeout' in captured, false);
 
     // after the section ends, the normal per-request timeout applies again
     await conn.makeAdtRequest({
@@ -105,6 +107,6 @@ describe('critical section (uninterruptible lock → unlock)', () => {
       method: 'GET',
       timeout: 30000,
     });
-    expect(captured.timeout).toBe(30000);
+    assert.strictEqual(captured.timeout, 30000);
   });
 });

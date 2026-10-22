@@ -8,8 +8,10 @@
  * one body runs them all.
  */
 
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import {
   BasicAuthProvider,
   CertificateAuthProvider,
@@ -89,29 +91,31 @@ const httpCases: {
   },
 ];
 
-describe.each(httpCases)('over HTTP: $name', (c) => {
-  it('connects, and the work request carries its header', async () => {
-    const { conn } = await overHttp(c.provider());
+for (const c of httpCases) {
+  describe(`over HTTP: ${c.name}`, () => {
+    it('connects, and the work request carries its header', async () => {
+      const { conn } = await overHttp(c.provider());
 
-    const response = await getWork(conn);
+      const response = await getWork(conn);
 
-    expect(response.status).toBe(200);
-    const sent = stub.sentTo(WORK);
-    expect(sent).toHaveLength(1);
-    expect(sent[0].headers.authorization).toBe(c.header);
+      assert.strictEqual(response.status, 200);
+      const sent = stub.sentTo(WORK);
+      assert.strictEqual(sent.length, 1);
+      assert.strictEqual(sent[0].headers.authorization, c.header);
+    });
+
+    it('three 401s end in the provider’s own refusal', async () => {
+      const { conn } = await overHttp(c.provider());
+      stub.work(WORK, [401, 401, 401]);
+
+      const error = await getWork(conn).catch((e: unknown) => e);
+
+      assert.ok(error instanceof AuthRefusedError);
+      assert.strictEqual((error as AuthRefusedError).at, 'request');
+      assert.strictEqual((error as AuthRefusedError).refusal.reason, c.refusal);
+    });
   });
-
-  it('three 401s end in the provider’s own refusal', async () => {
-    const { conn } = await overHttp(c.provider());
-    stub.work(WORK, [401, 401, 401]);
-
-    const error = await getWork(conn).catch((e: unknown) => e);
-
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).at).toBe('request');
-    expect((error as AuthRefusedError).refusal.reason).toBe(c.refusal);
-  });
-});
+}
 
 describe('over HTTP: a certificate', () => {
   it('its material reaches the agent at logon', async () => {
@@ -131,9 +135,9 @@ describe('over HTTP: a certificate', () => {
     const agent = (transport as any).client().defaults.httpsAgent as {
       options: Record<string, unknown>;
     };
-    expect(agent.options.cert).toBe(CERT);
-    expect(agent.options.key).toBe(KEY);
-    expect(agent.options.passphrase).toBe('pp');
+    assert.strictEqual(agent.options.cert, CERT);
+    assert.strictEqual(agent.options.key, KEY);
+    assert.strictEqual(agent.options.passphrase, 'pp');
   });
 });
 
@@ -155,12 +159,12 @@ describe('over HTTP: a token renewed through refreshToken', () => {
 
     const response = await getWork(conn);
 
-    expect(response.status).toBe(200);
-    expect(refreshes).toBe(1);
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(refreshes, 1);
     const sent = stub.sentTo(WORK);
-    expect(sent).toHaveLength(2);
-    expect(sent[0].headers.authorization).toBe('Bearer OLD');
-    expect(sent[1].headers.authorization).toBe('Bearer NEW');
+    assert.strictEqual(sent.length, 2);
+    assert.strictEqual(sent[0].headers.authorization, 'Bearer OLD');
+    assert.strictEqual(sent[1].headers.authorization, 'Bearer NEW');
   });
 });
 
@@ -231,7 +235,7 @@ describe('over RFC', () => {
 
     await conn.connect();
 
-    expect(opens[0]).toStrictEqual({ user: 'DEVELOPER', passwd: 'pw' });
+    assert.deepStrictEqual(opens[0], { user: 'DEVELOPER', passwd: 'pw' });
   });
 
   it('basic: a refused open ends in “the user or password was refused”', async () => {
@@ -242,9 +246,10 @@ describe('over RFC', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).at).toBe('logon');
-    expect((error as AuthRefusedError).refusal.reason).toBe(
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual((error as AuthRefusedError).at, 'logon');
+    assert.strictEqual(
+      (error as AuthRefusedError).refusal.reason,
       'the user or password was refused',
     );
   });
@@ -258,11 +263,12 @@ describe('over RFC', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal.reason).toBe(
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual(
+      (error as AuthRefusedError).refusal.reason,
       'this wire carries no TLS material (RFC)',
     );
-    expect(opens).toHaveLength(0);
+    assert.strictEqual(opens.length, 0);
   });
 
   it('a bearer token: the open gets no parameters, and the connect ends in AuthRefusedError', async () => {
@@ -270,9 +276,9 @@ describe('over RFC', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect(opens.length).toBeGreaterThan(0);
-    for (const open of opens) expect(open).toStrictEqual({});
+    assert.ok(error instanceof AuthRefusedError);
+    assert.ok(opens.length > 0);
+    for (const open of opens) assert.deepStrictEqual(open, {});
   });
 
   it('SNC: the open gets the four keys, and snc_myname when given', async () => {
@@ -286,7 +292,7 @@ describe('over RFC', () => {
 
     await conn.connect();
 
-    expect(opens[0]).toStrictEqual({
+    assert.deepStrictEqual(opens[0], {
       snc_mode: '1',
       snc_partnername: 'p:CN=SAP',
       snc_qop: '9',
@@ -306,7 +312,7 @@ describe('over RFC', () => {
 
     await conn.connect();
 
-    expect(opens[0]).toStrictEqual({
+    assert.deepStrictEqual(opens[0], {
       snc_mode: '1',
       snc_partnername: 'p:CN=SAP',
       snc_qop: '3',
@@ -324,9 +330,10 @@ describe('over RFC', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).at).toBe('logon');
-    expect((error as AuthRefusedError).refusal.reason).toBe(
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual((error as AuthRefusedError).at, 'logon');
+    assert.strictEqual(
+      (error as AuthRefusedError).refusal.reason,
       'the SNC library has no credential to present (A2200019)',
     );
   });

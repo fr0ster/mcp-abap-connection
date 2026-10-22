@@ -11,6 +11,8 @@
  * nothing before `rejected()` is asked.
  */
 
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
 import type {
@@ -24,6 +26,7 @@ import {
   WireLogonError,
 } from '../../connection/authErrors.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
+import { assertMatchObject } from '../helpers/assertions.js';
 import { type SapStub, startSapStub } from '../helpers/sapStub.js';
 import { type StubScript, stubProvider } from '../helpers/stubProvider.js';
 
@@ -129,15 +132,15 @@ describe('a 401 that survives the wire', () => {
 
     const response = await get(conn);
 
-    expect(response.status).toBe(200);
-    expect(rejections()).toHaveLength(1);
-    expect(rejections()[0]).toMatchObject({ at: 'request', status: 401 });
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(rejections().length, 1);
+    assertMatchObject(rejections()[0], { at: 'request', status: 401 });
     // No resend before rejected(): the first attempt, then exactly one more,
     // carrying the renewed credential.
     const sent = stub.sentTo(WORK);
-    expect(sent).toHaveLength(2);
-    expect(sent[0].headers.authorization).toBe('Stub 0');
-    expect(sent[1].headers.authorization).toBe('Stub 1');
+    assert.strictEqual(sent.length, 2);
+    assert.strictEqual(sent[0].headers.authorization, 'Stub 0');
+    assert.strictEqual(sent[1].headers.authorization, 'Stub 1');
   });
 
   it('an Oops is an AuthRefusedError at request in the provider words, the 401 as cause', async () => {
@@ -146,14 +149,15 @@ describe('a 401 that survives the wire', () => {
 
     const error = await get(conn).catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).at).toBe('request');
-    expect((error as AuthRefusedError).refusal).toBe(
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual((error as AuthRefusedError).at, 'request');
+    assert.strictEqual(
+      (error as AuthRefusedError).refusal,
       (NO as { refusal: unknown }).refusal,
     );
-    expect(statusOf((error as AuthRefusedError).cause)).toBe(401);
+    assert.strictEqual(statusOf((error as AuthRefusedError).cause), 401);
     // SAP's 401 reaches the caller; nothing was resent.
-    expect(stub.sentTo(WORK)).toHaveLength(1);
+    assert.strictEqual(stub.sentTo(WORK).length, 1);
   });
 
   it('a rejected() that throws is PROVIDER_FAILED at request, the throw as cause', async () => {
@@ -169,12 +173,12 @@ describe('a 401 that survives the wire', () => {
 
     const error = await get(conn).catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).at).toBe('request');
-    expect((error as AuthRefusedError).refusal).toMatchObject(PROVIDER_FAILED);
-    expect((error as AuthRefusedError).cause).toBe(boom);
-    expect(rejections()).toHaveLength(1);
-    expect(stub.sentTo(WORK)).toHaveLength(1);
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual((error as AuthRefusedError).at, 'request');
+    assertMatchObject((error as AuthRefusedError).refusal, PROVIDER_FAILED);
+    assert.strictEqual((error as AuthRefusedError).cause, boom);
+    assert.strictEqual(rejections().length, 1);
+    assert.strictEqual(stub.sentTo(WORK).length, 1);
   });
 
   it('refused again after Ok is the verdict, and rejected is asked once', async () => {
@@ -183,16 +187,16 @@ describe('a 401 that survives the wire', () => {
 
     const error = await get(conn).catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
-    expect((error as AuthRefusedError).refusal).toMatchObject({
+    assert.ok(error instanceof AuthRefusedError);
+    assertMatchObject((error as AuthRefusedError).refusal, REFUSED_AGAIN);
+    assertMatchObject((error as AuthRefusedError).refusal, {
       facts: { at: 'request' },
     });
     // SAP's repeated 401 reaches the caller: the first attempt and the one
     // resend Ok bought, nothing more.
-    expect(statusOf((error as AuthRefusedError).cause)).toBe(401);
-    expect(rejections()).toHaveLength(1);
-    expect(stub.sentTo(WORK)).toHaveLength(2);
+    assert.strictEqual(statusOf((error as AuthRefusedError).cause), 401);
+    assert.strictEqual(rejections().length, 1);
+    assert.strictEqual(stub.sentTo(WORK).length, 2);
   });
 
   it('a 403 is thrown unchanged, and rejected is never asked', async () => {
@@ -201,9 +205,9 @@ describe('a 401 that survives the wire', () => {
 
     const error = await get(conn).catch((e: unknown) => e);
 
-    expect(error).not.toBeInstanceOf(AuthRefusedError);
-    expect(statusOf(error)).toBe(403);
-    expect(rejections()).toHaveLength(0);
+    assert.ok(!(error instanceof AuthRefusedError));
+    assert.strictEqual(statusOf(error), 403);
+    assert.strictEqual(rejections().length, 0);
   });
 });
 
@@ -214,11 +218,12 @@ describe("the wire's own recovery", () => {
 
     const response = await post(conn);
 
-    expect(response.status).toBe(200);
-    expect(rejections()).toHaveLength(0);
-    expect(stub.sentTo(WORK).map((request) => request.status)).toEqual([
-      403, 200,
-    ]);
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(rejections().length, 0);
+    assert.deepStrictEqual(
+      stub.sentTo(WORK).map((request) => request.status),
+      [403, 200],
+    );
   });
 
   it('re-authorizes its resend (path a): the resend carries a new header', async () => {
@@ -237,8 +242,11 @@ describe("the wire's own recovery", () => {
     await post(conn);
 
     const [first, resend] = stub.sentTo(WORK);
-    expect(resend.headers['x-attempt']).toBeDefined();
-    expect(resend.headers['x-attempt']).not.toBe(first.headers['x-attempt']);
+    assert.notStrictEqual(resend.headers['x-attempt'], undefined);
+    assert.notStrictEqual(
+      resend.headers['x-attempt'],
+      first.headers['x-attempt'],
+    );
   });
 
   it('a token fetch refused with 401 goes to rejected at logon, not the 403; Ok → fetch again, POST with the new token', async () => {
@@ -248,15 +256,16 @@ describe("the wire's own recovery", () => {
 
     const response = await post(conn);
 
-    expect(response.status).toBe(200);
-    expect(rejections()).toHaveLength(1);
-    expect(rejections()[0]).toMatchObject({ at: 'logon', status: 401 });
-    expect(statusOf(rejections()[0].error)).toBe(401);
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(rejections().length, 1);
+    assertMatchObject(rejections()[0], { at: 'logon', status: 401 });
+    assert.strictEqual(statusOf(rejections()[0].error), 401);
     const sent = stub.sentTo(WORK);
-    expect(sent[sent.length - 1].headers['x-csrf-token']).toBe(
+    assert.strictEqual(
+      sent[sent.length - 1].headers['x-csrf-token'],
       stub.tokens[stub.tokens.length - 1],
     );
-    expect(sent[sent.length - 1].status).toBe(200);
+    assert.strictEqual(sent[sent.length - 1].status, 200);
   });
 
   it('a token fetch refused twice is refused again, rejected asked once', async () => {
@@ -266,13 +275,13 @@ describe("the wire's own recovery", () => {
 
     const error = await post(conn).catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
-    expect((error as AuthRefusedError).refusal).toMatchObject({
+    assert.ok(error instanceof AuthRefusedError);
+    assertMatchObject((error as AuthRefusedError).refusal, REFUSED_AGAIN);
+    assertMatchObject((error as AuthRefusedError).refusal, {
       facts: { at: 'logon' },
     });
-    expect((error as AuthRefusedError).at).toBe('logon');
-    expect(rejections()).toHaveLength(1);
+    assert.strictEqual((error as AuthRefusedError).at, 'logon');
+    assert.strictEqual(rejections().length, 1);
   });
 
   it('a CSRF resend that meets a 401 goes to rejected at request, not the 403', async () => {
@@ -282,9 +291,9 @@ describe("the wire's own recovery", () => {
 
     const response = await post(conn);
 
-    expect(response.status).toBe(200);
-    expect(rejections()).toHaveLength(1);
-    expect(rejections()[0]).toMatchObject({ at: 'request', status: 401 });
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(rejections().length, 1);
+    assertMatchObject(rejections()[0], { at: 'request', status: 401 });
   });
 
   it('a CSRF resend the provider refuses to authorize is its AuthRefusedError, not the 403', async () => {
@@ -297,11 +306,12 @@ describe("the wire's own recovery", () => {
 
     const error = await post(conn).catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toBe(
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual(
+      (error as AuthRefusedError).refusal,
       (NO as { refusal: unknown }).refusal,
     );
-    expect(stub.sentTo(WORK)).toHaveLength(1);
+    assert.strictEqual(stub.sentTo(WORK).length, 1);
   });
 
   it('a GET 401 on a wire holding no cookies fetches nothing to earn some: the provider is asked, the resend stays in this session', async () => {
@@ -314,10 +324,10 @@ describe("the wire's own recovery", () => {
 
     const response = await get(conn);
 
-    expect(response.status).toBe(200);
-    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
-    expect(rejections()).toHaveLength(1);
-    expect(rejections()[0]).toMatchObject({ at: 'request', status: 401 });
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(stub.sentTo(DISCOVERY).length, discoveries);
+    assert.strictEqual(rejections().length, 1);
+    assertMatchObject(rejections()[0], { at: 'request', status: 401 });
   });
 });
 
@@ -336,11 +346,12 @@ describe('the upfront token fetch before a mutation', () => {
 
     const error = await post(conn).catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toBe(
+    assert.ok(error instanceof AuthRefusedError);
+    assert.strictEqual(
+      (error as AuthRefusedError).refusal,
       (NO as { refusal: unknown }).refusal,
     );
-    expect(stub.sentTo(WORK)).toHaveLength(0);
+    assert.strictEqual(stub.sentTo(WORK).length, 0);
   });
 
   it('a fetch refused with 401 goes to rejected at logon; Ok → fetch once more, the POST with the new token', async () => {
@@ -350,12 +361,13 @@ describe('the upfront token fetch before a mutation', () => {
 
     const response = await post(conn);
 
-    expect(response.status).toBe(200);
-    expect(rejections()).toHaveLength(1);
-    expect(rejections()[0]).toMatchObject({ at: 'logon', status: 401 });
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(rejections().length, 1);
+    assertMatchObject(rejections()[0], { at: 'logon', status: 401 });
     const sent = stub.sentTo(WORK);
-    expect(sent).toHaveLength(1);
-    expect(sent[0].headers['x-csrf-token']).toBe(
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(
+      sent[0].headers['x-csrf-token'],
       stub.tokens[stub.tokens.length - 1],
     );
   });
@@ -367,13 +379,13 @@ describe('the upfront token fetch before a mutation', () => {
 
     const error = await post(conn).catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
-    expect((error as AuthRefusedError).refusal).toMatchObject({
+    assert.ok(error instanceof AuthRefusedError);
+    assertMatchObject((error as AuthRefusedError).refusal, REFUSED_AGAIN);
+    assertMatchObject((error as AuthRefusedError).refusal, {
       facts: { at: 'logon' },
     });
-    expect(rejections()).toHaveLength(1);
-    expect(stub.sentTo(WORK)).toHaveLength(0);
+    assert.strictEqual(rejections().length, 1);
+    assert.strictEqual(stub.sentTo(WORK).length, 0);
   });
 
   it('spends the one retry: a POST refused after it is refused again without asking a second time', async () => {
@@ -384,17 +396,19 @@ describe('the upfront token fetch before a mutation', () => {
 
     const error = await post(conn).catch((e: unknown) => e);
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
-    expect((error as AuthRefusedError).refusal).toMatchObject({
+    assert.ok(error instanceof AuthRefusedError);
+    assertMatchObject((error as AuthRefusedError).refusal, REFUSED_AGAIN);
+    assertMatchObject((error as AuthRefusedError).refusal, {
       facts: { at: 'request' },
     });
     // Asked once, about the fetch — the POST's 401s spent nothing more.
-    expect(rejections()).toHaveLength(1);
-    expect(rejections()[0]).toMatchObject({ at: 'logon', status: 401 });
+    assert.strictEqual(rejections().length, 1);
+    assertMatchObject(rejections()[0], { at: 'logon', status: 401 });
   });
 
-  it('a fetch that fails any other way is swallowed, and the mutation goes on as today', async () => {
+  it('a fetch that fails any other way is swallowed, and the mutation goes on as today', {
+    timeout: 20000,
+  }, async () => {
     const { conn, transport, rejections } = await connected();
     transport.adoptCsrfToken(null);
     // The upfront fetch's first try and its three retries.
@@ -402,12 +416,13 @@ describe('the upfront token fetch before a mutation', () => {
 
     const response = await post(conn);
 
-    expect(response.status).toBe(200);
-    expect(rejections()).toHaveLength(0);
-    expect(stub.sentTo(WORK).map((request) => request.status)).toEqual([
-      403, 200,
-    ]);
-  }, 20000);
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(rejections().length, 0);
+    assert.deepStrictEqual(
+      stub.sentTo(WORK).map((request) => request.status),
+      [403, 200],
+    );
+  });
 });
 
 describe('many requests, and a critical section', () => {
@@ -421,11 +436,11 @@ describe('many requests, and a critical section', () => {
       get(conn, '/sap/bc/adt/b'),
     ]);
 
-    expect(a.status).toBe(200);
-    expect(b.status).toBe(200);
-    expect(rejections()).toHaveLength(2);
-    expect(stub.sentTo('/sap/bc/adt/a')).toHaveLength(2);
-    expect(stub.sentTo('/sap/bc/adt/b')).toHaveLength(2);
+    assert.strictEqual(a.status, 200);
+    assert.strictEqual(b.status, 200);
+    assert.strictEqual(rejections().length, 2);
+    assert.strictEqual(stub.sentTo('/sap/bc/adt/a').length, 2);
+    assert.strictEqual(stub.sentTo('/sap/bc/adt/b').length, 2);
   });
 
   it('inside a critical section, a surviving 401 is resent on the same session', async () => {
@@ -436,42 +451,42 @@ describe('many requests, and a critical section', () => {
     conn.beginCriticalSection();
     try {
       const response = await get(conn);
-      expect(response.status).toBe(200);
+      assert.strictEqual(response.status, 200);
     } finally {
       conn.endCriticalSection();
     }
 
-    expect(rejections()).toHaveLength(1);
-    expect(conn.getSessionIdentity()).toBe(identity);
-    expect(conn.isConnected()).toBe(true);
-    expect(stub.sentTo(DISCOVERY)).toHaveLength(1);
+    assert.strictEqual(rejections().length, 1);
+    assert.strictEqual(conn.getSessionIdentity(), identity);
+    assert.strictEqual(conn.isConnected(), true);
+    assert.strictEqual(stub.sentTo(DISCOVERY).length, 1);
   });
 
   it('inside a critical section, a mutation 401 with a cached token is renewed and resent on the same session', async () => {
     const { conn, transport, rejections } = await connected();
     const identity = conn.getSessionIdentity();
     const token = transport.csrfToken();
-    expect(token).not.toBeNull();
+    assert.notStrictEqual(token, null);
     stub.work(WORK, [401]);
 
     conn.beginCriticalSection();
     try {
       const response = await put(conn);
-      expect(response.status).toBe(200);
+      assert.strictEqual(response.status, 200);
     } finally {
       conn.endCriticalSection();
     }
 
-    expect(rejections()).toHaveLength(1);
-    expect(rejections()[0]).toMatchObject({ at: 'request', status: 401 });
+    assert.strictEqual(rejections().length, 1);
+    assertMatchObject(rejections()[0], { at: 'request', status: 401 });
     const [first, resend] = stub.sentTo(WORK);
-    expect(first.headers.cookie).toContain('SAP_SESSIONID_STUB_100=S1');
-    expect(resend.headers.cookie).toBe(first.headers.cookie);
-    expect(resend.headers['x-csrf-token']).toBe(token);
-    expect(resend.headers.authorization).toBe('Stub 1');
-    expect(conn.getSessionIdentity()).toBe(identity);
-    expect(conn.isConnected()).toBe(true);
-    expect(stub.sentTo(DISCOVERY)).toHaveLength(1);
+    assert.ok(first.headers.cookie.includes('SAP_SESSIONID_STUB_100=S1'));
+    assert.strictEqual(resend.headers.cookie, first.headers.cookie);
+    assert.strictEqual(resend.headers['x-csrf-token'], token);
+    assert.strictEqual(resend.headers.authorization, 'Stub 1');
+    assert.strictEqual(conn.getSessionIdentity(), identity);
+    assert.strictEqual(conn.isConnected(), true);
+    assert.strictEqual(stub.sentTo(DISCOVERY).length, 1);
   });
 
   it('inside a critical section, a resend that finds the session replaced says SESSION_REPLACED', async () => {
@@ -493,8 +508,8 @@ describe('many requests, and a critical section', () => {
       conn.endCriticalSection();
     }
 
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.SESSION_REPLACED);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.SESSION_REPLACED);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('inside a critical section, a resend answered "session not found" says SESSION_REPLACED', async () => {
@@ -512,10 +527,10 @@ describe('many requests, and a critical section', () => {
       conn.endCriticalSection();
     }
 
-    expect(rejections()).toHaveLength(1);
-    expect(stub.sentTo(WORK)).toHaveLength(2);
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.SESSION_REPLACED);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(rejections().length, 1);
+    assert.strictEqual(stub.sentTo(WORK).length, 2);
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.SESSION_REPLACED);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('the wire\'s own resends answered "session not found" say SESSION_REPLACED too', async () => {
@@ -533,8 +548,8 @@ describe('many requests, and a critical section', () => {
 
       const error = await send(conn).catch((e: unknown) => e);
 
-      expect(codeOf(error)).toBe(ADT_SESSION_ERROR.SESSION_REPLACED);
-      expect(conn.isConnected()).toBe(false);
+      assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.SESSION_REPLACED);
+      assert.strictEqual(conn.isConnected(), false);
     }
   });
 
@@ -554,16 +569,16 @@ describe('many requests, and a critical section', () => {
       conn.endCriticalSection();
     }
 
-    expect(error).toBeInstanceOf(AuthRefusedError);
-    expect((error as AuthRefusedError).refusal).toMatchObject(REFUSED_AGAIN);
-    expect((error as AuthRefusedError).refusal).toMatchObject({
+    assert.ok(error instanceof AuthRefusedError);
+    assertMatchObject((error as AuthRefusedError).refusal, REFUSED_AGAIN);
+    assertMatchObject((error as AuthRefusedError).refusal, {
       facts: { at: 'request' },
     });
-    expect((error as AuthRefusedError).at).toBe('request');
-    expect(rejections()).toHaveLength(1);
+    assert.strictEqual((error as AuthRefusedError).at, 'request');
+    assert.strictEqual(rejections().length, 1);
     // Still connected, on the session the lock was taken in.
-    expect(conn.isConnected()).toBe(true);
-    expect(conn.getSessionIdentity()).toBe(identity);
+    assert.strictEqual(conn.isConnected(), true);
+    assert.strictEqual(conn.getSessionIdentity(), identity);
   });
 });
 
@@ -598,11 +613,11 @@ describe('a request whose session is gone', () => {
     release();
     const error = await request;
 
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    expect(stub.sentTo(WORK)).toHaveLength(0);
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(stub.sentTo(WORK).length, 0);
     // Nor the token fetch that would have readied the wire for it.
-    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(stub.sentTo(DISCOVERY).length, discoveries);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('a GET whose authorization outlives its session is not sent into the next one', async () => {
@@ -633,9 +648,9 @@ describe('a request whose session is gone', () => {
     release();
     const error = await request;
 
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(stub.sentTo(WORK).length, 0);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('a CSRF recovery fetch that outlives its session sends no discovery into the next one', async () => {
@@ -653,10 +668,10 @@ describe('a request whose session is gone', () => {
     release();
     const error = await request;
 
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
-    expect(stub.sentTo(WORK)).toHaveLength(1);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(stub.sentTo(DISCOVERY).length, discoveries);
+    assert.strictEqual(stub.sentTo(WORK).length, 1);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('an upfront token fetch retried after a renewal sends no discovery into the next session', async () => {
@@ -677,11 +692,11 @@ describe('a request whose session is gone', () => {
     release();
     const error = await request;
 
-    expect(rejections()).toHaveLength(1);
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
-    expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(rejections().length, 1);
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(stub.sentTo(DISCOVERY).length, discoveries);
+    assert.strictEqual(stub.sentTo(WORK).length, 0);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('the first pass of the upfront token fetch sends nothing into the next session', async () => {
@@ -700,10 +715,10 @@ describe('a request whose session is gone', () => {
     release();
     const error = await request;
 
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    expect(stub.sentTo(DISCOVERY)).toHaveLength(discoveries);
-    expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(stub.sentTo(DISCOVERY).length, discoveries);
+    assert.strictEqual(stub.sentTo(WORK).length, 0);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('an upfront fetch refused after its session went away is NOT_CONNECTED, never the wire error', async () => {
@@ -733,11 +748,11 @@ describe('a request whose session is gone', () => {
     release();
     const error = await request;
 
-    expect(error).not.toBeInstanceOf(WireLogonError);
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    expect(rejections()).toHaveLength(0);
-    expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(false);
+    assert.ok(!(error instanceof WireLogonError));
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(rejections().length, 0);
+    assert.strictEqual(stub.sentTo(WORK).length, 0);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('a GET resent after its 401, answered "session not found", says SESSION_REPLACED', async () => {
@@ -754,13 +769,14 @@ describe('a request whose session is gone', () => {
 
     const error = await get(conn).catch((e: unknown) => e);
 
-    expect(stub.sentTo(WORK)).toHaveLength(2);
+    assert.strictEqual(stub.sentTo(WORK).length, 2);
     // No session cookie — only the client the wire asserts on every request.
-    expect(stub.sentTo(WORK)[0].headers.cookie).toBe(
+    assert.strictEqual(
+      stub.sentTo(WORK)[0].headers.cookie,
       'sap-usercontext=sap-client=100',
     );
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.SESSION_REPLACED);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.SESSION_REPLACED);
+    assert.strictEqual(conn.isConnected(), false);
   });
 });
 
@@ -801,17 +817,17 @@ describe('an answer that arrives after its session is gone', () => {
     const token = transport.csrfToken();
     const identity = conn.getSessionIdentity();
     // Ended and cleared: no next session on this instance to write into.
-    expect(jar).toBeNull();
+    assert.strictEqual(jar, null);
     fetch.release();
     const error = await request;
 
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.NOT_CONNECTED);
     // The held answer set S1 — the old session's cookie — and a token.
-    expect(transport.cookies()).toBe(jar);
-    expect(transport.csrfToken()).toBe(token);
-    expect(conn.getSessionIdentity()).toBe(identity);
-    expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(transport.cookies(), jar);
+    assert.strictEqual(transport.csrfToken(), token);
+    assert.strictEqual(conn.getSessionIdentity(), identity);
+    assert.strictEqual(stub.sentTo(WORK).length, 0);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('a resend refused after its session went away is NOT_CONNECTED, not a credential verdict', async () => {
@@ -828,11 +844,11 @@ describe('an answer that arrives after its session is gone', () => {
     resend.release();
     const error = await request;
 
-    expect(error).not.toBeInstanceOf(AuthRefusedError);
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    expect(rejections()).toHaveLength(1);
-    expect(stub.sentTo(WORK)).toHaveLength(2);
-    expect(conn.isConnected()).toBe(false);
+    assert.ok(!(error instanceof AuthRefusedError));
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(rejections().length, 1);
+    assert.strictEqual(stub.sentTo(WORK).length, 2);
+    assert.strictEqual(conn.isConnected(), false);
   });
 });
 
@@ -865,10 +881,10 @@ describe('a stale request meets its credential', () => {
     release();
     const error = await request;
 
-    expect(error).not.toBeInstanceOf(WireLogonError);
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    expect(stub.sentTo(WORK)).toHaveLength(1);
-    expect(conn.isConnected()).toBe(false);
+    assert.ok(!(error instanceof WireLogonError));
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(stub.sentTo(WORK).length, 1);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('an upfront fetch the provider refuses after the session went away is NOT_CONNECTED', async () => {
@@ -899,10 +915,10 @@ describe('a stale request meets its credential', () => {
     release();
     const error = await request;
 
-    expect(error).not.toBeInstanceOf(AuthRefusedError);
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    expect(stub.sentTo(WORK)).toHaveLength(0);
-    expect(conn.isConnected()).toBe(false);
+    assert.ok(!(error instanceof AuthRefusedError));
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(stub.sentTo(WORK).length, 0);
+    assert.strictEqual(conn.isConnected(), false);
   });
 });
 
@@ -960,9 +976,9 @@ describe("a provider's Oops that arrives after the session went away", () => {
     release();
     const error = await request;
 
-    expect(error).not.toBeInstanceOf(AuthRefusedError);
-    expect(codeOf(error)).toBe(ADT_SESSION_ERROR.NOT_CONNECTED);
-    expect(conn.isConnected()).toBe(false);
+    assert.ok(!(error instanceof AuthRefusedError));
+    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(conn.isConnected(), false);
   }
 
   it('on the first attempt is NOT_CONNECTED', async () => {
@@ -1025,8 +1041,8 @@ describe('a subclass that fetches a token itself', () => {
 
     const token = await conn.fetchWith(conn.current());
 
-    expect(token).toBe(stub.tokens[stub.tokens.length - 1]);
-    expect(stub.sentTo(DISCOVERY)).toHaveLength(2);
+    assert.strictEqual(token, stub.tokens[stub.tokens.length - 1]);
+    assert.strictEqual(stub.sentTo(DISCOVERY).length, 2);
   });
 
   it('a number that is not the current generation still fetches: it fences only what the answer does', async () => {
@@ -1034,8 +1050,8 @@ describe('a subclass that fetches a token itself', () => {
 
     const token = await conn.fetchWith(conn.current() - 1);
 
-    expect(token).toBe(stub.tokens[stub.tokens.length - 1]);
-    expect(stub.sentTo(DISCOVERY)).toHaveLength(2);
-    expect(conn.isConnected()).toBe(true);
+    assert.strictEqual(token, stub.tokens[stub.tokens.length - 1]);
+    assert.strictEqual(stub.sentTo(DISCOVERY).length, 2);
+    assert.strictEqual(conn.isConnected(), true);
   });
 });

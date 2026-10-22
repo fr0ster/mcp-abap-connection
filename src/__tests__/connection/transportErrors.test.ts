@@ -13,6 +13,8 @@
  * comparison cannot see it (there is no cookie to change), and `isConnected()`
  * goes on answering true over a session that no longer exists.
  */
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
@@ -80,21 +82,21 @@ describe('a refusal that is not an AxiosError', () => {
     const wire = conversation();
     const conn = overRfc(wire);
     await conn.connect();
-    expect(conn.isConnected()).toBe(true);
+    assert.strictEqual(conn.isConnected(), true);
 
     wire.die();
-    await expect(
+    await assert.rejects(
       conn.makeAdtRequest({
         url: '/sap/bc/adt/oo/classes/ZCL_X',
         method: 'GET',
         timeout: 5000,
       }),
-    ).rejects.toThrow();
+    );
 
     // The conversation is still alive; only the answer said the session was
     // gone. If the lifecycle reads that answer, this is false — if it only
     // reads the wire's health, it stays true and the caller locks over a
     // session that does not exist.
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(conn.isConnected(), false);
   });
 });

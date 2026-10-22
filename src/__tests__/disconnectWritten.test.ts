@@ -14,6 +14,7 @@
  * Against a real HTTP stand-in on loopback: the wire's own node request, its
  * own `finish`.
  */
+import assert from 'node:assert/strict';
 import {
   createServer,
   request as httpRequest,
@@ -22,11 +23,13 @@ import {
 } from 'node:http';
 import type { Socket } from 'node:net';
 import { Duplex } from 'node:stream';
+import { afterEach, describe, it } from 'node:test';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import type { ILogger } from '../logger.js';
+import { assertMatchObject } from './helpers/assertions.js';
 import {
   cloudHttpTransport,
   onPrem,
@@ -287,16 +290,16 @@ describe('disconnect() resolves once the logoff is written', () => {
     await server.logoffArrived;
     await drained();
     // The logoff is on the server, unanswered: disconnect() is done with it.
-    expect(disconnected()).toBe(true);
+    assert.strictEqual(disconnected(), true);
 
     // flushGoodbye() is the wait for the answer, and the answer is held.
     const flushed = watched(conn.flushGoodbye(60_000));
     await turns(2);
-    expect(flushed()).toBe(false);
+    assert.strictEqual(flushed(), false);
 
     server.answerLogoff();
     await conn.flushGoodbye(60_000);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('a server that never takes the bytes: disconnect() waits for the write, and resolves when the socket fails', async () => {
@@ -309,15 +312,15 @@ describe('disconnect() resolves once the logoff is written', () => {
     await turns(20);
     // Nothing written: disconnect() has not resolved, and no timer of its own
     // will make it.
-    expect(disconnected()).toBe(false);
-    expect(conn.isConnected()).toBe(false);
+    assert.strictEqual(disconnected(), false);
+    assert.strictEqual(conn.isConnected(), false);
 
     // The socket fails: the failure is logged, not thrown, and the teardown
     // completes.
     wire.fail();
     await turns(20, disconnected);
-    expect(disconnected()).toBe(true);
-    await expect(conn.flushGoodbye(60_000)).resolves.toBeUndefined();
+    assert.strictEqual(disconnected(), true);
+    assert.strictEqual(await conn.flushGoodbye(60_000), undefined);
   });
 
   describe('disconnect() is called once', () => {
@@ -335,12 +338,15 @@ describe('disconnect() resolves once the logoff is written', () => {
 
       const first = conn.disconnect();
       const firstDone = watched(first);
-      await expect(conn.disconnect()).rejects.toMatchObject(NOT_CONNECTED);
+      await assert.rejects(conn.disconnect(), (e: unknown) => {
+        assertMatchObject(e, NOT_CONNECTED);
+        return true;
+      });
       await turns(20);
-      expect(firstDone()).toBe(false);
+      assert.strictEqual(firstDone(), false);
 
       wire.fail();
-      await expect(first).resolves.toBeUndefined();
+      assert.strictEqual(await first, undefined);
     });
 
     it('a second call after the first has settled rejects', async () => {
@@ -352,7 +358,10 @@ describe('disconnect() resolves once the logoff is written', () => {
       server.answerLogoff();
       await conn.flushGoodbye(60_000);
 
-      await expect(conn.disconnect()).rejects.toMatchObject(NOT_CONNECTED);
+      await assert.rejects(conn.disconnect(), (e: unknown) => {
+        assertMatchObject(e, NOT_CONNECTED);
+        return true;
+      });
     });
   });
 
@@ -374,16 +383,22 @@ describe('disconnect() resolves once the logoff is written', () => {
       );
 
       const error = await conn.connect().catch((e: unknown) => e);
-      expect(error).toBeDefined();
-      expect(conn.isConnected()).toBe(false);
+      assert.notStrictEqual(error, undefined);
+      assert.strictEqual(conn.isConnected(), false);
       // The preflight's session was logged off, and nothing was renewed or
       // established again on the spent instance.
       await server.logoffArrived;
-      expect(server.logoffs()).toBe(1);
-      expect(server.establishments()).toBe(1);
-      expect(provider.calls.filter((c) => c.method === 'rejected')).toEqual([]);
-      await expect(conn.connect()).rejects.toMatchObject({
-        code: 'ADT_NOT_CONNECTED',
+      assert.strictEqual(server.logoffs(), 1);
+      assert.strictEqual(server.establishments(), 1);
+      assert.deepStrictEqual(
+        provider.calls.filter((c) => c.method === 'rejected'),
+        [],
+      );
+      await assert.rejects(conn.connect(), (e: unknown) => {
+        assertMatchObject(e, {
+          code: 'ADT_NOT_CONNECTED',
+        });
+        return true;
       });
       server.answerLogoff();
     });
@@ -398,12 +413,15 @@ describe('disconnect() resolves once the logoff is written', () => {
       // disconnect's transition has run, and must still open nothing.
       const disconnecting = conn.disconnect();
       const connecting = conn.connect();
-      await expect(connecting).rejects.toMatchObject({
-        code: 'ADT_NOT_CONNECTED',
+      await assert.rejects(connecting, (e: unknown) => {
+        assertMatchObject(e, {
+          code: 'ADT_NOT_CONNECTED',
+        });
+        return true;
       });
       await disconnecting;
-      expect(server.establishments()).toBe(establishments);
-      expect(conn.isConnected()).toBe(false);
+      assert.strictEqual(server.establishments(), establishments);
+      assert.strictEqual(conn.isConnected(), false);
       server.answerLogoff();
     });
   });
@@ -414,12 +432,22 @@ describe('disconnect() resolves once the logoff is written', () => {
 
     /** Every call on a spent instance throws; disconnect() is still owed once. */
     async function spentAfterLoss(conn: ReturnType<typeof onPrem>) {
-      await expect(conn.connect()).rejects.toMatchObject(SPENT_CODE);
-      await expect(
+      await assert.rejects(conn.connect(), (e: unknown) => {
+        assertMatchObject(e, SPENT_CODE);
+        return true;
+      });
+      await assert.rejects(
         conn.makeAdtRequest(work('/sap/bc/adt/other')),
-      ).rejects.toMatchObject(SPENT_CODE);
-      await expect(conn.disconnect()).resolves.toBeUndefined();
-      await expect(conn.disconnect()).rejects.toMatchObject(SPENT_CODE);
+        (e: unknown) => {
+          assertMatchObject(e, SPENT_CODE);
+          return true;
+        },
+      );
+      assert.strictEqual(await conn.disconnect(), undefined);
+      await assert.rejects(conn.disconnect(), (e: unknown) => {
+        assertMatchObject(e, SPENT_CODE);
+        return true;
+      });
     }
 
     it('a dead session (400 "session not found"): SESSION_REPLACED, then the instance is spent', async () => {
@@ -445,15 +473,19 @@ describe('disconnect() resolves once the logoff is written', () => {
       const establishments = server.establishments();
 
       // Detected and reported as in 15.0.1.
-      await expect(
+      await assert.rejects(
         conn.makeAdtRequest(work('/sap/bc/adt/gone')),
-      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+        (e: unknown) => {
+          assertMatchObject(e, { code: 'ADT_SESSION_REPLACED' });
+          return true;
+        },
+      );
       await spentAfterLoss(conn);
-      expect(server.establishments()).toBe(establishments);
+      assert.strictEqual(server.establishments(), establishments);
       // 15.0.1's session-loss cleanup cleared the jar, so disconnect() held
       // no SAP_SESSIONID to log off (scope line 5).
       await turns(5);
-      expect(server.logoffs()).toBe(0);
+      assert.strictEqual(server.logoffs(), 0);
     });
 
     it('a replaced SAP_SESSIONID: SESSION_REPLACED, then the instance is spent', async () => {
@@ -464,17 +496,21 @@ describe('disconnect() resolves once the logoff is written', () => {
       await conn.connect();
       const establishments = server.establishments();
 
-      await expect(
+      await assert.rejects(
         conn.makeAdtRequest(work('/sap/bc/adt/work')),
-      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+        (e: unknown) => {
+          assertMatchObject(e, { code: 'ADT_SESSION_REPLACED' });
+          return true;
+        },
+      );
       await server.logoffArrived;
       server.answerLogoff();
       await spentAfterLoss(conn);
-      expect(server.establishments()).toBe(establishments);
+      assert.strictEqual(server.establishments(), establishments);
       await turns(5);
       // The replacing session's logoff, and nothing more: disconnect() found
       // the jar cleared and sent none of its own.
-      expect(server.logoffs()).toBe(1);
+      assert.strictEqual(server.logoffs(), 1);
     });
 
     it("a replaced SAP_SESSIONID: the replacing session is logged off — its cookie, no sap-contextid — and flushGoodbye() waits for that logoff's answer", async () => {
@@ -489,28 +525,32 @@ describe('disconnect() resolves once the logoff is written', () => {
       const conn = onPrem(configFor(server.baseUrl), null);
       await conn.connect();
 
-      await expect(
+      await assert.rejects(
         conn.makeAdtRequest(work('/sap/bc/adt/work')),
-      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+        (e: unknown) => {
+          assertMatchObject(e, { code: 'ADT_SESSION_REPLACED' });
+          return true;
+        },
+      );
       // Sent at the loss, without waiting for disconnect().
       await server.logoffArrived;
-      expect(server.logoffs()).toBe(1);
+      assert.strictEqual(server.logoffs(), 1);
       const [cookie] = server.logoffCookies();
-      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S2');
-      expect(cookie).not.toContain('S1');
-      expect(cookie).not.toContain('sap-contextid');
+      assert.ok(cookie.includes('SAP_SESSIONID_STUB_100=S2'));
+      assert.ok(!cookie.includes('S1'));
+      assert.ok(!cookie.includes('sap-contextid'));
 
       // The answer is held: flushGoodbye() has not resolved.
       const flushed = watched(conn.flushGoodbye());
       await turns(5);
-      expect(flushed()).toBe(false);
+      assert.strictEqual(flushed(), false);
       server.answerLogoff();
       await conn.flushGoodbye();
 
       // disconnect() owes nothing more: the cookies were forgotten.
-      await expect(conn.disconnect()).resolves.toBeUndefined();
+      assert.strictEqual(await conn.disconnect(), undefined);
       await turns(5);
-      expect(server.logoffs()).toBe(1);
+      assert.strictEqual(server.logoffs(), 1);
     });
 
     it('cloud: a replaced SAP_SESSIONID logs the replacing session off through the linked logoff, with its cookie and no sap-contextid', async () => {
@@ -535,28 +575,34 @@ describe('disconnect() resolves once the logoff is written', () => {
       );
       await conn.connect();
 
-      await expect(
+      await assert.rejects(
         conn.makeAdtRequest(work('/sap/bc/adt/work')),
-      ).rejects.toMatchObject({ code: 'ADT_SESSION_REPLACED' });
+        (e: unknown) => {
+          assertMatchObject(e, { code: 'ADT_SESSION_REPLACED' });
+          return true;
+        },
+      );
       const logoff = await server.logoffArrived;
-      expect(logoff.url).toBe('/sap/public/bc/icf/logoff');
-      expect(logoff.headers['x-sap-security-session']).toBe('use');
+      assert.strictEqual(logoff.url, '/sap/public/bc/icf/logoff');
+      assert.strictEqual(logoff.headers['x-sap-security-session'], 'use');
       const [cookie] = server.logoffCookies();
-      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S2');
-      expect(cookie).not.toContain('S1');
-      expect(cookie).not.toContain('sap-contextid');
+      assert.ok(cookie.includes('SAP_SESSIONID_STUB_100=S2'));
+      assert.ok(!cookie.includes('S1'));
+      assert.ok(!cookie.includes('sap-contextid'));
 
       const flushed = watched(conn.flushGoodbye());
       await turns(5);
-      expect(flushed()).toBe(false);
+      assert.strictEqual(flushed(), false);
       server.answerLogoff();
       await conn.flushGoodbye();
-      await expect(conn.disconnect()).resolves.toBeUndefined();
+      assert.strictEqual(await conn.disconnect(), undefined);
       await turns(5);
-      expect(server.logoffs()).toBe(1);
+      assert.strictEqual(server.logoffs(), 1);
     });
 
-    it('a session replaced while connect() establishes it: one logoff, for the replacing session, written before connect() rejects', async () => {
+    it('a session replaced while connect() establishes it: one logoff, for the replacing session, written before connect() rejects', {
+      timeout: 30_000,
+    }, async () => {
       // Core discovery answers 404 in session S1; its fallback, which runs in
       // the same session, comes back naming S2.
       server = await standIn({
@@ -573,26 +619,29 @@ describe('disconnect() resolves once the logoff is written', () => {
       await wire.requested;
       await turns(20);
       // The logoff is not written yet: connect() has not rejected.
-      expect(rejected()).toBe(false);
+      assert.strictEqual(rejected(), false);
       wire.fail();
-      await expect(connecting).rejects.toMatchObject({
-        code: 'ADT_SESSION_REPLACED',
+      await assert.rejects(connecting, (e: unknown) => {
+        assertMatchObject(e, {
+          code: 'ADT_SESSION_REPLACED',
+        });
+        return true;
       });
-      await expect(conn.disconnect()).resolves.toBeUndefined();
+      assert.strictEqual(await conn.disconnect(), undefined);
       await conn.flushGoodbye();
       await turns(5);
       // One logoff and only one: the replacement's. The failed connect()
       // found the cookies already forgotten and sent none of its own.
-      expect(server.logoffs()).toBe(0);
-      expect(wire.logoffs).toHaveLength(1);
+      assert.strictEqual(server.logoffs(), 0);
+      assert.strictEqual(wire.logoffs.length, 1);
       const headers = (wire.logoffs[0]?.headers ?? {}) as Record<
         string,
         unknown
       >;
       const cookie = String(headers.Cookie ?? headers.cookie ?? '');
-      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S2');
-      expect(cookie).not.toContain('S1');
-    }, 30_000);
+      assert.ok(cookie.includes('SAP_SESSIONID_STUB_100=S2'));
+      assert.ok(!cookie.includes('S1'));
+    });
 
     it('a 401 answering a request is no replacement: no logoff is sent for it, and disconnect() logs the session off once', async () => {
       server = await standIn({
@@ -603,16 +652,19 @@ describe('disconnect() resolves once the logoff is written', () => {
       const conn = onPrem(configFor(server.baseUrl), null);
       await conn.connect();
 
-      await expect(
+      await assert.rejects(
         conn.makeAdtRequest(work('/sap/bc/adt/refused')),
-      ).rejects.toBeDefined();
+        (e: unknown) => e !== undefined,
+      );
       await turns(5);
-      expect(server.logoffs()).toBe(0);
+      assert.strictEqual(server.logoffs(), 0);
 
       await conn.disconnect();
       await conn.flushGoodbye();
-      expect(server.logoffs()).toBe(1);
-      expect(server.logoffCookies()[0]).toContain('SAP_SESSIONID_STUB_100=S1');
+      assert.strictEqual(server.logoffs(), 1);
+      assert.ok(
+        server.logoffCookies()[0].includes('SAP_SESSIONID_STUB_100=S1'),
+      );
     });
 
     it('after a plain disconnect(), a request throws NOT_CONNECTED', async () => {
@@ -620,9 +672,13 @@ describe('disconnect() resolves once the logoff is written', () => {
       const conn = onPrem(configFor(server.baseUrl), null);
       await conn.connect();
       await conn.disconnect();
-      await expect(
+      await assert.rejects(
         conn.makeAdtRequest(work('/sap/bc/adt/other')),
-      ).rejects.toMatchObject(SPENT_CODE);
+        (e: unknown) => {
+          assertMatchObject(e, SPENT_CODE);
+          return true;
+        },
+      );
       server.answerLogoff();
     });
   });
@@ -642,9 +698,12 @@ describe('disconnect() resolves once the logoff is written', () => {
       await conn.disconnect();
       await server.logoffArrived;
 
-      await expect(conn.connect()).rejects.toMatchObject(SPENT);
-      expect(server.establishments()).toBe(establishments);
-      expect(server.logoffs()).toBe(1);
+      await assert.rejects(conn.connect(), (e: unknown) => {
+        assertMatchObject(e, SPENT);
+        return true;
+      });
+      assert.strictEqual(server.establishments(), establishments);
+      assert.strictEqual(server.logoffs(), 1);
       server.answerLogoff();
     });
 
@@ -662,8 +721,14 @@ describe('disconnect() resolves once the logoff is written', () => {
         null,
       );
       await conn.disconnect();
-      await expect(conn.connect()).rejects.toMatchObject(SPENT);
-      expect(provider.calls.filter((c) => c.method === 'prepare')).toEqual([]);
+      await assert.rejects(conn.connect(), (e: unknown) => {
+        assertMatchObject(e, SPENT);
+        return true;
+      });
+      assert.deepStrictEqual(
+        provider.calls.filter((c) => c.method === 'prepare'),
+        [],
+      );
     });
 
     it('connect() called in the same turn as disconnect(), after it, asks the credential nothing', async () => {
@@ -682,55 +747,68 @@ describe('disconnect() resolves once the logoff is written', () => {
       await conn.connect();
       const prepares = () =>
         provider.calls.filter((c) => c.method === 'prepare').length;
-      expect(prepares()).toBe(1);
+      assert.strictEqual(prepares(), 1);
       const establishments = server.establishments();
 
       // Not awaited in between: the instance is spent only when the
       // disconnect's transition runs, after connect()'s check at entry.
       const disconnected = conn.disconnect();
-      const reconnected = expect(conn.connect()).rejects.toMatchObject(SPENT);
+      const reconnected = assert.rejects(conn.connect(), (e: unknown) => {
+        assertMatchObject(e, SPENT);
+        return true;
+      });
       await disconnected;
       await reconnected;
 
-      expect(prepares()).toBe(1);
-      expect(server.establishments()).toBe(establishments);
+      assert.strictEqual(prepares(), 1);
+      assert.strictEqual(server.establishments(), establishments);
     });
 
     it('connect() after disconnect() on an instance that never connected is refused too', async () => {
       server = await standIn();
       const conn = onPrem(configFor(server.baseUrl), null);
       await conn.disconnect();
-      await expect(conn.connect()).rejects.toMatchObject(SPENT);
-      expect(server.establishments()).toBe(0);
+      await assert.rejects(conn.connect(), (e: unknown) => {
+        assertMatchObject(e, SPENT);
+        return true;
+      });
+      assert.strictEqual(server.establishments(), 0);
     });
 
-    it('connect() after a failed connect() that logged off is refused', async () => {
+    it('connect() after a failed connect() that logged off is refused', {
+      timeout: 30_000,
+    }, async () => {
       server = await standIn({ discoveryStatus: 404, fallbackStatus: 404 });
       const conn = onPrem(configFor(server.baseUrl), null);
-      await expect(conn.connect()).rejects.toBeDefined();
+      await assert.rejects(conn.connect(), (e: unknown) => e !== undefined);
       await server.logoffArrived;
       const establishments = server.establishments();
 
-      await expect(conn.connect()).rejects.toMatchObject(SPENT);
-      expect(server.establishments()).toBe(establishments);
+      await assert.rejects(conn.connect(), (e: unknown) => {
+        assertMatchObject(e, SPENT);
+        return true;
+      });
+      assert.strictEqual(server.establishments(), establishments);
       server.answerLogoff();
-    }, 30_000);
+    });
 
-    it("after a failed connect() that logged off, disconnect() then flushGoodbye() waits for that logoff's answer", async () => {
+    it("after a failed connect() that logged off, disconnect() then flushGoodbye() waits for that logoff's answer", {
+      timeout: 30_000,
+    }, async () => {
       server = await standIn({ discoveryStatus: 404, fallbackStatus: 404 });
       const conn = onPrem(configFor(server.baseUrl), null);
-      await expect(conn.connect()).rejects.toBeDefined();
+      await assert.rejects(conn.connect(), (e: unknown) => e !== undefined);
       await server.logoffArrived;
 
-      await expect(conn.disconnect()).resolves.toBeUndefined();
+      assert.strictEqual(await conn.disconnect(), undefined);
       const flushed = watched(conn.flushGoodbye());
       await turns(5);
       // The instance's one logoff is the failed connect's, still unanswered.
-      expect(flushed()).toBe(false);
+      assert.strictEqual(flushed(), false);
       server.answerLogoff();
       await conn.flushGoodbye();
-      expect(server.logoffs()).toBe(1);
-    }, 30_000);
+      assert.strictEqual(server.logoffs(), 1);
+    });
 
     it('connect() after a failed connect() that sent no logoff (401) may be retried', async () => {
       // A 401 creates no security session, so it carries no SAP_SESSIONID.
@@ -739,13 +817,13 @@ describe('disconnect() resolves once the logoff is written', () => {
         cookies: ['sap-XSRF_STUB_100=X1; Path=/'],
       });
       const conn = onPrem(configFor(server.baseUrl), null);
-      await expect(conn.connect()).rejects.toBeDefined();
-      expect(server.logoffs()).toBe(0);
+      await assert.rejects(conn.connect(), (e: unknown) => e !== undefined);
+      assert.strictEqual(server.logoffs(), 0);
       const establishments = server.establishments();
 
       // Retried: it asks the server again rather than refusing.
-      await expect(conn.connect()).rejects.toBeDefined();
-      expect(server.establishments()).toBeGreaterThan(establishments);
+      await assert.rejects(conn.connect(), (e: unknown) => e !== undefined);
+      assert.ok(server.establishments() > establishments);
       await conn.disconnect();
     });
   });
@@ -786,10 +864,12 @@ describe('disconnect() resolves once the logoff is written', () => {
       const connecting = conn.connect();
       const settled = watched(connecting);
       await turns(20);
-      expect(settled()).toBe(false);
+      assert.strictEqual(settled(), false);
 
       write();
-      await expect(connecting).rejects.toThrow(/opened no ABAP session/);
+      await assert.rejects(connecting, (e: unknown) =>
+        /opened no ABAP session/.test((e as Error).message),
+      );
     });
 
     it('the establishment failing after the cloud preflight opened a session', async () => {
@@ -812,10 +892,10 @@ describe('disconnect() resolves once the logoff is written', () => {
       const settled = watched(connecting);
       await wire.requested;
       await turns(20);
-      expect(settled()).toBe(false);
+      assert.strictEqual(settled(), false);
 
       wire.fail();
-      await expect(connecting).rejects.toBeDefined();
+      await assert.rejects(connecting, (e: unknown) => e !== undefined);
     });
   });
 
@@ -824,57 +904,53 @@ describe('disconnect() resolves once the logoff is written', () => {
     // attempts: these take a few seconds of the wire's retries.
     const RETRIES = 30_000;
 
-    it.each([404, 403])(
-      'connect() answered %i after logon, with SAP_SESSIONID: the logoff is sent, and connect() rejects once it is written',
-      async (status) => {
+    for (const status of [404, 403]) {
+      it(`connect() answered ${status} after logon, with SAP_SESSIONID: the logoff is sent, and connect() rejects once it is written`, {
+        timeout: RETRIES,
+      }, async () => {
         server = await standIn({ discoveryStatus: status });
         const conn = onPrem(configFor(server.baseUrl), null);
 
-        await expect(conn.connect()).rejects.toBeDefined();
+        await assert.rejects(conn.connect(), (e: unknown) => e !== undefined);
         // It rejected after the write: the logoff is on its way or arrived.
         const logoff = await server.logoffArrived;
-        expect(logoff.headers.cookie).toContain('SAP_SESSIONID_STUB_100=S1');
-        expect(server.logoffs()).toBe(1);
+        assert.ok(logoff.headers.cookie?.includes('SAP_SESSIONID_STUB_100=S1'));
+        assert.strictEqual(server.logoffs(), 1);
         server.answerLogoff();
-      },
-      RETRIES,
-    );
+      });
+    }
 
-    it(
-      'core discovery 404 with SAP_SESSIONID, fallback 200: connect() resolves, no logoff, the fallback ran in the same session',
-      async () => {
-        server = await standIn({ discoveryStatus: 404, fallbackStatus: 200 });
-        const conn = onPrem(configFor(server.baseUrl), null);
+    it('core discovery 404 with SAP_SESSIONID, fallback 200: connect() resolves, no logoff, the fallback ran in the same session', {
+      timeout: RETRIES,
+    }, async () => {
+      server = await standIn({ discoveryStatus: 404, fallbackStatus: 200 });
+      const conn = onPrem(configFor(server.baseUrl), null);
 
-        await expect(conn.connect()).resolves.toBeUndefined();
-        expect(server.logoffs()).toBe(0);
-        expect(server.fallbackCookies()[0]).toContain(
-          'SAP_SESSIONID_STUB_100=S1',
-        );
+      assert.strictEqual(await conn.connect(), undefined);
+      assert.strictEqual(server.logoffs(), 0);
+      assert.ok(
+        server.fallbackCookies()[0].includes('SAP_SESSIONID_STUB_100=S1'),
+      );
 
-        // The normal path: nothing until disconnect().
-        await conn.disconnect();
-        await server.logoffArrived;
-        expect(server.logoffs()).toBe(1);
-        server.answerLogoff();
-      },
-      RETRIES,
-    );
+      // The normal path: nothing until disconnect().
+      await conn.disconnect();
+      await server.logoffArrived;
+      assert.strictEqual(server.logoffs(), 1);
+      server.answerLogoff();
+    });
 
-    it(
-      'core discovery 404 and fallback 404, both with SAP_SESSIONID: one logoff, then connect() rejects',
-      async () => {
-        server = await standIn({ discoveryStatus: 404, fallbackStatus: 404 });
-        const conn = onPrem(configFor(server.baseUrl), null);
+    it('core discovery 404 and fallback 404, both with SAP_SESSIONID: one logoff, then connect() rejects', {
+      timeout: RETRIES,
+    }, async () => {
+      server = await standIn({ discoveryStatus: 404, fallbackStatus: 404 });
+      const conn = onPrem(configFor(server.baseUrl), null);
 
-        await expect(conn.connect()).rejects.toBeDefined();
-        await server.logoffArrived;
-        expect(server.logoffs()).toBe(1);
-        expect(server.fallbackCookies().length).toBeGreaterThan(0);
-        server.answerLogoff();
-      },
-      RETRIES,
-    );
+      await assert.rejects(conn.connect(), (e: unknown) => e !== undefined);
+      await server.logoffArrived;
+      assert.strictEqual(server.logoffs(), 1);
+      assert.ok(server.fallbackCookies().length > 0);
+      server.answerLogoff();
+    });
 
     it('connect() answered 401 with a debris cookie: nothing is sent', async () => {
       server = await standIn({
@@ -883,20 +959,22 @@ describe('disconnect() resolves once the logoff is written', () => {
       });
       const conn = onPrem(configFor(server.baseUrl), null);
 
-      await expect(conn.connect()).rejects.toBeDefined();
-      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await assert.rejects(conn.connect(), (e: unknown) => e !== undefined);
+      assert.strictEqual(await conn.disconnect(), undefined);
       await turns(5);
-      expect(server.logoffs()).toBe(0);
+      assert.strictEqual(server.logoffs(), 0);
     });
 
     it('connect() answered 200 with only sap-XSRF_* (no session): nothing is sent, on connect() nor on disconnect()', async () => {
       server = await standIn({ sessionCookie: false });
       const conn = onPrem(configFor(server.baseUrl), null);
 
-      await expect(conn.connect()).rejects.toThrow(/opened no ABAP session/);
-      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await assert.rejects(conn.connect(), (e: unknown) =>
+        /opened no ABAP session/.test((e as Error).message),
+      );
+      assert.strictEqual(await conn.disconnect(), undefined);
       await turns(5);
-      expect(server.logoffs()).toBe(0);
+      assert.strictEqual(server.logoffs(), 0);
     });
 
     it('a deleting Set-Cookie (expiry in the past, or Max-Age=0) removes SAP_SESSIONID: no session, nothing is sent', async () => {
@@ -918,12 +996,12 @@ describe('disconnect() resolves once the logoff is written', () => {
         transport.ingest({
           'set-cookie': ['SAP_SESSIONID_STUB_100=S1; Path=/'],
         });
-        expect(transport.sessionEstablished()).toBe(true);
+        assert.strictEqual(transport.sessionEstablished(), true);
         transport.ingest({ 'set-cookie': [deletion] });
-        expect(transport.sessionFingerprint().size).toBe(0);
-        expect(transport.sessionEstablished()).toBe(false);
+        assert.strictEqual(transport.sessionFingerprint().size, 0);
+        assert.strictEqual(transport.sessionEstablished(), false);
         // Nor does the deleted cookie ride on the next request.
-        expect(transport.cookies() ?? '').not.toContain('SAP_SESSIONID');
+        assert.ok(!(transport.cookies() ?? '').includes('SAP_SESSIONID'));
         await transport.close(context);
       }
       // A wire with no client asserts no cookie of its own: the deletion
@@ -937,9 +1015,9 @@ describe('disconnect() resolves once the logoff is written', () => {
           'SAP_SESSIONID_STUB_100=X; path=/; expires=Tue, 01-Jan-1980 00:00:01 GMT',
         ],
       });
-      expect(bare.cookies()).toBeNull();
+      assert.strictEqual(bare.cookies(), null);
       await turns(5);
-      expect(server.logoffs()).toBe(0);
+      assert.strictEqual(server.logoffs(), 0);
     });
 
     it("SAP's whole logoff answer deletes every cookie it set", () => {
@@ -951,7 +1029,7 @@ describe('disconnect() resolves once the logoff is written', () => {
           'sap-usercontext=sap-client=100; path=/',
         ],
       });
-      expect(transport.sessionEstablished()).toBe(true);
+      assert.strictEqual(transport.sessionEstablished(), true);
       const gone = 'expires=Tue, 01-Jan-1980 00:00:01 GMT';
       transport.ingest({
         'set-cookie': [
@@ -963,17 +1041,17 @@ describe('disconnect() resolves once the logoff is written', () => {
           `OIDCTokenRequested=X; path=/; ${gone}`,
         ],
       });
-      expect(transport.sessionEstablished()).toBe(false);
+      assert.strictEqual(transport.sessionEstablished(), false);
       const sent = transport.cookies() ?? '';
-      expect(sent).not.toContain('SAP_SESSIONID');
-      expect(sent).not.toContain('sap-contextid');
+      assert.ok(!sent.includes('SAP_SESSIONID'));
+      assert.ok(!sent.includes('sap-contextid'));
     });
 
     it('an empty SAP_SESSIONID value names no session: nothing is sent', async () => {
       server = await standIn();
       const transport = onPremHttpTransport(configFor(server.baseUrl));
       transport.ingest({ 'set-cookie': ['SAP_SESSIONID_STUB_100=; Path=/'] });
-      expect(transport.sessionEstablished()).toBe(false);
+      assert.strictEqual(transport.sessionEstablished(), false);
       await transport.close({
         baseUrl: server.baseUrl,
         authorize: async () => {},
@@ -981,7 +1059,7 @@ describe('disconnect() resolves once the logoff is written', () => {
         observe: () => {},
       });
       await turns(5);
-      expect(server.logoffs()).toBe(0);
+      assert.strictEqual(server.logoffs(), 0);
     });
 
     it('cloud: a preflight session document without SAP_SESSIONID: nothing is sent', async () => {
@@ -998,23 +1076,27 @@ describe('disconnect() resolves once the logoff is written', () => {
         null,
       );
 
-      await expect(conn.connect()).rejects.toThrow(/opened no ABAP session/);
-      await expect(conn.disconnect()).resolves.toBeUndefined();
+      await assert.rejects(conn.connect(), (e: unknown) =>
+        /opened no ABAP session/.test((e as Error).message),
+      );
+      assert.strictEqual(await conn.disconnect(), undefined);
       await turns(5);
-      expect(server.logoffs()).toBe(0);
+      assert.strictEqual(server.logoffs(), 0);
     });
 
-    it("the failing answer's cookie is the one the goodbye carries, snapshot before the clearing", async () => {
+    it("the failing answer's cookie is the one the goodbye carries, snapshot before the clearing", {
+      timeout: 30_000,
+    }, async () => {
       server = await standIn({ discoveryStatus: 404 });
       const conn = onPrem(configFor(server.baseUrl), null);
 
-      await expect(conn.connect()).rejects.toBeDefined();
+      await assert.rejects(conn.connect(), (e: unknown) => e !== undefined);
       // Cleared by now: the goodbye took its cookie before that.
-      expect(conn.transport.cookies()).toBeNull();
+      assert.strictEqual(conn.transport.cookies(), null);
       const logoff = await server.logoffArrived;
-      expect(logoff.headers.cookie).toContain('SAP_SESSIONID_STUB_100=S1');
+      assert.ok(logoff.headers.cookie?.includes('SAP_SESSIONID_STUB_100=S1'));
       server.answerLogoff();
-    }, 30_000);
+    });
   });
 
   describe('the logoff never carries sap-contextid', () => {
@@ -1032,9 +1114,9 @@ describe('disconnect() resolves once the logoff is written', () => {
       await conn.disconnect();
       const logoff = await server.logoffArrived;
       const cookie = String(logoff.headers.cookie ?? '');
-      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S1');
-      expect(cookie).toContain('sap-usercontext=');
-      expect(cookie).not.toContain('sap-contextid');
+      assert.ok(cookie.includes('SAP_SESSIONID_STUB_100=S1'));
+      assert.ok(cookie.includes('sap-usercontext='));
+      assert.ok(!cookie.includes('sap-contextid'));
       server.answerLogoff();
     });
 
@@ -1063,21 +1145,23 @@ describe('disconnect() resolves once the logoff is written', () => {
       const logoff = await server.logoffArrived;
       // The answer is held: disconnect() resolved on the write alone.
       await drained();
-      expect(disconnected()).toBe(true);
-      expect(logoff.url).toBe('/sap/public/bc/icf/logoff');
+      assert.strictEqual(disconnected(), true);
+      assert.strictEqual(logoff.url, '/sap/public/bc/icf/logoff');
       const cookie = String(logoff.headers.cookie ?? '');
-      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S1');
-      expect(cookie).not.toContain('sap-contextid');
+      assert.ok(cookie.includes('SAP_SESSIONID_STUB_100=S1'));
+      assert.ok(!cookie.includes('sap-contextid'));
       // Exactly as the on-prem wire sends it: no session header of the
       // cloud's own, and no credential.
-      expect(logoff.headers['x-sap-security-session']).toBeUndefined();
-      expect(logoff.headers.authorization).toBeUndefined();
-      expect(server.logoffs()).toBe(1);
+      assert.strictEqual(logoff.headers['x-sap-security-session'], undefined);
+      assert.strictEqual(logoff.headers.authorization, undefined);
+      assert.strictEqual(server.logoffs(), 1);
       server.answerLogoff();
       await conn.flushGoodbye(60_000);
     });
 
-    it('cloud: connect() failing after a preflight session with no logoff link sends the platform logoff before it rejects', async () => {
+    it('cloud: connect() failing after a preflight session with no logoff link sends the platform logoff before it rejects', {
+      timeout: 30_000,
+    }, async () => {
       server = await standIn({
         sessionDocument: NO_LOGOFF_DOCUMENT,
         discoveryStatus: 404,
@@ -1095,16 +1179,18 @@ describe('disconnect() resolves once the logoff is written', () => {
         null,
       );
 
-      await expect(conn.connect()).rejects.toBeDefined();
+      await assert.rejects(conn.connect(), (e: unknown) => e !== undefined);
       // It rejected after the write: the logoff is on its way or arrived.
       const logoff = await server.logoffArrived;
-      expect(logoff.url).toBe('/sap/public/bc/icf/logoff');
-      expect(String(logoff.headers.cookie ?? '')).toContain(
-        'SAP_SESSIONID_STUB_100=S1',
+      assert.strictEqual(logoff.url, '/sap/public/bc/icf/logoff');
+      assert.ok(
+        String(logoff.headers.cookie ?? '').includes(
+          'SAP_SESSIONID_STUB_100=S1',
+        ),
       );
-      expect(server.logoffs()).toBe(1);
+      assert.strictEqual(server.logoffs(), 1);
       server.answerLogoff();
-    }, 30_000);
+    });
 
     it('cloud: a context in the jar stays off the logoff', async () => {
       server = await standIn();
@@ -1125,8 +1211,8 @@ describe('disconnect() resolves once the logoff is written', () => {
       await conn.disconnect();
       const logoff = await server.logoffArrived;
       const cookie = String(logoff.headers.cookie ?? '');
-      expect(cookie).toContain('SAP_SESSIONID_STUB_100=S1');
-      expect(cookie).not.toContain('sap-contextid');
+      assert.ok(cookie.includes('SAP_SESSIONID_STUB_100=S1'));
+      assert.ok(!cookie.includes('sap-contextid'));
       server.answerLogoff();
     });
   });
@@ -1136,14 +1222,14 @@ describe('disconnect() resolves once the logoff is written', () => {
     const conn = onPrem(configFor(server.baseUrl), null);
     await conn.connect();
     const establishedOn = server.establishedOn();
-    expect(establishedOn).toBeDefined();
+    assert.notStrictEqual(establishedOn, undefined);
 
     await conn.disconnect();
     const logoff = await server.logoffArrived;
     // Not the establishment's keep-alive socket, which the server may close
     // at any time: a write to that one could succeed and still be lost.
-    expect(logoff.socket).not.toBe(establishedOn);
-    expect(logoff.headers.connection).toBe('close');
+    assert.notStrictEqual(logoff.socket, establishedOn);
+    assert.strictEqual(logoff.headers.connection, 'close');
     server.answerLogoff();
     await conn.flushGoodbye(60_000);
   });
@@ -1156,12 +1242,13 @@ describe('disconnect() resolves once the logoff is written', () => {
 
     await conn.disconnect();
     await conn.flushGoodbye(60_000);
-    expect(logger.lines).toContain('Told the server the session is finished');
-    expect(
+    assert.ok(logger.lines.includes('Told the server the session is finished'));
+    assert.strictEqual(
       logger.lines.some((line) =>
         line.startsWith('Could not tell the server the session is finished'),
       ),
-    ).toBe(false);
+      false,
+    );
   });
 
   it('on the cloud wire: has resolved while the server holds its answer', async () => {
@@ -1182,11 +1269,11 @@ describe('disconnect() resolves once the logoff is written', () => {
     const disconnected = watched(conn.disconnect());
     await server.logoffArrived;
     await drained();
-    expect(disconnected()).toBe(true);
+    assert.strictEqual(disconnected(), true);
 
     const flushed = watched(conn.flushGoodbye(60_000));
     await turns(2);
-    expect(flushed()).toBe(false);
+    assert.strictEqual(flushed(), false);
     server.answerLogoff();
     await conn.flushGoodbye(60_000);
   });
@@ -1222,10 +1309,10 @@ describe('over RFC, disconnect() resolves when the close call has returned', () 
 
     const disconnected = watched(conn.disconnect());
     await turns(10);
-    expect(disconnected()).toBe(false);
+    assert.strictEqual(disconnected(), false);
 
     release();
     await turns(10, disconnected);
-    expect(disconnected()).toBe(true);
+    assert.strictEqual(disconnected(), true);
   });
 });

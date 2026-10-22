@@ -10,6 +10,8 @@
  * Against the local SAP stand-in with `authenticate` on, so a request with no
  * credential and no live session is refused `401`, as SAP refuses it.
  */
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { SapConfig } from '../config/sapConfig.js';
@@ -19,6 +21,7 @@ import {
   createConnection,
 } from '../connection/createConnection.js';
 import { RfcTransport } from '../connection/RfcTransport.js';
+import { assertMatchObject } from './helpers/assertions.js';
 import { type SapStub, startSapStub } from './helpers/sapStub.js';
 
 const DISCOVERY = '/sap/bc/adt/core/discovery';
@@ -100,9 +103,10 @@ const pairs = (cookie: string | undefined) =>
 describe('sessionCookies()', () => {
   it('is null before a session, and the session’s cookies once there is one', async () => {
     const conn = onPremHttp();
-    expect(conn.sessionCookies()).toBeNull();
+    assert.strictEqual(conn.sessionCookies(), null);
     await conn.connect();
-    expect(pairs(conn.sessionCookies() ?? '')).toStrictEqual(
+    assert.deepStrictEqual(
+      pairs(conn.sessionCookies() ?? ''),
       new Set([`${COOKIE}=S1`, 'sap-usercontext=sap-client=100']),
     );
   });
@@ -115,7 +119,8 @@ describe('sessionCookies()', () => {
       },
     });
     const { cookies } = await openedSession();
-    expect(pairs(cookies)).toStrictEqual(
+    assert.deepStrictEqual(
+      pairs(cookies),
       new Set([
         `${COOKIE}=S1`,
         'sap-usercontext=sap-client=100',
@@ -128,8 +133,11 @@ describe('sessionCookies()', () => {
     const conn = onPremHttp();
     await conn.connect();
     await conn.disconnect();
-    expect(conn.sessionCookies()).toBeNull();
-    expect(new RfcTransport(() => ({}) as never).sessionCookies()).toBeNull();
+    assert.strictEqual(conn.sessionCookies(), null);
+    assert.strictEqual(
+      new RfcTransport(() => ({}) as never).sessionCookies(),
+      null,
+    );
   });
 });
 
@@ -142,17 +150,20 @@ describe('an instance on a live session', () => {
     await conn.connect();
 
     const sent = stub.requests.slice(before);
-    expect(sent).toHaveLength(1);
-    expect(sent[0].path).toBe(DISCOVERY);
-    expect(sent[0].headers['x-csrf-token']).toBe('fetch');
-    expect(sent[0].headers.authorization).toBeUndefined();
-    expect(pairs(sent[0].headers.cookie).has(`${COOKIE}=S1`)).toBe(true);
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].path, DISCOVERY);
+    assert.strictEqual(sent[0].headers['x-csrf-token'], 'fetch');
+    assert.strictEqual(sent[0].headers.authorization, undefined);
+    assert.strictEqual(pairs(sent[0].headers.cookie).has(`${COOKIE}=S1`), true);
     // Not stateful, so not in the lock's context.
-    expect(pairs(sent[0].headers.cookie).has('sap-contextid=CTX1')).toBe(false);
+    assert.strictEqual(
+      pairs(sent[0].headers.cookie).has('sap-contextid=CTX1'),
+      false,
+    );
     // No session was opened for it.
-    expect([...stub.sessions]).toStrictEqual(['S1']);
-    expect(conn.isConnected()).toBe(true);
-    expect(conn.getSessionIdentity()).not.toBeNull();
+    assert.deepStrictEqual([...stub.sessions], ['S1']);
+    assert.strictEqual(conn.isConnected(), true);
+    assert.notStrictEqual(conn.getSessionIdentity(), null);
   });
 
   it('then sends its requests in that session, with the credential as usual', async () => {
@@ -174,14 +185,20 @@ describe('an instance on a live session', () => {
     });
 
     const sent = stub.requests.slice(before);
-    expect(sent.map((request) => request.status)).toStrictEqual([200, 200]);
+    assert.deepStrictEqual(
+      sent.map((request) => request.status),
+      [200, 200],
+    );
     for (const request of sent) {
-      expect(pairs(request.headers.cookie).has(`${COOKIE}=S1`)).toBe(true);
-      expect(request.headers.authorization).toMatch(/^Basic /);
+      assert.strictEqual(
+        pairs(request.headers.cookie).has(`${COOKIE}=S1`),
+        true,
+      );
+      assert.match(request.headers.authorization, /^Basic /);
     }
     // The PUT went with the token the takeover earned.
-    expect(sent[1].headers['x-csrf-token']).toBe(stub.tokens.at(-1));
-    expect([...stub.sessions]).toStrictEqual(['S1']);
+    assert.strictEqual(sent[1].headers['x-csrf-token'], stub.tokens.at(-1));
+    assert.deepStrictEqual([...stub.sessions], ['S1']);
   });
 
   it('sends a stateful request into the adopted ABAP context', async () => {
@@ -199,8 +216,11 @@ describe('an instance on a live session', () => {
     });
 
     const [unlock] = stub.requests.slice(before);
-    expect(pairs(unlock.headers.cookie).has('sap-contextid=CTX1')).toBe(true);
-    expect(unlock.headers['x-sap-adt-sessiontype']).toBe('stateful');
+    assert.strictEqual(
+      pairs(unlock.headers.cookie).has('sap-contextid=CTX1'),
+      true,
+    );
+    assert.strictEqual(unlock.headers['x-sap-adt-sessiontype'], 'stateful');
   });
 
   it('logs the session off at disconnect(), as any instance does', async () => {
@@ -212,9 +232,12 @@ describe('an instance on a live session', () => {
     await conn.flushGoodbye();
 
     const logoffs = stub.sentTo(LOGOFF);
-    expect(logoffs).toHaveLength(1);
-    expect(pairs(logoffs[0].headers.cookie).has(`${COOKIE}=S1`)).toBe(true);
-    expect(stub.sessions.size).toBe(0);
+    assert.strictEqual(logoffs.length, 1);
+    assert.strictEqual(
+      pairs(logoffs[0].headers.cookie).has(`${COOKIE}=S1`),
+      true,
+    );
+    assert.strictEqual(stub.sessions.size, 0);
   });
 
   it('hands out cookies that build the next instance on the same session', async () => {
@@ -222,12 +245,12 @@ describe('an instance on a live session', () => {
     const second = onPremHttp(cookies);
     await second.connect();
     const again = second.sessionCookies();
-    expect(pairs(again ?? '')).toStrictEqual(pairs(cookies));
+    assert.deepStrictEqual(pairs(again ?? ''), pairs(cookies));
 
     const third = onPremHttp(again as string);
     await third.connect();
-    expect(third.isConnected()).toBe(true);
-    expect([...stub.sessions]).toStrictEqual(['S1']);
+    assert.strictEqual(third.isConnected(), true);
+    assert.deepStrictEqual([...stub.sessions], ['S1']);
   });
 
   it('on the cloud wire: says `use`, asks for no new security session, and logs off at the ICF', async () => {
@@ -238,14 +261,17 @@ describe('an instance on a live session', () => {
     await conn.connect();
 
     const sent = stub.requests.slice(before);
-    expect(sent.map((request) => request.path)).toStrictEqual([DISCOVERY]);
-    expect(sent[0].headers['x-sap-security-session']).toBe('use');
-    expect(sent[0].headers.authorization).toBeUndefined();
+    assert.deepStrictEqual(
+      sent.map((request) => request.path),
+      [DISCOVERY],
+    );
+    assert.strictEqual(sent[0].headers['x-sap-security-session'], 'use');
+    assert.strictEqual(sent[0].headers.authorization, undefined);
 
     await conn.disconnect();
     await conn.flushGoodbye();
-    expect(stub.sentTo(LOGOFF)).toHaveLength(1);
-    expect(stub.sessions.size).toBe(0);
+    assert.strictEqual(stub.sentTo(LOGOFF).length, 1);
+    assert.strictEqual(stub.sessions.size, 0);
   });
 });
 
@@ -256,37 +282,46 @@ describe('an instance on a session that is gone', () => {
     const before = stub.requests.length;
 
     const conn = onPremHttp(cookies);
-    const rejected = expect(conn.connect()).rejects.toMatchObject({
-      response: { status: 401 },
+    const rejected = assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, {
+        response: { status: 401 },
+      });
+      return true;
     });
     await rejected;
 
     const sent = stub.requests.slice(before);
-    expect(sent).toHaveLength(1);
-    expect(sent[0].status).toBe(401);
-    expect(sent[0].headers.authorization).toBeUndefined();
-    expect(stub.sessions.size).toBe(0);
-    expect(conn.isConnected()).toBe(false);
-    expect(conn.sessionCookies()).toBeNull();
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].status, 401);
+    assert.strictEqual(sent[0].headers.authorization, undefined);
+    assert.strictEqual(stub.sessions.size, 0);
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(conn.sessionCookies(), null);
   });
 
   it('leaves the instance spent: connect() refuses, disconnect() sends nothing', async () => {
     const { cookies } = await openedSession();
     stub.sessions.delete('S1');
     const conn = onPremHttp(cookies);
-    await expect(conn.connect()).rejects.toMatchObject({
-      response: { status: 401 },
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, {
+        response: { status: 401 },
+      });
+      return true;
     });
     const before = stub.requests.length;
 
-    await expect(conn.connect()).rejects.toMatchObject({
-      code: ADT_SESSION_ERROR.NOT_CONNECTED,
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, {
+        code: ADT_SESSION_ERROR.NOT_CONNECTED,
+      });
+      return true;
     });
     await conn.disconnect();
     await conn.flushGoodbye();
 
-    expect(stub.requests.slice(before)).toHaveLength(0);
-    expect(stub.sessions.size).toBe(0);
+    assert.strictEqual(stub.requests.slice(before).length, 0);
+    assert.strictEqual(stub.sessions.size, 0);
   });
 
   it('rejects an answer that names another session, with that answer, and sends no logoff', async () => {
@@ -298,16 +333,18 @@ describe('an instance on a session that is gone', () => {
     const before = stub.requests.length;
 
     const conn = onPremHttp(cookies);
-    await expect(conn.connect()).rejects.toMatchObject({
-      response: { status: 200 },
-      message: expect.stringContaining('another session'),
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, { response: { status: 200 } });
+      assert.ok((e as Error).message.includes('another session'));
+      return true;
     });
     await conn.disconnect();
     await conn.flushGoodbye();
 
-    expect(
+    assert.deepStrictEqual(
       stub.requests.slice(before).map((request) => request.path),
-    ).toStrictEqual([DISCOVERY]);
+      [DISCOVERY],
+    );
   });
 
   it('follows no redirect: rejects with the 302 as SAP gave it, the target never asked', async () => {
@@ -322,28 +359,35 @@ describe('an instance on a session that is gone', () => {
     const before = stub.requests.length;
 
     const conn = onPremHttp(cookies);
-    const rejected = expect(conn.connect()).rejects.toMatchObject({
-      response: {
-        status: 302,
-        headers: { location: '/sap/public/bc/icf/login' },
-      },
+    const rejected = assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, {
+        response: {
+          status: 302,
+          headers: { location: '/sap/public/bc/icf/login' },
+        },
+      });
+      return true;
     });
     await rejected;
     const afterConnect = stub.requests.length;
 
-    expect(
+    assert.deepStrictEqual(
       stub.requests.slice(before).map((request) => request.path),
-    ).toStrictEqual([DISCOVERY]);
-    expect(stub.sentTo('/sap/public/bc/icf/login')).toHaveLength(0);
-    expect(conn.isConnected()).toBe(false);
+      [DISCOVERY],
+    );
+    assert.strictEqual(stub.sentTo('/sap/public/bc/icf/login').length, 0);
+    assert.strictEqual(conn.isConnected(), false);
     // Spent, and nothing logged off.
-    await expect(conn.connect()).rejects.toMatchObject({
-      code: ADT_SESSION_ERROR.NOT_CONNECTED,
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, {
+        code: ADT_SESSION_ERROR.NOT_CONNECTED,
+      });
+      return true;
     });
     await conn.disconnect();
     await conn.flushGoodbye();
-    expect(stub.requests.length).toBe(afterConnect);
-    expect(stub.sentTo(LOGOFF)).toHaveLength(0);
+    assert.strictEqual(stub.requests.length, afterConnect);
+    assert.strictEqual(stub.sentTo(LOGOFF).length, 0);
   });
 
   it('rejects an answer without a CSRF token', async () => {
@@ -353,32 +397,38 @@ describe('an instance on a session that is gone', () => {
       headers: { 'x-csrf-token': '' },
     });
     const conn = onPremHttp(cookies);
-    await expect(conn.connect()).rejects.toMatchObject({
-      response: { status: 200 },
-      message: expect.stringContaining('no CSRF token'),
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, { response: { status: 200 } });
+      assert.ok((e as Error).message.includes('no CSRF token'));
+      return true;
     });
   });
 
   it('sends nothing for cookies that name no SAP_SESSIONID', async () => {
     const before = stub.requests.length;
     const conn = onPremHttp('sap-usercontext=sap-client=100');
-    await expect(conn.connect()).rejects.toThrow('names no SAP_SESSIONID');
-    expect(stub.requests.length).toBe(before);
+    await assert.rejects(conn.connect(), (e: unknown) =>
+      (e as Error).message.includes('names no SAP_SESSIONID'),
+    );
+    assert.strictEqual(stub.requests.length, before);
   });
 });
 
 describe('what `session` may be', () => {
   it('is refused over RFC, at construction', () => {
-    expect(() =>
-      // @ts-expect-error — the RFC spec takes no session.
-      createConnection({
-        system: 'onprem',
-        transport: 'rfc',
-        config: { ...config(), systemNumber: '00' } as SapConfig,
-        credential: new BasicAuthProvider('u', 'p'),
-        session: `${COOKIE}=S1`,
-      }),
-    ).toThrow('an RFC session cannot be taken over');
+    assert.throws(
+      () =>
+        // @ts-expect-error — the RFC spec takes no session.
+        createConnection({
+          system: 'onprem',
+          transport: 'rfc',
+          config: { ...config(), systemNumber: '00' } as SapConfig,
+          credential: new BasicAuthProvider('u', 'p'),
+          session: `${COOKIE}=S1`,
+        }),
+      (e: unknown) =>
+        (e as Error).message.includes('an RFC session cannot be taken over'),
+    );
   });
 
   it('is refused over RFC at connect() when the connector was built by hand, with nothing sent', async () => {
@@ -394,13 +444,17 @@ describe('what `session` may be', () => {
       undefined,
       `${COOKIE}=S1`,
     );
-    await expect(conn.connect()).rejects.toThrow(
-      'An RFC session cannot be taken over',
+    await assert.rejects(conn.connect(), (e: unknown) =>
+      (e as Error).message.includes('An RFC session cannot be taken over'),
     );
-    expect(opened).toBe(false);
+    assert.strictEqual(opened, false);
   });
 
   it('is refused empty, at construction', () => {
-    expect(() => onPremHttp('  ')).toThrow('an empty one names no session');
+    assert.throws(
+      () => onPremHttp('  '),
+      (e: unknown) =>
+        (e as Error).message.includes('an empty one names no session'),
+    );
   });
 });

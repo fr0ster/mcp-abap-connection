@@ -5,6 +5,8 @@
  * Measured on E19, 2026-09-27: create, read after create, two
  * lock/PUT/unlock rounds and a delete all pass on one connection this way.
  */
+import assert from 'node:assert/strict';
+import { describe, it, type Mock, mock } from 'node:test';
 import { RfcTransport } from '../connection/RfcTransport.js';
 
 const ok = {
@@ -17,10 +19,10 @@ const ok = {
 
 type Fake = {
   alive: boolean;
-  open: jest.Mock;
-  close: jest.Mock;
-  call: jest.Mock;
-  resetServerContext: jest.Mock;
+  open: Mock<(...args: any[]) => any>;
+  close: Mock<(...args: any[]) => any>;
+  call: Mock<(...args: any[]) => any>;
+  resetServerContext: Mock<(...args: any[]) => any>;
 };
 
 function resettable(
@@ -34,7 +36,7 @@ function resettable(
   const connect = () => {
     const conversation: Fake = {
       alive: true,
-      open: jest.fn(async () => {
+      open: mock.fn(async () => {
         if (
           options.slowOpen &&
           opened.indexOf(conversation) === options.slowOpen.index
@@ -42,16 +44,16 @@ function resettable(
           await options.slowOpen.until;
         }
       }),
-      close: jest.fn(async () => {
+      close: mock.fn(async () => {
         conversation.alive = false;
       }),
-      call: jest.fn(async () => {
+      call: mock.fn(async () => {
         if (options.slowCall && opened.indexOf(conversation) === 1) {
           await options.slowCall;
         }
         return ok;
       }),
-      resetServerContext: jest.fn(async () => {
+      resetServerContext: mock.fn(async () => {
         if (options.failReset) throw new Error('reset refused');
       }),
     };
@@ -73,10 +75,10 @@ describe('RFC: one kept stateless conversation, reset after each call', () => {
     await transport.send(stateless);
     await transport.send(stateless);
 
-    expect(opened).toHaveLength(2);
-    expect(opened[1].call).toHaveBeenCalledTimes(3);
-    expect(opened[1].resetServerContext).toHaveBeenCalledTimes(3);
-    expect(opened[1].close).not.toHaveBeenCalled();
+    assert.strictEqual(opened.length, 2);
+    assert.strictEqual(opened[1].call.mock.callCount(), 3);
+    assert.strictEqual(opened[1].resetServerContext.mock.callCount(), 3);
+    assert.strictEqual(opened[1].close.mock.callCount(), 0);
   });
 
   it('keeps the stateful requests on the lock conversation, never reset', async () => {
@@ -87,9 +89,9 @@ describe('RFC: one kept stateless conversation, reset after each call', () => {
     await transport.send(stateless);
     await transport.send(stateful);
 
-    expect(opened[0].call).toHaveBeenCalledTimes(2);
-    expect(opened[0].resetServerContext).not.toHaveBeenCalled();
-    expect(opened[1].call).toHaveBeenCalledTimes(1);
+    assert.strictEqual(opened[0].call.mock.callCount(), 2);
+    assert.strictEqual(opened[0].resetServerContext.mock.callCount(), 0);
+    assert.strictEqual(opened[1].call.mock.callCount(), 1);
   });
 
   it('drops a conversation whose reset failed; the next call opens another', async () => {
@@ -99,9 +101,9 @@ describe('RFC: one kept stateless conversation, reset after each call', () => {
     await transport.send(stateless);
     await transport.send(stateless);
 
-    expect(opened).toHaveLength(3);
-    expect(opened[1].close).toHaveBeenCalledTimes(1);
-    expect(opened[2].call).toHaveBeenCalledTimes(1);
+    assert.strictEqual(opened.length, 3);
+    assert.strictEqual(opened[1].close.mock.callCount(), 1);
+    assert.strictEqual(opened[2].call.mock.callCount(), 1);
   });
 
   it('a call made while the kept one is busy takes a conversation of its own', async () => {
@@ -120,10 +122,10 @@ describe('RFC: one kept stateless conversation, reset after each call', () => {
     release();
     await first;
 
-    expect(opened).toHaveLength(3);
-    expect(opened[1].call).toHaveBeenCalledTimes(1);
-    expect(opened[2].call).toHaveBeenCalledTimes(1);
-    expect(opened[2].close).toHaveBeenCalledTimes(1);
+    assert.strictEqual(opened.length, 3);
+    assert.strictEqual(opened[1].call.mock.callCount(), 1);
+    assert.strictEqual(opened[2].call.mock.callCount(), 1);
+    assert.strictEqual(opened[2].close.mock.callCount(), 1);
   });
 
   it('a send() made while close() is under way is refused, stateful or not', async () => {
@@ -138,19 +140,23 @@ describe('RFC: one kept stateless conversation, reset after each call', () => {
     const { opened, transport } = resettable();
     await transport.open();
     await transport.send(stateless);
-    opened[1].close.mockImplementationOnce(async () => {
+    opened[1].close.mock.mockImplementationOnce(async () => {
       await slowClose;
     });
 
     const closing = transport.close();
-    await expect(transport.send(stateful)).rejects.toThrow(/not open/);
-    await expect(transport.send(stateless)).rejects.toThrow(/not open/);
+    await assert.rejects(transport.send(stateful), (e: unknown) =>
+      /not open/.test((e as Error).message),
+    );
+    await assert.rejects(transport.send(stateless), (e: unknown) =>
+      /not open/.test((e as Error).message),
+    );
     finishClose();
     await closing;
 
-    expect(opened).toHaveLength(2);
-    expect(opened[0].call).not.toHaveBeenCalled();
-    expect(opened[1].call).toHaveBeenCalledTimes(1);
+    assert.strictEqual(opened.length, 2);
+    assert.strictEqual(opened[0].call.mock.callCount(), 0);
+    assert.strictEqual(opened[1].call.mock.callCount(), 1);
   });
 
   it('open() closed meanwhile does not hand out the session it logged on to', async () => {
@@ -164,9 +170,13 @@ describe('RFC: one kept stateless conversation, reset after each call', () => {
     await transport.close();
     finishLogon();
 
-    await expect(opening).rejects.toThrow(/closed while it was being opened/);
-    expect(opened[0].close).toHaveBeenCalledTimes(1);
-    await expect(transport.send(stateful)).rejects.toThrow(/not open/);
+    await assert.rejects(opening, (e: unknown) =>
+      /closed while it was being opened/.test((e as Error).message),
+    );
+    assert.strictEqual(opened[0].close.mock.callCount(), 1);
+    await assert.rejects(transport.send(stateful), (e: unknown) =>
+      /not open/.test((e as Error).message),
+    );
   });
 
   it('a stateless logon that close() overtook neither sends nor becomes the kept one', async () => {
@@ -182,16 +192,18 @@ describe('RFC: one kept stateless conversation, reset after each call', () => {
     await transport.close();
     finishLogon();
 
-    await expect(sending).rejects.toThrow(/closed/);
-    expect(opened[1].call).not.toHaveBeenCalled();
-    expect(opened[1].close).toHaveBeenCalled();
+    await assert.rejects(sending, (e: unknown) =>
+      /closed/.test((e as Error).message),
+    );
+    assert.strictEqual(opened[1].call.mock.callCount(), 0);
+    assert.notStrictEqual(opened[1].close.mock.callCount(), 0);
 
     // The next generation opens its own: the overtaken one was not kept.
     await transport.open();
     await transport.send(stateless);
-    expect(opened[1].call).not.toHaveBeenCalled();
-    expect(opened).toHaveLength(4);
-    expect(opened[3].call).toHaveBeenCalledTimes(1);
+    assert.strictEqual(opened[1].call.mock.callCount(), 0);
+    assert.strictEqual(opened.length, 4);
+    assert.strictEqual(opened[3].call.mock.callCount(), 1);
   });
 
   it('close() closes the kept stateless conversation too', async () => {
@@ -201,7 +213,7 @@ describe('RFC: one kept stateless conversation, reset after each call', () => {
 
     await transport.close();
 
-    expect(opened[1].close).toHaveBeenCalledTimes(1);
-    expect(opened[0].close).toHaveBeenCalledTimes(1);
+    assert.strictEqual(opened[1].close.mock.callCount(), 1);
+    assert.strictEqual(opened[0].close.mock.callCount(), 1);
   });
 });

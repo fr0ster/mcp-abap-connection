@@ -1,16 +1,20 @@
+import assert from 'node:assert/strict';
+import { beforeEach, describe, it, type Mock, mock } from 'node:test';
 import { AxiosError } from 'axios';
 import type { SapConfig } from '../config/sapConfig.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
+import { answering } from './helpers/answering.js';
+import { assertMatchObject } from './helpers/assertions.js';
 import { onPrem } from './helpers/onPrem.js';
 import { markConnectedForTest } from './helpers/session.js';
 import { heldCookies, seedCookies } from './helpers/transportStub.js';
 
 const mockLogger: ILogger = {
-  info: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn(),
-  debug: jest.fn(),
+  info: mock.fn(),
+  warn: mock.fn(),
+  error: mock.fn(),
+  debug: mock.fn(),
 };
 
 const baseConfig: SapConfig = {
@@ -49,13 +53,15 @@ function makeAxiosError(
   return err;
 }
 
-function attachMockAxios(conn: AdtOnPremConnector, fn: jest.Mock) {
+function attachMockAxios(conn: AdtOnPremConnector, fn: Mock<any>) {
   (conn as any).transport.send = fn;
 }
 
 describe('AbstractAbapConnection — CSRF retry behavior', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    for (const fn of Object.values(mockLogger)) {
+      (fn as Mock<any>).mock.resetCalls();
+    }
   });
 
   it('POST with cached CSRF token succeeds without retry', async () => {
@@ -64,12 +70,12 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     (conn as any).transport.adoptCsrfToken('cached-token');
     seedCookies(conn, 'SAP_SESSIONID_HQ6=alive');
 
-    const mock = jest.fn().mockResolvedValue({
+    const send = mock.fn(async (..._args: any[]) => ({
       status: 200,
       data: 'ok',
       headers: {},
-    });
-    attachMockAxios(conn, mock);
+    }));
+    attachMockAxios(conn, send);
 
     const res = await conn.makeAdtRequest({
       url: '/sap/bc/adt/ddic/domains/zfoo',
@@ -78,10 +84,10 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
       data: '<adtcore:objectReference/>',
     });
 
-    expect(res.status).toBe(200);
-    expect(mock).toHaveBeenCalledTimes(1);
-    expect((conn as any).transport.csrfToken()).toBe('cached-token');
-    expect(heldCookies(conn)).toContain('SAP_SESSIONID_HQ6=alive');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(send.mock.callCount(), 1);
+    assert.strictEqual((conn as any).transport.csrfToken(), 'cached-token');
+    assert.ok(heldCookies(conn)?.includes('SAP_SESSIONID_HQ6=alive'));
   });
 
   it('403 with "CSRF" body refetches token and retries; cookies preserved', async () => {
@@ -90,21 +96,23 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     (conn as any).transport.adoptCsrfToken('old-token');
     seedCookies(conn, 'SAP_SESSIONID_HQ6=alive');
 
-    const mock = jest
-      .fn()
-      .mockRejectedValueOnce(
-        makeAxiosError(403, 'CSRF token validation failed', {
+    const send = answering(
+      {
+        reject: makeAxiosError(403, 'CSRF token validation failed', {
           method: 'POST',
           url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
         }),
-      )
-      .mockResolvedValueOnce({
-        status: 200,
-        data: '',
-        headers: { 'x-csrf-token': 'new-token' },
-      })
-      .mockResolvedValueOnce({ status: 200, data: 'ok', headers: {} });
-    attachMockAxios(conn, mock);
+      },
+      {
+        resolve: {
+          status: 200,
+          data: '',
+          headers: { 'x-csrf-token': 'new-token' },
+        },
+      },
+      { resolve: { status: 200, data: 'ok', headers: {} } },
+    );
+    attachMockAxios(conn, send);
 
     const res = await conn.makeAdtRequest({
       url: '/sap/bc/adt/ddic/domains/zfoo',
@@ -113,9 +121,9 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
       data: '<x/>',
     });
 
-    expect(res.status).toBe(200);
-    expect((conn as any).transport.csrfToken()).toBe('new-token');
-    expect(heldCookies(conn)).toContain('SAP_SESSIONID_HQ6=alive');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual((conn as any).transport.csrfToken(), 'new-token');
+    assert.ok(heldCookies(conn)?.includes('SAP_SESSIONID_HQ6=alive'));
   });
 
   it('POST 401 without cached token: refetches token and retries', async () => {
@@ -128,22 +136,23 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     // before a mutation is the WIRE establishing itself; the refetch after a
     // 401 is the connection deciding the token it had is no good.
     const upfrontFetchError = new Error('upfront CSRF fetch unavailable');
-    const upfront = jest
-      .spyOn((conn as any).transport, 'establish')
-      .mockRejectedValueOnce(upfrontFetchError);
-    const fetchSpy = jest
-      .spyOn(conn as any, 'fetchCsrfToken')
-      .mockResolvedValueOnce('bootstrap-token');
-    const mock = jest
-      .fn()
-      .mockRejectedValueOnce(
-        makeAxiosError(401, '<html>login</html>', {
+    // A spy keeps the original for every call past the first.
+    const upfront = mock.method((conn as any).transport, 'establish');
+    upfront.mock.mockImplementationOnce(async () => {
+      throw upfrontFetchError;
+    });
+    const fetchSpy = mock.method(conn as any, 'fetchCsrfToken');
+    fetchSpy.mock.mockImplementationOnce(async () => 'bootstrap-token');
+    const send = answering(
+      {
+        reject: makeAxiosError(401, '<html>login</html>', {
           method: 'POST',
           url: 'https://sap.example.com/sap/bc/adt/ddic/domains/zfoo',
         }),
-      )
-      .mockResolvedValueOnce({ status: 200, data: 'ok', headers: {} });
-    attachMockAxios(conn, mock);
+      },
+      { resolve: { status: 200, data: 'ok', headers: {} } },
+    );
+    attachMockAxios(conn, send);
 
     const res = await conn.makeAdtRequest({
       url: '/sap/bc/adt/ddic/domains/zfoo',
@@ -152,11 +161,11 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
       data: '<x/>',
     });
 
-    expect(res.status).toBe(200);
-    expect((conn as any).transport.csrfToken()).toBe('bootstrap-token');
-    expect(upfront).toHaveBeenCalledTimes(1);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(mock).toHaveBeenCalledTimes(2);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual((conn as any).transport.csrfToken(), 'bootstrap-token');
+    assert.strictEqual(upfront.mock.callCount(), 1);
+    assert.strictEqual(fetchSpy.mock.callCount(), 1);
+    assert.strictEqual(send.mock.callCount(), 2);
   });
 
   // One instance is one session: a 401 on a mutation that holds a cached CSRF
@@ -179,7 +188,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
       },
     );
     const calls: AxiosCall[] = [];
-    const mock = jest.fn().mockImplementation(async (cfg: AxiosCall) => {
+    const send = mock.fn(async (cfg: AxiosCall) => {
       calls.push({ method: cfg.method, url: cfg.url });
       if (calls.length === 1) throw original;
       // A token fetch here would hand out a different session.
@@ -192,26 +201,31 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
         },
       };
     });
-    attachMockAxios(conn, mock);
+    attachMockAxios(conn, send);
 
-    await expect(
+    await assert.rejects(
       conn.makeAdtRequest({
         url: '/sap/bc/adt/ddic/domains/zfoo',
         method: 'POST',
         timeout: 30000,
         data: '<x/>',
       }),
-    ).rejects.toMatchObject({
-      name: 'AuthRefusedError',
-      at: 'request',
-      cause: original,
-    });
+      (e: unknown) => {
+        assertMatchObject(e, {
+          name: 'AuthRefusedError',
+          at: 'request',
+          cause: original,
+        });
+        return true;
+      },
+    );
 
     // Only the POST: no token fetch, no second session.
-    expect(calls).toHaveLength(1);
-    expect(heldCookies(conn)).toContain('SAP_SESSIONID_HQ6=dead');
-    expect(heldCookies(conn)).not.toContain('fresh');
-    expect((conn as any).transport.csrfToken()).toBe('stale-token');
+    assert.strictEqual(calls.length, 1);
+    const held = heldCookies(conn);
+    assert.ok(held?.includes('SAP_SESSIONID_HQ6=dead'));
+    assert.ok(held !== null && !held.includes('fresh'));
+    assert.strictEqual((conn as any).transport.csrfToken(), 'stale-token');
   });
 
   it('GET 401 with cookies held: nothing is resent before the provider; the 401 reaches the caller', async () => {
@@ -229,34 +243,40 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
       },
       { 'set-cookie': ['sap-usercontext=sap-client=100'] },
     );
-    const mock = jest
-      .fn()
-      .mockRejectedValueOnce(original)
-      .mockResolvedValueOnce({ status: 200, data: 'ok', headers: {} });
-    attachMockAxios(conn, mock);
+    const send = answering(
+      { reject: original },
+      { resolve: { status: 200, data: 'ok', headers: {} } },
+    );
+    attachMockAxios(conn, send);
 
-    await expect(
+    await assert.rejects(
       conn.makeAdtRequest({
         url: '/sap/bc/adt/oo/classes/zcl_x',
         method: 'GET',
         timeout: 30000,
       }),
-    ).rejects.toMatchObject({
-      name: 'AuthRefusedError',
-      at: 'request',
-      cause: original,
-    });
+      (e: unknown) => {
+        assertMatchObject(e, {
+          name: 'AuthRefusedError',
+          at: 'request',
+          cause: original,
+        });
+        return true;
+      },
+    );
 
     // Only the GET: the provider (Basic) answers no, and nothing else is sent.
-    expect(mock).toHaveBeenCalledTimes(1);
-    expect((conn as any).transport.csrfToken()).toBe('cached-token');
-    expect(heldCookies(conn)).toContain('SAP_SESSIONID_HQ6=alive');
+    assert.strictEqual(send.mock.callCount(), 1);
+    assert.strictEqual((conn as any).transport.csrfToken(), 'cached-token');
+    assert.ok(heldCookies(conn)?.includes('SAP_SESSIONID_HQ6=alive'));
   });
 });
 
 describe('AbstractAbapConnection — headers that belong to the request', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    for (const fn of Object.values(mockLogger)) {
+      (fn as Mock<any>).mock.resetCalls();
+    }
   });
 
   /** A stateless request, and what it carried. */
@@ -269,10 +289,12 @@ describe('AbstractAbapConnection — headers that belong to the request', () => 
     (conn as any).transport.adoptCsrfToken('t');
     prepare?.(conn);
 
-    const mock = jest
-      .fn()
-      .mockResolvedValue({ status: 200, data: 'ok', headers: {} });
-    attachMockAxios(conn, mock);
+    const send = mock.fn(async (..._args: any[]) => ({
+      status: 200,
+      data: 'ok',
+      headers: {},
+    }));
+    attachMockAxios(conn, send);
 
     await conn.makeAdtRequest({
       url: '/sap/bc/adt/oo/classes/zfoo/source/main',
@@ -281,37 +303,46 @@ describe('AbstractAbapConnection — headers that belong to the request', () => 
       data: 'CLASS zfoo DEFINITION.',
       ...(headers ? { headers } : {}),
     });
-    return (mock.mock.calls[0][0].headers ?? {}) as Record<string, string>;
+    return (send.mock.calls[0].arguments[0].headers ?? {}) as Record<
+      string,
+      string
+    >;
   }
 
   it('sends sap-adt-request-id on a stateless request', async () => {
     const headers = await sent();
-    expect(headers['sap-adt-request-id']).toMatch(/^[0-9a-f]{32}$/);
+    assert.match(headers['sap-adt-request-id'], /^[0-9a-f]{32}$/);
     // The one header that really is the session's stays out of it.
-    expect(headers['x-sap-adt-sessiontype']).toBeUndefined();
+    assert.strictEqual(headers['x-sap-adt-sessiontype'], undefined);
   });
 
   it('gives each request its own id', async () => {
     const first = await sent();
     const second = await sent();
-    expect(first['sap-adt-request-id']).not.toBe(second['sap-adt-request-id']);
+    assert.notStrictEqual(
+      first['sap-adt-request-id'],
+      second['sap-adt-request-id'],
+    );
   });
 
   it('asks for server-time by default, and stops when told to', async () => {
-    expect((await sent())['X-sap-adt-profiling']).toBe('server-time');
+    assert.strictEqual((await sent())['X-sap-adt-profiling'], 'server-time');
 
     const quiet = await sent((conn) => {
       conn.setProfilingRequest(null);
     });
-    expect(quiet['X-sap-adt-profiling']).toBeUndefined();
-    expect(quiet['sap-adt-request-id']).toBeDefined();
+    assert.strictEqual(quiet['X-sap-adt-profiling'], undefined);
+    assert.notStrictEqual(quiet['sap-adt-request-id'], undefined);
   });
 
   it('asks for whatever the caller set', async () => {
     const headers = await sent((conn) => {
       conn.setProfilingRequest('server-time,response-size');
     });
-    expect(headers['X-sap-adt-profiling']).toBe('server-time,response-size');
+    assert.strictEqual(
+      headers['X-sap-adt-profiling'],
+      'server-time,response-size',
+    );
   });
 
   it('keeps a request id the caller supplied', async () => {
@@ -321,22 +352,22 @@ describe('AbstractAbapConnection — headers that belong to the request', () => 
     const headers = await sent(undefined, {
       'sap-adt-request-id': 'caller-owns-this-one',
     });
-    expect(headers['sap-adt-request-id']).toBe('caller-owns-this-one');
+    assert.strictEqual(headers['sap-adt-request-id'], 'caller-owns-this-one');
   });
 
   it('keeps a profiling value the caller supplied, in either case', async () => {
     const upper = await sent(undefined, {
       'X-sap-adt-profiling': 'response-size',
     });
-    expect(upper['X-sap-adt-profiling']).toBe('response-size');
+    assert.strictEqual(upper['X-sap-adt-profiling'], 'response-size');
 
     // Header names are case-insensitive; a lookup that is not would write the
     // default alongside the caller's and send both.
     const lower = await sent(undefined, {
       'x-sap-adt-profiling': 'response-size',
     });
-    expect(lower['x-sap-adt-profiling']).toBe('response-size');
-    expect(lower['X-sap-adt-profiling']).toBeUndefined();
+    assert.strictEqual(lower['x-sap-adt-profiling'], 'response-size');
+    assert.strictEqual(lower['X-sap-adt-profiling'], undefined);
   });
 
   it('says stateful to the wire as a flag, not as a header', async () => {
@@ -345,23 +376,25 @@ describe('AbstractAbapConnection — headers that belong to the request', () => 
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
     (conn as any).transport.adoptCsrfToken('t');
-    const mock = jest
-      .fn()
-      .mockResolvedValue({ status: 200, data: 'ok', headers: {} });
-    attachMockAxios(conn, mock);
+    const send = mock.fn(async (..._args: any[]) => ({
+      status: 200,
+      data: 'ok',
+      headers: {},
+    }));
+    attachMockAxios(conn, send);
 
     conn.setSessionType('stateful');
     await conn.makeAdtRequest({ url: '/x', method: 'POST', timeout: 1000 });
     conn.setSessionType('stateless');
     await conn.makeAdtRequest({ url: '/x', method: 'POST', timeout: 1000 });
 
-    const [stateful, stateless] = mock.mock.calls.map((c) => c[0]);
-    expect(stateful.stateful).toBe(true);
-    expect(stateless.stateful).toBe(false);
+    const [stateful, stateless] = send.mock.calls.map((c) => c.arguments[0]);
+    assert.strictEqual(stateful.stateful, true);
+    assert.strictEqual(stateless.stateful, false);
     for (const request of [stateful, stateless]) {
-      expect(request.headers['x-sap-adt-sessiontype']).toBeUndefined();
-      expect(request.headers['sap-adt-request-id']).toBeDefined();
-      expect(request.headers['X-sap-adt-profiling']).toBe('server-time');
+      assert.strictEqual(request.headers['x-sap-adt-sessiontype'], undefined);
+      assert.notStrictEqual(request.headers['sap-adt-request-id'], undefined);
+      assert.strictEqual(request.headers['X-sap-adt-profiling'], 'server-time');
     }
   });
 });
