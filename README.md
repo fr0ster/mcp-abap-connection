@@ -161,6 +161,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 19.0.0](./docs/MIGRATION-19.0.md)** - `@mcp-abap-adt/sap-rfc-lite` ^0.3.2: no compile on install; prebuilt RFC bindings for linux-x64, win32-x64, darwin-arm64; elsewhere build sap-rfc-lite's binding from its repository; the API is unchanged
 - 🚚 **[Migration to 18.0.0](./docs/MIGRATION-18.0.md)** - `rfcParamsFrom` returns `RfcAddress` (application server or message server): narrow before reading `.ashost` / `.sysnr`; RFC through a message server and a logon group (`mshost`, `msserv` | `sysid`, `group`, `saprouter`)
 - 🚚 **[Migration to 17.0.0](./docs/MIGRATION-17.0.md)** - no deadline of the package's own: `getTimeout`, `getTimeoutConfig` and `SAP_TIMEOUT_*` are gone, and a request inside a critical section carries none at all; an instance can be built on an existing session (`session`, `sessionCookies()`)
 - 🚚 **[Migration to 16.0.0](./docs/MIGRATION-16.0.md)** - the per-request `signal` (15.1.0) and `ADT_REQUEST_ABORTED` are removed; `disconnect()` resolves once the logoff is written, not answered — a process about to exit awaits it; `flushGoodbye()` when the answer matters
@@ -453,7 +454,11 @@ package state from causing PAK/058 on later writes or SADT_RESOURCE/007 on a
 read after create. Concurrent calls use a separate conversation. See
 [RFC conversation isolation](./docs/STATEFUL_SESSION_GUIDE.md#rfc-conversation-isolation-932-and-933).
 
-Needs the SAP NW RFC SDK on the machine and `npm install @mcp-abap-adt/sap-rfc-lite`.
+Needs `npm install @mcp-abap-adt/sap-rfc-lite` (0.3.2 or newer: it installs with no install
+script and carries prebuilt bindings for linux-x64 glibc, win32-x64 and darwin-arm64; elsewhere,
+build one from its repository) and the SAP NetWeaver RFC library at run time: on Windows, the
+64-bit `sapnwrfc.dll` SAP GUI installs into `System32` is enough; otherwise the SAP NW RFC SDK, its
+`lib` directory on the library search path (see sap-rfc-lite's README, "Runtime library loading").
 
 ```typescript
 import {

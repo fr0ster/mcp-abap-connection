@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/connection",
-  "version": "18.0.1",
+  "version": "19.0.0",
   "description": "ABAP connection layer for MCP ABAP ADT server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -59,7 +59,7 @@
     "axios": "^1.16.0"
   },
   "optionalDependencies": {
-    "@mcp-abap-adt/sap-rfc-lite": "^0.2.2"
+    "@mcp-abap-adt/sap-rfc-lite": "^0.3.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.14",
