@@ -44,9 +44,9 @@ jobs:
 
       - run: npm run build
 
-      # test:ci is `jest --no-cache`: --no-cache because ts-jest once served a
-      # compile from before a dependency bump and reported 35 green suites for
-      # code that did not compile.
+      # test:ci compiles the tests afresh on every run and runs them with
+      # node:test: a cached compile once reported 35 green suites for code that
+      # did not compile after a dependency bump.
       - run: npm run test:ci
 
       - run: npm run check:docs

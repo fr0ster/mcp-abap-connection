@@ -8,32 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 Nothing here ships: the published package's code and its dependency ranges are unchanged. It is
-the repository's own install, lockfile and workflows.
+the repository's own install, lockfile, tests and workflows.
 
 ### Security
 
-- **The lockfile is refreshed within the declared ranges.** `follow-redirects` (under `axios`)
-  1.16.0 → 1.16.1 (GHSA-q3jh-wrc6-jgq8, GHSA-8r9p-f939-6h3c); `handlebars` (under `ts-jest`)
-  4.7.9 → 4.7.10 (GHSA-xw65-4hp5-5hc7, GHSA-8r5x-fm3f-whwj, GHSA-p8wg-vrv2-v86f); `ts-jest`
-  29.4.15, `@biomejs/biome` 2.5.15, `@types/node` 25.9.9. `npm audit --omit=dev` finds nothing.
-  What remains is `sprintf-js` (GHSA-hp3w-g68c-fv3c, moderate, no fixed release) under Jest's
-  `babel-plugin-istanbul` → `@istanbuljs/load-nyc-config` → `js-yaml` 3 → `argparse` 1, which no
-  update within the declared ranges removes.
-- **No dependency runs an install script.** `allowScripts` in `package.json` denies the two that
-  have one, `@parcel/watcher` (it compiles only when asked to build from source; its binary comes
-  from its platform package) and `unrs-resolver` (its `postinstall` fetches a binding only when
-  the platform package is missing), and `.npmrc` sets `strict-allow-scripts=true`, so a new
-  dependency with an unreviewed install script fails the install instead of running it. npm reads
-  these settings in full from 11.19.0 (measured there); earlier npm 11 releases read part of them
-  and npm 10, bundled with Node.js 22, none — so CI and the release workflow install with
-  `--ignore-scripts`, and docs/INSTALLATION.md, "From Source", says `npm ci --ignore-scripts`. `.npmrc` does not set `ignore-scripts=true`: it would
+- **`npm audit` finds nothing, dev dependencies included** (it found 21: 19 moderate, 1 high,
+  1 critical). `follow-redirects` (under `axios`) 1.16.0 → 1.16.1 by a lockfile refresh within
+  the declared ranges (GHSA-q3jh-wrc6-jgq8, GHSA-8r9p-f939-6h3c — the one that reached the
+  runtime tree). The rest came with Jest: `handlebars` under `ts-jest` (GHSA-xw65-4hp5-5hc7,
+  GHSA-8r5x-fm3f-whwj, GHSA-p8wg-vrv2-v86f) and `sprintf-js` under `babel-plugin-istanbul` →
+  `@istanbuljs/load-nyc-config` → `js-yaml` 3 → `argparse` 1 (GHSA-hp3w-g68c-fv3c, no fixed
+  release), and they left with it (below). `@biomejs/biome` 2.5.15, `@types/node` 25.9.9.
+- **No dependency has an install script, and none may run one.** With Jest gone the tree has no
+  package with an install script (it had two, `@parcel/watcher` and `unrs-resolver`, both
+  Jest's). `allowScripts` in `package.json` is empty — no dependency is allowed one — and `.npmrc`
+  sets `strict-allow-scripts=true`, so a new dependency with an unreviewed install script fails
+  the install instead of running it. npm reads these settings in full from 11.19.0 (measured
+  there); earlier npm 11 releases read part of them and npm 10, bundled with Node.js 22, none — so
+  CI and the release workflow install with `--ignore-scripts`, and docs/INSTALLATION.md, "From
+  Source", says `npm ci --ignore-scripts`. `.npmrc` does not set `ignore-scripts=true`: it would
   also skip this package's own `prepublishOnly` gate.
-- **New versions age before they are resolved** (npm 11.19.0 and later). `.npmrc` sets `min-release-age=7`, except for
-  the project's own `@mcp-abap-adt/*` scope, whose packages are released to each other the same
-  day (`min-release-age-exclude`); their dependencies still wait the 7 days.
+- **New versions age before they are resolved** (npm 11.19.0 and later). `.npmrc` sets
+  `min-release-age=7`, except for the project's own `@mcp-abap-adt/*` scope, whose packages are
+  released to each other the same day (`min-release-age-exclude`); their dependencies still wait
+  the 7 days.
 - **CI and the release workflow run `npm audit --audit-level=moderate`**, dev dependencies
-  included, and call Jest through `npm run test:ci` (`jest --no-cache`) instead of `npx`; the
-  package scripts call Biome and `tsc` from the installed dependencies instead of through `npx`.
+  included, and run the tests through `npm run test:ci` instead of `npx jest`; the package scripts
+  call Biome and `tsc` from the installed dependencies instead of through `npx`.
+- The `brace-expansion` override is gone: the package was reachable only through Jest.
+
+### Changed
+
+- **The tests run on Node.js's own test runner (`node:test`), not Jest.** `npm test` (and
+  `test:ci`, `test:shape`) runs `scripts/run-tests.mjs`: it compiles `src` with the tests by `tsc`
+  (`tsconfig.test.json`) into the git-ignored `.test-build/`, afresh on every run, and hands the
+  compiled `*.test.js` files to `node --test`. `jest`, `ts-jest`, `@types/jest` and `jest-util`
+  are no longer dev dependencies, `jest.config.js` is gone, and with them 1,600-odd packages of
+  the dev tree. Every suite is converted as it was: `expect` → `node:assert/strict` (Jest's
+  `toMatchObject` as `helpers/assertions.ts`'s `assertMatchObject`, the asymmetric matchers as
+  the explicit checks they stood for), `jest.fn` / `spyOn` → `mock.fn` / `mock.method`, fake
+  timers → `mock.timers`, `jest.doMock` / `isolateModules` → `helpers/moduleCache.ts` over
+  `require.cache`. No production code changed. Same counts: 585 passed, 13 skipped (the live
+  RFC/SNC blocks, still listed and skipped with their reason, none of their hooks run). One file
+  or several: `node scripts/run-tests.mjs rfcLogon shapeCheck`; anything after `--` goes to
+  `node --test`. The plain-node scenario of `dispatchedGoodbye` now runs compiled, without the
+  transpiling `register.cjs`.
 
 ## [19.0.0] - 2026-10-22
 
