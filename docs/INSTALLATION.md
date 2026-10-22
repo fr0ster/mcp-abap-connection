@@ -27,15 +27,16 @@ yarn add @mcp-abap-adt/connection
 ```bash
 git clone https://github.com/fr0ster/mcp-abap-connection.git
 cd mcp-abap-connection
-npm ci
+npm ci --ignore-scripts
 npm run build
 ```
 
-The repository's `.npmrc` lets no dependency run an install script that
-`package.json` `allowScripts` does not allow, and resolves no new version
-younger than 7 days. npm 11 reads both settings; npm 10 (bundled with Node.js 22)
-reads neither, so with it install with `npm ci --ignore-scripts` — no dependency
-needs its install script to build or test.
+`--ignore-scripts` because no dependency needs its install script to build or
+test, and because the repository's own guard depends on the npm version: its
+`.npmrc` lets no dependency run an install script that `package.json`
+`allowScripts` does not allow and resolves no new version younger than 7 days,
+which npm reads in full only from 11.19.0 (measured there); earlier npm 11
+releases read part of it, and npm 10 (bundled with Node.js 22) none.
 
 ## Environment Setup
 

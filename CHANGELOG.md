@@ -23,12 +23,12 @@ the repository's own install, lockfile and workflows.
   have one, `@parcel/watcher` (it compiles only when asked to build from source; its binary comes
   from its platform package) and `unrs-resolver` (its `postinstall` fetches a binding only when
   the platform package is missing), and `.npmrc` sets `strict-allow-scripts=true`, so a new
-  dependency with an unreviewed install script fails the install instead of running it. npm 11
-  reads these settings (measured with 11.19.0); npm 10, bundled with Node.js 22, reads neither, so
-  CI and the release workflow install with `--ignore-scripts`, and docs/INSTALLATION.md, "From
-  Source", says to do the same with npm 10. `.npmrc` does not set `ignore-scripts=true`: it would
+  dependency with an unreviewed install script fails the install instead of running it. npm reads
+  these settings in full from 11.19.0 (measured there); earlier npm 11 releases read part of them
+  and npm 10, bundled with Node.js 22, none — so CI and the release workflow install with
+  `--ignore-scripts`, and docs/INSTALLATION.md, "From Source", says `npm ci --ignore-scripts`. `.npmrc` does not set `ignore-scripts=true`: it would
   also skip this package's own `prepublishOnly` gate.
-- **New versions age before they are resolved** (npm 11). `.npmrc` sets `min-release-age=7`, except for
+- **New versions age before they are resolved** (npm 11.19.0 and later). `.npmrc` sets `min-release-age=7`, except for
   the project's own `@mcp-abap-adt/*` scope, whose packages are released to each other the same
   day (`min-release-age-exclude`); their dependencies still wait the 7 days.
 - **CI and the release workflow run `npm audit --audit-level=moderate`**, dev dependencies
