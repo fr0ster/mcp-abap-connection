@@ -34,17 +34,18 @@
   "scripts": {
     "chrono": "node scripts/version-stats.mjs",
     "clean": "node scripts/clean.mjs",
-    "lint": "npx biome check --write src scripts",
-    "lint:check": "npx biome check src scripts --error-on-warnings",
+    "lint": "biome check --write src scripts",
+    "lint:check": "biome check src scripts --error-on-warnings",
     "test:shape": "jest src/__tests__/shapeCheck.test.ts",
-    "format": "npx biome format --write src scripts",
-    "build": "npm run --silent clean && npx biome check src scripts --diagnostic-level=error && npx tsc -p tsconfig.json && npm run --silent typecheck:scripts",
-    "build:fast": "npx tsc -p tsconfig.json",
+    "format": "biome format --write src scripts",
+    "build": "npm run --silent clean && biome check src scripts --diagnostic-level=error && tsc -p tsconfig.json && npm run --silent typecheck:scripts",
+    "build:fast": "tsc -p tsconfig.json",
     "test": "npm run --silent check:docs && jest",
     "prepublishOnly": "npm run build && npm run lint:check && npm run test:shape && npm run check:docs && npm run --silent check:pack",
     "check:docs": "node scripts/check-docs.mjs",
-    "typecheck:scripts": "npx tsc -p tsconfig.scripts.json",
-    "check:pack": "node scripts/check-pack.mjs"
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json",
+    "check:pack": "node scripts/check-pack.mjs",
+    "test:ci": "jest --no-cache"
   },
   "engines": {
     "node": "^22 || ^24 || ^26"
@@ -74,5 +75,9 @@
   },
   "overrides": {
     "brace-expansion": "^5.0.8"
+  },
+  "allowScripts": {
+    "@parcel/watcher": false,
+    "unrs-resolver": false
   }
 }
