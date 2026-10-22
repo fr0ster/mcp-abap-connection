@@ -12,7 +12,7 @@ the repository's own install, lockfile, tests and workflows.
 
 ### Changed
 
-- **The 7-day release age is dropped.** `.npmrc` no longer sets `min-release-age=7` or
+- **The 7-day release age is dropped** (it was added earlier in this section and never shipped). `.npmrc` sets neither `min-release-age=7` nor
   `min-release-age-exclude[]=@mcp-abap-adt/*`. The age gate conflicted with the gating
   `npm audit`: a security fix younger than the gate could not be installed while the audit blocked
   CI (seen 2026-10-22 with markdown-it 14.3.3). The defences that stay: `allowScripts` with
@@ -38,10 +38,6 @@ the repository's own install, lockfile, tests and workflows.
   CI and the release workflow install with `--ignore-scripts`, and docs/INSTALLATION.md, "From
   Source", says `npm ci --ignore-scripts`. `.npmrc` does not set `ignore-scripts=true`: it would
   also skip this package's own `prepublishOnly` gate.
-- **New versions age before they are resolved** (npm 11.19.0 and later). `.npmrc` sets
-  `min-release-age=7`, except for the project's own `@mcp-abap-adt/*` scope, whose packages are
-  released to each other the same day (`min-release-age-exclude`); their dependencies still wait
-  the 7 days.
 - **CI and the release workflow run `npm audit --audit-level=moderate`**, dev dependencies
   included, and run the tests through `npm run test:ci` instead of `npx jest`; the package scripts
   call Biome and `tsc` from the installed dependencies instead of through `npx`.
