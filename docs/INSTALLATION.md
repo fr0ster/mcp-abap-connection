@@ -34,8 +34,7 @@ npm run build
 `--ignore-scripts` because no dependency needs its install script to build or
 test, and because the repository's own guard depends on the npm version: its
 `.npmrc` lets no dependency run an install script that `package.json`
-`allowScripts` does not allow and resolves no new version younger than 7 days,
-which npm reads in full only from 11.19.0 (measured there); earlier npm 11
+`allowScripts` does not allow, which npm reads in full only from 11.19.0 (measured there); earlier npm 11
 releases read part of it, and npm 10 (bundled with Node.js 22) none.
 
 ## Environment Setup
