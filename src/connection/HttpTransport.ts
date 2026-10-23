@@ -70,44 +70,79 @@ const POOLED: HttpAgentOptions = {
 };
 
 /**
- * What one dispatch learns from the pool while it runs: the socket taken from
- * it — with how many bytes that socket had read then, so that a byte of an
- * answer is seen however little of it arrived —
- * and whether a redirect was followed (an answer, so never resent).
+ * What one dispatch learns from its agent while it runs: the socket its last
+ * request went out on, whether that socket had carried a request before, and
+ * how many bytes it had read then — so that a byte of an answer is seen
+ * however little of it arrived — and whether a redirect was followed (an
+ * answer, so never resent).
  */
 interface PooledAttempt {
-  reused?: { socket: Duplex; bytesRead: number };
+  sent?: { socket: Duplex; reused: boolean; bytesRead: number };
   redirected?: boolean;
 }
 
 /**
- * Which dispatch a pooled socket is handed to. Node attaches a free socket
- * inside the `ClientRequest` constructor, so `reuseSocket()` runs in the async
- * context of the dispatch that made the request.
+ * Which dispatch a request belongs to. Node hands a request to its agent
+ * (`addRequest()`) inside the `ClientRequest` constructor, so in the async
+ * context of the dispatch that made it.
  */
 const pooledAttempts = new AsyncLocalStorage<PooledAttempt>();
 
-function noteReuse(socket: Duplex): void {
-  const attempt = pooledAttempts.getStore();
-  if (attempt === undefined) return;
+/**
+ * The sockets that have carried a request. A socket is reused when it is in
+ * here as a request gets it — whether the agent took it from its free list
+ * (`reuseSocket()`) or handed it straight from a finished request to a queued
+ * one, which bypasses `reuseSocket()` (a caller's `maxSockets`).
+ */
+const carried = new WeakSet<Duplex>();
+
+function bytesReadOf(socket: Duplex): number {
   const bytesRead = (socket as { bytesRead?: unknown }).bytesRead;
-  attempt.reused = {
-    socket,
-    bytesRead: typeof bytesRead === 'number' ? bytesRead : -1,
+  return typeof bytesRead === 'number' ? bytesRead : -1;
+}
+
+function noteRequest(request: ClientRequest): void {
+  const attempt = pooledAttempts.getStore();
+  request.once('socket', (socket: Duplex) => {
+    const reused = carried.has(socket);
+    carried.add(socket);
+    if (attempt !== undefined) {
+      attempt.sent = { socket, reused, bytesRead: bytesReadOf(socket) };
+    }
+  });
+}
+
+type AddRequest = (
+  this: unknown,
+  request: ClientRequest,
+  options: unknown,
+) => void;
+
+/**
+ * Sees every request the agent is given. `addRequest()` is Node's own entry
+ * of an agent (every `ClientRequest` with an agent calls it); not in the
+ * typings, so reached through this one cast.
+ */
+function seeRequests(agent: HttpAgent): void {
+  const target = agent as unknown as { addRequest: AddRequest };
+  const add = target.addRequest;
+  target.addRequest = function addRequest(request, options) {
+    noteRequest(request);
+    add.call(this, request, options);
   };
 }
 
 class PooledHttpAgent extends HttpAgent {
-  override reuseSocket(socket: Duplex, request: ClientRequest): void {
-    super.reuseSocket(socket, request);
-    noteReuse(socket);
+  constructor(options: HttpAgentOptions) {
+    super(options);
+    seeRequests(this);
   }
 }
 
 class PooledHttpsAgent extends Agent {
-  override reuseSocket(socket: Duplex, request: ClientRequest): void {
-    super.reuseSocket(socket, request);
-    noteReuse(socket);
+  constructor(options: AgentOptions) {
+    super(options);
+    seeRequests(this);
   }
 }
 
@@ -130,10 +165,13 @@ function codeOf(error: unknown): unknown {
  * the request was being written onto it.
  */
 function diedOnPooledSocket(error: unknown, attempt: PooledAttempt): boolean {
-  const reused = attempt.reused;
-  if (reused === undefined || attempt.redirected === true) return false;
-  const bytesRead = (reused.socket as { bytesRead?: unknown }).bytesRead;
-  if (reused.bytesRead < 0 || bytesRead !== reused.bytesRead) return false;
+  const sent = attempt.sent;
+  if (sent === undefined || !sent.reused || attempt.redirected === true) {
+    return false;
+  }
+  if (sent.bytesRead < 0 || bytesReadOf(sent.socket) !== sent.bytesRead) {
+    return false;
+  }
   if (typeof error === 'object' && error !== null && 'response' in error) {
     if ((error as { response?: unknown }).response !== undefined) return false;
   }

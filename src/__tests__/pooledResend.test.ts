@@ -359,6 +359,51 @@ describe('the https: pool and the caller', () => {
     await stub.close();
   });
 
+  function limited(): HttpTransport {
+    return new HttpTransport(() => ({ ca: cert, maxSockets: 1 }), null, {
+      baseUrl: stub.baseUrl,
+    });
+  }
+
+  it('resends a queued request handed a used socket straight from the one before it (maxSockets)', async () => {
+    stub.arrivals.length = 0;
+    stub.plan = (arrival) => (arrival.onSocket > 1 ? 'drop' : 'ok');
+    const transport = limited();
+
+    const [first, second] = await Promise.all([
+      read(transport),
+      unlock(transport),
+    ]);
+
+    assert.strictEqual(first.status, 200);
+    assert.strictEqual(second.status, 200);
+    assert.deepStrictEqual(trace(stub), [
+      ['GET', 1, 'ok'],
+      ['POST', 2, 'drop'],
+      ['POST', 1, 'ok'],
+    ]);
+  });
+
+  it('does not resend a queued request that failed on a socket opened to replace a dead one', async () => {
+    stub.arrivals.length = 0;
+    stub.plan = () => 'drop';
+    const transport = limited();
+
+    const outcomes = await Promise.allSettled([
+      read(transport),
+      unlock(transport),
+    ]);
+
+    assert.deepStrictEqual(
+      outcomes.map((outcome) => outcome.status),
+      ['rejected', 'rejected'],
+    );
+    assert.deepStrictEqual(trace(stub), [
+      ['GET', 1, 'drop'],
+      ['POST', 1, 'drop'],
+    ]);
+  });
+
   it("agentOptions' keepAlive: false turns the pool off: the caller's options win", async () => {
     const transport = new HttpTransport(
       () => ({ ca: cert, keepAlive: false }),
@@ -366,6 +411,8 @@ describe('the https: pool and the caller', () => {
       { baseUrl: stub.baseUrl },
     );
 
+    stub.arrivals.length = 0;
+    stub.plan = () => 'ok';
     await read(transport);
     await read(transport);
 
