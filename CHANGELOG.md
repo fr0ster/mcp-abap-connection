@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The HTTP wire's sockets change (below, a patch release: Fixed and the first two Changed entries); the
+## [19.1.0] - 2026-10-23
+
+The HTTP wire's sockets change (below: Fixed and the first two Changed entries; a minor release because `https:` now keeps sockets alive); the
 dependency ranges are unchanged. The rest is the repository's own install, lockfile, tests and
 workflows.
 
@@ -2789,6 +2791,7 @@ const connection = createAbapConnection(config, logger);
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
 [Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.1...HEAD
+[19.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v19.0.0...v19.1.0
 [19.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.1...v19.0.0
 [18.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.0...v18.0.1
 [18.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v17.1.0...v18.0.0
