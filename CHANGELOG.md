@@ -7,11 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing here ships: the published package's code and its dependency ranges are unchanged. It is
-the repository's own install, lockfile, tests and workflows.
+The HTTP wire's sockets change (below, a patch release: Fixed and the first two Changed entries); the
+dependency ranges are unchanged. The rest is the repository's own install, lockfile, tests and
+workflows.
+
+### Fixed
+
+- **A request lost on a dead kept-alive socket is sent once more, on a new connection**
+  (mcp-abap-adt#314) — a named exception to "no retries". Over `http:` the wire used Node.js's
+  global agent, which keeps sockets alive; a server may close an idle one just as a request is
+  written onto it, and the request is lost unread. After a `500` in a stateful session the cleanup
+  `UNLOCK` failed so, with "socket hang up", and the enqueue lock stayed with the session — still
+  alive — until SM12. Now a request that went out on a socket taken from the pool, and whose
+  socket ended with no byte of an answer read (`ECONNRESET`, `EPIPE`), is resent once on a socket
+  opened for it, with the same cookies, session headers, CSRF token and body: the ABAP session and
+  its locks are bound to the cookies, not to the TCP connection (measured on an on-premise system,
+  2026-10-23: an `UNLOCK` on a fresh connection with the same cookies and lock handle released the
+  lock). Never resent: a request on a socket opened for it, one that read any byte of an answer,
+  one after a redirect, one with a stream body, the logoff, and the resend itself. All methods
+  qualify. The resend shows only as a `debug` line in fixed words. The risk, stated: a server that
+  read the request and died before a byte of its answer would run a non-idempotent request twice —
+  not what happens to a socket the server closed while idle.
 
 ### Changed
 
+- **`https:` keeps its sockets alive too.** The HTTPS agent is built with Node.js's global-agent
+  options (`keepAlive: true`, `scheduling: 'lifo'`, `timeout: 5000` — an idle pooled socket is
+  closed after 5 s), as plain `http:` always had them, so a TLS handshake is no longer paid per
+  request. Your `agentOptions` and the TLS material still win over these: `ca`,
+  `rejectUnauthorized`, the client certificate are kept as before, and `keepAlive: false` there
+  turns the pool off. The wire's own `http.Agent` replaces the global one, with the same options.
+- **The logoff always goes out on a connection of its own**, with `Connection: close` — over
+  `https:` also when your `agentOptions` say `keepAlive: true` (before, it then took a pooled
+  socket, and "written" could be a write onto a socket the server had closed).
 - **The 7-day release age is dropped** (it was added earlier in this section and never shipped). `.npmrc` sets neither `min-release-age=7` nor
   `min-release-age-exclude[]=@mcp-abap-adt/*`. The age gate conflicted with the gating
   `npm audit`: a security fix younger than the gate could not be installed while the audit blocked

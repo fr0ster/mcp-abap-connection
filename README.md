@@ -280,6 +280,25 @@ the socket and SAP then ends the request running on it — a write in it lost.
 a critical section (`beginCriticalSection()`) a request carries none at all,
 not even yours.
 
+**Kept-alive connections, and the one resend** (19.0.1). The HTTP wires pool
+their sockets over `http:` and `https:` alike (Node.js's global-agent options:
+`keepAlive`, `lifo`, an idle socket closed after 5 s; your `agentOptions` win
+over `https:`, so `keepAlive: false` there turns the pool off). A server may
+close an idle kept-alive connection just as a request is written onto it; that
+request is lost unread. So, as a **named exception to "no retries"**: a request
+that went out on a socket taken from the pool, and whose socket ended with no
+byte of an answer read (`ECONNRESET` — "socket hang up" — or `EPIPE`), is sent
+once more, on a new connection, with the same cookies, session headers, CSRF
+token and body — the ABAP session and its locks are the cookies', not the
+socket's (measured on-premise, 2026-10-23). Nothing else is resent: not a
+request on a socket opened for it, not one that read any byte of an answer, not
+one after a redirect, not a stream body, not the logoff, and never a second
+time. The resend is visible only as a `debug` line in fixed words. **The risk,
+stated:** a server that read the request and died before writing a byte of its
+answer would run it twice; for a socket the server closed while it was idle,
+that does not happen. Without the resend, a cleanup `UNLOCK` died so and the
+enqueue lock stayed until SM12 (mcp-abap-adt#314).
+
 ### An instance on an existing session
 
 An instance may be built on a session that already exists, instead of logging

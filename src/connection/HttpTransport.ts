@@ -6,8 +6,9 @@
  * code path on one end cannot be named in a type — a default type parameter has
  * nothing to point at — so this is what makes the two ends symmetrical.
  *
- * Nothing to open or give back at this level. A request opens its own socket
- * and there is no conversation to establish; `open()` only offers the
+ * Nothing to open or give back at this level. A request takes a socket from
+ * the wire's pool (see `sendPooled()`), no socket is the session, and there is
+ * no conversation to establish; `open()` only offers the
  * credential its logon, and the subclasses add the session mechanism.
  *
  * **Where the two axes touch.** TLS client-certificate material comes from the
@@ -19,21 +20,29 @@
  * the cookie jar and the CSRF token are the session's and stay.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import {
   type ClientRequest,
+  Agent as HttpAgent,
+  type AgentOptions as HttpAgentOptions,
   request as httpRequest,
   type IncomingMessage,
   type RequestOptions,
 } from 'node:http';
 import { Agent, type AgentOptions, request as httpsRequest } from 'node:https';
+import type { Duplex } from 'node:stream';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type {
   AuthOutcome,
   ICertificateMaterial,
   ILogonTarget,
 } from '@mcp-abap-adt/interfaces-auth';
-import axios, { type AxiosInstance } from 'axios';
+import axios, {
+  type AxiosInstance,
+  type AxiosRequestConfig,
+  type AxiosResponse,
+} from 'axios';
 import type { ILogger } from '../logger.js';
 import { mergeCookieHeaders } from '../utils/cookies.js';
 import { AuthRefusedError, WireLogonError } from './authErrors.js';
@@ -47,6 +56,96 @@ import {
   refusalOf,
 } from './IAdtTransport.js';
 import { isStatefulRequest, SESSION_TYPE_HEADER } from './statefulRequest.js';
+
+/**
+ * The pool every request of the wire goes through: the options of Node's own
+ * global agents (`node -p "http.globalAgent.options"`), which plain `http:`
+ * used before the wire had an agent of its own for it — kept-alive sockets,
+ * the most recently freed taken first, an idle one closed after 5 s.
+ */
+const POOLED: HttpAgentOptions = {
+  keepAlive: true,
+  scheduling: 'lifo',
+  timeout: 5000,
+};
+
+/**
+ * What one dispatch learns from the pool while it runs: the socket taken from
+ * it — with how many bytes that socket had read then, so that a byte of an
+ * answer is seen however little of it arrived —
+ * and whether a redirect was followed (an answer, so never resent).
+ */
+interface PooledAttempt {
+  reused?: { socket: Duplex; bytesRead: number };
+  redirected?: boolean;
+}
+
+/**
+ * Which dispatch a pooled socket is handed to. Node attaches a free socket
+ * inside the `ClientRequest` constructor, so `reuseSocket()` runs in the async
+ * context of the dispatch that made the request.
+ */
+const pooledAttempts = new AsyncLocalStorage<PooledAttempt>();
+
+function noteReuse(socket: Duplex): void {
+  const attempt = pooledAttempts.getStore();
+  if (attempt === undefined) return;
+  const bytesRead = (socket as { bytesRead?: unknown }).bytesRead;
+  attempt.reused = {
+    socket,
+    bytesRead: typeof bytesRead === 'number' ? bytesRead : -1,
+  };
+}
+
+class PooledHttpAgent extends HttpAgent {
+  override reuseSocket(socket: Duplex, request: ClientRequest): void {
+    super.reuseSocket(socket, request);
+    noteReuse(socket);
+  }
+}
+
+class PooledHttpsAgent extends Agent {
+  override reuseSocket(socket: Duplex, request: ClientRequest): void {
+    super.reuseSocket(socket, request);
+    noteReuse(socket);
+  }
+}
+
+/** The codes of a socket that ended before an answer: "socket hang up" is `ECONNRESET`. */
+const UNANSWERED_CODES: ReadonlySet<string> = new Set(['ECONNRESET', 'EPIPE']);
+
+function codeOf(error: unknown): unknown {
+  if (typeof error !== 'object' || error === null) return undefined;
+  try {
+    return (error as { code?: unknown }).code;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether a failed dispatch is the one case resent: it went out on a socket
+ * taken from the pool, no redirect was followed, and the socket ended with no
+ * byte of an answer read — the server had closed the idle connection while
+ * the request was being written onto it.
+ */
+function diedOnPooledSocket(error: unknown, attempt: PooledAttempt): boolean {
+  const reused = attempt.reused;
+  if (reused === undefined || attempt.redirected === true) return false;
+  const bytesRead = (reused.socket as { bytesRead?: unknown }).bytesRead;
+  if (reused.bytesRead < 0 || bytesRead !== reused.bytesRead) return false;
+  if (typeof error === 'object' && error !== null && 'response' in error) {
+    if ((error as { response?: unknown }).response !== undefined) return false;
+  }
+  const code = codeOf(error);
+  return typeof code === 'string' && UNANSWERED_CODES.has(code);
+}
+
+/** A body that can be written a second time: not a stream. */
+function resendable(data: unknown): boolean {
+  if (typeof data !== 'object' || data === null) return true;
+  return typeof (data as { pipe?: unknown }).pipe !== 'function';
+}
 
 /**
  * Whether a `Set-Cookie`'s attributes delete it: `Max-Age` of zero or less, or
@@ -212,6 +311,13 @@ export class HttpTransport implements IAdtTransport {
   readonly kind: string = 'http';
 
   private instance: AxiosInstance | null = null;
+
+  /**
+   * The agents that open a socket for one request and keep none — the
+   * logoff's, and the resend's after a pooled socket died. Built with the
+   * client, from the same options.
+   */
+  private fresh: { http: HttpAgent; https: Agent } | null = null;
 
   /**
    * The TLS material the last logon offered. The client is built from it, and
@@ -882,13 +988,19 @@ export class HttpTransport implements IAdtTransport {
         );
       }
 
+      // Both schemes pool their sockets, `https:` as plain `http:` always
+      // has: a TLS handshake per request is what keep-alive saves. The
+      // caller's `agentOptions` and the TLS material win over the pool's
+      // options — `keepAlive: false` there turns the pool off for `https:`.
+      const tls = { ...options, rejectUnauthorized, ...this.material };
       this.instance = axios.create({
-        httpsAgent: new Agent({
-          ...options,
-          rejectUnauthorized,
-          ...this.material,
-        }),
+        httpAgent: new PooledHttpAgent(POOLED),
+        httpsAgent: new PooledHttpsAgent({ ...POOLED, ...tls }),
       });
+      this.fresh = {
+        http: new HttpAgent({ keepAlive: false }),
+        https: new Agent({ ...tls, keepAlive: false }),
+      };
     }
     return this.instance;
   }
@@ -1081,6 +1193,64 @@ export class HttpTransport implements IAdtTransport {
       : httpRequest(options, onResponse);
   }
 
+  /** The agent a logoff goes out on: never a pooled one. */
+  private goodbyeAgent(options: RequestOptions): RequestOptions['agent'] {
+    const agent = options.agent;
+    if (agent instanceof PooledHttpsAgent) return this.fresh?.https ?? false;
+    if (agent instanceof PooledHttpAgent) return this.fresh?.http ?? false;
+    return agent === undefined || agent === null ? false : agent;
+  }
+
+  /**
+   * One request, sent once more — on a new connection — in exactly one case,
+   * a named exception to "no retries": it went out on a socket taken from the
+   * pool, and that socket ended with no byte of an answer (`ECONNRESET` —
+   * "socket hang up" — or `EPIPE`). A server closes an idle kept-alive
+   * connection when it likes, and a request written onto it as it closes is
+   * lost unread; left alone, a cleanup `UNLOCK` dies so and the enqueue lock
+   * stays with the session until SM12 (mcp-abap-adt#314). The session is the
+   * cookies', not the socket's (measured on an on-premise system, 2026-10-23:
+   * an `UNLOCK` on a new connection with the same cookies and handle released
+   * the lock), so the resend carries the same config — the same cookies,
+   * session headers, CSRF token and body.
+   *
+   * Never resent: a request on a socket opened for it, one that read any byte
+   * of an answer, one after a redirect, one with a stream body, and the resend
+   * itself — it goes on a fresh agent, so its failure is the caller's error.
+   * The risk, stated: a server that read the request and died before a byte of
+   * its answer would run it twice.
+   */
+  private async sendPooled(config: AxiosRequestConfig): Promise<AxiosResponse> {
+    const attempt: PooledAttempt = {};
+    try {
+      return await pooledAttempts.run(attempt, () =>
+        this.client()({
+          ...config,
+          beforeRedirect: () => {
+            attempt.redirected = true;
+          },
+        }),
+      );
+    } catch (error) {
+      const fresh = this.fresh;
+      if (
+        fresh === null ||
+        !resendable(config.data) ||
+        !diedOnPooledSocket(error, attempt)
+      ) {
+        throw error;
+      }
+      this.logger?.debug(
+        'HTTP: a pooled connection closed before any answer; the request is sent once more on a new connection',
+      );
+      return this.client()({
+        ...config,
+        httpAgent: fresh.http,
+        httpsAgent: fresh.https,
+      });
+    }
+  }
+
   private async dispatch(
     request: IAdtTransportRequest,
     headers: Record<string, string>,
@@ -1088,7 +1258,7 @@ export class HttpTransport implements IAdtTransport {
     /** `maxRedirects: 0` for the adoption probe alone; see `resume()`. */
     redirects?: { maxRedirects: number },
   ): Promise<IAdtTransportResponse> {
-    const response = await this.client()({
+    const config: AxiosRequestConfig = {
       ...(redirects ?? {}),
       // The write is the point `disconnect()` resolves at: the request's
       // `finish`, emitted once its bytes are handed to the socket — not when
@@ -1100,18 +1270,14 @@ export class HttpTransport implements IAdtTransport {
                 options: RequestOptions,
                 onResponse: (response: IncomingMessage) => void,
               ) => {
-                // A socket of its own: with no agent of the wire's (plain
-                // `http:` — the TLS material's agent and a proxy's are kept),
-                // node would take a pooled keep-alive socket, whose write can
+                // A socket of its own: a pooled keep-alive socket's write can
                 // succeed after the server closed it, losing the logoff after
-                // `finish`. `agent: false` opens a fresh connection, and node
-                // sends `Connection: close` on it. Over `https:` the wire's
-                // own agent keeps no socket alive unless the caller's
-                // `agentOptions` say `keepAlive: true`.
+                // `finish`. The wire's fresh agents open a new connection and
+                // keep none (node sends `Connection: close` on it) — over
+                // `https:` with the pool's TLS options. A proxy's agent is
+                // kept; with no agent at all, `agent: false` does the same.
                 const outgoing = this.logoffRequest(
-                  options.agent === undefined
-                    ? { ...options, agent: false }
-                    : options,
+                  { ...options, agent: this.goodbyeAgent(options) },
                   onResponse,
                 );
                 outgoing.once('finish', written);
@@ -1134,7 +1300,13 @@ export class HttpTransport implements IAdtTransport {
       ...(request.validateStatus !== undefined
         ? { validateStatus: request.validateStatus }
         : {}),
-    });
+    };
+    // A logoff opens a socket of its own and is never resent: its answer is
+    // not read, and its write is what `disconnect()` resolves at.
+    const response =
+      written !== undefined
+        ? await this.client()(config)
+        : await this.sendPooled(config);
 
     return {
       status: response.status,
