@@ -125,6 +125,15 @@ fact belongs on the transport instead.
 - The connection hands the wire a PATH; putting a server in front of it is the
   wire's business. An absolute URL in `SADT_REST_RFC_ENDPOINT`'s request line
   dumps the FM with `STRING_OFFSET_TOO_LARGE`.
+- One named resend (#314): a request sent on a pooled socket that had already carried a request,
+  which ended with no byte of an answer read (`ECONNRESET` / "socket hang up" / `EPIPE`), is resent
+  once on a non-pooled agent with the same config (cookies, session headers, CSRF, body) — never
+  after any answer byte, a fresh socket's failure, a redirect, a stream body, the logoff or the
+  resend itself (`src/connection/HttpTransport.ts`, `sendPooled`). Both `http:` and `https:` reuse
+  sockets (`keepAlive: true`, `scheduling: 'lifo'`, an idle-socket `timeout: 5000` as Node's
+  global agent — it closes idle pooled sockets only, no request deadline); `agentOptions`
+  `keepAlive: false` turns reuse off. The logoff always goes on its own connection
+  (`Connection: close`)
 - CSRF fetch retries 3 times, falling back to `/sap/bc/adt/discovery` only when
   the primary endpoint answers 404 — a host that is not answering will not
   answer a different path either

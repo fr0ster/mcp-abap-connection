@@ -265,6 +265,14 @@ and does not belong to the cookies — it belongs to the **ABAP session**, and
 that session is the server's. This side never ends one: it can ask (a logoff),
 and otherwise waits for a timeout it cannot see.
 
+That is also why the HTTP wire may resend a request on a new connection: when a
+pooled kept-alive socket ends before a byte of the answer (the server closed it
+while idle), the request is sent once more with the same cookies, and an
+`UNLOCK` on the new connection reaches the lock a `LOCK` took on another
+(measured on an on-premise system, 2026-10-23). Without it, the cleanup
+`UNLOCK` after a failed save died with "socket hang up" and the lock stayed
+until SM12. See USAGE.md, "Kept-alive connections, and the one resend".
+
 A closed socket is just a client that stopped listening. The ABAP session
 neither knows nor cares — which is why `SM04` shows sessions left behind by
 connections that never said they were finished, and why this package sends an
