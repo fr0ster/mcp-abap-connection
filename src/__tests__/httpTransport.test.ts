@@ -171,3 +171,80 @@ describe('the requests the HTTP wire originates go to its own base URL', () => {
     );
   });
 });
+
+describe('the requests the HTTP wire originates go to the origin of its base URL', () => {
+  // A configured URL may carry a path. The wire's own requests — the CSRF
+  // fetch, the cloud preflight, the logoff — go to the system's origin, as
+  // they always have; only a path a caller sends is put on the whole URL.
+  let own: SapStub;
+  before(async () => {
+    own = await startSapStub();
+  });
+  after(async () => {
+    await own.close();
+  });
+
+  const withPath = () => `${own.baseUrl}/some/path`;
+  const context = () => ({
+    authorize: async () => {},
+    logon: async () => {},
+    observe: () => {},
+  });
+
+  it('the CSRF fetch', async () => {
+    own.requests.length = 0;
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: withPath(),
+    });
+
+    await transport.establish(context());
+
+    assert.deepStrictEqual(
+      own.requests.map((request) => request.path),
+      ['/sap/bc/adt/core/discovery'],
+    );
+  });
+
+  it('the cloud preflight', async () => {
+    own.requests.length = 0;
+    const transport = new CloudHttpTransport(undefined, null, {
+      baseUrl: withPath(),
+    });
+
+    await transport.open(context());
+
+    assert.deepStrictEqual(
+      own.requests.map((request) => request.path),
+      ['/sap/bc/adt/core/http/sessions'],
+    );
+  });
+
+  it('the logoff', async () => {
+    own.requests.length = 0;
+    const transport = new OnPremHttpTransport(undefined, null, {
+      baseUrl: withPath(),
+    });
+    transport.ingest({ 'set-cookie': ['SAP_SESSIONID_STUB_100=S1; Path=/'] });
+
+    await transport.close(context());
+
+    assert.deepStrictEqual(
+      own.requests.map((request) => request.path),
+      ['/sap/public/bc/icf/logoff'],
+    );
+  });
+
+  it('a path the caller sends is still put on the whole URL', async () => {
+    own.requests.length = 0;
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: withPath(),
+    });
+
+    await transport.send({ method: 'GET', url: '/sap/bc/adt/x', headers: {} });
+
+    assert.deepStrictEqual(
+      own.requests.map((request) => request.path),
+      ['/some/path/sap/bc/adt/x'],
+    );
+  });
+});

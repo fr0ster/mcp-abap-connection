@@ -390,13 +390,23 @@ export class HttpTransport implements IAdtTransport {
      * `clientHeaders()`.
      *
      * `baseUrl`: the system this wire addresses, required. A path a caller
-     * sends is put on it, and every request the wire originates itself — the
-     * CSRF fetch, the cloud preflight, the logoff — goes to it.
+     * sends is put on it; every request the wire originates itself — the
+     * CSRF fetch, the cloud preflight, the logoff — goes to its origin.
      */
     private readonly options: { client?: string; baseUrl: string },
   ) {}
 
-  /** The base URL without a trailing slash, for a path to be put on. */
+  /**
+   * The system's origin: where the wire's own requests go — the CSRF fetch,
+   * the session check, the cloud preflight, the logoff — whatever path the
+   * configured URL carries. The same base the connection's `getBaseUrl()`
+   * answers.
+   */
+  protected origin(): string {
+    return new URL(this.options.baseUrl).origin;
+  }
+
+  /** The base URL without a trailing slash, for a caller's path to be put on. */
   protected base(): string {
     return this.options.baseUrl.endsWith('/')
       ? this.options.baseUrl.slice(0, -1)
@@ -501,7 +511,7 @@ export class HttpTransport implements IAdtTransport {
       );
     }
 
-    const base = this.base();
+    const base = this.origin();
     const endpoints = [
       `${base}${CSRF_CONFIG.ENDPOINT}`,
       `${base}${CSRF_CONFIG.FALLBACK_ENDPOINT}`,
@@ -696,7 +706,7 @@ export class HttpTransport implements IAdtTransport {
     // move the session out from under a lock taken against the first.
     if (this.token) return;
 
-    const base = this.base();
+    const base = this.origin();
     const endpoints = [
       `${base}${CSRF_CONFIG.ENDPOINT}`,
       // BASIS < 7.52 has no /sap/bc/adt/core/discovery.
@@ -1088,7 +1098,7 @@ export class HttpTransport implements IAdtTransport {
   ): Promise<void> {
     await this.sendLogoff(
       context,
-      `${this.base()}${ICF_LOGOFF_PATH}`,
+      `${this.origin()}${ICF_LOGOFF_PATH}`,
       { ...snapshot, session: {} },
       written,
     );
