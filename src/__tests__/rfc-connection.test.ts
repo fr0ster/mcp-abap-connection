@@ -348,11 +348,8 @@ describeWhere(
         timeout: 10_000,
       });
 
-      assert.ok(
-        typeof resp.headers === 'object' &&
-          resp.headers !== null &&
-          'content-type' in resp.headers,
-      );
+      assert.notStrictEqual(resp.headers, undefined);
+      assert.notStrictEqual(resp.headers['content-type'], undefined);
     });
 
     it('should handle query params', { timeout: 15_000 }, async () => {

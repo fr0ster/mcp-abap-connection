@@ -15,7 +15,10 @@ import type {
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../connection/CloudHttpTransport.js';
-import { createConnection } from '../connection/createConnection.js';
+import {
+  type CreatedConnection,
+  createConnection,
+} from '../connection/createConnection.js';
 import { LegacyOnPremHttpTransport } from '../connection/LegacyOnPremHttpTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import {
@@ -23,7 +26,12 @@ import {
   RfcTransport,
 } from '../connection/RfcTransport.js';
 import { createConnection as exported } from '../index.js';
+import { createPastTheTypes } from './fixtures/pastTheTypes/createPastTheTypes.js';
 import { assertMatchObject } from './helpers/assertions.js';
+import {
+  type HttpClientStub,
+  httpClientStub,
+} from './helpers/httpClientStub.js';
 import { withModuleAsync } from './helpers/moduleCache.js';
 import { type SapStub, startSapStub } from './helpers/sapStub.js';
 
@@ -209,6 +217,80 @@ describe('createConnection', () => {
     );
     assert.strictEqual(conn.getSessionId(), 'my-conversation');
   });
+
+  const viaHttpClient: Array<
+    [string, (httpClient: HttpClientStub) => CreatedConnection]
+  > = [
+    [
+      'cloud + http',
+      (httpClient) =>
+        createConnection({
+          system: 'cloud',
+          transport: 'http',
+          config,
+          credential,
+          httpClient,
+        }),
+    ],
+    [
+      'onprem + http',
+      (httpClient) =>
+        createConnection({
+          system: 'onprem',
+          transport: 'http',
+          config,
+          credential,
+          httpClient,
+        }),
+    ],
+    [
+      'onprem + legacy-http',
+      (httpClient) =>
+        createConnection({
+          system: 'onprem',
+          transport: 'legacy-http',
+          config,
+          credential,
+          httpClient,
+        }),
+    ],
+  ];
+  for (const [combination, build] of viaHttpClient) {
+    it(`${combination}: the injected httpClient is the one the wire sends through`, async () => {
+      const client = httpClientStub();
+      const conn = build(client);
+
+      await conn.transport.send({ method: 'GET', url: '/sap/bc/adt/x' });
+
+      assert.strictEqual(client.built.length, 1);
+      assert.deepStrictEqual(
+        client.sent.map((request) => request.url),
+        ['https://sap.example.com:44300/sap/bc/adt/x'],
+      );
+    });
+  }
+
+  for (const [system, transport] of [
+    ['cloud', 'rfc'],
+    ['cloud', 'legacy-http'],
+    ['onprem', 'websocket'],
+    ['mainframe', 'http'],
+    [undefined, undefined],
+  ]) {
+    it(`refuses ${system} + ${transport} built past the types (plain JS), in fixed words`, () => {
+      assert.throws(
+        () => createPastTheTypes(system, transport, config, credential),
+        (e: unknown) => {
+          assert.ok(e instanceof TypeError);
+          assert.strictEqual(
+            e.message,
+            "createConnection: no such combination of system and transport. ABAP Cloud has one wire, 'http'; on-prem takes 'http', 'legacy-http' or 'rfc'. Both are stated by the caller, never inferred.",
+          );
+          return true;
+        },
+      );
+    });
+  }
 
   it('admits no other combination of system and transport (checked by compiling)', () => {
     // Never run: each call below must not compile, and the build fails the

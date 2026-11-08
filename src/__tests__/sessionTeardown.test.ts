@@ -896,8 +896,17 @@ describe('disconnect ends the server session', () => {
    * called from a `finally`, so a throw here would replace the error that sent
    * the caller there, and would leave the teardown half-done.
    */
+  /** Whether the wire said, on its logger, that the goodbye did not go. */
+  const saidNoGoodbye = (logger: ReturnType<typeof makeLogger>) =>
+    logger.debug.mock.calls.some(
+      ({ arguments: [line] }) =>
+        typeof line === 'string' &&
+        line.startsWith('Could not tell the server the session is finished'),
+    );
+
   it('disconnects even when the logoff cannot be assembled', async () => {
-    const { conn, client } = onPremStubbed(makeLogger());
+    const logger = makeLogger();
+    const { conn, client } = onPremStubbed(logger);
     const seen: Seen[] = [];
     attachMockAxios(client, seen);
 
@@ -909,6 +918,36 @@ describe('disconnect ends the server session', () => {
     await settled();
     assert.strictEqual(conn.isConnected(), false);
     assert.strictEqual(conn.getSessionIdentity(), null);
+    assert.ok(saidNoGoodbye(logger));
+  });
+
+  it('disconnects even when the client cannot be built for the logoff', async () => {
+    const logger = makeLogger();
+    const { conn, client } = onPremStubbed(logger);
+    const seen: Seen[] = [];
+    attachMockAxios(client, seen);
+
+    await conn.connect();
+    // A logon offering other TLS material drops the client, so the logoff is
+    // the request that builds the next one — and building it throws, as a
+    // certificate connection's agent can.
+    await conn.transport.open({
+      ...QUIET_CONTEXT,
+      logon: async (target) => {
+        target.tlsMaterial({ cert: 'OTHER-CERT', key: 'OTHER-KEY' });
+      },
+    });
+    client.failNextBuild(new Error('no material to build the agent from'));
+    const builtBefore = client.built.length;
+
+    assert.strictEqual(await conn.disconnect(), undefined);
+    await settled();
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(conn.getSessionIdentity(), null);
+    // The build was attempted and failed: no client built, nothing sent.
+    assert.strictEqual(client.built.length, builtBefore);
+    assert.strictEqual(seen.filter((r) => r.url.includes('/logoff')).length, 0);
+    assert.ok(saidNoGoodbye(logger));
   });
 
   it('asks nothing of the credential to say goodbye', async () => {

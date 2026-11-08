@@ -98,6 +98,8 @@ export interface HttpClientStub extends HttpClientFactory {
   built: HttpClientAgents[];
   /** Answer the requests from now on with `responder`. */
   answer(responder: Responder): void;
+  /** Make the next client the wire builds throw `error` instead. */
+  failNextBuild(error: Error): void;
   /**
    * Make the node request of every logoff from now on throw `error` while it
    * is built, as a certificate connection's agent can: the logoff is then
@@ -111,6 +113,7 @@ export function httpClientStub(responder: Responder = OK): HttpClientStub {
   const built: HttpClientAgents[] = [];
   let respond = responder;
   let logoffFailure: Error | null = null;
+  let buildFailure: Error | null = null;
   return {
     sent,
     built,
@@ -120,7 +123,15 @@ export function httpClientStub(responder: Responder = OK): HttpClientStub {
     failLogoffWith: (error) => {
       logoffFailure = error;
     },
+    failNextBuild: (error) => {
+      buildFailure = error;
+    },
     create: (agents) => {
+      if (buildFailure !== null) {
+        const failure = buildFailure;
+        buildFailure = null;
+        throw failure;
+      }
       built.push(agents);
       return axios.create({
         ...agents,
