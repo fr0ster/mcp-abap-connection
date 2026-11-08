@@ -102,8 +102,8 @@ the RFC wire could not connect at all as a result.
   refused by its rule alone. `npm test` runs it, and so does `npm run
   test:shape`, which `prepublishOnly` names in the place `lint:check` once
   ran the check; the test asserts both. There is no copy of the check here.
-- **The tests run the real auth-providers 6.0.0 providers** (devDependency
-  `^6.0.0`), handed to the connector unwrapped. A token provider needs
+- **The tests run the real auth-providers 6.x providers** (devDependency
+  `^6.0.2`), handed to the connector unwrapped. A token provider needs
   `renewal` (`refreshThenLogin()` / `refreshOnly()`); one that needs a browser
   gets a fake `IBrowser` — no test starts a real browser or program.
   `CertificateAuthProvider` checks its material in `prepare()`: load a real
