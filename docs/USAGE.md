@@ -1001,7 +1001,7 @@ What a request travels over, and everything true of that wire: addressing,
 establishing, and whatever session state it keeps.
 
 ```text
-new HttpTransport(agentOptions?, logger?, { client?, baseUrl })
+new HttpTransport(agentOptions?, logger?, { client?, baseUrl, httpClient? })
 new RfcTransport(
   connect: (logon: Readonly<Record<string, string>>) => IRfcConversation,
   logger?,
@@ -1015,7 +1015,17 @@ mechanism is what differs, and `OnPremHttpTransport` / `CloudHttpTransport` are
 what the connectors' type parameters admit. An HTTP wire is built with its
 `baseUrl`, required: a path a caller sends is put on it, and the requests the
 wire makes on its own — the CSRF fetch, the cloud preflight, the logoff — go to
-its origin. The connection hands the wire no address. `RfcTransport` you build
+its origin. The connection hands the wire no address. `httpClient`, optional
+(20.0.0), is how the wire reaches the network — an `HttpClientFactory`:
+`create(agents)` returns the axios instance every request goes through, built
+from the wire's two pooled agents (`{ httpAgent, httpsAgent }`) when it first
+sends, and anew when a logon offers other TLS material; `logoffRequest(options,
+onResponse)` returns the Node `ClientRequest` a logoff goes out on, whose
+`finish` is the write `disconnect()` resolves at. Left out, it is the exported
+`nodeHttpClient` — axios over those agents, Node's `http` / `https` for the
+logoff — so nothing changes for a wire built without it. A test double goes
+here, under the wire, so what the wire adds to its own requests still runs.
+`RfcTransport` you build
 with `rfcConversationFrom(rfcConfig)`, which takes the RFC config's stated
 address, `client` and `language` as they are and loads the SAP NW RFC SDK only
 when a conversation opens.

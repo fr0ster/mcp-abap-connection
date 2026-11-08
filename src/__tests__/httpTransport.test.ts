@@ -13,12 +13,21 @@
  * first built.
  */
 import assert from 'node:assert/strict';
+import { Agent as HttpAgent } from 'node:http';
+import { Agent as HttpsAgent } from 'node:https';
 import { after, before, describe, it } from 'node:test';
+import axios from 'axios';
 import { CloudHttpTransport } from '../connection/CloudHttpTransport.js';
-import { HttpTransport } from '../connection/HttpTransport.js';
+import {
+  type HttpClientAgents,
+  type HttpClientFactory,
+  HttpTransport,
+  nodeHttpClient,
+} from '../connection/HttpTransport.js';
 import type { IAdtTransport } from '../connection/IAdtTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import { assertMatchObject } from './helpers/assertions.js';
+import { httpClientStub } from './helpers/httpClientStub.js';
 import { type SapStub, startSapStub } from './helpers/sapStub.js';
 
 /** A bare HTTP wire, addressed at a server no test here reaches. */
@@ -47,42 +56,55 @@ describe('HttpTransport', () => {
     assert.strictEqual(await transport.close(context), undefined);
   });
 
-  it('reads its agentOptions when it builds the client, not before', () => {
+  it('reads its agentOptions when it builds the client, not before', async () => {
     let asked = 0;
+    const client = httpClientStub();
     const transport = new HttpTransport(
       () => {
         asked++;
         return { ca: 'PEM' };
       },
       null,
-      { baseUrl: 'https://h' },
+      { baseUrl: 'https://h', httpClient: client },
     );
 
     assert.strictEqual(asked, 0);
 
-    // Building the client is what asks. Asking in the constructor would read
-    // options the caller may not have loaded yet; the credential's material
-    // is not among them — the provider offers it at logon.
-    (transport as any).client();
+    // Building the client is what asks — at the first request. Asking in the
+    // constructor would read options the caller may not have loaded yet; the
+    // credential's material is not among them — the provider offers it at
+    // logon.
+    await transport.send({ method: 'GET', url: '/x' });
     assert.strictEqual(asked, 1);
+    assert.strictEqual(client.built[0]?.httpsAgent.options.ca, 'PEM');
   });
 
-  it('builds the client once and keeps it', () => {
-    const transport = http();
+  it('builds the client once and keeps it', async () => {
+    const client = httpClientStub();
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: 'https://h',
+      httpClient: client,
+    });
 
-    const first = (transport as any).client();
-    const second = (transport as any).client();
+    await transport.send({ method: 'GET', url: '/x' });
+    await transport.send({ method: 'GET', url: '/y' });
 
-    assert.strictEqual(second, first);
+    assert.strictEqual(client.built.length, 1);
+    assert.strictEqual(client.sent.length, 2);
   });
 
   it('carries the request through to the client', async () => {
-    const transport = http();
-    const seen: Array<Record<string, unknown>> = [];
-    (transport as any).instance = async (config: Record<string, unknown>) => {
-      seen.push(config);
-      return { status: 200, statusText: 'OK', headers: {}, data: 'ok' };
-    };
+    const client = httpClientStub(async () => ({
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: 'ok',
+    }));
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: 'https://h',
+      httpClient: client,
+    });
+    const seen = client.sent;
 
     const response = await transport.send({
       method: 'GET',
@@ -245,6 +267,103 @@ describe('the requests the HTTP wire originates go to the origin of its base URL
     assert.deepStrictEqual(
       own.requests.map((request) => request.path),
       ['/some/path/sap/bc/adt/x'],
+    );
+  });
+});
+
+describe('the HTTP client the wire is built with', () => {
+  let stand: SapStub;
+  before(async () => {
+    stand = await startSapStub();
+  });
+  after(async () => {
+    await stand.close();
+  });
+
+  it('is built by the injected factory, from the wire’s own agents', async () => {
+    const built: HttpClientAgents[] = [];
+    const seen: string[] = [];
+    const httpClient: HttpClientFactory = {
+      ...nodeHttpClient,
+      create: (agents) => {
+        built.push(agents);
+        return axios.create({
+          ...agents,
+          adapter: async (config) => {
+            seen.push(config.url ?? '');
+            return {
+              status: 200,
+              statusText: 'OK',
+              headers: {},
+              data: 'ok',
+              config,
+            };
+          },
+        });
+      },
+    };
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: 'https://h',
+      httpClient,
+    });
+
+    const response = await transport.send({ method: 'GET', url: '/x' });
+    await transport.send({ method: 'GET', url: '/y' });
+
+    assert.strictEqual(built.length, 1);
+    assert.ok(built[0]?.httpsAgent instanceof HttpsAgent);
+    assert.ok(built[0]?.httpAgent instanceof HttpAgent);
+    assert.deepStrictEqual(seen, ['https://h/x', 'https://h/y']);
+    assertMatchObject(response, { status: 200, data: 'ok' });
+  });
+
+  it('opens the logoff request through the injected factory', async () => {
+    const opened: string[] = [];
+    const httpClient: HttpClientFactory = {
+      ...nodeHttpClient,
+      logoffRequest: (options, onResponse) => {
+        opened.push(String(options.path));
+        return nodeHttpClient.logoffRequest(options, onResponse);
+      },
+    };
+    const transport = new OnPremHttpTransport(undefined, null, {
+      baseUrl: stand.baseUrl,
+      httpClient,
+    });
+    transport.ingest({ 'set-cookie': ['SAP_SESSIONID_STUB_100=S1; Path=/'] });
+    stand.requests.length = 0;
+
+    let written = 0;
+    await transport.close(
+      {
+        authorize: async () => {},
+        logon: async () => {},
+        observe: () => {},
+      },
+      () => {
+        written += 1;
+      },
+    );
+
+    assert.deepStrictEqual(opened, ['/sap/public/bc/icf/logoff']);
+    assert.strictEqual(written, 1);
+    assert.deepStrictEqual(
+      stand.requests.map((request) => request.path),
+      ['/sap/public/bc/icf/logoff'],
+    );
+  });
+
+  it('is the shipped one when none is given: requests reach the network', async () => {
+    stand.requests.length = 0;
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: stand.baseUrl,
+    });
+
+    await transport.send({ method: 'GET', url: '/sap/bc/adt/x' });
+
+    assert.deepStrictEqual(
+      stand.requests.map((request) => request.path),
+      ['/sap/bc/adt/x'],
     );
   });
 });

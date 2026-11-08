@@ -39,6 +39,12 @@ config passed to `createConnection` or the connectors compiles and behaves as be
 ### Added
 
 - `SapHttpConfig` and `SapRfcConfig`, the two shapes of `SapConfig`.
+- **`httpClient`, an option of the HTTP transports** (`HttpTransport`, `OnPremHttpTransport`,
+  `LegacyOnPremHttpTransport`, `CloudHttpTransport`): an `HttpClientFactory` — `create(agents)`
+  returns the axios instance the wire sends through, built from its two pooled agents
+  (`HttpClientAgents`), and `logoffRequest(options, onResponse)` the Node request a logoff goes
+  out on. Left out, it is the exported `nodeHttpClient`, which is what the wire used before:
+  nothing changes for a wire built without it. A test double goes under the wire through it.
 
 ### Fixed
 

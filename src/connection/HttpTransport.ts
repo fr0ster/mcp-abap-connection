@@ -314,6 +314,36 @@ function sameMaterial(
   });
 }
 
+/** What an HTTP wire builds its client from: its two pooled agents. */
+export interface HttpClientAgents {
+  httpAgent: HttpAgent;
+  httpsAgent: Agent;
+}
+
+/**
+ * How an HTTP wire reaches the network: the axios instance every request goes
+ * through, built from the wire's agents (built anew when a logon offers other
+ * TLS material), and the node request a logoff goes out on — the seam where
+ * its write is seen. `nodeHttpClient` is the shipped one; a consumer or a test
+ * hands its own to the constructor (`httpClient`).
+ */
+export interface HttpClientFactory {
+  create(agents: HttpClientAgents): AxiosInstance;
+  logoffRequest(
+    options: RequestOptions,
+    onResponse: (response: IncomingMessage) => void,
+  ): ClientRequest;
+}
+
+/** axios over the wire's agents, and node's own `http` / `https` for a logoff. */
+export const nodeHttpClient: HttpClientFactory = {
+  create: (agents) => axios.create(agents),
+  logoffRequest: (options, onResponse) =>
+    options.protocol === 'https:'
+      ? httpsRequest(options, onResponse)
+      : httpRequest(options, onResponse),
+};
+
 /**
  * Whether the server certificate is verified: yes, as Node does, unless told
  * otherwise in so many words.
@@ -392,8 +422,14 @@ export class HttpTransport implements IAdtTransport {
      * `baseUrl`: the system this wire addresses, required. A path a caller
      * sends is put on it; every request the wire originates itself — the
      * CSRF fetch, the cloud preflight, the logoff — goes to its origin.
+     *
+     * `httpClient`: how the wire reaches the network. Absent: `nodeHttpClient`.
      */
-    private readonly options: { client?: string; baseUrl: string },
+    private readonly options: {
+      client?: string;
+      baseUrl: string;
+      httpClient?: HttpClientFactory;
+    },
   ) {}
 
   /**
@@ -1046,7 +1082,7 @@ export class HttpTransport implements IAdtTransport {
       // caller's `agentOptions` and the TLS material win over the pool's
       // options — `keepAlive: false` there turns the pool off for `https:`.
       const tls = { ...options, rejectUnauthorized, ...this.material };
-      this.instance = axios.create({
+      this.instance = (this.options.httpClient ?? nodeHttpClient).create({
         httpAgent: new PooledHttpAgent(POOLED),
         httpsAgent: new PooledHttpsAgent({ ...POOLED, ...tls }),
       });
@@ -1231,19 +1267,19 @@ export class HttpTransport implements IAdtTransport {
   }
 
   /**
-   * The node request a logoff goes out on — the seam where its write is seen.
-   *
-   * A test replaces it to hold a request's socket shut; the wire uses node's
-   * own `http` / `https`, as axios would with redirects off. The logoff's
-   * answer is not read, so not following a redirect changes nothing.
+   * The node request a logoff goes out on — the seam where its write is seen:
+   * the `httpClient`'s, node's own `http` / `https` by default, as axios would
+   * use with redirects off. The logoff's answer is not read, so not following a
+   * redirect changes nothing.
    */
   protected logoffRequest(
     options: RequestOptions,
     onResponse: (response: IncomingMessage) => void,
   ): ClientRequest {
-    return options.protocol === 'https:'
-      ? httpsRequest(options, onResponse)
-      : httpRequest(options, onResponse);
+    return (this.options.httpClient ?? nodeHttpClient).logoffRequest(
+      options,
+      onResponse,
+    );
   }
 
   /** The agent a logoff goes out on: never a pooled one. */

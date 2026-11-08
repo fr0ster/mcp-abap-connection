@@ -54,6 +54,12 @@ where `getBaseUrl()` may answer `undefined`. Both are required (`^4.0.0`).
   take `baseUrl` as a required option (`{ client?, baseUrl }`). A path a caller
   sends is put on it; the requests the wire makes on its own — the CSRF fetch,
   the cloud preflight, the logoff — go to its origin, as they did.
+- **Added: `httpClient`, an optional HTTP-transport option** (`{ client?, baseUrl,
+  httpClient? }`): an `HttpClientFactory` that builds the axios instance the
+  wire sends through from its agents and opens the Node request a logoff goes
+  out on. Left out, it is `nodeHttpClient`, what the wire used before — nothing
+  to do unless you want something of your own under the wire, such as a test
+  double.
 - **`IAdtSessionContext` has no `baseUrl`.** The connection hands a wire no
   address; `establishSession` no longer reads `getBaseUrl()`.
 - **`sapConfigSignature`** also carries `connectionType`, the RFC address

@@ -679,6 +679,35 @@ false }`, or (when `agentOptions` leaves it unset) `TLS_REJECT_UNAUTHORIZED=0` o
 for production. Before 11.0.0 the certificate was not verified by default: see
 [MIGRATION-11.0.md](./docs/MIGRATION-11.0.md).
 
+### The HTTP client
+
+An HTTP wire reaches the network through an `HttpClientFactory`, the `httpClient`
+option of its constructor (20.0.0). Left out, it is `nodeHttpClient`: axios over
+the wire's own pooled agents, and Node's `http` / `https` for the logoff — what
+the wire has always used. Hand your own to put something under the wire, a test
+double above all: everything the wire adds to its requests (cookies, CSRF token,
+affinity headers, `sap-client`) still runs, and only the exchange is yours.
+
+```typescript
+import axios from "axios";
+import {
+  type HttpClientFactory,
+  OnPremHttpTransport,
+  nodeHttpClient,
+} from "@mcp-abap-adt/connection";
+
+const httpClient: HttpClientFactory = {
+  ...nodeHttpClient,
+  // Built from the wire's agents; built anew when a logon offers other TLS material.
+  create: (agents) => axios.create({ ...agents }),
+};
+const transport = new OnPremHttpTransport(() => ({}), logger, {
+  client: config.client,
+  baseUrl: config.url,
+  httpClient,
+});
+```
+
 ### Stateful Sessions
 
 Enable stateful mode for requests that need the ABAP context, such as LOCK and
