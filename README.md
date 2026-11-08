@@ -80,9 +80,10 @@ The package uses a clean separation of concerns:
     conversation that IS the session
   - On-prem is where this is a real choice; ABAP Cloud has one wire and its
     connector takes no such parameter
-  - `rfcConversationFrom(config)` builds what `RfcTransport` needs, deriving
-    `ashost` and `sysnr` and loading the SDK only when a conversation opens. It
-    reads no user or password: the provider writes the logon parameters
+  - `rfcConversationFrom(config)` builds what `RfcTransport` needs from an
+    RFC config's stated address, client and language — nothing derived, no
+    URL — and loads the SDK only when a conversation opens. It reads no user
+    or password: the provider writes the logon parameters
 
 - **`GenericWebSocketTransport`** (concrete, exported):
   - Transport abstraction for realtime WS message flows
@@ -161,6 +162,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 20.0.0](./docs/MIGRATION-20.0.md)** - an RFC config is an `ISapRfcConfig` that states its address (`ashost` + `sysnr`, or `mshost` + `msserv` / `sysid` + `group`), `client` and `language`: no URL, no defaults, no `SAP_SYSNR`; `getBaseUrl()` may answer `undefined`; hand-built HTTP transports take `baseUrl`; `IAdtSessionContext` has no `baseUrl`
 - 🚚 **[Migration to 19.0.0](./docs/MIGRATION-19.0.md)** - `@mcp-abap-adt/sap-rfc-lite` ^0.3.2: no compile on install; prebuilt RFC bindings for linux-x64, win32-x64, darwin-arm64; elsewhere build sap-rfc-lite's binding from its repository; the API is unchanged
 - 🚚 **[Migration to 18.0.0](./docs/MIGRATION-18.0.md)** - `rfcParamsFrom` returns `RfcAddress` (application server or message server): narrow before reading `.ashost` / `.sysnr`; RFC through a message server and a logon group (`mshost`, `msserv` | `sysid`, `group`, `saprouter`)
 - 🚚 **[Migration to 17.0.0](./docs/MIGRATION-17.0.md)** - no deadline of the package's own: `getTimeout`, `getTimeoutConfig` and `SAP_TIMEOUT_*` are gone, and a request inside a critical section carries none at all; an instance can be built on an existing session (`session`, `sessionCookies()`)
@@ -790,7 +792,7 @@ interface AbapConnection {
   makeAdtRequest<T = unknown, D = unknown>(
     options: AbapRequestOptions,
   ): Promise<IAdtWireResponse<T, D>>;
-  getBaseUrl(): Promise<string>;
+  getBaseUrl(): Promise<string | undefined>; // undefined over RFC: no HTTP origin
   setSessionType(type: "stateless" | "stateful"): void; // Switch session type
   getSessionId(): string | null; // Client-side conversation id
 }
@@ -856,17 +858,19 @@ which `connect()` then takes over instead of logging on.
 
 #### `rfcConversationFrom(config)`
 
-What `RfcTransport` is constructed with. The address is one of two:
+What `RfcTransport` is constructed with, from an RFC config
+(`SapRfcConfig`, `connectionType: 'rfc'`). An RFC config has no URL: it states
+its address, its `client` and its logon `language`, and the SDK gets them as
+they are — nothing is derived, defaulted, trimmed or read from the environment.
+The address is one of two, and the config's type admits exactly one:
 
-- **One application server** (default): `ashost` from the url and `sysnr` from
-  the HTTP port by the SAP convention that `80XX` is the ICM port for system
-  `XX`, which `SAP_SYSNR` overrides for a port that follows no convention.
-- **A message server and a logon group**, when the config states `mshost`: the
-  config's `mshost`, `msserv` or `sysid` (one of the two is required) and
-  `group` (default `PUBLIC`) go to the SDK as they are, and the url gives no
-  host or system number — the message server picks the application server.
+- **One application server**: `ashost` and `sysnr`.
+- **A message server and a logon group**: `mshost`, its service as `msserv`,
+  `sysid` or both, and `group` — the message server picks the application
+  server.
 
-`saprouter` goes with either.
+`saprouter` goes with either. `language` reaches the SDK as `lang`. The
+provider's logon parameters are spread over the address at each open.
 
 The SAP NW RFC SDK is loaded when a conversation opens, not when this is called,
 so a machine without it fails at `connect()` with a message saying what to
@@ -874,10 +878,10 @@ install rather than at construction.
 
 ```text
 function rfcConversationFrom(
-  config: SapConfig,
+  config: SapRfcConfig,
 ): (logon: Readonly<Record<string, string>>) => IRfcConversation;
-function rfcParamsFrom(config: SapConfig): RfcAddress; // the address only
-// RfcAddress = RfcConnectionParams (ashost, sysnr) | RfcMessageServerParams (mshost, msserv | sysid, group)
+function rfcParamsFrom(config: SapRfcConfig): RfcAddress; // the address only
+// RfcAddress = RfcConnectionParams (ashost, sysnr) | RfcMessageServerParams (mshost, msserv and/or sysid, group)
 ```
 
 ```typescript
