@@ -13,22 +13,27 @@
  * first built.
  */
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
+import { CloudHttpTransport } from '../connection/CloudHttpTransport.js';
 import { HttpTransport } from '../connection/HttpTransport.js';
 import type { IAdtTransport } from '../connection/IAdtTransport.js';
+import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import { assertMatchObject } from './helpers/assertions.js';
+import { type SapStub, startSapStub } from './helpers/sapStub.js';
+
+/** A bare HTTP wire, addressed at a server no test here reaches. */
+const http = () => new HttpTransport(undefined, null, { baseUrl: 'https://h' });
 
 describe('HttpTransport', () => {
   it('names itself http', () => {
-    const transport: IAdtTransport = new HttpTransport();
+    const transport: IAdtTransport = http();
 
     assert.strictEqual(transport.kind, 'http');
   });
 
   it('offers its logon on open and has nothing to give back', async () => {
-    const transport: IAdtTransport = new HttpTransport();
+    const transport: IAdtTransport = http();
     const context = {
-      baseUrl: 'https://h',
       authorize: async () => {},
       logon: async () => {},
       observe: () => {},
@@ -44,10 +49,14 @@ describe('HttpTransport', () => {
 
   it('reads its agentOptions when it builds the client, not before', () => {
     let asked = 0;
-    const transport = new HttpTransport(() => {
-      asked++;
-      return { ca: 'PEM' };
-    });
+    const transport = new HttpTransport(
+      () => {
+        asked++;
+        return { ca: 'PEM' };
+      },
+      null,
+      { baseUrl: 'https://h' },
+    );
 
     assert.strictEqual(asked, 0);
 
@@ -59,7 +68,7 @@ describe('HttpTransport', () => {
   });
 
   it('builds the client once and keeps it', () => {
-    const transport = new HttpTransport();
+    const transport = http();
 
     const first = (transport as any).client();
     const second = (transport as any).client();
@@ -68,7 +77,7 @@ describe('HttpTransport', () => {
   });
 
   it('carries the request through to the client', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     const seen: Array<Record<string, unknown>> = [];
     (transport as any).instance = async (config: Record<string, unknown>) => {
       seen.push(config);
@@ -98,5 +107,67 @@ describe('HttpTransport', () => {
     });
     assert.ok(!('params' in seen[0]));
     assertMatchObject(response, { status: 200, data: 'ok' });
+  });
+});
+
+describe('the requests the HTTP wire originates go to its own base URL', () => {
+  // The wire was handed a base URL at construction; the connection hands it
+  // a session context and no address. A request the wire makes on its own —
+  // the CSRF fetch, the cloud preflight, the logoff — goes there.
+  let own: SapStub;
+  before(async () => {
+    own = await startSapStub();
+  });
+  after(async () => {
+    await own.close();
+  });
+
+  const context = () => ({
+    authorize: async () => {},
+    logon: async () => {},
+    observe: () => {},
+  });
+
+  it('the CSRF fetch', async () => {
+    own.requests.length = 0;
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: own.baseUrl,
+    });
+
+    await transport.establish(context());
+
+    assert.deepStrictEqual(
+      own.requests.map((request) => request.path),
+      ['/sap/bc/adt/core/discovery'],
+    );
+  });
+
+  it('the cloud preflight', async () => {
+    own.requests.length = 0;
+    const transport = new CloudHttpTransport(undefined, null, {
+      baseUrl: own.baseUrl,
+    });
+
+    await transport.open(context());
+
+    assert.deepStrictEqual(
+      own.requests.map((request) => request.path),
+      ['/sap/bc/adt/core/http/sessions'],
+    );
+  });
+
+  it('the logoff', async () => {
+    own.requests.length = 0;
+    const transport = new OnPremHttpTransport(undefined, null, {
+      baseUrl: own.baseUrl,
+    });
+    transport.ingest({ 'set-cookie': ['SAP_SESSIONID_STUB_100=S1; Path=/'] });
+
+    await transport.close(context());
+
+    assert.deepStrictEqual(
+      own.requests.map((request) => request.path),
+      ['/sap/public/bc/icf/logoff'],
+    );
   });
 });

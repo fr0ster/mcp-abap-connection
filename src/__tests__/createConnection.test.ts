@@ -8,7 +8,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
-import type { SapConfig } from '../config/sapConfig.js';
+import type {
+  ISapHttpConfig,
+  ISapRfcConfig,
+} from '@mcp-abap-adt/interfaces-auth-sap';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../connection/CloudHttpTransport.js';
@@ -18,7 +21,7 @@ import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import { RfcTransport } from '../connection/RfcTransport.js';
 import { createConnection as exported } from '../index.js';
 
-const config: SapConfig = {
+const config: ISapHttpConfig = {
   url: 'https://sap.example.com:44300',
   authType: 'basic',
   username: 'u',
@@ -26,6 +29,16 @@ const config: SapConfig = {
   client: '200',
 };
 const credential = new BasicAuthProvider('u', 'p');
+
+/** An RFC destination: its address stated, no URL. */
+const rfcConfig: ISapRfcConfig = {
+  connectionType: 'rfc',
+  authType: 'basic',
+  ashost: 'saphost',
+  sysnr: '00',
+  client: '200',
+  language: 'EN',
+};
 
 /** What the HTTP wire was told: its client and base URL. */
 function address(transport: unknown) {
@@ -47,7 +60,10 @@ describe('createConnection', () => {
     });
     assert.ok(conn instanceof AdtCloudConnector);
     assert.ok(conn.transport instanceof CloudHttpTransport);
-    assert.strictEqual(conn.transport.kind, new CloudHttpTransport().kind);
+    assert.strictEqual(
+      conn.transport.kind,
+      new CloudHttpTransport(undefined, null, { baseUrl: 'https://h' }).kind,
+    );
     assert.deepStrictEqual(address(conn.transport), {
       client: '200',
       baseUrl: 'https://sap.example.com:44300',
@@ -87,10 +103,6 @@ describe('createConnection', () => {
   });
 
   it('onprem + rfc: the on-prem connector over the RFC wire, its options passed through', () => {
-    const rfcConfig: SapConfig = {
-      ...config,
-      url: 'http://saphost:8000',
-    };
     const options = { logWire: true, maxLoggedBodyChars: 10 };
     const conn = createConnection({
       system: 'onprem',
@@ -165,14 +177,55 @@ describe('createConnection', () => {
     assert.notStrictEqual(second, first);
     assert.notStrictEqual(second.transport, first.transport);
   });
+});
 
-  it('infers nothing from the config: connectionType does not pick the wire', () => {
+describe('the base URL a created connection answers', () => {
+  it('cloud + http: the origin of the configured URL', async () => {
+    const conn = createConnection({
+      system: 'cloud',
+      transport: 'http',
+      config: { ...config, url: 'https://sap.example.com:44300/some/path' },
+      credential,
+    });
+    assert.strictEqual(
+      await conn.getBaseUrl(),
+      'https://sap.example.com:44300',
+    );
+  });
+
+  it('onprem + http: the origin of the configured URL', async () => {
     const conn = createConnection({
       system: 'onprem',
       transport: 'http',
-      config: { ...config, connectionType: 'rfc' } as SapConfig,
+      config,
       credential,
     });
-    assert.ok(conn.transport instanceof OnPremHttpTransport);
+    assert.strictEqual(
+      await conn.getBaseUrl(),
+      'https://sap.example.com:44300',
+    );
+  });
+
+  it('onprem + legacy-http: the origin of the configured URL', async () => {
+    const conn = createConnection({
+      system: 'onprem',
+      transport: 'legacy-http',
+      config,
+      credential,
+    });
+    assert.strictEqual(
+      await conn.getBaseUrl(),
+      'https://sap.example.com:44300',
+    );
+  });
+
+  it('onprem + rfc: undefined, from a config that states no URL', async () => {
+    const conn = createConnection({
+      system: 'onprem',
+      transport: 'rfc',
+      config: rfcConfig,
+      credential,
+    });
+    assert.strictEqual(await conn.getBaseUrl(), undefined);
   });
 });

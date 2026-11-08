@@ -102,7 +102,12 @@ abstract class AbstractAbapConnection
    */
   protected readonly lifecycle = new SessionLifecycle();
 
-  private baseUrl: string;
+  /**
+   * The system's HTTP origin, read off an HTTP config's `url`. `undefined` for
+   * an RFC config: an RFC destination states its address and has no URL, and
+   * none is invented for it.
+   */
+  private readonly baseUrl: string | undefined;
   private sessionId: string | null = null;
   private sessionMode: 'stateless' | 'stateful' = 'stateless';
 
@@ -259,14 +264,18 @@ abstract class AbstractAbapConnection
     // Generate sessionId (used for sap-adt-connection-id header)
     this.sessionId = sessionId || randomUUID();
 
-    // Initialize baseUrl from config (required, will throw if invalid)
-    try {
-      const urlObj = new URL(config.url);
-      this.baseUrl = urlObj.origin;
-    } catch (error) {
-      throw new Error(
-        `Invalid URL in configuration: ${error instanceof Error ? error.message : error}`,
-      );
+    // The HTTP origin of an HTTP config's URL (an unparsable one refused); an
+    // RFC config has none.
+    if (config.connectionType === 'rfc') {
+      this.baseUrl = undefined;
+    } else {
+      try {
+        this.baseUrl = new URL(config.url).origin;
+      } catch (error) {
+        throw new Error(
+          `Invalid URL in configuration: ${error instanceof Error ? error.message : error}`,
+        );
+      }
     }
 
     this.logger?.debug(
@@ -774,7 +783,6 @@ abstract class AbstractAbapConnection
    */
   protected sessionContext(): IAdtSessionContext {
     return {
-      baseUrl: this.baseUrl,
       authorize: (headers) => this.credentialHeaders(headers),
       logon: (target) => this.logon(target),
       extraHeaders: { 'sap-adt-connection-id': this.getSessionId() ?? '' },
@@ -1233,7 +1241,8 @@ abstract class AbstractAbapConnection
     return this.transport.sessionCookies();
   }
 
-  async getBaseUrl(): Promise<string> {
+  /** The system's HTTP origin; `undefined` over RFC, which has none. */
+  async getBaseUrl(): Promise<string | undefined> {
     return this.baseUrl;
   }
 
@@ -2041,7 +2050,6 @@ abstract class AbstractAbapConnection
     generation: number | undefined = lease?.generation,
   ): IAdtSessionContext {
     return {
-      baseUrl: this.baseUrl,
       authorize: async (headers) => {
         await this.credentialHeaders(headers);
         if (lease && !this.lifecycle.isCurrent(lease)) {

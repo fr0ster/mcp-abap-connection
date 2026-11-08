@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it, type Mock, mock } from 'node:test';
 import { AxiosError } from 'axios';
-import type { SapConfig } from '../config/sapConfig.js';
+import type { SapHttpConfig } from '../config/sapConfig.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
 import { answering } from './helpers/answering.js';
@@ -17,7 +17,7 @@ const mockLogger: ILogger = {
   debug: mock.fn(),
 };
 
-const baseConfig: SapConfig = {
+const baseConfig: SapHttpConfig = {
   url: 'https://sap.example.com',
   authType: 'basic',
   username: 'u',

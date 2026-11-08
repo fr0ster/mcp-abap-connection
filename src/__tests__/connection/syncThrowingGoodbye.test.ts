@@ -16,13 +16,13 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { SapConfig } from '../../config/sapConfig.js';
+import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { credentialWriting } from '../helpers/credentials.js';
 import { settled } from '../helpers/settled.js';
 
-const config: SapConfig = {
+const config: SapHttpConfig = {
   url: 'https://sap.example.com',
   authType: 'basic',
   username: 'u',

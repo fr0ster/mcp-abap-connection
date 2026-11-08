@@ -13,13 +13,15 @@
  * Requires:
  *   - SAP NW RFC SDK installed (SAPNWRFC_HOME set)
  *   - @mcp-abap-adt/sap-rfc-lite installed
- *   - An env file with SAP_URL, SAP_USERNAME, SAP_PASSWORD, SAP_CLIENT
+ *   - An env file with the application server's address SAP_ASHOST and
+ *     SAP_SYSNR, and SAP_CLIENT, SAP_LANGUAGE, SAP_USERNAME, SAP_PASSWORD
+ *     (optional SAP_SAPROUTER); no URL is read
  *   - for SNC: Windows or macOS with the Secure Login Client, and
  *     SAP_SNC_PARTNERNAME in the env file (optional SAP_SNC_QOP, SAP_SNC_LIB,
  *     SAP_SNC_MYNAME)
- *   - for SNC through a message server: the SNC settings, plus SAP_MSHOST and
- *     SAP_MSSERV or SAP_SYSID (optional SAP_GROUP, default PUBLIC, and
- *     SAP_SAPROUTER)
+ *   - for SNC through a message server: the SNC settings, plus SAP_MSHOST,
+ *     SAP_MSSERV or SAP_SYSID (or both), SAP_GROUP, SAP_CLIENT, SAP_LANGUAGE
+ *     (optional SAP_SAPROUTER)
  *
  * Each block states where it can run; elsewhere it is skipped with the reason
  * in its title — not being runnable on this machine is not a failure.
@@ -35,14 +37,15 @@ import {
   SncLogonProvider,
 } from '@mcp-abap-adt/auth-providers';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
+import type {
+  ISapRfcApplicationServer,
+  ISapRfcConfig,
+  ISapRfcMessageServer,
+} from '@mcp-abap-adt/interfaces-auth-sap';
 import * as dotenv from 'dotenv';
-import type { SapConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { RfcTransport } from '../connection/RfcTransport.js';
-import {
-  rfcConversationFrom,
-  rfcParamsFrom,
-} from '../connection/rfcConversation.js';
+import { rfcConversationFrom } from '../connection/rfcConversation.js';
 import type { ILogger } from '../logger.js';
 
 // Load env file — default to e19.env, override via SAP_ENV_FILE
@@ -56,20 +59,112 @@ const logger: ILogger = {
   debug: mock.fn(),
 };
 
-function buildConfig(): SapConfig {
+/** A variable of the env file, or `undefined` when it is absent or empty. */
+function env(name: string): string | undefined {
+  const value = process.env[name];
+  return value === undefined || value === '' ? undefined : value;
+}
+
+/** The names among `names` the env file does not state. */
+function lacking(names: readonly string[]): string | null {
+  const missing = names.filter((name) => env(name) === undefined);
+  return missing.length ? `${envFile} lacks ${missing.join(', ')}` : null;
+}
+
+/** `saprouter` exactly when the env file states one. */
+function router(): { saprouter?: string } {
+  const saprouter = env('SAP_SAPROUTER');
+  return saprouter === undefined ? {} : { saprouter };
+}
+
+/**
+ * The application server the env file states, or why it states none. Read as
+ * given: nothing of it comes from a URL.
+ */
+function applicationServer(): ISapRfcApplicationServer | string {
+  const ashost = env('SAP_ASHOST');
+  const sysnr = env('SAP_SYSNR');
+  const client = env('SAP_CLIENT');
+  const language = env('SAP_LANGUAGE');
+  if (
+    ashost === undefined ||
+    sysnr === undefined ||
+    client === undefined ||
+    language === undefined
+  ) {
+    return (
+      lacking(['SAP_ASHOST', 'SAP_SYSNR', 'SAP_CLIENT', 'SAP_LANGUAGE']) ?? ''
+    );
+  }
   return {
-    url: process.env.SAP_URL as string,
-    client: process.env.SAP_CLIENT as string,
-    username: process.env.SAP_USERNAME as string,
-    password: process.env.SAP_PASSWORD as string,
-    authType: (process.env.SAP_AUTH_TYPE as SapConfig['authType']) || 'basic',
+    connectionType: 'rfc',
+    authType: 'basic',
+    ashost,
+    sysnr,
+    client,
+    language,
+    ...router(),
   };
 }
 
-function overRfc(config: SapConfig) {
+/** The message server the env file states, or why it states none. */
+function messageServer(): ISapRfcMessageServer | string {
+  const mshost = env('SAP_MSHOST');
+  const group = env('SAP_GROUP');
+  const client = env('SAP_CLIENT');
+  const language = env('SAP_LANGUAGE');
+  const msserv = env('SAP_MSSERV');
+  const sysid = env('SAP_SYSID');
+  if (
+    mshost === undefined ||
+    group === undefined ||
+    client === undefined ||
+    language === undefined
+  ) {
+    return (
+      lacking(['SAP_MSHOST', 'SAP_GROUP', 'SAP_CLIENT', 'SAP_LANGUAGE']) ?? ''
+    );
+  }
+  const service =
+    msserv !== undefined
+      ? { msserv, ...(sysid === undefined ? {} : { sysid }) }
+      : sysid !== undefined
+        ? { sysid }
+        : undefined;
+  if (service === undefined) return `${envFile} lacks SAP_MSSERV or SAP_SYSID`;
+  return {
+    connectionType: 'rfc',
+    authType: 'basic',
+    mshost,
+    group,
+    client,
+    language,
+    ...router(),
+    ...service,
+  };
+}
+
+/** The user and password the basic block logs on with, or why there are none. */
+function basicCredential(): { username: string; password: string } | string {
+  const username = env('SAP_USERNAME');
+  const password = env('SAP_PASSWORD');
+  if (username === undefined || password === undefined) {
+    return lacking(['SAP_USERNAME', 'SAP_PASSWORD']) ?? '';
+  }
+  return { username, password };
+}
+
+/** What a block reads, once its availability said it can: never a reason. */
+function stated<T>(value: T | string): T {
+  if (typeof value === 'string') throw new Error(value);
+  return value;
+}
+
+function overRfc(config: ISapRfcConfig) {
+  const { username, password } = stated(basicCredential());
   return new AdtOnPremConnector(
     config,
-    new BasicAuthProvider(config.username ?? '', config.password ?? ''),
+    new BasicAuthProvider(username, password),
     new RfcTransport(rfcConversationFrom(config), logger),
     logger,
   );
@@ -106,13 +201,10 @@ function rfcUnavailable(): string | null {
 
 /** Why the basic-over-RFC block cannot run here, or null when it can. */
 function basicUnavailable(): string | null {
-  const missing = [
-    'SAP_URL',
-    'SAP_USERNAME',
-    'SAP_PASSWORD',
-    'SAP_CLIENT',
-  ].filter((name) => !process.env[name]);
-  if (missing.length) return `${envFile} lacks ${missing.join(', ')}`;
+  const address = applicationServer();
+  if (typeof address === 'string') return address;
+  const credential = basicCredential();
+  if (typeof credential === 'string') return credential;
   return rfcUnavailable();
 }
 
@@ -125,26 +217,23 @@ function sncUnavailable(): string | null {
   if (process.platform !== 'win32' && process.platform !== 'darwin') {
     return `SNC needs Windows or macOS with the Secure Login Client; this is ${process.platform}`;
   }
-  const missing = ['SAP_URL', 'SAP_CLIENT', 'SAP_SNC_PARTNERNAME'].filter(
-    (name) => !process.env[name],
-  );
-  if (missing.length) return `${envFile} lacks ${missing.join(', ')}`;
-  return rfcUnavailable();
+  const address = applicationServer();
+  if (typeof address === 'string') return address;
+  return lacking(['SAP_SNC_PARTNERNAME']) ?? rfcUnavailable();
 }
 
 /**
  * The same SNC logon, dialled through a message server and a logon group —
- * SAP_MSHOST plus SAP_MSSERV or SAP_SYSID, SAP_GROUP optional — instead of the
- * application server the url names.
+ * SAP_MSHOST with SAP_MSSERV or SAP_SYSID, and SAP_GROUP — instead of one
+ * application server.
  */
 function messageServerUnavailable(): string | null {
-  const snc = sncUnavailable();
-  if (snc) return snc;
-  if (!process.env.SAP_MSHOST) return `${envFile} lacks SAP_MSHOST`;
-  if (!process.env.SAP_MSSERV && !process.env.SAP_SYSID) {
-    return `${envFile} lacks SAP_MSSERV or SAP_SYSID`;
+  if (process.platform !== 'win32' && process.platform !== 'darwin') {
+    return `SNC needs Windows or macOS with the Secure Login Client; this is ${process.platform}`;
   }
-  return null;
+  const address = messageServer();
+  if (typeof address === 'string') return address;
+  return lacking(['SAP_SNC_PARTNERNAME']) ?? rfcUnavailable();
 }
 
 /** What a block registers its tests and hooks with. */
@@ -182,7 +271,7 @@ describeWhere(
 
     before(
       async () => {
-        conn = overRfc(buildConfig());
+        conn = overRfc(stated(applicationServer()));
         await conn.connect();
       },
       { timeout: 15_000 },
@@ -202,9 +291,8 @@ describeWhere(
       assert.match(conn.getSessionIdentity() ?? '', /^rfc-conversation=/);
     });
 
-    it('should return base URL matching config', async () => {
-      const baseUrl = await conn.getBaseUrl();
-      assert.strictEqual(baseUrl, process.env.SAP_URL);
+    it('has no HTTP origin: getBaseUrl() answers undefined', async () => {
+      assert.strictEqual(await conn.getBaseUrl(), undefined);
     });
 
     it('should return a session ID', () => {
@@ -293,7 +381,7 @@ describeWhere(
     it('refuses a call once the conversation has been given back', {
       timeout: 20_000,
     }, async () => {
-      const other = overRfc(buildConfig());
+      const other = overRfc(stated(applicationServer()));
       await other.connect();
       await other.disconnect();
 
@@ -309,31 +397,6 @@ describeWhere(
   },
 );
 
-describe('the parameters the conversation is dialled with', () => {
-  // Pure derivation, so these run wherever the suite does — the validation the
-  // per-transport class used to do in its constructor lives here now.
-  const config: SapConfig = {
-    url: 'http://saphost:8000',
-    client: '100',
-    username: 'USER',
-    password: 'PASS',
-    authType: 'basic',
-  };
-
-  it('refuses a config with no url to take a host from', () => {
-    assert.throws(
-      () => rfcParamsFrom({ ...config, url: '' }),
-      (e: unknown) => /url/i.test((e as Error).message),
-    );
-  });
-
-  it('takes a config with no credentials: the provider brings those', () => {
-    assert.doesNotThrow(() =>
-      rfcParamsFrom({ ...config, username: '', password: '' }),
-    );
-  });
-});
-
 describeWhere(
   'SNC over RFC, through the Secure Login Client (integration)',
   sncUnavailable(),
@@ -342,15 +405,11 @@ describeWhere(
 
     before(
       async () => {
-        const config: SapConfig = {
-          url: process.env.SAP_URL as string,
-          client: process.env.SAP_CLIENT as string,
-          authType: 'basic',
-        };
+        const config = stated(applicationServer());
         conn = new AdtOnPremConnector(
           config,
           SncLogonProvider.forSecureLoginClient({
-            partnerName: process.env.SAP_SNC_PARTNERNAME as string,
+            partnerName: env('SAP_SNC_PARTNERNAME') ?? '',
             qop: process.env.SAP_SNC_QOP || undefined,
             sncLib: process.env.SAP_SNC_LIB || undefined,
             myName: process.env.SAP_SNC_MYNAME || undefined,
@@ -386,20 +445,11 @@ describeWhere(
 
     before(
       async () => {
-        const config: SapConfig = {
-          url: process.env.SAP_URL as string,
-          client: process.env.SAP_CLIENT as string,
-          authType: 'basic',
-          mshost: process.env.SAP_MSHOST as string,
-          msserv: process.env.SAP_MSSERV || undefined,
-          sysid: process.env.SAP_SYSID || undefined,
-          group: process.env.SAP_GROUP || undefined,
-          saprouter: process.env.SAP_SAPROUTER || undefined,
-        };
+        const config = stated(messageServer());
         conn = new AdtOnPremConnector(
           config,
           SncLogonProvider.forSecureLoginClient({
-            partnerName: process.env.SAP_SNC_PARTNERNAME as string,
+            partnerName: env('SAP_SNC_PARTNERNAME') ?? '',
             qop: process.env.SAP_SNC_QOP || undefined,
             sncLib: process.env.SAP_SNC_LIB || undefined,
             myName: process.env.SAP_SNC_MYNAME || undefined,

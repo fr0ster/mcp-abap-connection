@@ -62,11 +62,18 @@ describe('the legacy on-prem wire', () => {
     // says yes, because there is nothing to be named. Answering "no session"
     // would refuse a system that works.
     assert.strictEqual(transport.sessionEstablished(), true);
-    assert.strictEqual(new OnPremHttpTransport().sessionEstablished(), false);
+    assert.strictEqual(
+      new OnPremHttpTransport(() => ({}), null, {
+        baseUrl: 'https://h',
+      }).sessionEstablished(),
+      false,
+    );
   });
 
   it('is still an on-prem wire, so it fits where one fits', () => {
-    const transport = new LegacyOnPremHttpTransport();
+    const transport = new LegacyOnPremHttpTransport(() => ({}), null, {
+      baseUrl: 'https://h',
+    });
 
     assert.strictEqual(transport.system, 'onprem');
     assert.strictEqual(transport.kind, 'onprem-http-legacy');
@@ -81,7 +88,6 @@ describe('the legacy on-prem wire', () => {
     (transport as unknown as { established: boolean }).established = true;
 
     await transport.close({
-      baseUrl: 'https://h',
       authorize: async () => {},
       logon: async () => {},
       observe: () => {},

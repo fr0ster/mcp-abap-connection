@@ -20,8 +20,13 @@ import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import { RfcTransport } from '../connection/RfcTransport.js';
 import { type SapStub, startSapStub } from './helpers/sapStub.js';
 
+/** The server every HTTP wire here is built for. */
+const BASE = 'https://sap.example.com';
+
+/** A bare HTTP wire, addressed at `BASE`. */
+const http = () => new HttpTransport(undefined, null, { baseUrl: BASE });
+
 const context = (over: Partial<Record<string, unknown>> = {}) => ({
-  baseUrl: 'https://sap.example.com',
   authorize: async (headers: Record<string, string>) => {
     headers.Authorization = 'Basic dTpw';
   },
@@ -57,7 +62,7 @@ const withToken = async () => ({
 
 describe('establishing over HTTP', () => {
   it('asks the discovery endpoint for a token', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     const sent = intercept(transport, withToken);
 
     await transport.establish(context());
@@ -69,16 +74,17 @@ describe('establishing over HTTP', () => {
     assert.strictEqual(sent[0].headers?.['x-csrf-token'], 'fetch');
   });
 
-  it('addresses the endpoint with the base url the caller named', async () => {
+  it('addresses the endpoint with the base url the wire was built with', async () => {
     // Over RFC the same string went into `REQUEST_LINE-URI`, where an absolute
     // URL dumped the FM with STRING_OFFSET_TOO_LARGE. Building it is the HTTP
-    // wire's business precisely because only HTTP can address one.
-    const transport = new HttpTransport();
+    // wire's business precisely because only HTTP can address one — so the
+    // HTTP wire holds its base URL, and the connection hands it none.
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: 'https://other.example.com',
+    });
     const sent = intercept(transport, withToken);
 
-    await transport.establish(
-      context({ baseUrl: 'https://other.example.com' }),
-    );
+    await transport.establish(context());
 
     assert.strictEqual(
       sent[0].url.startsWith('https://other.example.com/'),
@@ -87,7 +93,7 @@ describe('establishing over HTTP', () => {
   });
 
   it('carries the credential the caller handed it', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     const sent = intercept(transport, withToken);
 
     await transport.establish(context());
@@ -96,7 +102,7 @@ describe('establishing over HTTP', () => {
   });
 
   it('keeps the token, so a mutation can present it', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     intercept(transport, withToken);
 
     await transport.establish(context());
@@ -105,7 +111,7 @@ describe('establishing over HTTP', () => {
   });
 
   it('keeps the cookies that came with it', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     intercept(transport, withToken);
 
     await transport.establish(context());
@@ -120,7 +126,7 @@ describe('establishing over HTTP', () => {
     // The wire folds the response into its own state; whether a new session id
     // is an establishment or a replacement is not its question.
     const seen: unknown[] = [];
-    const transport = new HttpTransport();
+    const transport = http();
     intercept(transport, withToken);
 
     await transport.establish(
@@ -132,7 +138,7 @@ describe('establishing over HTTP', () => {
 
   it('falls back to the legacy endpoint when the first has none', async () => {
     // BASIS < 7.52 has no /sap/bc/adt/core/discovery.
-    const transport = new HttpTransport();
+    const transport = http();
     const sent = intercept(transport, async (request) => {
       if (request.url.includes('/core/discovery')) {
         // What a system without the endpoint answers. A refused connection is
@@ -155,7 +161,7 @@ describe('establishing over HTTP', () => {
   });
 
   it('does not ask a second path of a host that is not answering', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     const sent = intercept(transport, async () => {
       throw new Error('connect ECONNREFUSED');
     });
@@ -165,7 +171,7 @@ describe('establishing over HTTP', () => {
   });
 
   it('refuses when the server answers without a token', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     intercept(transport, async () => ({ status: 200, headers: {}, data: '' }));
 
     await assert.rejects(transport.establish(context({ retries: 0 })));
@@ -174,7 +180,7 @@ describe('establishing over HTTP', () => {
   it('is a no-op once the wire already holds a token', async () => {
     // Asked again before a mutation, this must not spend a round trip — and
     // must not re-open the session the token is bound to.
-    const transport = new HttpTransport();
+    const transport = http();
     const sent = intercept(transport, withToken);
     await transport.establish(context());
 
@@ -184,7 +190,7 @@ describe('establishing over HTTP', () => {
   });
 
   it('forgets the token when the session it was bound to is gone', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     intercept(transport, withToken);
     await transport.establish(context());
 
@@ -339,7 +345,6 @@ describe('a refused logon over HTTP', () => {
 
     const error = await transport
       .establish({
-        baseUrl: stub.baseUrl,
         authorize: async () => {},
         logon: async () => {},
         observe: (headers) => observed.push(headers),
@@ -367,7 +372,6 @@ describe('a refused logon over HTTP', () => {
     const transport = wire();
 
     await transport.establish({
-      baseUrl: stub.baseUrl,
       authorize: async () => {},
       logon: async () => {},
       observe: () => {},

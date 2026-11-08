@@ -485,12 +485,26 @@ import {
   RfcTransport,
   rfcConversationFrom,
 } from "@mcp-abap-adt/connection";
+import type { SapRfcConfig } from "@mcp-abap-adt/connection";
 import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 
+// An RFC destination states its address — here one application server, its
+// host and system number — and its client and logon language. No URL.
+const rfcConfig: SapRfcConfig = {
+  connectionType: "rfc",
+  ashost: "your-sap-host",
+  sysnr: "00",
+  client: "100",
+  language: "EN",
+  authType: "basic",
+  username: "your-username",
+  password: "your-password",
+};
+
 const connection = new AdtOnPremConnector(
-  config,
-  new BasicAuthProvider(config.username!, config.password!),
-  new RfcTransport(rfcConversationFrom(config), logger),
+  rfcConfig,
+  new BasicAuthProvider(rfcConfig.username!, rfcConfig.password!),
+  new RfcTransport(rfcConversationFrom(rfcConfig), logger),
   logger,
 );
 
@@ -875,9 +889,9 @@ import {
 import { BasicAuthProvider } from "@mcp-abap-adt/auth-providers";
 
 const connection = new AdtOnPremConnector(
-  config,
-  new BasicAuthProvider(config.username!, config.password!),
-  new RfcTransport(rfcConversationFrom(config), logger),
+  rfcConfig,
+  new BasicAuthProvider(rfcConfig.username!, rfcConfig.password!),
+  new RfcTransport(rfcConversationFrom(rfcConfig), logger),
   logger,
 );
 ```
@@ -885,7 +899,7 @@ const connection = new AdtOnPremConnector(
 A third argument turns on the wire log, which is off by default:
 
 ```typescript
-new RfcTransport(rfcConversationFrom(config), logger, { logWire: true });
+new RfcTransport(rfcConversationFrom(rfcConfig), logger, { logWire: true });
 ```
 
 It adds three debug lines per request — header fields, request body, response

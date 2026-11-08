@@ -8,6 +8,10 @@
  * system and a transport is the caller stating which system it is dialling
  * and what it travels over — the rule the connectors themselves follow.
  *
+ * **Each wire takes its own config shape.** The HTTP wires take an
+ * `ISapHttpConfig` (its URL is their base URL), RFC an `ISapRfcConfig` (its
+ * stated address, no URL); the compiler refuses the other one.
+ *
  * **A new instance on every call.** One connection instance is one SAP
  * session: after its `disconnect()` (or a logoff of its own) it is spent, and
  * a new session is a new call to this.
@@ -22,7 +26,10 @@
  */
 import type { AgentOptions } from 'node:https';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
-import type { SapConfig } from '../config/sapConfig.js';
+import type {
+  ISapHttpConfig,
+  ISapRfcConfig,
+} from '@mcp-abap-adt/interfaces-auth-sap';
 import type { ILogger } from '../logger.js';
 import { AdtCloudConnector } from './AdtCloudConnector.js';
 import { AdtOnPremConnector } from './AdtOnPremConnector.js';
@@ -32,10 +39,8 @@ import { OnPremHttpTransport } from './OnPremHttpTransport.js';
 import { type IRfcTransportOptions, RfcTransport } from './RfcTransport.js';
 import { rfcConversationFrom } from './rfcConversation.js';
 
-/** What every combination takes. */
+/** What every combination takes; each states the shape of its `config`. */
 interface ConnectionSpecBase<TCredential extends IAuthProvider> {
-  /** The system: its URL, client and, over RFC, what the conversation needs. */
-  config: SapConfig;
   /** The credential, handed to the connector as it is. */
   credential: TCredential;
   /** The connection's logger. Absent: none. */
@@ -52,6 +57,8 @@ interface ConnectionSpecBase<TCredential extends IAuthProvider> {
 
 /** What the HTTP wires take besides. */
 interface HttpWireOptions {
+  /** The system: its URL and client. An HTTP config, never an RFC one. */
+  config: ISapHttpConfig;
   /**
    * The HTTPS agent's options — `ca`, `rejectUnauthorized` and the like, not
    * the credential (its TLS material arrives at logon). Absent: none.
@@ -89,6 +96,11 @@ export interface OnPremRfcSpec<
 > extends ConnectionSpecBase<TCredential> {
   system: 'onprem';
   transport: 'rfc';
+  /**
+   * The system: its stated RFC address, client and language. An RFC config,
+   * which has no URL.
+   */
+  config: ISapRfcConfig;
   /** The RFC wire's own options (`logWire`, `maxLoggedBodyChars`). */
   rfc?: IRfcTransportOptions | undefined;
   /**
@@ -123,6 +135,14 @@ export type CreatedConnection<
       OnPremHttpTransport | LegacyOnPremHttpTransport | RfcTransport
     >;
 
+/** What an HTTP wire addresses: the config's client and its URL. */
+function httpAddress(spec: { config: ISapHttpConfig }): {
+  client?: string;
+  baseUrl: string;
+} {
+  return { client: spec.config.client, baseUrl: spec.config.url };
+}
+
 export function createConnection<TCredential extends IAuthProvider>(
   spec: ConnectionSpec<TCredential>,
 ): CreatedConnection<TCredential> {
@@ -138,14 +158,13 @@ export function createConnection<TCredential extends IAuthProvider>(
   }
   const logger = spec.logger ?? null;
   const wireLogger = spec.wireLogger ?? null;
-  const address = { client: spec.config.client, baseUrl: spec.config.url };
 
   if (system === 'cloud' && transport === 'http') {
     const http = spec as CloudHttpSpec<TCredential>;
     return new AdtCloudConnector(
-      spec.config,
+      http.config,
       spec.credential,
-      new CloudHttpTransport(http.agentOptions, wireLogger, address),
+      new CloudHttpTransport(http.agentOptions, wireLogger, httpAddress(http)),
       logger,
       spec.sessionId,
       http.session,
@@ -154,9 +173,9 @@ export function createConnection<TCredential extends IAuthProvider>(
   if (system === 'onprem' && transport === 'http') {
     const http = spec as OnPremHttpSpec<TCredential>;
     return new AdtOnPremConnector(
-      spec.config,
+      http.config,
       spec.credential,
-      new OnPremHttpTransport(http.agentOptions, wireLogger, address),
+      new OnPremHttpTransport(http.agentOptions, wireLogger, httpAddress(http)),
       logger,
       spec.sessionId,
       http.session,
@@ -165,9 +184,13 @@ export function createConnection<TCredential extends IAuthProvider>(
   if (system === 'onprem' && transport === 'legacy-http') {
     const http = spec as OnPremHttpSpec<TCredential>;
     return new AdtOnPremConnector(
-      spec.config,
+      http.config,
       spec.credential,
-      new LegacyOnPremHttpTransport(http.agentOptions, wireLogger, address),
+      new LegacyOnPremHttpTransport(
+        http.agentOptions,
+        wireLogger,
+        httpAddress(http),
+      ),
       logger,
       spec.sessionId,
       http.session,
@@ -176,9 +199,9 @@ export function createConnection<TCredential extends IAuthProvider>(
   if (system === 'onprem' && transport === 'rfc') {
     const rfc = spec as OnPremRfcSpec<TCredential>;
     return new AdtOnPremConnector(
-      spec.config,
+      rfc.config,
       spec.credential,
-      new RfcTransport(rfcConversationFrom(spec.config), wireLogger, rfc.rfc),
+      new RfcTransport(rfcConversationFrom(rfc.config), wireLogger, rfc.rfc),
       logger,
       spec.sessionId,
     );

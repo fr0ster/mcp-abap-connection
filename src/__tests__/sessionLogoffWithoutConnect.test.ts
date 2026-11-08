@@ -14,7 +14,7 @@ import { Duplex } from 'node:stream';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
-import type { SapConfig } from '../config/sapConfig.js';
+import type { SapHttpConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { createConnection } from '../connection/createConnection.js';
@@ -49,7 +49,7 @@ afterEach(async () => {
   await stub.close();
 });
 
-function config(): SapConfig {
+function config(): SapHttpConfig {
   return {
     url: stub.baseUrl,
     client: '100',

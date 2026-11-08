@@ -16,7 +16,7 @@ import {
   BasicAuthProvider,
   TokenAuthProvider,
 } from '@mcp-abap-adt/auth-providers';
-import type { SapConfig } from '../../config/sapConfig.js';
+import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
@@ -24,7 +24,7 @@ import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { RfcTransport } from '../../connection/RfcTransport.js';
 import type { Connection, ConnectorFixture } from './contract.js';
 
-const config: SapConfig = {
+const config: SapHttpConfig = {
   url: 'https://sap.example.com',
   authType: 'basic',
   username: 'u',

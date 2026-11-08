@@ -24,7 +24,7 @@ import assert from 'node:assert/strict';
 import { describe, it, mock } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
-import type { SapConfig } from '../config/sapConfig.js';
+import type { ISapRfcConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type {
   IAdtTransportRequest,
@@ -33,12 +33,16 @@ import type {
 } from '../connection/IAdtTransport.js';
 import { holdsNoSession } from './helpers/transportStub.js';
 
-const config: SapConfig = {
-  url: 'http://saphost:8000',
+/** An RFC destination states its address; it has no URL to read one from. */
+const config: ISapRfcConfig = {
+  connectionType: 'rfc',
   authType: 'basic',
   username: 'USER',
   password: 'PASS',
+  ashost: 'saphost',
+  sysnr: '00',
   client: '100',
+  language: 'EN',
 };
 
 const credential: IAuthProvider = new BasicAuthProvider('USER', 'PASS');
@@ -123,6 +127,43 @@ describe('connect() over an RFC transport', () => {
     for (const request of sent) {
       assert.strictEqual(request.url.startsWith('/'), true);
     }
+  });
+});
+
+describe('an RFC connection without a URL', () => {
+  it('is built from a config that states no URL', () => {
+    assert.doesNotThrow(() => onPremOverRfc());
+  });
+
+  it('connects, reading no URL to establish', async () => {
+    const { conn } = onPremOverRfc();
+
+    await conn.connect();
+
+    assert.strictEqual(conn.getSessionIdentity(), 'rfc-conversation=C1');
+  });
+
+  it('answers getBaseUrl() with undefined: it has no HTTP origin', async () => {
+    const { conn } = onPremOverRfc();
+
+    assert.strictEqual(await conn.getBaseUrl(), undefined);
+  });
+
+  it('carries a request as a path', async () => {
+    const { conn, sent } = onPremOverRfc();
+    await conn.connect();
+    sent.length = 0;
+
+    await conn.makeAdtRequest({
+      url: '/sap/bc/adt/core/discovery',
+      method: 'GET',
+      timeout: 30000,
+    });
+
+    assert.deepStrictEqual(
+      sent.map((request) => request.url),
+      ['/sap/bc/adt/core/discovery'],
+    );
   });
 });
 

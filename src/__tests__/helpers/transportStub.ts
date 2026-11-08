@@ -45,8 +45,10 @@ export function holdsItsSession(
     url: string;
     headers?: Record<string, string>;
   }) => Promise<{ headers?: unknown }>,
+  /** The server it addresses, as an HTTP wire holds its own. */
+  baseUrl = 'https://sap.example.com',
 ) {
-  const state = new HttpTransport();
+  const state = new HttpTransport(undefined, null, { baseUrl });
   return {
     // Empty, and true of it: an HTTP wire's session arrives with the
     // establishing call below, so there is nothing to ask for and nothing to
@@ -60,7 +62,6 @@ export function holdsItsSession(
      * session, and the connection would rightly refuse to connect over it.
      */
     establish: async (context: {
-      baseUrl: string;
       authorize: (headers: Record<string, string>) => Promise<void>;
       observe: (headers: unknown) => void;
     }) => {
@@ -69,7 +70,7 @@ export function holdsItsSession(
       await context.authorize(auth);
       const response = await send({
         method: 'GET',
-        url: `${context.baseUrl}/sap/bc/adt/core/discovery`,
+        url: `${baseUrl}/sap/bc/adt/core/discovery`,
         headers: { ...auth, 'x-csrf-token': 'fetch' },
       });
       context.observe(response.headers);

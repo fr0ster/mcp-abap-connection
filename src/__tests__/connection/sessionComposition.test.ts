@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
-import type { SapConfig } from '../../config/sapConfig.js';
+import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { assertMatchObject } from '../helpers/assertions.js';
@@ -105,7 +105,7 @@ async function startStub(): Promise<Stub> {
   };
 }
 
-const configFor = (baseUrl: string): SapConfig => ({
+const configFor = (baseUrl: string): SapHttpConfig => ({
   url: baseUrl,
   client: '100',
   authType: 'basic',
@@ -251,7 +251,7 @@ describe('a credential refused while establishing', () => {
         client: '100',
         authType: 'jwt',
         jwtToken: 'STALE',
-      } as SapConfig,
+      },
       TokenAuthProvider.from({
         getToken: async () => (refreshed ? 'FRESH' : 'STALE'),
         refreshToken: async () => {
@@ -261,7 +261,11 @@ describe('a credential refused while establishing', () => {
           return 'FRESH';
         },
       }),
-      cloudHttpTransport({ url: stub.baseUrl, client: '100' } as SapConfig),
+      cloudHttpTransport({
+        url: stub.baseUrl,
+        client: '100',
+        authType: 'jwt',
+      }),
       null,
     );
 

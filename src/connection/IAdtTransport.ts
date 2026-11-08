@@ -80,10 +80,11 @@ export interface IAdtTransportResponse {
  * session is one request, and one that is retried is one the caller cannot
  * reason about — a second session may already be open by the time the first
  * answer arrives.
+ *
+ * No address: a wire that addresses a server (HTTP) was handed its base URL
+ * at construction, and one that does not (RFC) has none to be handed.
  */
 export interface IAdtSessionContext {
-  /** The server, for a wire that addresses one. */
-  baseUrl: string;
   /**
    * Fill the credential into a request the wire itself originates — the CSRF
    * fetch, the cloud preflight. Not the logoff: it carries the session's cookie

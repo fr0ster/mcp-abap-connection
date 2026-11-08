@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type { AuthOutcome, ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
-import type { SapConfig } from '../config/sapConfig.js';
+import type { ISapRfcConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { AuthRefusedError, WireLogonError } from '../connection/authErrors.js';
 import type { IAdtSessionContext } from '../connection/IAdtTransport.js';
@@ -40,10 +40,13 @@ const RAW = Object.assign(new Error('Logon failed: password incorrect'), {
   key: 'RFC_LOGON_FAILURE',
 });
 
-const config: SapConfig = {
-  url: 'http://saphost:8000',
+const config: ISapRfcConfig = {
+  connectionType: 'rfc',
   authType: 'basic',
+  ashost: 'saphost',
+  sysnr: '00',
   client: '100',
+  language: 'EN',
 };
 
 /** `refuse` is asked with the 1-based number of the open; a returned error refuses it. */
@@ -81,7 +84,6 @@ function contextOffering(
   seen: AuthOutcome[] = [],
 ): IAdtSessionContext {
   return {
-    baseUrl: 'http://saphost:8000',
     authorize: async () => {},
     logon: async (target) => {
       seen.push(offer(target));

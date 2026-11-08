@@ -56,7 +56,7 @@ describe('a credential that does not', () => {
     assert.strictEqual((conn as any).getCsrfToken(), 'CSRF-FROM-THE-WIRE');
   });
 
-  it('hands the wire the server, the credential, and somewhere to report', async () => {
+  it('hands the wire the credential and somewhere to report, and no server: the wire holds its own', async () => {
     const credential: IAuthProvider = credentialWriting({
       kind: 'test-basic',
       authorization: 'Basic dTpw',
@@ -76,11 +76,10 @@ describe('a credential that does not', () => {
     await (conn as any).establishSession();
 
     const context = wire.mock.calls[0].arguments[0] as {
-      baseUrl: string;
       authorize: (headers: Record<string, string>) => Promise<void>;
       observe: unknown;
     };
-    assert.strictEqual(context.baseUrl, config.url);
+    assert.ok(!('baseUrl' in context));
     const headers: Record<string, string> = {};
     await context.authorize(headers);
     assert.strictEqual(headers.Authorization, 'Basic dTpw');

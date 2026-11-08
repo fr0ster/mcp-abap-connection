@@ -110,7 +110,6 @@ describe('the HTTP logon target', () => {
   ): Promise<AuthOutcome> {
     let outcome: AuthOutcome = { ok: true };
     await transport.open({
-      baseUrl: stub.baseUrl,
       authorize: async () => {},
       logon: async (target) => {
         outcome = offer(target);
@@ -121,7 +120,9 @@ describe('the HTTP logon target', () => {
   }
 
   it('takes TLS material', async () => {
-    const transport = new HttpTransport();
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: stub.baseUrl,
+    });
 
     const outcome = await logonWith(transport, (t) =>
       t.tlsMaterial({ cert: 'C', key: 'K' }),
@@ -131,7 +132,9 @@ describe('the HTTP logon target', () => {
   });
 
   it('refuses logon parameters, in the fixed words', async () => {
-    const transport = new HttpTransport();
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: stub.baseUrl,
+    });
 
     const outcome = await logonWith(transport, (t) =>
       t.logonParameters({ snc_mode: '1' }),
@@ -163,10 +166,14 @@ describe('the HTTP logon target', () => {
     };
 
   it('builds the agent from the material the logon offered, over agentOptions', async () => {
-    const transport = new HttpTransport(() => ({
-      ca: 'THE-CA',
-      passphrase: 'from-options',
-    }));
+    const transport = new HttpTransport(
+      () => ({
+        ca: 'THE-CA',
+        passphrase: 'from-options',
+      }),
+      null,
+      { baseUrl: stub.baseUrl },
+    );
 
     await logonWith(transport, (t) =>
       t.tlsMaterial({ cert: 'THE-CERT', key: 'THE-KEY', passphrase: 'mine' }),
@@ -180,11 +187,15 @@ describe('the HTTP logon target', () => {
   });
 
   it('takes only the material fields: an extra key or an explicit undefined does not override agentOptions', async () => {
-    const transport = new HttpTransport(() => ({
-      ca: 'THE-CA',
-      rejectUnauthorized: true,
-      passphrase: 'from-options',
-    }));
+    const transport = new HttpTransport(
+      () => ({
+        ca: 'THE-CA',
+        rejectUnauthorized: true,
+        passphrase: 'from-options',
+      }),
+      null,
+      { baseUrl: stub.baseUrl },
+    );
 
     await logonWith(transport, (t) =>
       t.tlsMaterial({
@@ -205,7 +216,9 @@ describe('the HTTP logon target', () => {
   });
 
   it('keeps the client when a first logon offers nothing but undefined fields', async () => {
-    const transport = new HttpTransport();
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: stub.baseUrl,
+    });
     const first = (transport as any).client();
 
     await logonWith(transport, (t) => t.tlsMaterial({ cert: undefined }));
@@ -214,7 +227,9 @@ describe('the HTTP logon target', () => {
   });
 
   it('keeps the client for the same material, compared by value', async () => {
-    const transport = new HttpTransport();
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: stub.baseUrl,
+    });
     await logonWith(transport, (t) =>
       t.tlsMaterial({ pfx: Buffer.from('bytes'), passphrase: 'p' }),
     );
@@ -228,7 +243,9 @@ describe('the HTTP logon target', () => {
   });
 
   it('rebuilds the client for different material, and the cookie jar survives', async () => {
-    const transport = new HttpTransport();
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: stub.baseUrl,
+    });
     await logonWith(transport, (t) => t.tlsMaterial({ cert: 'ONE', key: 'K' }));
     const first = (transport as any).client();
     transport.ingest({ 'set-cookie': ['SAP_SESSIONID_X_100=S1; Path=/'] });
@@ -357,13 +374,14 @@ describe('a 401 while establishing', () => {
 
 describe('the wire’s establishment', () => {
   it('lets the provider’s refusal to authorize through at once, whatever isFatal says', async () => {
-    const transport = new HttpTransport();
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: stub.baseUrl,
+    });
     let asked = 0;
     const refusal = new AuthRefusedError(REFUSAL, 'request');
 
     const error = await transport
       .establish({
-        baseUrl: stub.baseUrl,
         authorize: async () => {
           asked += 1;
           throw refusal;

@@ -10,14 +10,14 @@
  */
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
-import type { SapConfig } from '../../config/sapConfig.js';
+import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import type { ILogger } from '../../logger.js';
 
 export function onPremHttpTransport(
-  config: SapConfig,
+  config: SapHttpConfig,
   logger: ILogger | null = null,
 ): OnPremHttpTransport {
   return new OnPremHttpTransport(
@@ -31,7 +31,7 @@ export function onPremHttpTransport(
 }
 
 export function onPrem(
-  config: SapConfig,
+  config: SapHttpConfig,
   logger: ILogger | null = null,
   sessionId?: string,
 ): AdtOnPremConnector<IAuthProvider, OnPremHttpTransport> {
@@ -46,7 +46,7 @@ export function onPrem(
 
 /** The cloud wire, built the way a consumer must build it. */
 export function cloudHttpTransport(
-  config: SapConfig,
+  config: SapHttpConfig,
   logger: ILogger | null = null,
 ): CloudHttpTransport {
   return new CloudHttpTransport(() => ({}), logger, {

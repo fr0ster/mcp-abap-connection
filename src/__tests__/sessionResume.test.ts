@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
-import type { SapConfig } from '../config/sapConfig.js';
+import type { SapHttpConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import {
   type CreatedConnection,
@@ -40,7 +40,7 @@ afterEach(async () => {
   await stub.close();
 });
 
-function config(): SapConfig {
+function config(): SapHttpConfig {
   return {
     url: stub.baseUrl,
     client: '100',
@@ -422,7 +422,14 @@ describe('what `session` may be', () => {
         createConnection({
           system: 'onprem',
           transport: 'rfc',
-          config: { ...config(), systemNumber: '00' } as SapConfig,
+          config: {
+            connectionType: 'rfc',
+            authType: 'basic',
+            ashost: 'saphost',
+            sysnr: '00',
+            client: '100',
+            language: 'EN',
+          },
           credential: new BasicAuthProvider('u', 'p'),
           session: `${COOKIE}=S1`,
         }),

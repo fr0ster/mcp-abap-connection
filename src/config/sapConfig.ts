@@ -1,13 +1,20 @@
 // Import interfaces from shared package
 import type {
   ISapConfig,
+  ISapHttpConfig,
+  ISapRfcConfig,
   SapAuthType,
   SapConnectionType,
 } from '@mcp-abap-adt/interfaces-auth-sap';
 
 // Re-export for backward compatibility
 export type { SapAuthType, SapConnectionType };
+/** A system's configuration: `SapHttpConfig` or `SapRfcConfig`, by `connectionType`. */
 export type SapConfig = ISapConfig;
+/** An HTTP destination: its URL, no RFC key. */
+export type SapHttpConfig = ISapHttpConfig;
+/** An RFC destination: its stated address, client and language, no URL. */
+export type SapRfcConfig = ISapRfcConfig;
 
 export function sapConfigSignature(config: ISapConfig): string {
   // Include token preview (first 10 and last 10 chars) to detect token changes

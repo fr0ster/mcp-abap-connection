@@ -383,13 +383,25 @@ export class HttpTransport implements IAdtTransport {
     private readonly agentOptions: () => AgentOptions = () => ({}),
     protected readonly logger: ILogger | null = null,
     /**
-     * The SAP client (mandant) every request on this wire addresses, from the
-     * first one on: the establishing call is where the session and its CSRF
-     * token are issued, so a client applied any later is applied to a session
-     * that already lives in another one. See `clientHeaders()`.
+     * `client`: the SAP client (mandant) every request on this wire
+     * addresses, from the first one on: the establishing call is where the
+     * session and its CSRF token are issued, so a client applied any later is
+     * applied to a session that already lives in another one. See
+     * `clientHeaders()`.
+     *
+     * `baseUrl`: the system this wire addresses, required. A path a caller
+     * sends is put on it, and every request the wire originates itself — the
+     * CSRF fetch, the cloud preflight, the logoff — goes to it.
      */
-    private readonly options: { client?: string; baseUrl?: string } = {},
+    private readonly options: { client?: string; baseUrl: string },
   ) {}
+
+  /** The base URL without a trailing slash, for a path to be put on. */
+  protected base(): string {
+    return this.options.baseUrl.endsWith('/')
+      ? this.options.baseUrl.slice(0, -1)
+      : this.options.baseUrl;
+  }
 
   /**
    * Fold a response into the wire state.
@@ -489,9 +501,7 @@ export class HttpTransport implements IAdtTransport {
       );
     }
 
-    const base = context.baseUrl.endsWith('/')
-      ? context.baseUrl.slice(0, -1)
-      : context.baseUrl;
+    const base = this.base();
     const endpoints = [
       `${base}${CSRF_CONFIG.ENDPOINT}`,
       `${base}${CSRF_CONFIG.FALLBACK_ENDPOINT}`,
@@ -686,9 +696,7 @@ export class HttpTransport implements IAdtTransport {
     // move the session out from under a lock taken against the first.
     if (this.token) return;
 
-    const base = context.baseUrl.endsWith('/')
-      ? context.baseUrl.slice(0, -1)
-      : context.baseUrl;
+    const base = this.base();
     const endpoints = [
       `${base}${CSRF_CONFIG.ENDPOINT}`,
       // BASIS < 7.52 has no /sap/bc/adt/core/discovery.
@@ -979,11 +987,8 @@ export class HttpTransport implements IAdtTransport {
 
   /** A path becomes an address; anything already absolute is left alone. */
   private address(url: string): string {
-    if (!url.startsWith('/') || !this.options.baseUrl) return url;
-    const base = this.options.baseUrl.endsWith('/')
-      ? this.options.baseUrl.slice(0, -1)
-      : this.options.baseUrl;
-    return `${base}${url}`;
+    if (!url.startsWith('/')) return url;
+    return `${this.base()}${url}`;
   }
 
   /**
@@ -1083,7 +1088,7 @@ export class HttpTransport implements IAdtTransport {
   ): Promise<void> {
     await this.sendLogoff(
       context,
-      `${context.baseUrl}${ICF_LOGOFF_PATH}`,
+      `${this.base()}${ICF_LOGOFF_PATH}`,
       { ...snapshot, session: {} },
       written,
     );

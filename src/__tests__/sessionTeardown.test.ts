@@ -316,7 +316,6 @@ describe('the cloud logoff link', () => {
     const authorize = mock.fn();
 
     await transport.close({
-      baseUrl: 'https://sap.example.com',
       authorize,
       extraHeaders: {
         authorization: 'Bearer LEAKED',

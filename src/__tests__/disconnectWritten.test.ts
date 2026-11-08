@@ -25,7 +25,7 @@ import type { Socket } from 'node:net';
 import { Duplex } from 'node:stream';
 import { afterEach, describe, it } from 'node:test';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
-import type { SapConfig } from '../config/sapConfig.js';
+import type { SapHttpConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import type { ILogger } from '../logger.js';
@@ -188,7 +188,7 @@ async function standIn(
   };
 }
 
-const configFor = (url: string): SapConfig => ({
+const configFor = (url: string): SapHttpConfig => ({
   url,
   authType: 'basic',
   username: 'u',
@@ -368,11 +368,11 @@ describe('disconnect() resolves once the logoff is written', () => {
   describe('a failed connect() that logged off, and every establishment attempt', () => {
     it('cloud: a preflight session, then a renewable 401 at discovery — one logoff, no second establishment, the original failure', async () => {
       server = await standIn({ discoveryStatus: 401 });
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const { stubProvider } = await import('./helpers/stubProvider.js');
       const provider = stubProvider();
       const conn = new AdtCloudConnector(
@@ -562,11 +562,11 @@ describe('disconnect() resolves once the logoff is written', () => {
           ],
         },
       });
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
@@ -875,11 +875,11 @@ describe('disconnect() resolves once the logoff is written', () => {
     it('the establishment failing after the cloud preflight opened a session', async () => {
       // A refused establishment fails at once, with no retry to wait out.
       server = await standIn({ discoveryStatus: 401 });
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
@@ -981,7 +981,6 @@ describe('disconnect() resolves once the logoff is written', () => {
       server = await standIn();
       const transport = onPremHttpTransport(configFor(server.baseUrl));
       const context = {
-        baseUrl: server.baseUrl,
         authorize: async () => {},
         logon: async () => {},
         observe: () => {},
@@ -1053,7 +1052,6 @@ describe('disconnect() resolves once the logoff is written', () => {
       transport.ingest({ 'set-cookie': ['SAP_SESSIONID_STUB_100=; Path=/'] });
       assert.strictEqual(transport.sessionEstablished(), false);
       await transport.close({
-        baseUrl: server.baseUrl,
         authorize: async () => {},
         logon: async () => {},
         observe: () => {},
@@ -1064,11 +1062,11 @@ describe('disconnect() resolves once the logoff is written', () => {
 
     it('cloud: a preflight session document without SAP_SESSIONID: nothing is sent', async () => {
       server = await standIn({ sessionCookie: false });
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
@@ -1128,11 +1126,11 @@ describe('disconnect() resolves once the logoff is written', () => {
           'sap-contextid=CTX; Path=/',
         ],
       });
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
@@ -1167,11 +1165,11 @@ describe('disconnect() resolves once the logoff is written', () => {
         discoveryStatus: 404,
         fallbackStatus: 404,
       });
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
@@ -1194,11 +1192,11 @@ describe('disconnect() resolves once the logoff is written', () => {
 
     it('cloud: a context in the jar stays off the logoff', async () => {
       server = await standIn();
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
@@ -1253,11 +1251,11 @@ describe('disconnect() resolves once the logoff is written', () => {
 
   it('on the cloud wire: has resolved while the server holds its answer', async () => {
     server = await standIn();
-    const config = {
+    const config: SapHttpConfig = {
       ...configFor(server.baseUrl),
       authType: 'jwt',
       jwtToken: 'TOKEN',
-    } as SapConfig;
+    };
     const conn = new AdtCloudConnector(
       config,
       TokenAuthProvider.fixed('TOKEN'),

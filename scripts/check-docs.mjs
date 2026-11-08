@@ -343,8 +343,9 @@ for (const file of documented) {
  * typechecked at all — `node --check` parses them and `wire` reads their call
  * sites.
  */
-const PLACEHOLDERS = `import type { SapConfig as _Cfg } from '@mcp-abap-adt/connection';
-declare const config: _Cfg & { username: string; password: string };
+const PLACEHOLDERS = `import type { SapHttpConfig as _HttpCfg, SapRfcConfig as _RfcCfg } from '@mcp-abap-adt/connection';
+declare const config: _HttpCfg & { username: string; password: string };
+declare const rfcConfig: _RfcCfg & { username: string; password: string };
 declare const logger: { debug(m: string): void; info(m: string): void; warn(m: string): void; error(m: string): void };
 declare const user: string;
 declare const pass: string;
