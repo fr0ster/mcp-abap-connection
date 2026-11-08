@@ -115,10 +115,15 @@ export type ConnectionSpec<TCredential extends IAuthProvider = IAuthProvider> =
   | OnPremHttpSpec<TCredential>
   | OnPremRfcSpec<TCredential>;
 
-/** Whatever a caller passed, read as the two words that pick the wire. */
-function stated(spec: unknown): { system: unknown; transport: unknown } {
-  const record = (spec ?? {}) as { system?: unknown; transport?: unknown };
-  return { system: record.system, transport: record.transport };
+/**
+ * Fixed words: nothing the caller passed is echoed back. Typed `never`: the
+ * compiler proves every combination of the spec type is handled before it,
+ * so only a caller that broke the types reaches it.
+ */
+function noSuchCombination(_spec: never): never {
+  throw new TypeError(
+    "createConnection: no such combination of system and transport. ABAP Cloud has one wire, 'http'; on-prem takes 'http', 'legacy-http' or 'rfc'. Both are stated by the caller, never inferred.",
+  );
 }
 
 /**
@@ -146,68 +151,80 @@ function httpAddress(spec: { config: ISapHttpConfig }): {
 export function createConnection<TCredential extends IAuthProvider>(
   spec: ConnectionSpec<TCredential>,
 ): CreatedConnection<TCredential> {
-  const { system, transport } = stated(spec);
-  // Fixed words, before anything is built.
-  if (
-    transport === 'rfc' &&
-    (spec as { session?: unknown }).session !== undefined
-  ) {
-    throw new TypeError(
-      "createConnection: an RFC session cannot be taken over — it is a conversation, not something a cookie names. 'session' is for the HTTP wires; over RFC, connect() opens a new session.",
-    );
-  }
   const logger = spec.logger ?? null;
   const wireLogger = spec.wireLogger ?? null;
 
-  if (system === 'cloud' && transport === 'http') {
-    const http = spec as CloudHttpSpec<TCredential>;
-    return new AdtCloudConnector(
-      http.config,
-      spec.credential,
-      new CloudHttpTransport(http.agentOptions, wireLogger, httpAddress(http)),
-      logger,
-      spec.sessionId,
-      http.session,
-    );
+  // The spec is a union discriminated by `transport` and `system`: each branch
+  // narrows it to one spec, so its config is that spec's shape.
+  switch (spec.transport) {
+    case 'http':
+      if (spec.system === 'cloud') {
+        return new AdtCloudConnector(
+          spec.config,
+          spec.credential,
+          new CloudHttpTransport(
+            spec.agentOptions,
+            wireLogger,
+            httpAddress(spec),
+          ),
+          logger,
+          spec.sessionId,
+          spec.session,
+        );
+      }
+      if (spec.system === 'onprem') {
+        return new AdtOnPremConnector(
+          spec.config,
+          spec.credential,
+          new OnPremHttpTransport(
+            spec.agentOptions,
+            wireLogger,
+            httpAddress(spec),
+          ),
+          logger,
+          spec.sessionId,
+          spec.session,
+        );
+      }
+      return noSuchCombination(spec);
+    case 'legacy-http':
+      if (spec.system === 'onprem') {
+        return new AdtOnPremConnector(
+          spec.config,
+          spec.credential,
+          new LegacyOnPremHttpTransport(
+            spec.agentOptions,
+            wireLogger,
+            httpAddress(spec),
+          ),
+          logger,
+          spec.sessionId,
+          spec.session,
+        );
+      }
+      return noSuchCombination(spec);
+    case 'rfc':
+      // Fixed words, before anything is built.
+      if (spec.session !== undefined) {
+        throw new TypeError(
+          "createConnection: an RFC session cannot be taken over — it is a conversation, not something a cookie names. 'session' is for the HTTP wires; over RFC, connect() opens a new session.",
+        );
+      }
+      if (spec.system === 'onprem') {
+        return new AdtOnPremConnector(
+          spec.config,
+          spec.credential,
+          new RfcTransport(
+            rfcConversationFrom(spec.config),
+            wireLogger,
+            spec.rfc,
+          ),
+          logger,
+          spec.sessionId,
+        );
+      }
+      return noSuchCombination(spec);
+    default:
+      return noSuchCombination(spec);
   }
-  if (system === 'onprem' && transport === 'http') {
-    const http = spec as OnPremHttpSpec<TCredential>;
-    return new AdtOnPremConnector(
-      http.config,
-      spec.credential,
-      new OnPremHttpTransport(http.agentOptions, wireLogger, httpAddress(http)),
-      logger,
-      spec.sessionId,
-      http.session,
-    );
-  }
-  if (system === 'onprem' && transport === 'legacy-http') {
-    const http = spec as OnPremHttpSpec<TCredential>;
-    return new AdtOnPremConnector(
-      http.config,
-      spec.credential,
-      new LegacyOnPremHttpTransport(
-        http.agentOptions,
-        wireLogger,
-        httpAddress(http),
-      ),
-      logger,
-      spec.sessionId,
-      http.session,
-    );
-  }
-  if (system === 'onprem' && transport === 'rfc') {
-    const rfc = spec as OnPremRfcSpec<TCredential>;
-    return new AdtOnPremConnector(
-      rfc.config,
-      spec.credential,
-      new RfcTransport(rfcConversationFrom(rfc.config), wireLogger, rfc.rfc),
-      logger,
-      spec.sessionId,
-    );
-  }
-  // Fixed words: nothing the caller passed is echoed back.
-  throw new TypeError(
-    "createConnection: no such combination of system and transport. ABAP Cloud has one wire, 'http'; on-prem takes 'http', 'legacy-http' or 'rfc'. Both are stated by the caller, never inferred.",
-  );
 }

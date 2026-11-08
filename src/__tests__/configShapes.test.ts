@@ -4,7 +4,8 @@
  * fails the moment it does. The calls sit in functions that are never run.
  *
  * - each `createConnection` spec takes its own config shape: an HTTP wire an
- *   `ISapHttpConfig`, RFC an `ISapRfcConfig`;
+ *   `ISapHttpConfig`, RFC an `ISapRfcConfig`; no other system and wire pair
+ *   compiles;
  * - an HTTP transport is built with its base URL: there is no default;
  * - the session context a connection hands a wire carries no base URL.
  */
@@ -68,6 +69,23 @@ function specsRefuseTheOtherShape(): void {
   });
 }
 
+function noOtherCombinationCompiles(): void {
+  // @ts-expect-error ABAP Cloud has one wire, 'http'
+  createConnection({
+    system: 'cloud',
+    transport: 'rfc',
+    config: rfc,
+    credential,
+  });
+  // @ts-expect-error ABAP Cloud has no BASIS 7.40 wire
+  createConnection({
+    system: 'cloud',
+    transport: 'legacy-http',
+    config: http,
+    credential,
+  });
+}
+
 function httpTransportsNeedTheirBaseUrl(): void {
   // @ts-expect-error no base URL: an HTTP wire has nothing to address
   new HttpTransport();
@@ -88,6 +106,7 @@ describe('the shapes the wires take', () => {
   it('are checked by compiling this file', () => {
     // Referenced so the compiler and the linter see them used; never called.
     assert.strictEqual(typeof specsRefuseTheOtherShape, 'function');
+    assert.strictEqual(typeof noOtherCombinationCompiles, 'function');
     assert.strictEqual(typeof httpTransportsNeedTheirBaseUrl, 'function');
     assert.strictEqual(typeof theSessionContextHasNoBaseUrl, 'function');
   });

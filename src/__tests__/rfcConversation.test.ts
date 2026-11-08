@@ -249,6 +249,23 @@ describe('the conversation factory', () => {
     ]);
   });
 
+  it('lets the provider’s logon win where it names a key of the address', () => {
+    // The logon is spread OVER the address: what the provider writes at the
+    // logon is what the SDK gets.
+    const constructed = constructedFrom(() => {
+      rfcConversationFrom(appServer)({ user: 'U', lang: 'FR', client: '300' });
+    });
+    assert.deepStrictEqual(constructed, [
+      {
+        ashost: 'saphost',
+        sysnr: '42',
+        client: '300',
+        lang: 'FR',
+        user: 'U',
+      },
+    ]);
+  });
+
   it('builds its factory from any stated address without throwing', () => {
     assert.doesNotThrow(() => rfcConversationFrom(appServer));
     assert.doesNotThrow(() => rfcConversationFrom(messageServer));
