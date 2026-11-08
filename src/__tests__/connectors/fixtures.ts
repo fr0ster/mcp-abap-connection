@@ -21,7 +21,10 @@ import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
-import { RfcTransport } from '../../connection/RfcTransport.js';
+import {
+  type IRfcConversation,
+  RfcTransport,
+} from '../../connection/RfcTransport.js';
 import type { Connection, ConnectorFixture } from './contract.js';
 
 const config: SapHttpConfig = {
@@ -123,7 +126,7 @@ export async function cloudFixture(): Promise<ConnectorFixture> {
         transport,
         null,
       );
-      return conn as unknown as Connection;
+      return conn;
     },
     sessionsOpened: wire.sessionsOpened,
     refuseNext: wire.refuseNext,
@@ -146,7 +149,7 @@ export async function onPremHttpFixture(): Promise<ConnectorFixture> {
         transport,
         null,
       );
-      return conn as unknown as Connection;
+      return conn;
     },
     sessionsOpened: wire.sessionsOpened,
     refuseNext: wire.refuseNext,
@@ -158,7 +161,7 @@ export async function onPremRfcFixture(): Promise<ConnectorFixture> {
   let opened = 0;
   let refuse = false;
 
-  const conversation = {
+  const conversation: IRfcConversation = {
     get alive() {
       return opened > 0 && !closed;
     },
@@ -192,10 +195,10 @@ export async function onPremRfcFixture(): Promise<ConnectorFixture> {
       const conn = new AdtOnPremConnector(
         config,
         new BasicAuthProvider('u', 'p'),
-        new RfcTransport(() => conversation as never, null),
+        new RfcTransport(() => conversation, null),
         null,
       );
-      return conn as unknown as Connection;
+      return conn;
     },
     sessionsOpened: () => opened,
     refuseNext: () => {

@@ -82,7 +82,7 @@ function closeThrowsSynchronously(
   transport: OnPremHttpTransport,
 ): () => number {
   let calls = 0;
-  (transport as unknown as { close: () => never }).close = () => {
+  transport.close = () => {
     calls += 1;
     throw new Error('the goodbye threw synchronously');
   };

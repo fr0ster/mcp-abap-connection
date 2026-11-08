@@ -371,10 +371,7 @@ describe('explicit connect is required', () => {
       const conn = onPrem(configFor(`http://127.0.0.1:${port}`), null);
       await assert.rejects(conn.connect());
 
-      assert.strictEqual(
-        (conn as unknown as { getCookies(): string | null }).getCookies(),
-        null,
-      );
+      assert.strictEqual(conn.transport.cookies(), null);
       assert.strictEqual(conn.getSessionIdentity(), null);
     } finally {
       await new Promise<void>((resolve, reject) =>
