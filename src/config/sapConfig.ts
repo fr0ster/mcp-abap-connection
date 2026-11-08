@@ -30,8 +30,19 @@ export function sapConfigSignature(config: ISapConfig): string {
     : null;
 
   return JSON.stringify({
+    connectionType: config.connectionType ?? null,
     url: config.url,
+    // The RFC address, as stated: two configs that dial different servers
+    // never share a signature. An HTTP config has none of these.
+    ashost: config.ashost ?? null,
+    sysnr: config.sysnr ?? null,
+    mshost: config.mshost ?? null,
+    msserv: config.msserv ?? null,
+    sysid: config.sysid ?? null,
+    group: config.group ?? null,
+    saprouter: config.saprouter ?? null,
     client: config.client ?? null,
+    language: config.language ?? null,
     authType: config.authType,
     username: config.username ?? null,
     password: config.password ? 'set' : null,
