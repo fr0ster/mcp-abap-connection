@@ -15,9 +15,11 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
+import type { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { assertMatchObject } from '../helpers/assertions.js';
 import { cloudHttpTransport, onPrem } from '../helpers/onPrem.js';
 
@@ -361,7 +363,9 @@ describe('explicit connect is required', () => {
     await new Promise<void>((resolve) =>
       rejecting.listen(0, '127.0.0.1', resolve),
     );
-    const { port } = rejecting.address() as { port: number };
+    const address = rejecting.address();
+    assert.ok(address !== null && typeof address === 'object');
+    const { port } = address;
 
     try {
       const conn = onPrem(configFor(`http://127.0.0.1:${port}`), null);
@@ -417,7 +421,9 @@ describe('a teardown requested during establishment', () => {
   });
 
   /** Holds establishment open until the test lets it finish. */
-  function stallEstablishment(conn: AdtOnPremConnector) {
+  function stallEstablishment(
+    conn: AdtOnPremConnector<IAuthProvider, OnPremHttpTransport>,
+  ) {
     let release!: () => void;
     let markStarted!: () => void;
     const held = new Promise<void>((r) => {
@@ -430,10 +436,9 @@ describe('a teardown requested during establishment', () => {
     });
     // The wire establishes itself now, so that is where establishment can be
     // caught mid-flight.
-    const original = (conn as any).transport.establish.bind(
-      (conn as any).transport,
-    );
-    (conn as any).transport.establish = async (context: unknown) => {
+    const wire = conn.transport;
+    const original = wire.establish.bind(wire);
+    wire.establish = async (context) => {
       markStarted();
       await held;
       return original(context);

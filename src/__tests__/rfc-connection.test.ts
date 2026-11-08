@@ -47,6 +47,7 @@ import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { RfcTransport } from '../connection/RfcTransport.js';
 import { rfcConversationFrom } from '../connection/rfcConversation.js';
 import type { ILogger } from '../logger.js';
+import { messageOf } from './helpers/assertions.js';
 
 // Load env file — default to e19.env, override via SAP_ENV_FILE
 const envFile = process.env.SAP_ENV_FILE || 'e19.env';
@@ -237,7 +238,14 @@ function messageServerUnavailable(): string | null {
 }
 
 /** What a block registers its tests and hooks with. */
-type Live = { it: typeof it; before: typeof before; after: typeof after };
+/** A test body, as node:test runs it. */
+type Body = () => Promise<void> | void;
+type Live = {
+  it(name: string, fn: Body): void;
+  it(name: string, options: { timeout?: number }, fn: Body): void;
+  before(fn: Body, options?: { timeout?: number }): void;
+  after(fn: Body): void;
+};
 
 /**
  * Run the block, or skip it with the reason in its title. Skipped, each of its
@@ -257,9 +265,11 @@ function describeWhere(
   const skip = `skipped: ${unavailable}`;
   describe(`${title} — ${skip}`, () =>
     body({
-      it: ((name: string) => it(name, { skip })) as typeof it,
-      before: (() => {}) as typeof before,
-      after: (() => {}) as typeof after,
+      it: (name: string) => {
+        it(name, { skip });
+      },
+      before: () => {},
+      after: () => {},
     }));
 }
 
@@ -338,10 +348,10 @@ describeWhere(
         timeout: 10_000,
       });
 
-      assert.notStrictEqual(resp.headers, undefined);
-      assert.notStrictEqual(
-        (resp.headers as Record<string, unknown>)['content-type'],
-        undefined,
+      assert.ok(
+        typeof resp.headers === 'object' &&
+          resp.headers !== null &&
+          'content-type' in resp.headers,
       );
     });
 
@@ -367,8 +377,7 @@ describeWhere(
           headers: { Accept: 'application/xml' },
           timeout: 10_000,
         }),
-        (e: unknown) =>
-          /4(0[0-9]|1[0-9]|2[0-9]|[0-9]{2})/.test((e as Error).message),
+        (e: unknown) => /4(0[0-9]|1[0-9]|2[0-9]|[0-9]{2})/.test(messageOf(e)),
       );
     });
 
@@ -391,7 +400,7 @@ describeWhere(
           url: '/sap/bc/adt/compatibility/graph',
           timeout: 10_000,
         }),
-        (e: unknown) => /ADT_NOT_CONNECTED/.test((e as Error).message),
+        (e: unknown) => /ADT_NOT_CONNECTED/.test(messageOf(e)),
       );
     });
   },

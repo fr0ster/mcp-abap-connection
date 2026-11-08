@@ -46,14 +46,18 @@ describe('a credential that does not', () => {
       onPremHttpTransport(config, null),
       null,
     );
-    const wire = mock.method((conn as any).transport, 'establish', async () => {
-      (conn as any).transport.adoptCsrfToken('CSRF-FROM-THE-WIRE');
+    const wire = mock.method(conn.transport, 'establish', async () => {
+      // What a wire's establishment leaves behind: a session and its token.
+      conn.transport.ingest({
+        'set-cookie': ['SAP_SESSIONID_X_100=S1; path=/'],
+      });
+      conn.transport.adoptCsrfToken('CSRF-FROM-THE-WIRE');
     });
 
-    await (conn as any).establishSession();
+    await conn.connect();
 
     assert.strictEqual(wire.mock.callCount(), 1);
-    assert.strictEqual((conn as any).getCsrfToken(), 'CSRF-FROM-THE-WIRE');
+    assert.strictEqual(conn.transport.csrfToken(), 'CSRF-FROM-THE-WIRE');
   });
 
   it('hands the wire the credential and somewhere to report, and no server: the wire holds its own', async () => {
@@ -67,18 +71,16 @@ describe('a credential that does not', () => {
       onPremHttpTransport(config, null),
       null,
     );
-    const wire = mock.method(
-      (conn as any).transport,
-      'establish',
-      async (..._args: any[]) => undefined,
-    );
+    const wire = mock.method(conn.transport, 'establish', async () => {
+      conn.transport.ingest({
+        'set-cookie': ['SAP_SESSIONID_X_100=S1; path=/'],
+      });
+    });
 
-    await (conn as any).establishSession();
+    await conn.connect();
 
-    const context = wire.mock.calls[0].arguments[0] as {
-      authorize: (headers: Record<string, string>) => Promise<void>;
-      observe: unknown;
-    };
+    const context = wire.mock.calls[0]?.arguments[0];
+    assert.ok(context);
     assert.ok(!('baseUrl' in context));
     const headers: Record<string, string> = {};
     await context.authorize(headers);

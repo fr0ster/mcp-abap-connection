@@ -20,8 +20,11 @@ import {
   type CreatedConnection,
   createConnection,
 } from '../connection/createConnection.js';
-import { RfcTransport } from '../connection/RfcTransport.js';
-import { assertMatchObject } from './helpers/assertions.js';
+import {
+  type IRfcConversation,
+  RfcTransport,
+} from '../connection/RfcTransport.js';
+import { assertMatchObject, messageOf } from './helpers/assertions.js';
 import { type SapStub, startSapStub } from './helpers/sapStub.js';
 
 const DISCOVERY = '/sap/bc/adt/core/discovery';
@@ -100,6 +103,16 @@ async function openedSession(): Promise<{
 const pairs = (cookie: string | undefined) =>
   new Set((cookie ?? '').split(/;\s*/).filter((pair) => pair !== ''));
 
+/** A conversation that opens, answers nothing and closes: one that is never the subject. */
+function idleConversation(): IRfcConversation {
+  return {
+    alive: false,
+    open: async () => {},
+    close: async () => {},
+    call: async () => ({}),
+  };
+}
+
 describe('sessionCookies()', () => {
   it('is null before a session, and the session’s cookies once there is one', async () => {
     const conn = onPremHttp();
@@ -135,7 +148,7 @@ describe('sessionCookies()', () => {
     await conn.disconnect();
     assert.strictEqual(conn.sessionCookies(), null);
     assert.strictEqual(
-      new RfcTransport(() => ({}) as never).sessionCookies(),
+      new RfcTransport(idleConversation).sessionCookies(),
       null,
     );
   });
@@ -247,7 +260,8 @@ describe('an instance on a live session', () => {
     const again = second.sessionCookies();
     assert.deepStrictEqual(pairs(again ?? ''), pairs(cookies));
 
-    const third = onPremHttp(again as string);
+    assert.ok(again !== null);
+    const third = onPremHttp(again);
     await third.connect();
     assert.strictEqual(third.isConnected(), true);
     assert.deepStrictEqual([...stub.sessions], ['S1']);
@@ -335,7 +349,7 @@ describe('an instance on a session that is gone', () => {
     const conn = onPremHttp(cookies);
     await assert.rejects(conn.connect(), (e: unknown) => {
       assertMatchObject(e, { response: { status: 200 } });
-      assert.ok((e as Error).message.includes('another session'));
+      assert.ok(messageOf(e).includes('another session'));
       return true;
     });
     await conn.disconnect();
@@ -399,7 +413,7 @@ describe('an instance on a session that is gone', () => {
     const conn = onPremHttp(cookies);
     await assert.rejects(conn.connect(), (e: unknown) => {
       assertMatchObject(e, { response: { status: 200 } });
-      assert.ok((e as Error).message.includes('no CSRF token'));
+      assert.ok(messageOf(e).includes('no CSRF token'));
       return true;
     });
   });
@@ -408,7 +422,7 @@ describe('an instance on a session that is gone', () => {
     const before = stub.requests.length;
     const conn = onPremHttp('sap-usercontext=sap-client=100');
     await assert.rejects(conn.connect(), (e: unknown) =>
-      (e as Error).message.includes('names no SAP_SESSIONID'),
+      messageOf(e).includes('names no SAP_SESSIONID'),
     );
     assert.strictEqual(stub.requests.length, before);
   });
@@ -434,7 +448,7 @@ describe('what `session` may be', () => {
           session: `${COOKIE}=S1`,
         }),
       (e: unknown) =>
-        (e as Error).message.includes('an RFC session cannot be taken over'),
+        messageOf(e).includes('an RFC session cannot be taken over'),
     );
   });
 
@@ -445,14 +459,14 @@ describe('what `session` may be', () => {
       new BasicAuthProvider('u', 'p'),
       new RfcTransport(() => {
         opened = true;
-        return {} as never;
+        return idleConversation();
       }),
       null,
       undefined,
       `${COOKIE}=S1`,
     );
     await assert.rejects(conn.connect(), (e: unknown) =>
-      (e as Error).message.includes('An RFC session cannot be taken over'),
+      messageOf(e).includes('An RFC session cannot be taken over'),
     );
     assert.strictEqual(opened, false);
   });
@@ -460,8 +474,7 @@ describe('what `session` may be', () => {
   it('is refused empty, at construction', () => {
     assert.throws(
       () => onPremHttp('  '),
-      (e: unknown) =>
-        (e as Error).message.includes('an empty one names no session'),
+      (e: unknown) => messageOf(e).includes('an empty one names no session'),
     );
   });
 });

@@ -63,11 +63,11 @@ function httpSubstrate() {
     // retries and the next attempt would connect — which says nothing about
     // what a connection does when the server keeps refusing.
     if (refusing) {
-      const error = new Error('unauthorized') as Error & { response?: unknown };
       // No cookie at all: the refusal opened no session, which is the thing the
       // connection has to notice.
-      error.response = { status: 401, headers: {}, data: '' };
-      throw error;
+      throw Object.assign(new Error('unauthorized'), {
+        response: { status: 401, headers: {}, data: '' },
+      });
     }
 
     const establishing =

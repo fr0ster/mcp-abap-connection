@@ -49,3 +49,20 @@ export function assertMatchObject(
   }
   assert.deepStrictEqual(actual, expected, path);
 }
+
+/**
+ * `value`, asserted to be an instance of `type` and narrowed to it: what a
+ * test reads off a caught value, without a cast.
+ */
+export function instanceOf<T>(
+  value: unknown,
+  type: abstract new (...args: never[]) => T,
+): T {
+  assert.ok(value instanceof type, `expected an instance of ${type.name}`);
+  return value;
+}
+
+/** The message of a caught value, asserted to be an `Error`. */
+export function messageOf(value: unknown): string {
+  return instanceOf(value, Error).message;
+}

@@ -20,6 +20,7 @@ import { LegacyOnPremHttpTransport } from '../connection/LegacyOnPremHttpTranspo
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import { RfcTransport } from '../connection/RfcTransport.js';
 import { createConnection as exported } from '../index.js';
+import { messageOf } from './helpers/assertions.js';
 
 const config: ISapHttpConfig = {
   url: 'https://sap.example.com:44300',
@@ -158,7 +159,7 @@ describe('createConnection', () => {
         () =>
           createConnection({ system, transport, config, credential } as never),
         (e: unknown) =>
-          (e as Error).message.includes(
+          messageOf(e).includes(
             "createConnection: no such combination of system and transport. ABAP Cloud has one wire, 'http'; on-prem takes 'http', 'legacy-http' or 'rfc'. Both are stated by the caller, never inferred.",
           ),
       );

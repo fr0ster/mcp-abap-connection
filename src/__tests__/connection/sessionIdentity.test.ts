@@ -227,21 +227,22 @@ describe('a session verdict raised during a retry', () => {
     await conn.connect();
 
     let attempts = 0;
-    const realSend = (conn as any).transport.send.bind((conn as any).transport);
-    (conn as any).transport.send = async (cfg: { url: string }) => {
+    const wire = conn.transport;
+    const realSend = wire.send.bind(wire);
+    wire.send = async (cfg) => {
       if (!cfg.url.includes('/work')) {
         return realSend(cfg);
       }
       attempts += 1;
       if (attempts === 1) {
         // A CSRF rejection: the connector refetches the token and retries.
-        const { AxiosError } = await import('axios');
+        const { AxiosError, AxiosHeaders } = await import('axios');
         throw new AxiosError('forbidden', 'ERR', undefined, null, {
           status: 403,
           statusText: 'Forbidden',
           data: 'CSRF token validation failed',
           headers: {},
-          config: {} as any,
+          config: { headers: new AxiosHeaders() },
         });
       }
       // …and the retry comes back on a DIFFERENT session.
@@ -311,8 +312,9 @@ describe('a dead session', () => {
     await conn.connect();
 
     let attempts = 0;
-    const realSend = (conn as any).transport.send.bind((conn as any).transport);
-    (conn as any).transport.send = async (cfg: { url: string }) => {
+    const wire = conn.transport;
+    const realSend = wire.send.bind(wire);
+    wire.send = async (cfg) => {
       if (cfg.url.includes('/work')) attempts += 1;
       return realSend(cfg);
     };

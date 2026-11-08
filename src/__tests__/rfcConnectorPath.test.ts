@@ -31,6 +31,7 @@ import type {
   IAdtTransportResponse,
   IOnPremTransport,
 } from '../connection/IAdtTransport.js';
+import type { ILogger } from '../logger.js';
 import { holdsNoSession } from './helpers/transportStub.js';
 
 /** An RFC destination states its address; it has no URL to read one from. */
@@ -88,9 +89,9 @@ function rfcTransport(): {
   return { transport, sent };
 }
 
-const onPremOverRfc = () => {
+const onPremOverRfc = (logger: ILogger | null = null) => {
   const { transport, sent } = rfcTransport();
-  const conn = new AdtOnPremConnector(config, credential, transport, null);
+  const conn = new AdtOnPremConnector(config, credential, transport, logger);
   return { conn, sent };
 };
 
@@ -107,12 +108,7 @@ describe('connect() over an RFC transport', () => {
     await conn.connect();
 
     const csrfAttempts = sent.filter(
-      (request) =>
-        String(
-          (request.headers as Record<string, string> | undefined)?.[
-            'x-csrf-token'
-          ] ?? '',
-        ) === 'fetch',
+      (request) => request.headers?.['x-csrf-token'] === 'fetch',
     );
     assert.strictEqual(csrfAttempts.length, 0);
   });
@@ -201,15 +197,14 @@ describe('a mutation over an RFC transport', () => {
     // that means a CSRF token; over RFC there is none to hold, and demanding
     // one raised `No CSRF token in response headers` on every write — swallowed,
     // but logged as an error and asked again on the next one.
-    const { conn, sent } = onPremOverRfc();
-    await conn.connect();
     const errors: string[] = [];
-    (conn as any).logger = {
+    const { conn, sent } = onPremOverRfc({
       debug: () => {},
       info: () => {},
       warn: () => {},
       error: (m: string) => errors.push(m),
-    };
+    });
+    await conn.connect();
     sent.length = 0;
 
     await conn.makeAdtRequest({

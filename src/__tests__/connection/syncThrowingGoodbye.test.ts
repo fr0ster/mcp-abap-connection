@@ -19,6 +19,7 @@ import { describe, it } from 'node:test';
 import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
+import { messageOf } from '../helpers/assertions.js';
 import { credentialWriting } from '../helpers/credentials.js';
 import { settled } from '../helpers/settled.js';
 
@@ -95,7 +96,7 @@ describe('a close() that throws synchronously', () => {
     const closes = closeThrowsSynchronously(transport);
 
     await assert.rejects(conn.connect(), (e: unknown) =>
-      (e as Error).message.includes('established, then failed'),
+      messageOf(e).includes('established, then failed'),
     );
 
     assert.strictEqual(closes(), 1);
@@ -109,7 +110,7 @@ describe('a close() that throws synchronously', () => {
     const closes = closeThrowsSynchronously(transport);
 
     await assert.rejects(conn.connect(), (e: unknown) =>
-      /opened no ABAP session/.test((e as Error).message),
+      /opened no ABAP session/.test(messageOf(e)),
     );
 
     assert.strictEqual(closes(), 1);
@@ -137,7 +138,7 @@ describe('the goodbye is still called synchronously', () => {
     failAfterEstablishing(transport);
 
     await assert.rejects(conn.connect(), (e: unknown) =>
-      (e as Error).message.includes('established, then failed'),
+      messageOf(e).includes('established, then failed'),
     );
     await settled();
 
@@ -149,7 +150,7 @@ describe('the goodbye is still called synchronously', () => {
     const { conn, logoffs } = onPremWire(NO_SESSION);
 
     await assert.rejects(conn.connect(), (e: unknown) =>
-      /opened no ABAP session/.test((e as Error).message),
+      /opened no ABAP session/.test(messageOf(e)),
     );
     await settled();
 

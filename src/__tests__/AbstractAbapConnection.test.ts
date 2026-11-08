@@ -1,21 +1,33 @@
 import assert from 'node:assert/strict';
-import { beforeEach, describe, it, type Mock, mock } from 'node:test';
-import { AxiosError } from 'axios';
+import { beforeEach, describe, it, mock } from 'node:test';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
+import { AxiosError, AxiosHeaders } from 'axios';
 import type { SapHttpConfig } from '../config/sapConfig.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
-import type { ILogger } from '../logger.js';
+import type {
+  IAdtTransportRequest,
+  IAdtTransportResponse,
+} from '../connection/IAdtTransport.js';
+import type { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import { answering } from './helpers/answering.js';
 import { assertMatchObject } from './helpers/assertions.js';
 import { onPrem } from './helpers/onPrem.js';
 import { markConnectedForTest } from './helpers/session.js';
 import { heldCookies, seedCookies } from './helpers/transportStub.js';
 
-const mockLogger: ILogger = {
+const mockLogger = {
   info: mock.fn(),
   warn: mock.fn(),
   error: mock.fn(),
   debug: mock.fn(),
 };
+
+/** What the wire's `send` is replaced with: one request in, one answer out. */
+type Send = (request: IAdtTransportRequest) => Promise<IAdtTransportResponse>;
+
+/** A `send` that answers every request 200 `ok`, recording what it was given. */
+const answeringOk = () =>
+  mock.fn<Send>(async () => ({ status: 200, data: 'ok', headers: {} }));
 
 const baseConfig: SapHttpConfig = {
   url: 'https://sap.example.com',
@@ -37,44 +49,40 @@ function makeAxiosError(
   config: AxiosCall = {},
   headers: Record<string, string | string[]> = {},
 ): AxiosError {
-  const err = new AxiosError(
+  const request = {
+    ...config,
+    headers: new AxiosHeaders(config.headers),
+  };
+  return new AxiosError(
     `Request failed with status ${status}`,
     String(status),
-    config as any,
+    request,
     null,
-    {
-      status,
-      statusText: '',
-      data,
-      headers,
-      config: config as any,
-    } as any,
+    { status, statusText: '', data, headers, config: request },
   );
-  return err;
 }
 
-function attachMockAxios(conn: AdtOnPremConnector, fn: Mock<any>) {
-  (conn as any).transport.send = fn;
+function attachMockAxios(
+  conn: AdtOnPremConnector<IAuthProvider, OnPremHttpTransport>,
+  fn: Send,
+) {
+  conn.transport.send = fn;
 }
 
 describe('AbstractAbapConnection — CSRF retry behavior', () => {
   beforeEach(() => {
     for (const fn of Object.values(mockLogger)) {
-      (fn as Mock<any>).mock.resetCalls();
+      fn.mock.resetCalls();
     }
   });
 
   it('POST with cached CSRF token succeeds without retry', async () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
-    (conn as any).transport.adoptCsrfToken('cached-token');
+    conn.transport.adoptCsrfToken('cached-token');
     seedCookies(conn, 'SAP_SESSIONID_HQ6=alive');
 
-    const send = mock.fn(async (..._args: any[]) => ({
-      status: 200,
-      data: 'ok',
-      headers: {},
-    }));
+    const send = answeringOk();
     attachMockAxios(conn, send);
 
     const res = await conn.makeAdtRequest({
@@ -86,14 +94,14 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
 
     assert.strictEqual(res.status, 200);
     assert.strictEqual(send.mock.callCount(), 1);
-    assert.strictEqual((conn as any).transport.csrfToken(), 'cached-token');
+    assert.strictEqual(conn.transport.csrfToken(), 'cached-token');
     assert.ok(heldCookies(conn)?.includes('SAP_SESSIONID_HQ6=alive'));
   });
 
   it('403 with "CSRF" body refetches token and retries; cookies preserved', async () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
-    (conn as any).transport.adoptCsrfToken('old-token');
+    conn.transport.adoptCsrfToken('old-token');
     seedCookies(conn, 'SAP_SESSIONID_HQ6=alive');
 
     const send = answering(
@@ -122,22 +130,22 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     });
 
     assert.strictEqual(res.status, 200);
-    assert.strictEqual((conn as any).transport.csrfToken(), 'new-token');
+    assert.strictEqual(conn.transport.csrfToken(), 'new-token');
     assert.ok(heldCookies(conn)?.includes('SAP_SESSIONID_HQ6=alive'));
   });
 
   it('POST 401 without cached token: refetches token and retries', async () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
-    (conn as any).transport.adoptCsrfToken(null);
-    (conn as any).transport.forgetSession();
+    conn.transport.adoptCsrfToken(null);
+    conn.transport.forgetSession();
 
     // Two levels, and they are different seams now. Getting the wire ready
     // before a mutation is the WIRE establishing itself; the refetch after a
     // 401 is the connection deciding the token it had is no good.
     const upfrontFetchError = new Error('upfront CSRF fetch unavailable');
     // A spy keeps the original for every call past the first.
-    const upfront = mock.method((conn as any).transport, 'establish');
+    const upfront = mock.method(conn.transport, 'establish');
     upfront.mock.mockImplementationOnce(async () => {
       throw upfrontFetchError;
     });
@@ -162,7 +170,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     });
 
     assert.strictEqual(res.status, 200);
-    assert.strictEqual((conn as any).transport.csrfToken(), 'bootstrap-token');
+    assert.strictEqual(conn.transport.csrfToken(), 'bootstrap-token');
     assert.strictEqual(upfront.mock.callCount(), 1);
     assert.strictEqual(fetchSpy.mock.callCount(), 1);
     assert.strictEqual(send.mock.callCount(), 2);
@@ -176,7 +184,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
   it('POST 401 with a cached CSRF token: no new session is opened; the 401 reaches the caller', async () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
-    (conn as any).transport.adoptCsrfToken('stale-token');
+    conn.transport.adoptCsrfToken('stale-token');
     seedCookies(conn, 'SAP_SESSIONID_HQ6=dead');
 
     const original = makeAxiosError(
@@ -225,13 +233,13 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     const held = heldCookies(conn);
     assert.ok(held?.includes('SAP_SESSIONID_HQ6=dead'));
     assert.ok(held !== null && !held.includes('fresh'));
-    assert.strictEqual((conn as any).transport.csrfToken(), 'stale-token');
+    assert.strictEqual(conn.transport.csrfToken(), 'stale-token');
   });
 
   it('GET 401 with cookies held: nothing is resent before the provider; the 401 reaches the caller', async () => {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
-    (conn as any).transport.adoptCsrfToken('cached-token');
+    conn.transport.adoptCsrfToken('cached-token');
     seedCookies(conn, 'SAP_SESSIONID_HQ6=alive');
 
     const original = makeAxiosError(
@@ -267,7 +275,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
 
     // Only the GET: the provider (Basic) answers no, and nothing else is sent.
     assert.strictEqual(send.mock.callCount(), 1);
-    assert.strictEqual((conn as any).transport.csrfToken(), 'cached-token');
+    assert.strictEqual(conn.transport.csrfToken(), 'cached-token');
     assert.ok(heldCookies(conn)?.includes('SAP_SESSIONID_HQ6=alive'));
   });
 });
@@ -275,7 +283,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
 describe('AbstractAbapConnection — headers that belong to the request', () => {
   beforeEach(() => {
     for (const fn of Object.values(mockLogger)) {
-      (fn as Mock<any>).mock.resetCalls();
+      fn.mock.resetCalls();
     }
   });
 
@@ -286,14 +294,10 @@ describe('AbstractAbapConnection — headers that belong to the request', () => 
   ): Promise<Record<string, string>> {
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
-    (conn as any).transport.adoptCsrfToken('t');
+    conn.transport.adoptCsrfToken('t');
     prepare?.(conn);
 
-    const send = mock.fn(async (..._args: any[]) => ({
-      status: 200,
-      data: 'ok',
-      headers: {},
-    }));
+    const send = answeringOk();
     attachMockAxios(conn, send);
 
     await conn.makeAdtRequest({
@@ -303,10 +307,7 @@ describe('AbstractAbapConnection — headers that belong to the request', () => 
       data: 'CLASS zfoo DEFINITION.',
       ...(headers ? { headers } : {}),
     });
-    return (send.mock.calls[0].arguments[0].headers ?? {}) as Record<
-      string,
-      string
-    >;
+    return send.mock.calls[0]?.arguments[0].headers ?? {};
   }
 
   it('sends sap-adt-request-id on a stateless request', async () => {
@@ -375,12 +376,8 @@ describe('AbstractAbapConnection — headers that belong to the request', () => 
     // header and the context cookie, RFC neither. The connection only says so.
     const conn = onPrem(baseConfig, mockLogger);
     markConnectedForTest(conn);
-    (conn as any).transport.adoptCsrfToken('t');
-    const send = mock.fn(async (..._args: any[]) => ({
-      status: 200,
-      data: 'ok',
-      headers: {},
-    }));
+    conn.transport.adoptCsrfToken('t');
+    const send = answeringOk();
     attachMockAxios(conn, send);
 
     conn.setSessionType('stateful');
@@ -389,12 +386,14 @@ describe('AbstractAbapConnection — headers that belong to the request', () => 
     await conn.makeAdtRequest({ url: '/x', method: 'POST', timeout: 1000 });
 
     const [stateful, stateless] = send.mock.calls.map((c) => c.arguments[0]);
-    assert.strictEqual(stateful.stateful, true);
-    assert.strictEqual(stateless.stateful, false);
+    assert.strictEqual(stateful?.stateful, true);
+    assert.strictEqual(stateless?.stateful, false);
     for (const request of [stateful, stateless]) {
-      assert.strictEqual(request.headers['x-sap-adt-sessiontype'], undefined);
-      assert.notStrictEqual(request.headers['sap-adt-request-id'], undefined);
-      assert.strictEqual(request.headers['X-sap-adt-profiling'], 'server-time');
+      const headers = request?.headers;
+      assert.ok(headers);
+      assert.strictEqual(headers['x-sap-adt-sessiontype'], undefined);
+      assert.notStrictEqual(headers['sap-adt-request-id'], undefined);
+      assert.strictEqual(headers['X-sap-adt-profiling'], 'server-time');
     }
   });
 });

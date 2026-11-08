@@ -8,19 +8,15 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { authError } from '@mcp-abap-adt/auth-errors';
-import type {
-  AuthOutcome,
-  IAuthRejection,
-  ILogonTarget,
-} from '@mcp-abap-adt/interfaces-auth';
-import type { SapConfig } from '../../config/sapConfig.js';
+import type { AuthOutcome, ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
+import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { AuthRefusedError } from '../../connection/authErrors.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
 import { HttpTransport } from '../../connection/HttpTransport.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
-import { assertMatchObject } from '../helpers/assertions.js';
+import { assertMatchObject, instanceOf } from '../helpers/assertions.js';
 import { type SapStub, startSapStub } from '../helpers/sapStub.js';
 import { type StubScript, stubProvider } from '../helpers/stubProvider.js';
 
@@ -53,21 +49,18 @@ afterEach(async () => {
 });
 
 function onPremWith(script: StubScript = {}) {
-  const config = {
+  const config: SapHttpConfig = {
     url: stub.baseUrl,
     client: '100',
     authType: 'basic',
-  } as SapConfig;
+  };
   const provider = stubProvider(script);
   const transport = new OnPremHttpTransport(() => ({}), null, {
     client: '100',
     baseUrl: stub.baseUrl,
   });
   const conn = new AdtOnPremConnector(config, provider, transport, null);
-  const rejections = () =>
-    provider.calls
-      .filter((call) => call.method === 'rejected')
-      .map((call) => call.argument as IAuthRejection);
+  const rejections = () => provider.rejections;
   const order = () => provider.calls.map((call) => call.method);
   return { conn, provider, transport, rejections, order };
 }
@@ -94,8 +87,11 @@ describe('connect() orders the credential around the wire', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.strictEqual((error as AuthRefusedError).at, 'prepare');
-    assert.deepStrictEqual((error as AuthRefusedError).refusal, REFUSAL);
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'prepare');
+    assert.deepStrictEqual(
+      instanceOf(error, AuthRefusedError).refusal,
+      REFUSAL,
+    );
     assert.deepStrictEqual(order(), ['prepare']);
     assert.strictEqual(stub.requests.length, 0);
     assert.strictEqual(conn.isConnected(), false);
@@ -197,15 +193,16 @@ describe('the HTTP logon target', () => {
       { baseUrl: stub.baseUrl },
     );
 
-    await logonWith(transport, (t) =>
-      t.tlsMaterial({
-        cert: 'THE-CERT',
-        key: 'THE-KEY',
-        passphrase: undefined,
-        rejectUnauthorized: false,
-        ca: 'NOT-THE-CA',
-      } as unknown as Parameters<ILogonTarget['tlsMaterial']>[0]),
-    );
+    // Not a literal: a value carrying keys beyond the material, as a caller
+    // outside the type system could hand one.
+    const material = {
+      cert: 'THE-CERT',
+      key: 'THE-KEY',
+      passphrase: undefined,
+      rejectUnauthorized: false,
+      ca: 'NOT-THE-CA',
+    };
+    await logonWith(transport, (t) => t.tlsMaterial(material));
 
     const options = agentOf(transport).options;
     assert.strictEqual(options.cert, 'THE-CERT');
@@ -294,13 +291,14 @@ describe('a 401 while establishing', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.strictEqual((error as AuthRefusedError).at, 'logon');
-    assert.deepStrictEqual((error as AuthRefusedError).refusal, REFUSAL);
-    assert.strictEqual(
-      ((error as AuthRefusedError).cause as { response?: { status?: number } })
-        .response?.status,
-      401,
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'logon');
+    assert.deepStrictEqual(
+      instanceOf(error, AuthRefusedError).refusal,
+      REFUSAL,
     );
+    assertMatchObject(instanceOf(error, AuthRefusedError).cause, {
+      response: { status: 401 },
+    });
     assert.strictEqual(rejections().length, 1);
     assert.strictEqual(conn.isConnected(), false);
   });
@@ -319,9 +317,12 @@ describe('a 401 while establishing', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.strictEqual((error as AuthRefusedError).at, 'logon');
-    assertMatchObject((error as AuthRefusedError).refusal, PROVIDER_FAILED);
-    assert.strictEqual((error as AuthRefusedError).cause, boom);
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'logon');
+    assertMatchObject(
+      instanceOf(error, AuthRefusedError).refusal,
+      PROVIDER_FAILED,
+    );
+    assert.strictEqual(instanceOf(error, AuthRefusedError).cause, boom);
     assert.strictEqual(rejections().length, 1);
     assert.strictEqual(conn.isConnected(), false);
   });
@@ -333,11 +334,14 @@ describe('a 401 while establishing', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assertMatchObject((error as AuthRefusedError).refusal, REFUSED_AGAIN);
-    assertMatchObject((error as AuthRefusedError).refusal, {
+    assertMatchObject(
+      instanceOf(error, AuthRefusedError).refusal,
+      REFUSED_AGAIN,
+    );
+    assertMatchObject(instanceOf(error, AuthRefusedError).refusal, {
       facts: { at: 'logon' },
     });
-    assert.strictEqual((error as AuthRefusedError).at, 'logon');
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'logon');
     assert.strictEqual(rejections().length, 1);
     assert.strictEqual(conn.isConnected(), false);
   });
@@ -366,7 +370,7 @@ describe('a 401 while establishing', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.strictEqual((error as AuthRefusedError).at, 'request');
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'request');
     assert.strictEqual(discoveryRequests().length, 0);
     assert.strictEqual(rejections().length, 0);
   });
@@ -439,11 +443,11 @@ describe('the goodbye', () => {
 
 describe('the cloud wire', () => {
   function cloudWith(script: StubScript = {}) {
-    const config = {
+    const config: SapHttpConfig = {
       url: stub.baseUrl,
       client: '100',
       authType: 'jwt',
-    } as SapConfig;
+    };
     const provider = stubProvider(script);
     const transport = new CloudHttpTransport(() => ({}), null, {
       client: '100',
@@ -459,7 +463,7 @@ describe('the cloud wire', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.strictEqual((error as AuthRefusedError).at, 'logon');
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'logon');
     assert.strictEqual(stub.requests.length, 0);
     assert.deepStrictEqual(
       provider.calls.map((c) => c.method),
@@ -473,7 +477,7 @@ describe('the cloud wire', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.strictEqual((error as AuthRefusedError).at, 'request');
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'request');
     assert.strictEqual(stub.requests.length, 0);
   });
 

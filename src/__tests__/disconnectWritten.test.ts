@@ -29,7 +29,7 @@ import type { SapHttpConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import type { ILogger } from '../logger.js';
-import { assertMatchObject } from './helpers/assertions.js';
+import { assertMatchObject, messageOf } from './helpers/assertions.js';
 import {
   cloudHttpTransport,
   onPrem,
@@ -457,16 +457,14 @@ describe('disconnect() resolves once the logoff is written', () => {
       const send = conn.transport.send.bind(conn.transport);
       conn.transport.send = async (request) => {
         if (request.url.includes('/gone')) {
-          const error = new Error('status 400') as Error & {
-            response: unknown;
-          };
-          error.response = {
-            status: 400,
-            statusText: 'Session not found',
-            headers: {},
-            data: 'Session not found',
-          };
-          throw error;
+          throw Object.assign(new Error('status 400'), {
+            response: {
+              status: 400,
+              statusText: 'Session not found',
+              headers: {},
+              data: 'Session not found',
+            },
+          });
         }
         return send(request);
       };
@@ -634,11 +632,13 @@ describe('disconnect() resolves once the logoff is written', () => {
       // found the cookies already forgotten and sent none of its own.
       assert.strictEqual(server.logoffs(), 0);
       assert.strictEqual(wire.logoffs.length, 1);
-      const headers = (wire.logoffs[0]?.headers ?? {}) as Record<
-        string,
-        unknown
-      >;
-      const cookie = String(headers.Cookie ?? headers.cookie ?? '');
+      const headers = wire.logoffs[0]?.headers;
+      assert.ok(typeof headers === 'object' && headers !== null);
+      const cookie = String(
+        ('Cookie' in headers ? headers.Cookie : undefined) ??
+          ('cookie' in headers ? headers.cookie : undefined) ??
+          '',
+      );
       assert.ok(cookie.includes('SAP_SESSIONID_STUB_100=S2'));
       assert.ok(!cookie.includes('S1'));
     });
@@ -868,7 +868,7 @@ describe('disconnect() resolves once the logoff is written', () => {
 
       write();
       await assert.rejects(connecting, (e: unknown) =>
-        /opened no ABAP session/.test((e as Error).message),
+        /opened no ABAP session/.test(messageOf(e)),
       );
     });
 
@@ -970,7 +970,7 @@ describe('disconnect() resolves once the logoff is written', () => {
       const conn = onPrem(configFor(server.baseUrl), null);
 
       await assert.rejects(conn.connect(), (e: unknown) =>
-        /opened no ABAP session/.test((e as Error).message),
+        /opened no ABAP session/.test(messageOf(e)),
       );
       assert.strictEqual(await conn.disconnect(), undefined);
       await turns(5);
@@ -1075,7 +1075,7 @@ describe('disconnect() resolves once the logoff is written', () => {
       );
 
       await assert.rejects(conn.connect(), (e: unknown) =>
-        /opened no ABAP session/.test((e as Error).message),
+        /opened no ABAP session/.test(messageOf(e)),
       );
       assert.strictEqual(await conn.disconnect(), undefined);
       await turns(5);

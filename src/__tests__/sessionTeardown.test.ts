@@ -9,18 +9,18 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it, type Mock, mock } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
-import type { SapConfig } from '../config/sapConfig.js';
+import type { SapHttpConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import type { ILogger } from '../logger.js';
-import { assertMatchObject } from './helpers/assertions.js';
+import { assertMatchObject, messageOf } from './helpers/assertions.js';
 import { reportableLogoff, wroteIt } from './helpers/logoffWrite.js';
 import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
 import { settled } from './helpers/settled.js';
 
-const baseConfig: SapConfig = {
+const baseConfig: SapHttpConfig = {
   url: 'https://sap.example.com',
   authType: 'basic',
   username: 'u',
@@ -28,12 +28,19 @@ const baseConfig: SapConfig = {
   client: '100',
 };
 
-function makeLogger(): ILogger {
+/** The cloud's config: a bearer token instead of a password. */
+const jwtConfig: SapHttpConfig = {
+  ...baseConfig,
+  authType: 'jwt',
+  jwtToken: 'TOKEN',
+};
+
+function makeLogger() {
   return {
-    info: mock.fn(),
-    warn: mock.fn(),
-    error: mock.fn(),
-    debug: mock.fn(),
+    info: mock.fn<ILogger['info']>(),
+    warn: mock.fn<ILogger['warn']>(),
+    error: mock.fn<ILogger['error']>(),
+    debug: mock.fn<ILogger['debug']>(),
   };
 }
 
@@ -118,12 +125,9 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
 
   it('cloud opens the session resource and gives it back through the logoff it links to', async () => {
     const conn = new AdtCloudConnector(
-      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      jwtConfig,
       TokenAuthProvider.fixed('TOKEN'),
-      cloudHttpTransport(
-        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-        makeLogger(),
-      ),
+      cloudHttpTransport(jwtConfig, makeLogger()),
       makeLogger(),
     );
     const seen: Seen[] = [];
@@ -165,12 +169,9 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
   it('cloud ends a session the server linked no logoff for with the platform logoff, without sap-contextid, resolving on the write', async () => {
     const logger = makeLogger();
     const conn = new AdtCloudConnector(
-      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      jwtConfig,
       TokenAuthProvider.fixed('TOKEN'),
-      cloudHttpTransport(
-        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-        logger,
-      ),
+      cloudHttpTransport(jwtConfig, logger),
       makeLogger(),
     );
     const seen: Seen[] = [];
@@ -208,9 +209,7 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     assert.strictEqual(sent[0]?.headers['x-sap-security-session'], undefined);
     assert.strictEqual(sent[0]?.headers.Authorization, undefined);
     assert.ok(
-      (
-        logger.debug as unknown as Mock<(...args: any[]) => void>
-      ).mock.calls.some(
+      logger.debug.mock.calls.some(
         ({ arguments: args }) =>
           args.length === 1 &&
           typeof args[0] === 'string' &&
@@ -223,12 +222,9 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
 describe('the cloud logoff link', () => {
   function cloudWithLogoffHref(href: string, logger: ILogger, seen: Seen[]) {
     const conn = new AdtCloudConnector(
-      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      jwtConfig,
       TokenAuthProvider.fixed('TOKEN'),
-      cloudHttpTransport(
-        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-        logger,
-      ),
+      cloudHttpTransport(jwtConfig, logger),
       makeLogger(),
     );
     attachMockAxios(conn as never, seen, async () => ({
@@ -278,9 +274,7 @@ describe('the cloud logoff link', () => {
       ['https://sap.example.com/sap/public/bc/icf/logoff'],
     );
     assert.ok(
-      (
-        logger.debug as unknown as Mock<(...args: any[]) => void>
-      ).mock.calls.some(
+      logger.debug.mock.calls.some(
         ({ arguments: args }) =>
           args.length === 1 &&
           typeof args[0] === 'string' &&
@@ -290,10 +284,7 @@ describe('the cloud logoff link', () => {
   });
 
   it('carries no credential even when the context holds one', async () => {
-    const transport = cloudHttpTransport(
-      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      makeLogger(),
-    );
+    const transport = cloudHttpTransport(jwtConfig, makeLogger());
     transport.ingest({
       'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
     });
@@ -357,7 +348,7 @@ describe('a connection the server gave no session says so', () => {
     }));
 
     await assert.rejects(conn.connect(), (e: unknown) =>
-      /opened no ABAP session/.test((e as Error).message),
+      /opened no ABAP session/.test(messageOf(e)),
     );
     assert.strictEqual(conn.isConnected(), false);
     assert.strictEqual(conn.getSessionIdentity(), null);
@@ -380,7 +371,7 @@ describe('a connection the server gave no session says so', () => {
     const error = await conn.connect().catch((e: Error) => e);
 
     assert.ok(error instanceof Error);
-    const message = (error as Error).message;
+    const message = messageOf(error);
     // Names the WIRE rather than the cookie: what a session is addressed by is
     // the wire's business, and the base no longer knows that HTTP's answer is a
     // SAP_SESSIONID.
@@ -398,9 +389,7 @@ describe('a connection the server gave no session says so', () => {
     await conn.connect();
 
     assert.ok(
-      !(
-        logger.warn as unknown as Mock<(...args: any[]) => void>
-      ).mock.calls.some(
+      !logger.warn.mock.calls.some(
         ({ arguments: args }) =>
           args.length === 1 &&
           typeof args[0] === 'string' &&
@@ -702,12 +691,9 @@ describe('a session opened before a failed connect is not abandoned', () => {
     // the one that can leave one open when establishing fails after the
     // preflight. On-prem opens nothing to leave behind.
     const conn = new AdtCloudConnector(
-      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      jwtConfig,
       TokenAuthProvider.fixed('TOKEN'),
-      cloudHttpTransport(
-        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-        makeLogger(),
-      ),
+      cloudHttpTransport(jwtConfig, makeLogger()),
       makeLogger(),
     );
     const seen: Seen[] = [];
@@ -729,12 +715,9 @@ describe('a session opened before a failed connect is not abandoned', () => {
 
   it('says nothing when the preflight opened nothing', async () => {
     const conn = new AdtCloudConnector(
-      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
+      jwtConfig,
       TokenAuthProvider.fixed('TOKEN'),
-      cloudHttpTransport(
-        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-        makeLogger(),
-      ),
+      cloudHttpTransport(jwtConfig, makeLogger()),
       makeLogger(),
     ) as never as AdtOnPremConnector;
     const seen: Seen[] = [];
