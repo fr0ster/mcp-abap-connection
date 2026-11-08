@@ -45,6 +45,8 @@ config passed to `createConnection` or the connectors compiles and behaves as be
   (`HttpClientAgents`), and `logoffRequest(options, onResponse)` the Node request a logoff goes
   out on. Left out, it is the exported `nodeHttpClient`, which is what the wire used before:
   nothing changes for a wire built without it. A test double goes under the wire through it.
+  `createConnection` passes it through for cloud + http, on-prem + http and on-prem + legacy-http
+  (`httpClient` beside `agentOptions` in `CloudHttpSpec` / `OnPremHttpSpec`).
 
 ### Fixed
 

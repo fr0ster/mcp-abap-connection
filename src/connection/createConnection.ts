@@ -34,6 +34,7 @@ import type { ILogger } from '../logger.js';
 import { AdtCloudConnector } from './AdtCloudConnector.js';
 import { AdtOnPremConnector } from './AdtOnPremConnector.js';
 import { CloudHttpTransport } from './CloudHttpTransport.js';
+import type { HttpClientFactory } from './HttpTransport.js';
 import { LegacyOnPremHttpTransport } from './LegacyOnPremHttpTransport.js';
 import { OnPremHttpTransport } from './OnPremHttpTransport.js';
 import { type IRfcTransportOptions, RfcTransport } from './RfcTransport.js';
@@ -64,6 +65,12 @@ interface HttpWireOptions {
    * the credential (its TLS material arrives at logon). Absent: none.
    */
   agentOptions?: (() => AgentOptions) | undefined;
+  /**
+   * How the wire reaches the network: the factory of its axios instance and
+   * of the node request a logoff goes out on. Absent: `nodeHttpClient`, as
+   * the transport constructors default.
+   */
+  httpClient?: HttpClientFactory | undefined;
   /**
    * An existing session to build the instance on, instead of logging on: the
    * string an instance's `sessionCookies()` returned. `connect()` then sends
@@ -140,12 +147,20 @@ export type CreatedConnection<
       OnPremHttpTransport | LegacyOnPremHttpTransport | RfcTransport
     >;
 
-/** What an HTTP wire addresses: the config's client and its URL. */
-function httpAddress(spec: { config: ISapHttpConfig }): {
+/**
+ * What an HTTP wire is told: the config's client and its URL as its address,
+ * and the caller's `httpClient` when one is given.
+ */
+function httpAddress(spec: HttpWireOptions): {
   client?: string;
   baseUrl: string;
+  httpClient?: HttpClientFactory;
 } {
-  return { client: spec.config.client, baseUrl: spec.config.url };
+  return {
+    client: spec.config.client,
+    baseUrl: spec.config.url,
+    ...(spec.httpClient !== undefined ? { httpClient: spec.httpClient } : {}),
+  };
 }
 
 export function createConnection<TCredential extends IAuthProvider>(

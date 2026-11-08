@@ -270,7 +270,7 @@ try {
 `createConnection` returns a **new instance on every call**. Any other
 combination of system and wire (cloud over RFC, say) is refused at
 construction. The transport options are passed through as you give them:
-`agentOptions` for the HTTP wires, `rfc` for the RFC wire, `wireLogger` for
+`agentOptions` and `httpClient` for the HTTP wires, `rfc` for the RFC wire, `wireLogger` for
 what the wire logs about itself, `logger` and `sessionId` for the connection.
 The constructors below remain available; the factory only names the four
 combinations that exist.
@@ -878,7 +878,7 @@ interface ILogger {
 Builds a NEW connection from what the caller states: `system` (`'cloud'` or
 `'onprem'`) and `transport` (`'http'`, `'legacy-http'` or `'rfc'`), plus
 `config`, `credential` and, optionally, `logger`, `wireLogger`, `sessionId`,
-`agentOptions` and `session` (HTTP) or `rfc` (`IRfcTransportOptions`). Nothing is inferred,
+`agentOptions`, `httpClient` and `session` (HTTP) or `rfc` (`IRfcTransportOptions`). Nothing is inferred,
 not even from `config.connectionType`. A combination that does not exist is
 refused with a `TypeError`, and so is `session` over RFC. One instance is one
 SAP session: call it again for a new one — or pass `session` (the string an

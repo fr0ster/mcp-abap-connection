@@ -170,7 +170,7 @@ refused at construction with a `TypeError`. Each wire takes its own config
 shape: the HTTP wires a `SapHttpConfig` (its `url`), RFC a `SapRfcConfig` (its
 stated address, `client` and `language`, no URL). `client` and `baseUrl` (the
 config's `url`) reach the HTTP wires from `config`. `agentOptions`,
-`rfc`, `wireLogger`, `logger` and `sessionId` are passed through exactly as
+`httpClient` (HTTP), `rfc`, `wireLogger`, `logger` and `sessionId` are passed through exactly as
 you give them; whatever you leave out takes the constructors' own defaults.
 
 **A new instance on every call.** One instance is one SAP session. After its
