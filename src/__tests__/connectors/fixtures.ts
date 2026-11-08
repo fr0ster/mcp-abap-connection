@@ -25,6 +25,10 @@ import {
   type IRfcConversation,
   RfcTransport,
 } from '../../connection/RfcTransport.js';
+import {
+  httpClientStub,
+  type StubResponse,
+} from '../helpers/httpClientStub.js';
 import type { Connection, ConnectorFixture } from './contract.js';
 
 const config: SapHttpConfig = {
@@ -51,7 +55,10 @@ function httpSubstrate() {
   let live = false;
   let refusing = false;
 
-  const send = async (request: { url?: string; method?: string }) => {
+  const send = async (request: {
+    url?: string;
+    method?: string;
+  }): Promise<StubResponse> => {
     const url = String(request.url ?? '');
 
     // The teardown call. 200 with no cookie, which is what a logoff answers —
@@ -118,8 +125,8 @@ export async function cloudFixture(): Promise<ConnectorFixture> {
       const transport = new CloudHttpTransport(() => ({}), null, {
         client: config.client,
         baseUrl: config.url,
+        httpClient: httpClientStub(wire.send),
       });
-      (transport as unknown as { instance: unknown }).instance = wire.send;
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('a-token'),
@@ -141,8 +148,8 @@ export async function onPremHttpFixture(): Promise<ConnectorFixture> {
       const transport = new OnPremHttpTransport(() => ({}), null, {
         client: config.client,
         baseUrl: config.url,
+        httpClient: httpClientStub(wire.send),
       });
-      (transport as unknown as { instance: unknown }).instance = wire.send;
       const conn = new AdtOnPremConnector(
         config,
         new BasicAuthProvider('u', 'p'),

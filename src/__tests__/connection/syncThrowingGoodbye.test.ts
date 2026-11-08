@@ -21,6 +21,10 @@ import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { messageOf } from '../helpers/assertions.js';
 import { credentialWriting } from '../helpers/credentials.js';
+import {
+  httpClientStub,
+  type StubResponse,
+} from '../helpers/httpClientStub.js';
 import { settled } from '../helpers/settled.js';
 
 const config: SapHttpConfig = {
@@ -36,19 +40,12 @@ const NO_SESSION = 'sap-XSRF_STUB_100=X1; path=/';
 
 /** A real on-prem wire over a recorded client that answers discovery with `cookie`. */
 function onPremWire(cookie: string) {
-  const sent: Array<{ url: string; cookie?: string }> = [];
-  const transport = new OnPremHttpTransport(() => ({}), null, {
-    client: config.client,
-    baseUrl: config.url,
-  });
+  const sent: Array<{ url: string; cookie?: string | undefined }> = [];
   // Stubbed at the CLIENT, so the wire's own dressing of the logoff — the
   // cookie it snapshots — is what gets recorded.
-  (transport as unknown as { instance: unknown }).instance = async (request: {
-    url?: string;
-    headers?: Record<string, string>;
-  }) => {
-    const url = String(request.url ?? '');
-    sent.push({ url, cookie: request.headers?.Cookie });
+  const client = httpClientStub(async (request): Promise<StubResponse> => {
+    const url = request.url;
+    sent.push({ url, cookie: request.headers.Cookie });
     if (url.includes('/icf/logoff')) {
       return { status: 200, statusText: 'OK', headers: {}, data: '' };
     }
@@ -58,7 +55,12 @@ function onPremWire(cookie: string) {
       data: '<service/>',
       headers: { 'x-csrf-token': 'TOKEN', 'set-cookie': [cookie] },
     };
-  };
+  });
+  const transport = new OnPremHttpTransport(() => ({}), null, {
+    client: config.client,
+    baseUrl: config.url,
+    httpClient: client,
+  });
   const conn = new AdtOnPremConnector(
     config,
     credentialWriting({ authorization: 'Basic dTpw' }),

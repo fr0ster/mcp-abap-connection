@@ -13,7 +13,7 @@
 
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapHttpConfig } from '../../config/sapConfig.js';
@@ -195,15 +195,9 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
-    let cleared = 0;
-    const realClear = (
-      conn as unknown as { clearSessionState: () => void }
-    ).clearSessionState.bind(conn);
-    (conn as unknown as { clearSessionState: () => void }).clearSessionState =
-      () => {
-        cleared += 1;
-        realClear();
-      };
+    // Tearing the session down gives the wire's session state back: counted
+    // where the connection hands it back, the wire's own `forgetSession`.
+    const forget = mock.method(conn.transport, 'forgetSession');
 
     const first = conn.disconnect();
     // disconnect() is called once; a second call is told so.
@@ -215,7 +209,7 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
     });
     await first;
 
-    assert.strictEqual(cleared, 1);
+    assert.strictEqual(forget.mock.callCount(), 1);
     assert.strictEqual(conn.isConnected(), false);
   });
 });

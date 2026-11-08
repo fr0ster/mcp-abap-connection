@@ -14,25 +14,32 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { LegacyOnPremHttpTransport } from '../connection/LegacyOnPremHttpTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
+import { httpClientStub } from './helpers/httpClientStub.js';
 
-function wire<T extends OnPremHttpTransport>(transport: T) {
-  const seen: Array<Record<string, string>> = [];
-  (transport as unknown as { instance: unknown }).instance = async (config: {
-    headers?: Record<string, string>;
-  }) => {
-    seen.push(config.headers ?? {});
-    return { status: 200, statusText: 'OK', headers: {}, data: '' };
+/** A legacy wire over a client that answers 200 and records the headers sent. */
+function wire() {
+  const client = httpClientStub(async () => ({
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: '',
+  }));
+  const transport = new LegacyOnPremHttpTransport(() => ({}), null, {
+    baseUrl: 'https://h',
+    httpClient: client,
+  });
+  return {
+    transport,
+    get seen() {
+      return client.sent.map((request) => request.headers);
+    },
   };
-  return { transport, seen };
 }
 
 describe('the legacy on-prem wire', () => {
   it('never sends the session-type header, whatever was asked for', async () => {
-    const { transport, seen } = wire(
-      new LegacyOnPremHttpTransport(() => ({}), null, {
-        baseUrl: 'https://h',
-      }),
-    );
+    const wired = wire();
+    const { transport } = wired;
 
     await transport.send({
       method: 'GET',
@@ -45,9 +52,11 @@ describe('the legacy on-prem wire', () => {
 
     // The caller's other headers are untouched; only the one that would move a
     // lock somewhere it cannot be released is dropped.
-    assert.strictEqual(seen[0].Accept, 'application/xml');
+    const [sent] = wired.seen;
+    assert.ok(sent);
+    assert.strictEqual(sent.Accept, 'application/xml');
     assert.ok(
-      !Object.keys(seen[0])
+      !Object.keys(sent)
         .map((k) => k.toLowerCase())
         .includes('x-sap-adt-sessiontype'),
     );
@@ -80,12 +89,9 @@ describe('the legacy on-prem wire', () => {
   });
 
   it('keeps the platform logoff it inherits', async () => {
-    const transport = new LegacyOnPremHttpTransport(() => ({}), null, {
-      baseUrl: 'https://h',
-    });
-    const { seen } = wire(transport);
+    const wired = wire();
+    const { transport } = wired;
     transport.ingest({ 'set-cookie': ['SAP_SESSIONID_X_100=abc; path=/'] });
-    (transport as unknown as { established: boolean }).established = true;
 
     await transport.close({
       authorize: async () => {},
@@ -95,7 +101,8 @@ describe('the legacy on-prem wire', () => {
 
     // Inherited rather than reimplemented: what differs on 7.40 is the header
     // and the session naming, not how a session is given back.
+    const seen = wired.seen;
     assert.strictEqual(seen.length, 1);
-    assert.ok(seen[0].Cookie.includes('SAP_SESSIONID_X_100'));
+    assert.ok(seen[0]?.Cookie?.includes('SAP_SESSIONID_X_100'));
   });
 });

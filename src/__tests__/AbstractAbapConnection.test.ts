@@ -143,14 +143,15 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
     // Two levels, and they are different seams now. Getting the wire ready
     // before a mutation is the WIRE establishing itself; the refetch after a
     // 401 is the connection deciding the token it had is no good.
+    // The wire's establishment, asked twice: first to get ready before the
+    // mutation (it fails), then by the connection's refetch after the 401
+    // (it earns the token).
     const upfrontFetchError = new Error('upfront CSRF fetch unavailable');
-    // A spy keeps the original for every call past the first.
-    const upfront = mock.method(conn.transport, 'establish');
-    upfront.mock.mockImplementationOnce(async () => {
-      throw upfrontFetchError;
+    const asked: string[] = [];
+    const upfront = mock.method(conn.transport, 'establish', async () => {
+      if (asked.push('establish') === 1) throw upfrontFetchError;
+      conn.transport.adoptCsrfToken('bootstrap-token');
     });
-    const fetchSpy = mock.method(conn as any, 'fetchCsrfToken');
-    fetchSpy.mock.mockImplementationOnce(async () => 'bootstrap-token');
     const send = answering(
       {
         reject: makeAxiosError(401, '<html>login</html>', {
@@ -171,8 +172,8 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
 
     assert.strictEqual(res.status, 200);
     assert.strictEqual(conn.transport.csrfToken(), 'bootstrap-token');
-    assert.strictEqual(upfront.mock.callCount(), 1);
-    assert.strictEqual(fetchSpy.mock.callCount(), 1);
+    // Once up front, once for the refetch — no third exchange.
+    assert.strictEqual(upfront.mock.callCount(), 2);
     assert.strictEqual(send.mock.callCount(), 2);
   });
 

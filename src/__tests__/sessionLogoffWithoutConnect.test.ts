@@ -9,7 +9,7 @@
  * Against the local SAP stand-in with `authenticate` on.
  */
 import assert from 'node:assert/strict';
-import { request as httpRequest, type IncomingMessage } from 'node:http';
+import { request as httpRequest, type RequestOptions } from 'node:http';
 import { Duplex } from 'node:stream';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
@@ -18,6 +18,10 @@ import type { SapHttpConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { createConnection } from '../connection/createConnection.js';
+import {
+  type HttpClientFactory,
+  nodeHttpClient,
+} from '../connection/HttpTransport.js';
 import { assertMatchObject } from './helpers/assertions.js';
 import { cloudHttpTransport, onPremHttpTransport } from './helpers/onPrem.js';
 import { type SapStub, startSapStub } from './helpers/sapStub.js';
@@ -89,9 +93,9 @@ async function liveSession(): Promise<string> {
   return cookies;
 }
 
-function onPremOn(session: string | undefined) {
+function onPremOn(session: string | undefined, httpClient?: HttpClientFactory) {
   const provider = stubProvider();
-  const transport = onPremHttpTransport(config());
+  const transport = onPremHttpTransport(config(), null, httpClient);
   const conn = new AdtOnPremConnector(
     config(),
     provider,
@@ -233,8 +237,8 @@ describe('disconnect() without connect() on an instance built on a session', () 
 
   it('does not resolve before the logoff is written', async () => {
     const session = await liveSession();
-    const { conn, transport } = onPremOn(session);
-    const never = bytesNeverTaken(transport);
+    const never = bytesNeverTaken();
+    const { conn } = onPremOn(session, never.httpClient);
 
     let settled = false;
     const disconnected = conn.disconnect().then(() => {
@@ -320,13 +324,19 @@ describe('disconnect() without connect() on an instance built on a session', () 
 });
 
 /**
- * Sends the wire's logoffs over a socket that accepts nothing: every write
- * stays pending, so no request's `finish` comes. Destroying it fails them.
+ * An HTTP client whose logoffs go over a socket that accepts nothing: every
+ * write stays pending, so no request's `finish` comes. Destroying it fails them.
+ * Everything else goes out as the shipped client sends it.
  */
-function bytesNeverTaken(transport: unknown): {
+function bytesNeverTaken(): {
+  httpClient: HttpClientFactory;
   fail: () => void;
+  /** Settles when the wire has opened its logoff request. */
   requested: Promise<void>;
+  /** The options of every logoff request the wire opened, in order. */
+  logoffs: RequestOptions[];
 } {
+  const logoffs: RequestOptions[] = [];
   let opened!: () => void;
   const requested = new Promise<void>((resolve) => {
     opened = resolve;
@@ -344,22 +354,21 @@ function bytesNeverTaken(transport: unknown): {
     ref: () => socket,
     unref: () => socket,
   });
-  (
-    transport as {
-      logoffRequest: (
-        options: Record<string, unknown>,
-        onResponse: (response: IncomingMessage) => void,
-      ) => unknown;
-    }
-  ).logoffRequest = (options, onResponse) => {
-    opened();
-    return httpRequest(
-      { ...options, agent: undefined, createConnection: () => socket } as never,
-      onResponse,
-    );
+  const httpClient: HttpClientFactory = {
+    ...nodeHttpClient,
+    logoffRequest: (options, onResponse) => {
+      logoffs.push(options);
+      opened();
+      return httpRequest(
+        { ...options, agent: undefined, createConnection: () => socket },
+        onResponse,
+      );
+    },
   };
   return {
+    httpClient,
     fail: () => socket.destroy(new Error('the server never took the bytes')),
     requested,
+    logoffs,
   };
 }

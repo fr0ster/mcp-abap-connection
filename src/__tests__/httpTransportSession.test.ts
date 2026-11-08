@@ -14,6 +14,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { HttpTransport } from '../connection/HttpTransport.js';
+import { httpClientStub } from './helpers/httpClientStub.js';
 
 const setCookie = (...entries: string[]) => ({ 'set-cookie': entries });
 
@@ -130,32 +131,44 @@ describe('staying on the server the session lives on', () => {
 });
 
 describe('what the wire puts on its own requests', () => {
-  /** Replaces axios, so the outgoing headers can be read. */
-  function outgoing(transport: HttpTransport) {
-    const seen: Array<Record<string, string>> = [];
-    (transport as unknown as { client: unknown }).client =
-      () => async (cfg: { headers?: Record<string, string> }) => {
-        seen.push(cfg.headers ?? {});
-        return { status: 200, statusText: 'OK', headers: {}, data: '' };
-      };
-    return seen;
+  /** A wire over a client that answers 200 and records the headers sent. */
+  function outgoing(options: { client?: string } = {}) {
+    const client = httpClientStub(async () => ({
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: '',
+    }));
+    const transport = new HttpTransport(undefined, null, {
+      ...options,
+      baseUrl: BASE,
+      httpClient: client,
+    });
+    return {
+      transport,
+      get seen() {
+        return client.sent.map((request) => request.headers);
+      },
+    };
   }
 
   it('sends the cookies it holds', async () => {
-    const transport = http();
-    const seen = outgoing(transport);
+    const wired = outgoing();
+    const { transport } = wired;
     transport.ingest(setCookie('SAP_SESSIONID_E19_100=ABC'));
 
     await transport.send({ method: 'GET', url: '/x' });
 
-    assert.ok(seen[0].Cookie.includes('SAP_SESSIONID_E19_100=ABC'));
+    const seen = wired.seen;
+
+    assert.ok(seen[0]?.Cookie?.includes('SAP_SESSIONID_E19_100=ABC'));
   });
 
   it('merges with a Cookie the caller set, rather than replacing it', async () => {
     // A SAML session IS the credential's cookie. Replacing it would send the
     // request out unauthenticated while looking like it carried a session.
-    const transport = http();
-    const seen = outgoing(transport);
+    const wired = outgoing();
+    const { transport } = wired;
     transport.ingest(setCookie('SAP_SESSIONID_E19_100=ABC'));
 
     await transport.send({
@@ -164,29 +177,35 @@ describe('what the wire puts on its own requests', () => {
       headers: { Cookie: 'MYSAPSSO2=ticket' },
     });
 
-    assert.ok(seen[0].Cookie.includes('MYSAPSSO2=ticket'));
-    assert.ok(seen[0].Cookie.includes('SAP_SESSIONID_E19_100=ABC'));
+    const seen = wired.seen;
+
+    assert.ok(seen[0]?.Cookie?.includes('MYSAPSSO2=ticket'));
+    assert.ok(seen[0]?.Cookie?.includes('SAP_SESSIONID_E19_100=ABC'));
   });
 
   it('asks the server to name itself, and sends the name back', async () => {
-    const transport = http();
-    const seen = outgoing(transport);
+    const wired = outgoing();
+    const { transport } = wired;
 
     await transport.send({ method: 'GET', url: '/x' });
     transport.ingest({ 'sap-adt-saplb': 'epbyminsd0654_E19_00' });
     await transport.send({ method: 'GET', url: '/y' });
 
-    assert.strictEqual(seen[0]['sap-adt-saplb'], 'fetch');
-    assert.strictEqual(seen[1].saplb, 'epbyminsd0654_E19_00');
+    const seen = wired.seen;
+
+    assert.strictEqual(seen[0]?.['sap-adt-saplb'], 'fetch');
+    assert.strictEqual(seen[1]?.saplb, 'epbyminsd0654_E19_00');
   });
 
   it('sends no Cookie header when it holds nothing', async () => {
-    const transport = http();
-    const seen = outgoing(transport);
+    const wired = outgoing();
+    const { transport } = wired;
 
     await transport.send({ method: 'GET', url: '/x' });
 
-    assert.strictEqual(seen[0].Cookie, undefined);
+    const seen = wired.seen;
+
+    assert.strictEqual(seen[0]?.Cookie, undefined);
   });
 });
 

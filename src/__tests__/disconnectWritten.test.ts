@@ -19,6 +19,7 @@ import {
   createServer,
   request as httpRequest,
   type IncomingMessage,
+  type RequestOptions,
   type ServerResponse,
 } from 'node:http';
 import type { Socket } from 'node:net';
@@ -27,6 +28,10 @@ import { afterEach, describe, it } from 'node:test';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { SapHttpConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
+import {
+  type HttpClientFactory,
+  nodeHttpClient,
+} from '../connection/HttpTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import type { ILogger } from '../logger.js';
 import { assertMatchObject, messageOf } from './helpers/assertions.js';
@@ -217,17 +222,19 @@ async function turns(count: number, until?: () => boolean): Promise<void> {
 }
 
 /**
- * Sends the wire's logoffs over a socket that accepts nothing: every write
- * stays pending, so no request's `finish` comes. Destroying it fails them.
+ * An HTTP client whose logoffs go over a socket that accepts nothing: every
+ * write stays pending, so no request's `finish` comes. Destroying it fails them.
+ * Everything else goes out as the shipped client sends it.
  */
-function bytesNeverTaken(transport: unknown): {
+function bytesNeverTaken(): {
+  httpClient: HttpClientFactory;
   fail: () => void;
   /** Settles when the wire has opened its logoff request. */
   requested: Promise<void>;
   /** The options of every logoff request the wire opened, in order. */
-  logoffs: Record<string, unknown>[];
+  logoffs: RequestOptions[];
 } {
-  const logoffs: Record<string, unknown>[] = [];
+  const logoffs: RequestOptions[] = [];
   let opened!: () => void;
   const requested = new Promise<void>((resolve) => {
     opened = resolve;
@@ -245,22 +252,19 @@ function bytesNeverTaken(transport: unknown): {
     ref: () => socket,
     unref: () => socket,
   });
-  (
-    transport as {
-      logoffRequest: (
-        options: Record<string, unknown>,
-        onResponse: (response: IncomingMessage) => void,
-      ) => unknown;
-    }
-  ).logoffRequest = (options, onResponse) => {
-    logoffs.push(options);
-    opened();
-    return httpRequest(
-      { ...options, agent: undefined, createConnection: () => socket } as never,
-      onResponse,
-    );
+  const httpClient: HttpClientFactory = {
+    ...nodeHttpClient,
+    logoffRequest: (options, onResponse) => {
+      logoffs.push(options);
+      opened();
+      return httpRequest(
+        { ...options, agent: undefined, createConnection: () => socket },
+        onResponse,
+      );
+    },
   };
   return {
+    httpClient,
     fail: () => socket.destroy(new Error('the server never took the bytes')),
     requested,
     logoffs,
@@ -304,9 +308,14 @@ describe('disconnect() resolves once the logoff is written', () => {
 
   it('a server that never takes the bytes: disconnect() waits for the write, and resolves when the socket fails', async () => {
     server = await standIn();
-    const conn = onPrem(configFor(server.baseUrl), null);
+    const wire = bytesNeverTaken();
+    const conn = onPrem(
+      configFor(server.baseUrl),
+      null,
+      undefined,
+      wire.httpClient,
+    );
     await conn.connect();
-    const wire = bytesNeverTaken(conn.transport);
 
     const disconnected = watched(conn.disconnect());
     await turns(20);
@@ -332,9 +341,14 @@ describe('disconnect() resolves once the logoff is written', () => {
 
     it('a second call while the first is writing rejects; the first still resolves on the write', async () => {
       server = await standIn();
-      const conn = onPrem(configFor(server.baseUrl), null);
+      const wire = bytesNeverTaken();
+      const conn = onPrem(
+        configFor(server.baseUrl),
+        null,
+        undefined,
+        wire.httpClient,
+      );
       await conn.connect();
-      const wire = bytesNeverTaken(conn.transport);
 
       const first = conn.disconnect();
       const firstDone = watched(first);
@@ -609,8 +623,13 @@ describe('disconnect() resolves once the logoff is written', () => {
           '/sap/bc/adt/discovery': ['SAP_SESSIONID_STUB_100=S2; Path=/'],
         },
       });
-      const conn = onPrem(configFor(server.baseUrl), null);
-      const wire = bytesNeverTaken(conn.transport);
+      const wire = bytesNeverTaken();
+      const conn = onPrem(
+        configFor(server.baseUrl),
+        null,
+        undefined,
+        wire.httpClient,
+      );
 
       const connecting = conn.connect();
       const rejected = watched(connecting);
@@ -857,7 +876,7 @@ describe('disconnect() resolves once the logoff is written', () => {
       const conn = new AdtOnPremConnector(
         configFor(server.baseUrl),
         new BasicAuthProvider('u', 'p'),
-        transport as never,
+        transport,
         null,
       );
 
@@ -880,13 +899,13 @@ describe('disconnect() resolves once the logoff is written', () => {
         authType: 'jwt',
         jwtToken: 'TOKEN',
       };
+      const wire = bytesNeverTaken();
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
-        cloudHttpTransport(config, null),
+        cloudHttpTransport(config, null, wire.httpClient),
         null,
       );
-      const wire = bytesNeverTaken(conn.transport);
 
       const connecting = conn.connect();
       const settled = watched(connecting);
