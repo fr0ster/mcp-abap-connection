@@ -16,13 +16,18 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { SapConfig } from '../../config/sapConfig.js';
+import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
+import { messageOf } from '../helpers/assertions.js';
 import { credentialWriting } from '../helpers/credentials.js';
+import {
+  httpClientStub,
+  type StubResponse,
+} from '../helpers/httpClientStub.js';
 import { settled } from '../helpers/settled.js';
 
-const config: SapConfig = {
+const config: SapHttpConfig = {
   url: 'https://sap.example.com',
   authType: 'basic',
   username: 'u',
@@ -35,19 +40,12 @@ const NO_SESSION = 'sap-XSRF_STUB_100=X1; path=/';
 
 /** A real on-prem wire over a recorded client that answers discovery with `cookie`. */
 function onPremWire(cookie: string) {
-  const sent: Array<{ url: string; cookie?: string }> = [];
-  const transport = new OnPremHttpTransport(() => ({}), null, {
-    client: config.client,
-    baseUrl: config.url,
-  });
+  const sent: Array<{ url: string; cookie?: string | undefined }> = [];
   // Stubbed at the CLIENT, so the wire's own dressing of the logoff — the
   // cookie it snapshots — is what gets recorded.
-  (transport as unknown as { instance: unknown }).instance = async (request: {
-    url?: string;
-    headers?: Record<string, string>;
-  }) => {
-    const url = String(request.url ?? '');
-    sent.push({ url, cookie: request.headers?.Cookie });
+  const client = httpClientStub(async (request): Promise<StubResponse> => {
+    const url = request.url;
+    sent.push({ url, cookie: request.headers.Cookie });
     if (url.includes('/icf/logoff')) {
       return { status: 200, statusText: 'OK', headers: {}, data: '' };
     }
@@ -57,7 +55,12 @@ function onPremWire(cookie: string) {
       data: '<service/>',
       headers: { 'x-csrf-token': 'TOKEN', 'set-cookie': [cookie] },
     };
-  };
+  });
+  const transport = new OnPremHttpTransport(() => ({}), null, {
+    client: config.client,
+    baseUrl: config.url,
+    httpClient: client,
+  });
   const conn = new AdtOnPremConnector(
     config,
     credentialWriting({ authorization: 'Basic dTpw' }),
@@ -81,7 +84,7 @@ function closeThrowsSynchronously(
   transport: OnPremHttpTransport,
 ): () => number {
   let calls = 0;
-  (transport as unknown as { close: () => never }).close = () => {
+  transport.close = () => {
     calls += 1;
     throw new Error('the goodbye threw synchronously');
   };
@@ -95,7 +98,7 @@ describe('a close() that throws synchronously', () => {
     const closes = closeThrowsSynchronously(transport);
 
     await assert.rejects(conn.connect(), (e: unknown) =>
-      (e as Error).message.includes('established, then failed'),
+      messageOf(e).includes('established, then failed'),
     );
 
     assert.strictEqual(closes(), 1);
@@ -109,7 +112,7 @@ describe('a close() that throws synchronously', () => {
     const closes = closeThrowsSynchronously(transport);
 
     await assert.rejects(conn.connect(), (e: unknown) =>
-      /opened no ABAP session/.test((e as Error).message),
+      /opened no ABAP session/.test(messageOf(e)),
     );
 
     assert.strictEqual(closes(), 1);
@@ -137,7 +140,7 @@ describe('the goodbye is still called synchronously', () => {
     failAfterEstablishing(transport);
 
     await assert.rejects(conn.connect(), (e: unknown) =>
-      (e as Error).message.includes('established, then failed'),
+      messageOf(e).includes('established, then failed'),
     );
     await settled();
 
@@ -149,7 +152,7 @@ describe('the goodbye is still called synchronously', () => {
     const { conn, logoffs } = onPremWire(NO_SESSION);
 
     await assert.rejects(conn.connect(), (e: unknown) =>
-      /opened no ABAP session/.test((e as Error).message),
+      /opened no ABAP session/.test(messageOf(e)),
     );
     await settled();
 

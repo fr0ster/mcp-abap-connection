@@ -314,6 +314,36 @@ function sameMaterial(
   });
 }
 
+/** What an HTTP wire builds its client from: its two pooled agents. */
+export interface HttpClientAgents {
+  httpAgent: HttpAgent;
+  httpsAgent: Agent;
+}
+
+/**
+ * How an HTTP wire reaches the network: the axios instance every request goes
+ * through, built from the wire's agents (built anew when a logon offers other
+ * TLS material), and the node request a logoff goes out on — the seam where
+ * its write is seen. `nodeHttpClient` is the shipped one; a consumer or a test
+ * hands its own to the constructor (`httpClient`).
+ */
+export interface HttpClientFactory {
+  create(agents: HttpClientAgents): AxiosInstance;
+  logoffRequest(
+    options: RequestOptions,
+    onResponse: (response: IncomingMessage) => void,
+  ): ClientRequest;
+}
+
+/** axios over the wire's agents, and node's own `http` / `https` for a logoff. */
+export const nodeHttpClient: HttpClientFactory = {
+  create: (agents) => axios.create(agents),
+  logoffRequest: (options, onResponse) =>
+    options.protocol === 'https:'
+      ? httpsRequest(options, onResponse)
+      : httpRequest(options, onResponse),
+};
+
 /**
  * Whether the server certificate is verified: yes, as Node does, unless told
  * otherwise in so many words.
@@ -383,13 +413,41 @@ export class HttpTransport implements IAdtTransport {
     private readonly agentOptions: () => AgentOptions = () => ({}),
     protected readonly logger: ILogger | null = null,
     /**
-     * The SAP client (mandant) every request on this wire addresses, from the
-     * first one on: the establishing call is where the session and its CSRF
-     * token are issued, so a client applied any later is applied to a session
-     * that already lives in another one. See `clientHeaders()`.
+     * `client`: the SAP client (mandant) every request on this wire
+     * addresses, from the first one on: the establishing call is where the
+     * session and its CSRF token are issued, so a client applied any later is
+     * applied to a session that already lives in another one. See
+     * `clientHeaders()`.
+     *
+     * `baseUrl`: the system this wire addresses, required. A path a caller
+     * sends is put on it; every request the wire originates itself — the
+     * CSRF fetch, the cloud preflight, the logoff — goes to its origin.
+     *
+     * `httpClient`: how the wire reaches the network. Absent: `nodeHttpClient`.
      */
-    private readonly options: { client?: string; baseUrl?: string } = {},
+    private readonly options: {
+      client?: string;
+      baseUrl: string;
+      httpClient?: HttpClientFactory;
+    },
   ) {}
+
+  /**
+   * The system's origin: where the wire's own requests go — the CSRF fetch,
+   * the session check, the cloud preflight, the logoff — whatever path the
+   * configured URL carries. The same base the connection's `getBaseUrl()`
+   * answers.
+   */
+  protected origin(): string {
+    return new URL(this.options.baseUrl).origin;
+  }
+
+  /** The base URL without a trailing slash, for a caller's path to be put on. */
+  protected base(): string {
+    return this.options.baseUrl.endsWith('/')
+      ? this.options.baseUrl.slice(0, -1)
+      : this.options.baseUrl;
+  }
 
   /**
    * Fold a response into the wire state.
@@ -489,9 +547,7 @@ export class HttpTransport implements IAdtTransport {
       );
     }
 
-    const base = context.baseUrl.endsWith('/')
-      ? context.baseUrl.slice(0, -1)
-      : context.baseUrl;
+    const base = this.origin();
     const endpoints = [
       `${base}${CSRF_CONFIG.ENDPOINT}`,
       `${base}${CSRF_CONFIG.FALLBACK_ENDPOINT}`,
@@ -686,9 +742,7 @@ export class HttpTransport implements IAdtTransport {
     // move the session out from under a lock taken against the first.
     if (this.token) return;
 
-    const base = context.baseUrl.endsWith('/')
-      ? context.baseUrl.slice(0, -1)
-      : context.baseUrl;
+    const base = this.origin();
     const endpoints = [
       `${base}${CSRF_CONFIG.ENDPOINT}`,
       // BASIS < 7.52 has no /sap/bc/adt/core/discovery.
@@ -979,11 +1033,8 @@ export class HttpTransport implements IAdtTransport {
 
   /** A path becomes an address; anything already absolute is left alone. */
   private address(url: string): string {
-    if (!url.startsWith('/') || !this.options.baseUrl) return url;
-    const base = this.options.baseUrl.endsWith('/')
-      ? this.options.baseUrl.slice(0, -1)
-      : this.options.baseUrl;
-    return `${base}${url}`;
+    if (!url.startsWith('/')) return url;
+    return `${this.base()}${url}`;
   }
 
   /**
@@ -1031,7 +1082,7 @@ export class HttpTransport implements IAdtTransport {
       // caller's `agentOptions` and the TLS material win over the pool's
       // options — `keepAlive: false` there turns the pool off for `https:`.
       const tls = { ...options, rejectUnauthorized, ...this.material };
-      this.instance = axios.create({
+      this.instance = (this.options.httpClient ?? nodeHttpClient).create({
         httpAgent: new PooledHttpAgent(POOLED),
         httpsAgent: new PooledHttpsAgent({ ...POOLED, ...tls }),
       });
@@ -1083,7 +1134,7 @@ export class HttpTransport implements IAdtTransport {
   ): Promise<void> {
     await this.sendLogoff(
       context,
-      `${context.baseUrl}${ICF_LOGOFF_PATH}`,
+      `${this.origin()}${ICF_LOGOFF_PATH}`,
       { ...snapshot, session: {} },
       written,
     );
@@ -1216,19 +1267,19 @@ export class HttpTransport implements IAdtTransport {
   }
 
   /**
-   * The node request a logoff goes out on — the seam where its write is seen.
-   *
-   * A test replaces it to hold a request's socket shut; the wire uses node's
-   * own `http` / `https`, as axios would with redirects off. The logoff's
-   * answer is not read, so not following a redirect changes nothing.
+   * The node request a logoff goes out on — the seam where its write is seen:
+   * the `httpClient`'s, node's own `http` / `https` by default, as axios would
+   * use with redirects off. The logoff's answer is not read, so not following a
+   * redirect changes nothing.
    */
   protected logoffRequest(
     options: RequestOptions,
     onResponse: (response: IncomingMessage) => void,
   ): ClientRequest {
-    return options.protocol === 'https:'
-      ? httpsRequest(options, onResponse)
-      : httpRequest(options, onResponse);
+    return (this.options.httpClient ?? nodeHttpClient).logoffRequest(
+      options,
+      onResponse,
+    );
   }
 
   /** The agent a logoff goes out on: never a pooled one. */

@@ -118,7 +118,6 @@ export abstract class CredentialAbapConnection<
       // credential itself, with nobody deciding anything.
       await this.transport.establish({
         ...this.sessionContext(),
-        baseUrl: await this.getBaseUrl(),
         isFatal: (error) => this.endsTheExchange(error),
       });
       this.logger?.debug('Connected', {

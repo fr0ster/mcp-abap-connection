@@ -6,14 +6,13 @@
  * machine, and a transport that reached for it in its constructor could not be
  * built at all where it is absent. But a factory is a poor front door — without
  * this, reaching the RFC wire means every consumer writing the `require` and
- * deriving `ashost` and `sysnr` for themselves, which is the derivation the
- * per-transport connection class used to do for them.
+ * mapping the config to the SDK's parameters for themselves.
  *
- * So the derivation lives here, once, and the SDK is still only touched when a
+ * So the mapping lives here, once, and the SDK is still only touched when a
  * conversation is actually opened.
  */
 
-import type { SapConfig } from '../config/sapConfig.js';
+import type { ISapRfcConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import type { IRfcConversation } from './RfcTransport.js';
 
 /**
@@ -32,81 +31,55 @@ export interface RfcConnectionParams {
 /**
  * Where the native client dials: a message server, which picks an application
  * server of the logon group (load-balanced logon). The keys are the SAP NW RFC
- * SDK's own; one of `msserv` and `sysid` names the message server's service.
+ * SDK's own; `msserv`, `sysid` or both name the message server's service.
  */
-export interface RfcMessageServerParams {
+export type RfcMessageServerParams = {
   mshost: string;
-  msserv?: string;
-  sysid?: string;
   group: string;
   client: string;
   lang: string;
   saprouter?: string;
-}
+} & ({ msserv: string; sysid?: string } | { msserv?: string; sysid: string });
 
 /** One application server, or a message server and a logon group. */
 export type RfcAddress = RfcConnectionParams | RfcMessageServerParams;
 
 /**
- * Read out of the config, never asked of the server.
+ * The address the config states, in the SDK's terms — read as given, never
+ * asked of the server.
  *
- * **A message server**, when the config states `mshost`: the SDK needs the
- * message server's service, so `msserv` or `sysid` must be there too, and the
- * logon group is `group` or SAP's default `PUBLIC`. `url` then gives no host
- * and no system number — the message server chooses the application server.
+ * Nothing is derived and nothing is added: no default client, language or
+ * logon group, no host or system number taken from a URL, nothing read from
+ * the environment, no value trimmed. `language` is the SDK's `lang`;
+ * `msserv`, `sysid` and `saprouter` are there exactly when the config states
+ * them. It refuses nothing: the config's type proves the address complete,
+ * and data from outside the type system is checked where it is read.
  *
- * **One application server** otherwise: the host comes off `url`, and the
- * system number off the HTTP port by the SAP convention that 80XX is the ICM
- * port for system XX — the convention the port itself follows, not a guess
- * about the deployment. `SAP_SYSNR` overrides it for a port that follows no
- * convention, which is the case on a system reached through 50400.
- *
- * `saprouter` goes with either. The address only: no username or password is
- * read from the config.
+ * The address only: no username or password is read from the config.
  */
-export function rfcParamsFrom(config: SapConfig): RfcAddress {
-  const client = config.client || '000';
-  const router = config.saprouter ? { saprouter: config.saprouter } : {};
+export function rfcParamsFrom(config: ISapRfcConfig): RfcAddress {
+  const router =
+    config.saprouter === undefined ? {} : { saprouter: config.saprouter };
+  const logon = { client: config.client, lang: config.language, ...router };
 
-  if (config.mshost) {
-    if (!config.msserv && !config.sysid) {
-      throw new Error(
-        'An RFC conversation through a message server needs msserv or sysid beside mshost',
-      );
-    }
-    return {
-      mshost: config.mshost,
-      ...(config.msserv ? { msserv: config.msserv } : {}),
-      ...(config.sysid ? { sysid: config.sysid } : {}),
-      group: config.group || 'PUBLIC',
-      client,
-      lang: 'EN',
-      ...router,
-    };
+  if (config.mshost === undefined) {
+    return { ashost: config.ashost, sysnr: config.sysnr, ...logon };
   }
 
-  if (!config.url) {
-    throw new Error(
-      'An RFC conversation needs a url to take its host from, or mshost for a message server',
-    );
-  }
-
-  const parsed = new URL(config.url);
-  const port = Number.parseInt(parsed.port || '8000', 10);
-  const derived = String(port - 8000).padStart(2, '0');
-
-  return {
-    ashost: parsed.hostname,
-    sysnr: process.env.SAP_SYSNR?.trim() || derived,
-    client,
-    lang: 'EN',
-    ...router,
-  };
+  const service =
+    config.msserv === undefined
+      ? { sysid: config.sysid }
+      : {
+          msserv: config.msserv,
+          ...(config.sysid === undefined ? {} : { sysid: config.sysid }),
+        };
+  return { mshost: config.mshost, group: config.group, ...service, ...logon };
 }
 
 /**
  * The factory `RfcTransport` asks for: the logon parameters the provider wrote
- * for this open go in, spread over the address from the config.
+ * for this open go in, spread over the address the config states; nothing
+ * else is added.
  *
  * The SDK is loaded when a conversation is opened, not when this is called, so
  * a consumer can build the transport on a machine that has no SDK and find out
@@ -114,7 +87,7 @@ export function rfcParamsFrom(config: SapConfig): RfcAddress {
  * install.
  */
 export function rfcConversationFrom(
-  config: SapConfig,
+  config: ISapRfcConfig,
 ): (logon: Readonly<Record<string, string>>) => IRfcConversation {
   const params = rfcParamsFrom(config);
 

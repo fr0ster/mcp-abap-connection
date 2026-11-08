@@ -10,15 +10,17 @@
  */
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
-import type { SapConfig } from '../../config/sapConfig.js';
+import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
+import type { HttpClientFactory } from '../../connection/HttpTransport.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import type { ILogger } from '../../logger.js';
 
 export function onPremHttpTransport(
-  config: SapConfig,
+  config: SapHttpConfig,
   logger: ILogger | null = null,
+  httpClient?: HttpClientFactory,
 ): OnPremHttpTransport {
   return new OnPremHttpTransport(
     // What the caller must wire: the agent's options. The credential no longer
@@ -26,19 +28,24 @@ export function onPremHttpTransport(
     // arranges.
     () => ({}),
     logger,
-    { client: config.client, baseUrl: config.url },
+    {
+      client: config.client,
+      baseUrl: config.url,
+      ...(httpClient ? { httpClient } : {}),
+    },
   );
 }
 
 export function onPrem(
-  config: SapConfig,
+  config: SapHttpConfig,
   logger: ILogger | null = null,
   sessionId?: string,
+  httpClient?: HttpClientFactory,
 ): AdtOnPremConnector<IAuthProvider, OnPremHttpTransport> {
   return new AdtOnPremConnector(
     config,
     new BasicAuthProvider(config.username ?? '', config.password ?? ''),
-    onPremHttpTransport(config, logger),
+    onPremHttpTransport(config, logger, httpClient),
     logger,
     sessionId,
   );
@@ -46,11 +53,13 @@ export function onPrem(
 
 /** The cloud wire, built the way a consumer must build it. */
 export function cloudHttpTransport(
-  config: SapConfig,
+  config: SapHttpConfig,
   logger: ILogger | null = null,
+  httpClient?: HttpClientFactory,
 ): CloudHttpTransport {
   return new CloudHttpTransport(() => ({}), logger, {
     client: config.client,
     baseUrl: config.url,
+    ...(httpClient ? { httpClient } : {}),
   });
 }

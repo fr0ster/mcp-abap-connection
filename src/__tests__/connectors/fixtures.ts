@@ -16,15 +16,22 @@ import {
   BasicAuthProvider,
   TokenAuthProvider,
 } from '@mcp-abap-adt/auth-providers';
-import type { SapConfig } from '../../config/sapConfig.js';
+import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
-import { RfcTransport } from '../../connection/RfcTransport.js';
+import {
+  type IRfcConversation,
+  RfcTransport,
+} from '../../connection/RfcTransport.js';
+import {
+  httpClientStub,
+  type StubResponse,
+} from '../helpers/httpClientStub.js';
 import type { Connection, ConnectorFixture } from './contract.js';
 
-const config: SapConfig = {
+const config: SapHttpConfig = {
   url: 'https://sap.example.com',
   authType: 'basic',
   username: 'u',
@@ -48,7 +55,10 @@ function httpSubstrate() {
   let live = false;
   let refusing = false;
 
-  const send = async (request: { url?: string; method?: string }) => {
+  const send = async (request: {
+    url?: string;
+    method?: string;
+  }): Promise<StubResponse> => {
     const url = String(request.url ?? '');
 
     // The teardown call. 200 with no cookie, which is what a logoff answers —
@@ -63,11 +73,11 @@ function httpSubstrate() {
     // retries and the next attempt would connect — which says nothing about
     // what a connection does when the server keeps refusing.
     if (refusing) {
-      const error = new Error('unauthorized') as Error & { response?: unknown };
       // No cookie at all: the refusal opened no session, which is the thing the
       // connection has to notice.
-      error.response = { status: 401, headers: {}, data: '' };
-      throw error;
+      throw Object.assign(new Error('unauthorized'), {
+        response: { status: 401, headers: {}, data: '' },
+      });
     }
 
     const establishing =
@@ -115,15 +125,15 @@ export async function cloudFixture(): Promise<ConnectorFixture> {
       const transport = new CloudHttpTransport(() => ({}), null, {
         client: config.client,
         baseUrl: config.url,
+        httpClient: httpClientStub(wire.send),
       });
-      (transport as unknown as { instance: unknown }).instance = wire.send;
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('a-token'),
         transport,
         null,
       );
-      return conn as unknown as Connection;
+      return conn;
     },
     sessionsOpened: wire.sessionsOpened,
     refuseNext: wire.refuseNext,
@@ -138,15 +148,15 @@ export async function onPremHttpFixture(): Promise<ConnectorFixture> {
       const transport = new OnPremHttpTransport(() => ({}), null, {
         client: config.client,
         baseUrl: config.url,
+        httpClient: httpClientStub(wire.send),
       });
-      (transport as unknown as { instance: unknown }).instance = wire.send;
       const conn = new AdtOnPremConnector(
         config,
         new BasicAuthProvider('u', 'p'),
         transport,
         null,
       );
-      return conn as unknown as Connection;
+      return conn;
     },
     sessionsOpened: wire.sessionsOpened,
     refuseNext: wire.refuseNext,
@@ -158,7 +168,7 @@ export async function onPremRfcFixture(): Promise<ConnectorFixture> {
   let opened = 0;
   let refuse = false;
 
-  const conversation = {
+  const conversation: IRfcConversation = {
     get alive() {
       return opened > 0 && !closed;
     },
@@ -192,10 +202,10 @@ export async function onPremRfcFixture(): Promise<ConnectorFixture> {
       const conn = new AdtOnPremConnector(
         config,
         new BasicAuthProvider('u', 'p'),
-        new RfcTransport(() => conversation as never, null),
+        new RfcTransport(() => conversation, null),
         null,
       );
-      return conn as unknown as Connection;
+      return conn;
     },
     sessionsOpened: () => opened,
     refuseNext: () => {

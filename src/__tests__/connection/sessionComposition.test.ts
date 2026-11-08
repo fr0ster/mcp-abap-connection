@@ -13,11 +13,13 @@
 
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
-import type { SapConfig } from '../../config/sapConfig.js';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
+import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
+import type { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { assertMatchObject } from '../helpers/assertions.js';
 import { cloudHttpTransport, onPrem } from '../helpers/onPrem.js';
 
@@ -105,7 +107,7 @@ async function startStub(): Promise<Stub> {
   };
 }
 
-const configFor = (baseUrl: string): SapConfig => ({
+const configFor = (baseUrl: string): SapHttpConfig => ({
   url: baseUrl,
   client: '100',
   authType: 'basic',
@@ -193,15 +195,9 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
-    let cleared = 0;
-    const realClear = (
-      conn as unknown as { clearSessionState: () => void }
-    ).clearSessionState.bind(conn);
-    (conn as unknown as { clearSessionState: () => void }).clearSessionState =
-      () => {
-        cleared += 1;
-        realClear();
-      };
+    // Tearing the session down gives the wire's session state back: counted
+    // where the connection hands it back, the wire's own `forgetSession`.
+    const forget = mock.method(conn.transport, 'forgetSession');
 
     const first = conn.disconnect();
     // disconnect() is called once; a second call is told so.
@@ -213,7 +209,7 @@ describe('session lifecycle composed into AdtOnPremConnector', () => {
     });
     await first;
 
-    assert.strictEqual(cleared, 1);
+    assert.strictEqual(forget.mock.callCount(), 1);
     assert.strictEqual(conn.isConnected(), false);
   });
 });
@@ -251,7 +247,7 @@ describe('a credential refused while establishing', () => {
         client: '100',
         authType: 'jwt',
         jwtToken: 'STALE',
-      } as SapConfig,
+      },
       TokenAuthProvider.from({
         getToken: async () => (refreshed ? 'FRESH' : 'STALE'),
         refreshToken: async () => {
@@ -261,7 +257,11 @@ describe('a credential refused while establishing', () => {
           return 'FRESH';
         },
       }),
-      cloudHttpTransport({ url: stub.baseUrl, client: '100' } as SapConfig),
+      cloudHttpTransport({
+        url: stub.baseUrl,
+        client: '100',
+        authType: 'jwt',
+      }),
       null,
     );
 
@@ -357,16 +357,15 @@ describe('explicit connect is required', () => {
     await new Promise<void>((resolve) =>
       rejecting.listen(0, '127.0.0.1', resolve),
     );
-    const { port } = rejecting.address() as { port: number };
+    const address = rejecting.address();
+    assert.ok(address !== null && typeof address === 'object');
+    const { port } = address;
 
     try {
       const conn = onPrem(configFor(`http://127.0.0.1:${port}`), null);
       await assert.rejects(conn.connect());
 
-      assert.strictEqual(
-        (conn as unknown as { getCookies(): string | null }).getCookies(),
-        null,
-      );
+      assert.strictEqual(conn.transport.cookies(), null);
       assert.strictEqual(conn.getSessionIdentity(), null);
     } finally {
       await new Promise<void>((resolve, reject) =>
@@ -413,7 +412,9 @@ describe('a teardown requested during establishment', () => {
   });
 
   /** Holds establishment open until the test lets it finish. */
-  function stallEstablishment(conn: AdtOnPremConnector) {
+  function stallEstablishment(
+    conn: AdtOnPremConnector<IAuthProvider, OnPremHttpTransport>,
+  ) {
     let release!: () => void;
     let markStarted!: () => void;
     const held = new Promise<void>((r) => {
@@ -426,10 +427,9 @@ describe('a teardown requested during establishment', () => {
     });
     // The wire establishes itself now, so that is where establishment can be
     // caught mid-flight.
-    const original = (conn as any).transport.establish.bind(
-      (conn as any).transport,
-    );
-    (conn as any).transport.establish = async (context: unknown) => {
+    const wire = conn.transport;
+    const original = wire.establish.bind(wire);
+    wire.establish = async (context) => {
       markStarted();
       await held;
       return original(context);

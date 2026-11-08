@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { authError } from '@mcp-abap-adt/auth-errors';
 import type { AuthOutcome, ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
-import type { SapConfig } from '../config/sapConfig.js';
+import type { ISapRfcConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { AuthRefusedError, WireLogonError } from '../connection/authErrors.js';
 import type { IAdtSessionContext } from '../connection/IAdtTransport.js';
@@ -17,7 +17,11 @@ import {
   RfcTransport,
 } from '../connection/RfcTransport.js';
 import { rfcConversationFrom } from '../connection/rfcConversation.js';
-import { assertMatchObject } from './helpers/assertions.js';
+import {
+  assertMatchObject,
+  instanceOf,
+  messageOf,
+} from './helpers/assertions.js';
 import { withModule } from './helpers/moduleCache.js';
 import { stubProvider } from './helpers/stubProvider.js';
 
@@ -40,10 +44,13 @@ const RAW = Object.assign(new Error('Logon failed: password incorrect'), {
   key: 'RFC_LOGON_FAILURE',
 });
 
-const config: SapConfig = {
-  url: 'http://saphost:8000',
+const config: ISapRfcConfig = {
+  connectionType: 'rfc',
   authType: 'basic',
+  ashost: 'saphost',
+  sysnr: '00',
   client: '100',
+  language: 'EN',
 };
 
 /** `refuse` is asked with the 1-based number of the open; a returned error refuses it. */
@@ -52,16 +59,19 @@ function fakeFactory(refuse: (n: number) => unknown = () => undefined) {
   let opened = 0;
   const factory = (logon: Readonly<Record<string, string>>) => {
     opens.push({ ...logon });
+    let alive = false;
     const conversation: IRfcConversation = {
-      alive: false,
+      get alive() {
+        return alive;
+      },
       open: async () => {
         opened += 1;
         const refusal = refuse(opened);
         if (refusal !== undefined) throw refusal;
-        (conversation as { alive: boolean }).alive = true;
+        alive = true;
       },
       close: async () => {
-        (conversation as { alive: boolean }).alive = false;
+        alive = false;
       },
       call: async () => OK_RESPONSE,
     };
@@ -81,7 +91,6 @@ function contextOffering(
   seen: AuthOutcome[] = [],
 ): IAdtSessionContext {
   return {
-    baseUrl: 'http://saphost:8000',
     authorize: async () => {},
     logon: async (target) => {
       seen.push(offer(target));
@@ -158,8 +167,8 @@ describe('the RFC wire opens with what the provider wrote', () => {
       .catch((e: unknown) => e);
 
     assert.ok(error instanceof WireLogonError);
-    assert.strictEqual((error as WireLogonError).cause, RAW);
-    assert.doesNotMatch((error as Error).message, /Failed to open RFC/);
+    assert.strictEqual(instanceOf(error, WireLogonError).cause, RAW);
+    assert.doesNotMatch(messageOf(error), /Failed to open RFC/);
   });
 
   it('logs on once per open: a per-call conversation asks the provider too', async () => {
@@ -191,7 +200,7 @@ describe('the RFC wire opens with what the provider wrote', () => {
       .catch((e: unknown) => e);
 
     assert.ok(error instanceof WireLogonError);
-    assert.strictEqual((error as WireLogonError).cause, RAW);
+    assert.strictEqual(instanceOf(error, WireLogonError).cause, RAW);
   });
 
   it('can be driven without a lifecycle: open() takes no context', async () => {
@@ -244,8 +253,7 @@ describe('through a connector', () => {
     const provider = stubProvider(script);
     const transport = new RfcTransport(factory, null);
     const conn = new AdtOnPremConnector(config, provider, transport, null);
-    const rejections = () =>
-      provider.calls.filter((c) => c.method === 'rejected');
+    const rejections = () => provider.rejections;
     return { conn, provider, opens, rejections };
   }
 
@@ -261,11 +269,8 @@ describe('through a connector', () => {
     await conn.connect();
 
     assert.strictEqual(rejections().length, 1);
-    assertMatchObject(rejections()[0].argument, { at: 'logon' });
-    assert.strictEqual(
-      (rejections()[0].argument as { error: unknown }).error,
-      RAW,
-    );
+    assertMatchObject(rejections()[0], { at: 'logon' });
+    assert.strictEqual(rejections()[0]?.error, RAW);
     assert.strictEqual(opens.length, 2);
     assert.strictEqual(conn.isConnected(), true);
   });
@@ -282,8 +287,11 @@ describe('through a connector', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.deepStrictEqual((error as AuthRefusedError).refusal, refusal);
-    assert.strictEqual((error as AuthRefusedError).at, 'logon');
+    assert.deepStrictEqual(
+      instanceOf(error, AuthRefusedError).refusal,
+      refusal,
+    );
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'logon');
   });
 
   it('refused again after Ok is REFUSED_AGAIN', async () => {
@@ -293,8 +301,11 @@ describe('through a connector', () => {
 
     const error = await conn.connect().catch((e: unknown) => e);
 
-    assertMatchObject((error as AuthRefusedError).refusal, REFUSED_AGAIN);
-    assertMatchObject((error as AuthRefusedError).refusal, {
+    assertMatchObject(
+      instanceOf(error, AuthRefusedError).refusal,
+      REFUSED_AGAIN,
+    );
+    assertMatchObject(instanceOf(error, AuthRefusedError).refusal, {
       facts: { at: 'logon' },
     });
     assert.strictEqual(rejections().length, 1);
@@ -324,11 +335,8 @@ describe('through a connector', () => {
 
     assert.strictEqual(response.status, 200);
     assert.strictEqual(rejections().length, 1);
-    assertMatchObject(rejections()[0].argument, { at: 'logon' });
-    assert.strictEqual(
-      (rejections()[0].argument as { error: unknown }).error,
-      RAW,
-    );
+    assertMatchObject(rejections()[0], { at: 'logon' });
+    assert.strictEqual(rejections()[0]?.error, RAW);
     assert.ok(opens.length > before);
   });
 
@@ -344,7 +352,10 @@ describe('through a connector', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.deepStrictEqual((error as AuthRefusedError).refusal, refusal);
+    assert.deepStrictEqual(
+      instanceOf(error, AuthRefusedError).refusal,
+      refusal,
+    );
     assert.strictEqual(rejections().length, 0);
   });
 });
@@ -352,15 +363,14 @@ describe('through a connector', () => {
 describe('an open() that throws instead of rejecting', () => {
   it('is a refused logon, like one that rejects', async () => {
     const transport = new RfcTransport(
-      () =>
-        ({
-          alive: false,
-          open: () => {
-            throw new Error('the SDK threw at once');
-          },
-          close: async () => {},
-          call: async () => ({}),
-        }) as never,
+      (): IRfcConversation => ({
+        alive: false,
+        open: () => {
+          throw new Error('the SDK threw at once');
+        },
+        close: async () => {},
+        call: async () => ({}),
+      }),
       null,
     );
     await assert.rejects(

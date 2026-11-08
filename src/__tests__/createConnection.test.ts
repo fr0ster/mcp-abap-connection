@@ -6,19 +6,56 @@
  * its SDK only when a conversation is opened.
  */
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { after, before, describe, it, mock } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
-import type { SapConfig } from '../config/sapConfig.js';
+import type {
+  ISapHttpConfig,
+  ISapRfcConfig,
+} from '@mcp-abap-adt/interfaces-auth-sap';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { CloudHttpTransport } from '../connection/CloudHttpTransport.js';
-import { createConnection } from '../connection/createConnection.js';
+import {
+  type CreatedConnection,
+  createConnection,
+} from '../connection/createConnection.js';
 import { LegacyOnPremHttpTransport } from '../connection/LegacyOnPremHttpTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
-import { RfcTransport } from '../connection/RfcTransport.js';
+import {
+  type IRfcConversation,
+  RfcTransport,
+} from '../connection/RfcTransport.js';
 import { createConnection as exported } from '../index.js';
+import { createPastTheTypes } from './fixtures/pastTheTypes/createPastTheTypes.js';
+import { assertMatchObject } from './helpers/assertions.js';
+import {
+  type HttpClientStub,
+  httpClientStub,
+} from './helpers/httpClientStub.js';
+import { withModuleAsync } from './helpers/moduleCache.js';
+import { type SapStub, startSapStub } from './helpers/sapStub.js';
 
-const config: SapConfig = {
+/** The SDK's client, standing in: opens, answers every call 200, closes. */
+class AnsweringConversation implements IRfcConversation {
+  alive = false;
+  async open(): Promise<void> {
+    this.alive = true;
+  }
+  async close(): Promise<void> {
+    this.alive = false;
+  }
+  async call(): Promise<Record<string, unknown>> {
+    return {
+      RESPONSE: {
+        STATUS_LINE: { STATUS_CODE: 200, REASON_PHRASE: 'OK' },
+        HEADER_FIELDS: [],
+        MESSAGE_BODY: Buffer.from('<ok/>', 'utf-8'),
+      },
+    };
+  }
+}
+
+const config: ISapHttpConfig = {
   url: 'https://sap.example.com:44300',
   authType: 'basic',
   username: 'u',
@@ -27,10 +64,43 @@ const config: SapConfig = {
 };
 const credential = new BasicAuthProvider('u', 'p');
 
-/** What the HTTP wire was told: its client and base URL. */
-function address(transport: unknown) {
-  return (transport as { options: { client?: string; baseUrl?: string } })
-    .options;
+/** An RFC destination: its address stated, no URL. */
+const rfcConfig: ISapRfcConfig = {
+  connectionType: 'rfc',
+  authType: 'basic',
+  ashost: 'saphost',
+  sysnr: '00',
+  client: '200',
+  language: 'EN',
+};
+
+let stand: SapStub;
+before(async () => {
+  stand = await startSapStub();
+});
+after(async () => {
+  await stand.close();
+});
+
+/** The stand's address, as a config's URL. */
+const atStand = (): ISapHttpConfig => ({ ...config, url: stand.baseUrl });
+
+/**
+ * What the HTTP wire was told, seen where it shows: a path it sends reaches
+ * the config's URL, carrying the config's client.
+ */
+async function assertAddressed(transport: {
+  send: (request: { method: string; url: string }) => Promise<unknown>;
+}): Promise<void> {
+  stand.requests.length = 0;
+  await transport.send({ method: 'GET', url: '/sap/bc/adt/x' });
+  assertMatchObject(
+    stand.requests.map((request) => ({
+      path: request.path,
+      client: request.headers['sap-client'],
+    })),
+    [{ path: '/sap/bc/adt/x', client: '200' }],
+  );
 }
 
 describe('createConnection', () => {
@@ -38,101 +108,167 @@ describe('createConnection', () => {
     assert.strictEqual(exported, createConnection);
   });
 
-  it('cloud + http: the cloud connector over the cloud HTTP wire', () => {
+  it('cloud + http: the cloud connector over the cloud HTTP wire', async () => {
     const conn = createConnection({
       system: 'cloud',
       transport: 'http',
-      config,
+      config: atStand(),
       credential,
     });
     assert.ok(conn instanceof AdtCloudConnector);
     assert.ok(conn.transport instanceof CloudHttpTransport);
-    assert.strictEqual(conn.transport.kind, new CloudHttpTransport().kind);
-    assert.deepStrictEqual(address(conn.transport), {
-      client: '200',
-      baseUrl: 'https://sap.example.com:44300',
-    });
+    assert.strictEqual(
+      conn.transport.kind,
+      new CloudHttpTransport(undefined, null, { baseUrl: 'https://h' }).kind,
+    );
+    await assertAddressed(conn.transport);
     assert.strictEqual(conn.credential, credential);
   });
 
-  it('onprem + http: the on-prem connector over the on-prem HTTP wire', () => {
+  it('onprem + http: the on-prem connector over the on-prem HTTP wire', async () => {
     const conn = createConnection({
       system: 'onprem',
       transport: 'http',
-      config,
+      config: atStand(),
       credential,
     });
     assert.ok(conn instanceof AdtOnPremConnector);
     assert.ok(conn.transport instanceof OnPremHttpTransport);
     assert.ok(!(conn.transport instanceof LegacyOnPremHttpTransport));
-    assert.deepStrictEqual(address(conn.transport), {
-      client: '200',
-      baseUrl: 'https://sap.example.com:44300',
-    });
+    await assertAddressed(conn.transport);
   });
 
-  it('onprem + legacy-http: the on-prem connector over the BASIS 7.40 wire', () => {
+  it('onprem + legacy-http: the on-prem connector over the BASIS 7.40 wire', async () => {
     const conn = createConnection({
       system: 'onprem',
       transport: 'legacy-http',
-      config,
+      config: atStand(),
       credential,
     });
     assert.ok(conn instanceof AdtOnPremConnector);
     assert.ok(conn.transport instanceof LegacyOnPremHttpTransport);
-    assert.deepStrictEqual(address(conn.transport), {
-      client: '200',
-      baseUrl: 'https://sap.example.com:44300',
-    });
+    await assertAddressed(conn.transport);
   });
 
-  it('onprem + rfc: the on-prem connector over the RFC wire, its options passed through', () => {
-    const rfcConfig: SapConfig = {
-      ...config,
-      url: 'http://saphost:8000',
+  it('onprem + rfc: the on-prem connector over the RFC wire, its options passed through', async () => {
+    // The options show in what the wire logs: `logWire` adds the body line,
+    // `maxLoggedBodyChars` clips it.
+    const lines: string[] = [];
+    const record = (message: string) => {
+      lines.push(message);
     };
-    const options = { logWire: true, maxLoggedBodyChars: 10 };
     const conn = createConnection({
       system: 'onprem',
       transport: 'rfc',
       config: rfcConfig,
       credential,
-      rfc: options,
+      wireLogger: { debug: record, info: record, warn: record, error: record },
+      rfc: { logWire: true, maxLoggedBodyChars: 10 },
     });
     assert.ok(conn instanceof AdtOnPremConnector);
     assert.ok(conn.transport instanceof RfcTransport);
     assert.strictEqual(conn.transport.kind, 'rfc');
-    assert.strictEqual(
-      (conn.transport as unknown as { options: unknown }).options,
-      options,
+
+    await withModuleAsync(
+      '@mcp-abap-adt/sap-rfc-lite',
+      { Client: AnsweringConversation },
+      async () => {
+        await conn.connect();
+        await conn.makeAdtRequest({
+          url: '/sap/bc/adt/x',
+          method: 'POST',
+          timeout: 1000,
+          data: 'x'.repeat(50),
+        });
+      },
     );
+
+    const body = lines.find((line) => line.startsWith('RFC BODY (50 chars): '));
+    assert.ok(body, 'logWire: the body line');
+    assert.ok(body.includes('x'.repeat(10)));
+    assert.ok(!body.includes('x'.repeat(11)), 'clipped at 10');
   });
 
-  it('passes the agent options, the wire logger and the session id through as given', () => {
-    const agentOptions = () => ({ rejectUnauthorized: true });
-    const wireLogger = {
-      debug: () => {},
-      info: () => {},
-      warn: () => {},
-      error: () => {},
+  it('passes the agent options, the wire logger and the session id through as given', async () => {
+    // Seen where each shows: the wire asks the agent options when it builds
+    // its client, and says on its own logger that verification is off.
+    const agentOptions = mock.fn(() => ({ rejectUnauthorized: false }));
+    const wireLines: string[] = [];
+    const record = (message: string) => {
+      wireLines.push(message);
     };
     const conn = createConnection({
       system: 'onprem',
       transport: 'http',
-      config,
+      config: atStand(),
       credential,
       agentOptions,
-      wireLogger,
+      wireLogger: { debug: record, info: record, warn: record, error: record },
       sessionId: 'my-conversation',
     });
-    const wire = conn.transport as unknown as {
-      agentOptions: unknown;
-      logger: unknown;
-    };
-    assert.strictEqual(wire.agentOptions, agentOptions);
-    assert.strictEqual(wire.logger, wireLogger);
+
+    await conn.transport.send({ method: 'GET', url: '/sap/bc/adt/x' });
+
+    assert.strictEqual(agentOptions.mock.callCount(), 1);
+    assert.ok(
+      wireLines.includes(
+        'TLS: the server certificate is not verified (explicit opt-out)',
+      ),
+    );
     assert.strictEqual(conn.getSessionId(), 'my-conversation');
   });
+
+  const viaHttpClient: Array<
+    [string, (httpClient: HttpClientStub) => CreatedConnection]
+  > = [
+    [
+      'cloud + http',
+      (httpClient) =>
+        createConnection({
+          system: 'cloud',
+          transport: 'http',
+          config,
+          credential,
+          httpClient,
+        }),
+    ],
+    [
+      'onprem + http',
+      (httpClient) =>
+        createConnection({
+          system: 'onprem',
+          transport: 'http',
+          config,
+          credential,
+          httpClient,
+        }),
+    ],
+    [
+      'onprem + legacy-http',
+      (httpClient) =>
+        createConnection({
+          system: 'onprem',
+          transport: 'legacy-http',
+          config,
+          credential,
+          httpClient,
+        }),
+    ],
+  ];
+  for (const [combination, build] of viaHttpClient) {
+    it(`${combination}: the injected httpClient is the one the wire sends through`, async () => {
+      const client = httpClientStub();
+      const conn = build(client);
+
+      await conn.transport.send({ method: 'GET', url: '/sap/bc/adt/x' });
+
+      assert.strictEqual(client.built.length, 1);
+      assert.deepStrictEqual(
+        client.sent.map((request) => request.url),
+        ['https://sap.example.com:44300/sap/bc/adt/x'],
+      );
+    });
+  }
 
   for (const [system, transport] of [
     ['cloud', 'rfc'],
@@ -141,17 +277,58 @@ describe('createConnection', () => {
     ['mainframe', 'http'],
     [undefined, undefined],
   ]) {
-    it(`refuses ${system} + ${transport} at construction, in fixed words`, () => {
+    it(`refuses ${system} + ${transport} built past the types (plain JS), in fixed words`, () => {
       assert.throws(
-        () =>
-          createConnection({ system, transport, config, credential } as never),
-        (e: unknown) =>
-          (e as Error).message.includes(
+        () => createPastTheTypes(system, transport, config, credential),
+        (e: unknown) => {
+          assert.ok(e instanceof TypeError);
+          assert.strictEqual(
+            e.message,
             "createConnection: no such combination of system and transport. ABAP Cloud has one wire, 'http'; on-prem takes 'http', 'legacy-http' or 'rfc'. Both are stated by the caller, never inferred.",
-          ),
+          );
+          return true;
+        },
       );
     });
   }
+
+  it('admits no other combination of system and transport (checked by compiling)', () => {
+    // Never run: each call below must not compile, and the build fails the
+    // moment one does.
+    const noOtherCombination = () => {
+      // @ts-expect-error ABAP Cloud has one wire, 'http'
+      createConnection({
+        system: 'cloud',
+        transport: 'rfc',
+        config: rfcConfig,
+        credential,
+      });
+      // @ts-expect-error ABAP Cloud has no BASIS 7.40 wire
+      createConnection({
+        system: 'cloud',
+        transport: 'legacy-http',
+        config,
+        credential,
+      });
+      createConnection({
+        system: 'onprem',
+        // @ts-expect-error no such wire
+        transport: 'websocket',
+        config,
+        credential,
+      });
+      createConnection({
+        // @ts-expect-error no such system
+        system: 'mainframe',
+        transport: 'http',
+        config,
+        credential,
+      });
+      // @ts-expect-error neither stated
+      createConnection({ config, credential });
+    };
+    assert.strictEqual(typeof noOtherCombination, 'function');
+  });
 
   it('gives a new instance, with a wire of its own, on every call', () => {
     const spec = {
@@ -165,14 +342,55 @@ describe('createConnection', () => {
     assert.notStrictEqual(second, first);
     assert.notStrictEqual(second.transport, first.transport);
   });
+});
 
-  it('infers nothing from the config: connectionType does not pick the wire', () => {
+describe('the base URL a created connection answers', () => {
+  it('cloud + http: the origin of the configured URL', async () => {
+    const conn = createConnection({
+      system: 'cloud',
+      transport: 'http',
+      config: { ...config, url: 'https://sap.example.com:44300/some/path' },
+      credential,
+    });
+    assert.strictEqual(
+      await conn.getBaseUrl(),
+      'https://sap.example.com:44300',
+    );
+  });
+
+  it('onprem + http: the origin of the configured URL', async () => {
     const conn = createConnection({
       system: 'onprem',
       transport: 'http',
-      config: { ...config, connectionType: 'rfc' } as SapConfig,
+      config,
       credential,
     });
-    assert.ok(conn.transport instanceof OnPremHttpTransport);
+    assert.strictEqual(
+      await conn.getBaseUrl(),
+      'https://sap.example.com:44300',
+    );
+  });
+
+  it('onprem + legacy-http: the origin of the configured URL', async () => {
+    const conn = createConnection({
+      system: 'onprem',
+      transport: 'legacy-http',
+      config,
+      credential,
+    });
+    assert.strictEqual(
+      await conn.getBaseUrl(),
+      'https://sap.example.com:44300',
+    );
+  });
+
+  it('onprem + rfc: undefined, from a config that states no URL', async () => {
+    const conn = createConnection({
+      system: 'onprem',
+      transport: 'rfc',
+      config: rfcConfig,
+      credential,
+    });
+    assert.strictEqual(await conn.getBaseUrl(), undefined);
   });
 });

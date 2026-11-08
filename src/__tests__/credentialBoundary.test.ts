@@ -22,13 +22,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
-import type { SapConfig } from '../config/sapConfig.js';
+import type { SapHttpConfig } from '../config/sapConfig.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import { assertMatchObject } from './helpers/assertions.js';
 import { credentialWriting } from './helpers/credentials.js';
 
-const config: SapConfig = {
+const config: SapHttpConfig = {
   url: 'https://sap.example.com',
   authType: 'jwt',
   jwtToken: 'STALE',
@@ -64,11 +64,9 @@ function wire() {
       const url = String(request.url ?? '');
       seen.push(url);
       if (url.includes('/work')) {
-        const error = new Error('unauthorized') as Error & {
-          response?: unknown;
-        };
-        error.response = { status: 401, headers: {}, data: '' };
-        throw error;
+        throw Object.assign(new Error('unauthorized'), {
+          response: { status: 401, headers: {}, data: '' },
+        });
       }
       return {
         status: 200,
@@ -89,7 +87,7 @@ function connected(credential: IAuthProvider) {
     client: '100',
     baseUrl: config.url,
   });
-  (transport as unknown as { send: unknown }).send = w.send;
+  transport.send = w.send;
   return {
     conn: new AdtOnPremConnector(config, credential, transport, null),
     w,

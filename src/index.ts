@@ -16,6 +16,8 @@ export type {
   SapAuthType,
   SapConfig,
   SapConnectionType,
+  SapHttpConfig,
+  SapRfcConfig,
 } from './config/sapConfig.js';
 // Config utilities
 export { sapConfigSignature } from './config/sapConfig.js';
@@ -56,7 +58,12 @@ export {
   type IWebSocketLike,
 } from './connection/GenericWebSocketTransport.js';
 // The transport axis. Both ends are objects, so a caller can name either.
-export { HttpTransport } from './connection/HttpTransport.js';
+export {
+  type HttpClientAgents,
+  type HttpClientFactory,
+  HttpTransport,
+  nodeHttpClient,
+} from './connection/HttpTransport.js';
 export type {
   IAdtEstablishContext,
   IAdtSessionContext,

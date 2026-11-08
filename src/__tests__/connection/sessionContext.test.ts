@@ -6,21 +6,22 @@
  * with a stub provider that records every call.
  */
 import assert from 'node:assert/strict';
+import type { AgentOptions } from 'node:https';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { authError } from '@mcp-abap-adt/auth-errors';
-import type {
-  AuthOutcome,
-  IAuthRejection,
-  ILogonTarget,
-} from '@mcp-abap-adt/interfaces-auth';
-import type { SapConfig } from '../../config/sapConfig.js';
+import type { AuthOutcome, ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
+import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { AuthRefusedError } from '../../connection/authErrors.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
 import { HttpTransport } from '../../connection/HttpTransport.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
-import { assertMatchObject } from '../helpers/assertions.js';
+import { assertMatchObject, instanceOf } from '../helpers/assertions.js';
+import {
+  type HttpClientStub,
+  httpClientStub,
+} from '../helpers/httpClientStub.js';
 import { type SapStub, startSapStub } from '../helpers/sapStub.js';
 import { type StubScript, stubProvider } from '../helpers/stubProvider.js';
 
@@ -53,21 +54,18 @@ afterEach(async () => {
 });
 
 function onPremWith(script: StubScript = {}) {
-  const config = {
+  const config: SapHttpConfig = {
     url: stub.baseUrl,
     client: '100',
     authType: 'basic',
-  } as SapConfig;
+  };
   const provider = stubProvider(script);
   const transport = new OnPremHttpTransport(() => ({}), null, {
     client: '100',
     baseUrl: stub.baseUrl,
   });
   const conn = new AdtOnPremConnector(config, provider, transport, null);
-  const rejections = () =>
-    provider.calls
-      .filter((call) => call.method === 'rejected')
-      .map((call) => call.argument as IAuthRejection);
+  const rejections = () => provider.rejections;
   const order = () => provider.calls.map((call) => call.method);
   return { conn, provider, transport, rejections, order };
 }
@@ -94,8 +92,11 @@ describe('connect() orders the credential around the wire', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.strictEqual((error as AuthRefusedError).at, 'prepare');
-    assert.deepStrictEqual((error as AuthRefusedError).refusal, REFUSAL);
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'prepare');
+    assert.deepStrictEqual(
+      instanceOf(error, AuthRefusedError).refusal,
+      REFUSAL,
+    );
     assert.deepStrictEqual(order(), ['prepare']);
     assert.strictEqual(stub.requests.length, 0);
     assert.strictEqual(conn.isConnected(), false);
@@ -110,7 +111,6 @@ describe('the HTTP logon target', () => {
   ): Promise<AuthOutcome> {
     let outcome: AuthOutcome = { ok: true };
     await transport.open({
-      baseUrl: stub.baseUrl,
       authorize: async () => {},
       logon: async (target) => {
         outcome = offer(target);
@@ -121,7 +121,9 @@ describe('the HTTP logon target', () => {
   }
 
   it('takes TLS material', async () => {
-    const transport = new HttpTransport();
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: stub.baseUrl,
+    });
 
     const outcome = await logonWith(transport, (t) =>
       t.tlsMaterial({ cert: 'C', key: 'K' }),
@@ -131,7 +133,9 @@ describe('the HTTP logon target', () => {
   });
 
   it('refuses logon parameters, in the fixed words', async () => {
-    const transport = new HttpTransport();
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: stub.baseUrl,
+    });
 
     const outcome = await logonWith(transport, (t) =>
       t.logonParameters({ snc_mode: '1' }),
@@ -157,13 +161,32 @@ describe('the HTTP logon target', () => {
     assert.strictEqual(outcome.refusal.hint, undefined);
   });
 
-  const agentOf = (transport: HttpTransport) =>
-    (transport as any).client().defaults.httpsAgent as {
-      options: Record<string, unknown>;
-    };
+  /** A wire whose client is the stub's: what it builds is what it records. */
+  function wireWith(agentOptions?: () => AgentOptions): {
+    transport: HttpTransport;
+    client: HttpClientStub;
+  } {
+    const client = httpClientStub();
+    const transport = new HttpTransport(agentOptions, null, {
+      baseUrl: stub.baseUrl,
+      httpClient: client,
+    });
+    return { transport, client };
+  }
+
+  /** One request, so the wire builds (or keeps) its client. */
+  const request = (transport: HttpTransport) =>
+    transport.send({ method: 'GET', url: '/sap/bc/adt/x' });
+
+  /** The options of the HTTPS agent of the last client the wire built. */
+  const agentOf = (client: HttpClientStub) => {
+    const agents = client.built.at(-1);
+    assert.ok(agents);
+    return agents.httpsAgent.options;
+  };
 
   it('builds the agent from the material the logon offered, over agentOptions', async () => {
-    const transport = new HttpTransport(() => ({
+    const { transport, client } = wireWith(() => ({
       ca: 'THE-CA',
       passphrase: 'from-options',
     }));
@@ -171,8 +194,9 @@ describe('the HTTP logon target', () => {
     await logonWith(transport, (t) =>
       t.tlsMaterial({ cert: 'THE-CERT', key: 'THE-KEY', passphrase: 'mine' }),
     );
+    await request(transport);
 
-    const options = agentOf(transport).options;
+    const options = agentOf(client);
     assert.strictEqual(options.ca, 'THE-CA');
     assert.strictEqual(options.cert, 'THE-CERT');
     assert.strictEqual(options.key, 'THE-KEY');
@@ -180,23 +204,25 @@ describe('the HTTP logon target', () => {
   });
 
   it('takes only the material fields: an extra key or an explicit undefined does not override agentOptions', async () => {
-    const transport = new HttpTransport(() => ({
+    const { transport, client } = wireWith(() => ({
       ca: 'THE-CA',
       rejectUnauthorized: true,
       passphrase: 'from-options',
     }));
 
-    await logonWith(transport, (t) =>
-      t.tlsMaterial({
-        cert: 'THE-CERT',
-        key: 'THE-KEY',
-        passphrase: undefined,
-        rejectUnauthorized: false,
-        ca: 'NOT-THE-CA',
-      } as unknown as Parameters<ILogonTarget['tlsMaterial']>[0]),
-    );
+    // Not a literal: a value carrying keys beyond the material, as a caller
+    // outside the type system could hand one.
+    const material = {
+      cert: 'THE-CERT',
+      key: 'THE-KEY',
+      passphrase: undefined,
+      rejectUnauthorized: false,
+      ca: 'NOT-THE-CA',
+    };
+    await logonWith(transport, (t) => t.tlsMaterial(material));
+    await request(transport);
 
-    const options = agentOf(transport).options;
+    const options = agentOf(client);
     assert.strictEqual(options.cert, 'THE-CERT');
     assert.strictEqual(options.key, 'THE-KEY');
     assert.strictEqual(options.ca, 'THE-CA');
@@ -205,40 +231,42 @@ describe('the HTTP logon target', () => {
   });
 
   it('keeps the client when a first logon offers nothing but undefined fields', async () => {
-    const transport = new HttpTransport();
-    const first = (transport as any).client();
+    const { transport, client } = wireWith();
+    await request(transport);
 
     await logonWith(transport, (t) => t.tlsMaterial({ cert: undefined }));
+    await request(transport);
 
-    assert.strictEqual((transport as any).client(), first);
+    assert.strictEqual(client.built.length, 1);
   });
 
   it('keeps the client for the same material, compared by value', async () => {
-    const transport = new HttpTransport();
+    const { transport, client } = wireWith();
     await logonWith(transport, (t) =>
       t.tlsMaterial({ pfx: Buffer.from('bytes'), passphrase: 'p' }),
     );
-    const first = (transport as any).client();
+    await request(transport);
 
     await logonWith(transport, (t) =>
       t.tlsMaterial({ pfx: Buffer.from('bytes'), passphrase: 'p' }),
     );
+    await request(transport);
 
-    assert.strictEqual((transport as any).client(), first);
+    assert.strictEqual(client.built.length, 1);
   });
 
   it('rebuilds the client for different material, and the cookie jar survives', async () => {
-    const transport = new HttpTransport();
+    const { transport, client } = wireWith();
     await logonWith(transport, (t) => t.tlsMaterial({ cert: 'ONE', key: 'K' }));
-    const first = (transport as any).client();
+    await request(transport);
     transport.ingest({ 'set-cookie': ['SAP_SESSIONID_X_100=S1; Path=/'] });
     transport.adoptCsrfToken('TOKEN');
 
     await logonWith(transport, (t) => t.tlsMaterial({ cert: 'TWO', key: 'K' }));
+    await request(transport);
 
-    const second = (transport as any).client();
-    assert.notStrictEqual(second, first);
-    assert.strictEqual(agentOf(transport).options.cert, 'TWO');
+    assert.strictEqual(client.built.length, 2);
+    assert.strictEqual(agentOf(client).cert, 'TWO');
     assert.strictEqual(transport.cookies(), 'SAP_SESSIONID_X_100=S1');
     assert.strictEqual(transport.csrfToken(), 'TOKEN');
   });
@@ -277,13 +305,14 @@ describe('a 401 while establishing', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.strictEqual((error as AuthRefusedError).at, 'logon');
-    assert.deepStrictEqual((error as AuthRefusedError).refusal, REFUSAL);
-    assert.strictEqual(
-      ((error as AuthRefusedError).cause as { response?: { status?: number } })
-        .response?.status,
-      401,
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'logon');
+    assert.deepStrictEqual(
+      instanceOf(error, AuthRefusedError).refusal,
+      REFUSAL,
     );
+    assertMatchObject(instanceOf(error, AuthRefusedError).cause, {
+      response: { status: 401 },
+    });
     assert.strictEqual(rejections().length, 1);
     assert.strictEqual(conn.isConnected(), false);
   });
@@ -302,9 +331,12 @@ describe('a 401 while establishing', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.strictEqual((error as AuthRefusedError).at, 'logon');
-    assertMatchObject((error as AuthRefusedError).refusal, PROVIDER_FAILED);
-    assert.strictEqual((error as AuthRefusedError).cause, boom);
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'logon');
+    assertMatchObject(
+      instanceOf(error, AuthRefusedError).refusal,
+      PROVIDER_FAILED,
+    );
+    assert.strictEqual(instanceOf(error, AuthRefusedError).cause, boom);
     assert.strictEqual(rejections().length, 1);
     assert.strictEqual(conn.isConnected(), false);
   });
@@ -316,11 +348,14 @@ describe('a 401 while establishing', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assertMatchObject((error as AuthRefusedError).refusal, REFUSED_AGAIN);
-    assertMatchObject((error as AuthRefusedError).refusal, {
+    assertMatchObject(
+      instanceOf(error, AuthRefusedError).refusal,
+      REFUSED_AGAIN,
+    );
+    assertMatchObject(instanceOf(error, AuthRefusedError).refusal, {
       facts: { at: 'logon' },
     });
-    assert.strictEqual((error as AuthRefusedError).at, 'logon');
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'logon');
     assert.strictEqual(rejections().length, 1);
     assert.strictEqual(conn.isConnected(), false);
   });
@@ -349,7 +384,7 @@ describe('a 401 while establishing', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.strictEqual((error as AuthRefusedError).at, 'request');
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'request');
     assert.strictEqual(discoveryRequests().length, 0);
     assert.strictEqual(rejections().length, 0);
   });
@@ -357,13 +392,14 @@ describe('a 401 while establishing', () => {
 
 describe('the wire’s establishment', () => {
   it('lets the provider’s refusal to authorize through at once, whatever isFatal says', async () => {
-    const transport = new HttpTransport();
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: stub.baseUrl,
+    });
     let asked = 0;
     const refusal = new AuthRefusedError(REFUSAL, 'request');
 
     const error = await transport
       .establish({
-        baseUrl: stub.baseUrl,
         authorize: async () => {
           asked += 1;
           throw refusal;
@@ -421,11 +457,11 @@ describe('the goodbye', () => {
 
 describe('the cloud wire', () => {
   function cloudWith(script: StubScript = {}) {
-    const config = {
+    const config: SapHttpConfig = {
       url: stub.baseUrl,
       client: '100',
       authType: 'jwt',
-    } as SapConfig;
+    };
     const provider = stubProvider(script);
     const transport = new CloudHttpTransport(() => ({}), null, {
       client: '100',
@@ -441,7 +477,7 @@ describe('the cloud wire', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.strictEqual((error as AuthRefusedError).at, 'logon');
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'logon');
     assert.strictEqual(stub.requests.length, 0);
     assert.deepStrictEqual(
       provider.calls.map((c) => c.method),
@@ -455,7 +491,7 @@ describe('the cloud wire', () => {
     const error = await conn.connect().catch((e: unknown) => e);
 
     assert.ok(error instanceof AuthRefusedError);
-    assert.strictEqual((error as AuthRefusedError).at, 'request');
+    assert.strictEqual(instanceOf(error, AuthRefusedError).at, 'request');
     assert.strictEqual(stub.requests.length, 0);
   });
 

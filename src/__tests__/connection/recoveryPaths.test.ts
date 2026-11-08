@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import type { SapConfig } from '../../config/sapConfig.js';
+import type { SapHttpConfig } from '../../config/sapConfig.js';
 import { assertMatchObject } from '../helpers/assertions.js';
 import { onPrem } from '../helpers/onPrem.js';
 
@@ -83,7 +83,7 @@ async function startStub(): Promise<Stub> {
   };
 }
 
-const configFor = (baseUrl: string): SapConfig => ({
+const configFor = (baseUrl: string): SapHttpConfig => ({
   url: baseUrl,
   client: '100',
   authType: 'basic',

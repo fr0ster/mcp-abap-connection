@@ -13,8 +13,10 @@
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import type { SapConfig } from '../../config/sapConfig.js';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
+import type { SapHttpConfig } from '../../config/sapConfig.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
+import type { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
@@ -33,7 +35,7 @@ async function startStub(): Promise<Stub> {
   const stub = {
     workStatus: 200,
     workBody: '',
-    workHeaders: {} as Record<string, string>,
+    workHeaders: {},
   };
   const server: Server = createServer((req, res) => {
     const url = req.url ?? '';
@@ -87,7 +89,7 @@ async function startStub(): Promise<Stub> {
   };
 }
 
-const configFor = (baseUrl: string): SapConfig => ({
+const configFor = (baseUrl: string): SapHttpConfig => ({
   url: baseUrl,
   client: '100',
   authType: 'basic',
@@ -96,13 +98,16 @@ const configFor = (baseUrl: string): SapConfig => ({
 });
 
 /** Holds any /work request until the returned release() is called. */
-function holdWork(conn: AdtOnPremConnector) {
+function holdWork(
+  conn: AdtOnPremConnector<IAuthProvider, OnPremHttpTransport>,
+) {
   let release!: () => void;
   const held = new Promise<void>((r) => {
     release = r;
   });
-  const realSend = (conn as any).transport.send.bind((conn as any).transport);
-  (conn as any).transport.send = async (cfg: { url: string }) => {
+  const wire = conn.transport;
+  const realSend = wire.send.bind(wire);
+  wire.send = async (cfg) => {
     if (cfg.url.includes('/work')) await held;
     return realSend(cfg);
   };
@@ -134,7 +139,7 @@ describe('a request that settles after its session was replaced', () => {
     const inFlight = conn
       .makeAdtRequest({
         url: '/sap/bc/adt/work',
-        method: method as 'GET',
+        method,
         timeout: 5000,
         ...(method === 'GET' ? {} : { data: 'x' }),
       })

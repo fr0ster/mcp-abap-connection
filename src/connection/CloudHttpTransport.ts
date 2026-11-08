@@ -99,7 +99,7 @@ export class CloudHttpTransport
         // The cache-buster is Eclipse's; kept because this must not be served
         // from anything's cache — a cached session document would hand back an
         // address that belongs to a session somebody else already ended.
-        url: `${context.baseUrl}${SESSIONS_PATH}?_=${Date.now()}`,
+        url: `${this.origin()}${SESSIONS_PATH}?_=${Date.now()}`,
         // No deadline: a client deadline closes the socket, and SAP then
         // ends what was running on it. connect() waits for SAP's answer.
         headers: {
@@ -133,7 +133,7 @@ export class CloudHttpTransport
       // sends the platform's own logoff instead.
       this.logoff = this.resolveLink(
         this.linkHref(response.data, LOGOFF_REL),
-        `${context.baseUrl}${SESSIONS_PATH}`,
+        `${this.origin()}${SESSIONS_PATH}`,
       );
       this.logger?.debug(`Security session opened: ${resource}`);
     } catch (error) {

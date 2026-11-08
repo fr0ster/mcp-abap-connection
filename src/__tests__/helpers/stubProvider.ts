@@ -32,10 +32,14 @@ export interface StubCall {
 
 const OK: AuthOutcome = { ok: true };
 
-export function stubProvider(
-  script: StubScript = {},
-): IAuthProvider & { calls: StubCall[]; renewals: () => number } {
+export function stubProvider(script: StubScript = {}): IAuthProvider & {
+  calls: StubCall[];
+  /** Every rejection `rejected` was asked about, in order. */
+  rejections: IAuthRejection[];
+  renewals: () => number;
+} {
   const calls: StubCall[] = [];
+  const rejections: IAuthRejection[] = [];
   const positions = { prepare: 0, establish: 0, authorize: 0, rejected: 0 };
   let renewals = 0;
 
@@ -52,6 +56,7 @@ export function stubProvider(
   return {
     kind: script.kind ?? 'stub',
     calls,
+    rejections,
     renewals: () => renewals,
     prepare: async () => {
       calls.push({ method: 'prepare' });
@@ -69,6 +74,7 @@ export function stubProvider(
     },
     rejected: async (rejection) => {
       calls.push({ method: 'rejected', argument: rejection });
+      rejections.push(rejection);
       const outcome = next('rejected', script.rejected, [rejection]);
       if (outcome.ok) renewals += 1;
       return outcome;

@@ -40,12 +40,32 @@ export function assertMatchObject(
         typeof actual === 'function',
       `${path} is not an object`,
     );
-    const target = actual as Record<string, unknown>;
     for (const key of Object.keys(expected)) {
-      assert.ok(key in target, `${path}.${key} is missing`);
-      assertMatchObject(target[key], expected[key], `${path}.${key}`);
+      assert.ok(key in actual, `${path}.${key} is missing`);
+      assertMatchObject(
+        Reflect.get(actual, key),
+        expected[key],
+        `${path}.${key}`,
+      );
     }
     return;
   }
   assert.deepStrictEqual(actual, expected, path);
+}
+
+/**
+ * `value`, asserted to be an instance of `type` and narrowed to it: what a
+ * test reads off a caught value, without a cast.
+ */
+export function instanceOf<T>(
+  value: unknown,
+  type: abstract new (...args: never[]) => T,
+): T {
+  assert.ok(value instanceof type, `expected an instance of ${type.name}`);
+  return value;
+}
+
+/** The message of a caught value, asserted to be an `Error`. */
+export function messageOf(value: unknown): string {
+  return instanceOf(value, Error).message;
 }

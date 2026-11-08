@@ -16,12 +16,25 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { WireLogonError } from '../connection/authErrors.js';
 import { HttpTransport } from '../connection/HttpTransport.js';
+import type {
+  IAdtTransportRequest,
+  IAdtTransportResponse,
+} from '../connection/IAdtTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
-import { RfcTransport } from '../connection/RfcTransport.js';
+import {
+  type IRfcConversation,
+  RfcTransport,
+} from '../connection/RfcTransport.js';
+import { assertMatchObject, instanceOf } from './helpers/assertions.js';
 import { type SapStub, startSapStub } from './helpers/sapStub.js';
 
+/** The server every HTTP wire here is built for. */
+const BASE = 'https://sap.example.com';
+
+/** A bare HTTP wire, addressed at `BASE`. */
+const http = () => new HttpTransport(undefined, null, { baseUrl: BASE });
+
 const context = (over: Partial<Record<string, unknown>> = {}) => ({
-  baseUrl: 'https://sap.example.com',
   authorize: async (headers: Record<string, string>) => {
     headers.Authorization = 'Basic dTpw';
   },
@@ -33,20 +46,25 @@ const context = (over: Partial<Record<string, unknown>> = {}) => ({
 /** Replaces the wire, so what `establish()` sends can be read. */
 function intercept(
   transport: HttpTransport,
-  answer: (request: {
-    url: string;
-    headers?: Record<string, string>;
-  }) => Promise<unknown>,
+  answer: (request: IAdtTransportRequest) => Promise<IAdtTransportResponse>,
 ) {
-  const sent: Array<{ url: string; headers?: Record<string, string> }> = [];
-  (transport as unknown as { send: unknown }).send = async (request: {
-    url: string;
-    headers?: Record<string, string>;
-  }) => {
+  const sent: IAdtTransportRequest[] = [];
+  transport.send = async (request) => {
     sent.push(request);
     return answer(request);
   };
   return sent;
+}
+
+/** The URI an RFC call's request line carries, or `undefined`. */
+function requestUri(params: Record<string, unknown>): unknown {
+  const request = params.REQUEST;
+  if (typeof request !== 'object' || request === null) return undefined;
+  if (!('REQUEST_LINE' in request)) return undefined;
+  const line = request.REQUEST_LINE;
+  if (typeof line !== 'object' || line === null || !('URI' in line))
+    return undefined;
+  return line.URI;
 }
 
 const withToken = async () => ({
@@ -57,7 +75,7 @@ const withToken = async () => ({
 
 describe('establishing over HTTP', () => {
   it('asks the discovery endpoint for a token', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     const sent = intercept(transport, withToken);
 
     await transport.establish(context());
@@ -69,16 +87,17 @@ describe('establishing over HTTP', () => {
     assert.strictEqual(sent[0].headers?.['x-csrf-token'], 'fetch');
   });
 
-  it('addresses the endpoint with the base url the caller named', async () => {
+  it('addresses the endpoint with the base url the wire was built with', async () => {
     // Over RFC the same string went into `REQUEST_LINE-URI`, where an absolute
     // URL dumped the FM with STRING_OFFSET_TOO_LARGE. Building it is the HTTP
-    // wire's business precisely because only HTTP can address one.
-    const transport = new HttpTransport();
+    // wire's business precisely because only HTTP can address one — so the
+    // HTTP wire holds its base URL, and the connection hands it none.
+    const transport = new HttpTransport(undefined, null, {
+      baseUrl: 'https://other.example.com',
+    });
     const sent = intercept(transport, withToken);
 
-    await transport.establish(
-      context({ baseUrl: 'https://other.example.com' }),
-    );
+    await transport.establish(context());
 
     assert.strictEqual(
       sent[0].url.startsWith('https://other.example.com/'),
@@ -87,7 +106,7 @@ describe('establishing over HTTP', () => {
   });
 
   it('carries the credential the caller handed it', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     const sent = intercept(transport, withToken);
 
     await transport.establish(context());
@@ -96,7 +115,7 @@ describe('establishing over HTTP', () => {
   });
 
   it('keeps the token, so a mutation can present it', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     intercept(transport, withToken);
 
     await transport.establish(context());
@@ -105,7 +124,7 @@ describe('establishing over HTTP', () => {
   });
 
   it('keeps the cookies that came with it', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     intercept(transport, withToken);
 
     await transport.establish(context());
@@ -120,7 +139,7 @@ describe('establishing over HTTP', () => {
     // The wire folds the response into its own state; whether a new session id
     // is an establishment or a replacement is not its question.
     const seen: unknown[] = [];
-    const transport = new HttpTransport();
+    const transport = http();
     intercept(transport, withToken);
 
     await transport.establish(
@@ -132,7 +151,7 @@ describe('establishing over HTTP', () => {
 
   it('falls back to the legacy endpoint when the first has none', async () => {
     // BASIS < 7.52 has no /sap/bc/adt/core/discovery.
-    const transport = new HttpTransport();
+    const transport = http();
     const sent = intercept(transport, async (request) => {
       if (request.url.includes('/core/discovery')) {
         // What a system without the endpoint answers. A refused connection is
@@ -155,7 +174,7 @@ describe('establishing over HTTP', () => {
   });
 
   it('does not ask a second path of a host that is not answering', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     const sent = intercept(transport, async () => {
       throw new Error('connect ECONNREFUSED');
     });
@@ -165,7 +184,7 @@ describe('establishing over HTTP', () => {
   });
 
   it('refuses when the server answers without a token', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     intercept(transport, async () => ({ status: 200, headers: {}, data: '' }));
 
     await assert.rejects(transport.establish(context({ retries: 0 })));
@@ -174,7 +193,7 @@ describe('establishing over HTTP', () => {
   it('is a no-op once the wire already holds a token', async () => {
     // Asked again before a mutation, this must not spend a round trip — and
     // must not re-open the session the token is bound to.
-    const transport = new HttpTransport();
+    const transport = http();
     const sent = intercept(transport, withToken);
     await transport.establish(context());
 
@@ -184,7 +203,7 @@ describe('establishing over HTTP', () => {
   });
 
   it('forgets the token when the session it was bound to is gone', async () => {
-    const transport = new HttpTransport();
+    const transport = http();
     intercept(transport, withToken);
     await transport.establish(context());
 
@@ -200,62 +219,65 @@ describe('addressing the wire', () => {
     // wire's job: HTTP puts a server in front of it, RFC writes it into
     // `REQUEST_LINE-URI` as it stands — and handed an absolute URL there,
     // SADT_REST_RFC_ENDPOINT dumps with STRING_OFFSET_TOO_LARGE.
-    const transport = new HttpTransport(undefined, null, {
-      baseUrl: 'https://sap.example.com',
-    });
-    const seen: string[] = [];
-    (transport as unknown as { client: unknown }).client =
-      () => async (cfg: { url: string }) => {
-        seen.push(cfg.url);
-        return { status: 200, statusText: 'OK', headers: {}, data: '' };
-      };
+    const server = await startSapStub();
+    try {
+      const transport = new HttpTransport(undefined, null, {
+        baseUrl: server.baseUrl,
+      });
 
-    await transport.send({ method: 'GET', url: '/sap/bc/adt/discovery' });
+      await transport.send({ method: 'GET', url: '/sap/bc/adt/discovery' });
 
-    assert.strictEqual(seen[0], 'https://sap.example.com/sap/bc/adt/discovery');
+      assert.deepStrictEqual(
+        server.requests.map((request) => request.path),
+        ['/sap/bc/adt/discovery'],
+      );
+    } finally {
+      await server.close();
+    }
   });
 
   it('leaves an address that is already absolute alone', async () => {
-    const transport = new HttpTransport(undefined, null, {
-      baseUrl: 'https://sap.example.com',
-    });
-    const seen: string[] = [];
-    (transport as unknown as { client: unknown }).client =
-      () => async (cfg: { url: string }) => {
-        seen.push(cfg.url);
-        return { status: 200, statusText: 'OK', headers: {}, data: '' };
-      };
+    const own = await startSapStub();
+    const other = await startSapStub();
+    try {
+      const transport = new HttpTransport(undefined, null, {
+        baseUrl: own.baseUrl,
+      });
 
-    await transport.send({
-      method: 'GET',
-      url: 'https://other.example.com/sap/bc/adt/discovery',
-    });
+      await transport.send({
+        method: 'GET',
+        url: `${other.baseUrl}/sap/bc/adt/discovery`,
+      });
 
-    assert.strictEqual(
-      seen[0],
-      'https://other.example.com/sap/bc/adt/discovery',
-    );
+      assert.deepStrictEqual(own.requests, []);
+      assert.deepStrictEqual(
+        other.requests.map((request) => request.path),
+        ['/sap/bc/adt/discovery'],
+      );
+    } finally {
+      await own.close();
+      await other.close();
+    }
   });
 
   it('writes the path into the RFC request line as it stands', async () => {
     let uri = '';
     const transport = new RfcTransport(
-      () =>
-        ({
-          alive: true,
-          open: async () => {},
-          close: async () => {},
-          call: async (_fm: string, params: any) => {
-            uri = params.REQUEST.REQUEST_LINE.URI;
-            return {
-              RESPONSE: {
-                STATUS_LINE: { STATUS_CODE: 200, REASON_PHRASE: 'OK' },
-                HEADER_FIELDS: [],
-                MESSAGE_BODY: Buffer.alloc(0),
-              },
-            };
-          },
-        }) as never,
+      (): IRfcConversation => ({
+        alive: true,
+        open: async () => {},
+        close: async () => {},
+        call: async (_fm: string, params: Record<string, unknown>) => {
+          uri = String(requestUri(params));
+          return {
+            RESPONSE: {
+              STATUS_LINE: { STATUS_CODE: 200, REASON_PHRASE: 'OK' },
+              HEADER_FIELDS: [],
+              MESSAGE_BODY: Buffer.alloc(0),
+            },
+          };
+        },
+      }),
     );
     await transport.open();
 
@@ -269,16 +291,15 @@ describe('establishing over RFC', () => {
   it('sends nothing, because the conversation is already the session', async () => {
     const calls: string[] = [];
     const transport = new RfcTransport(
-      () =>
-        ({
-          alive: true,
-          open: async () => {},
-          close: async () => {},
-          call: async (fm: string) => {
-            calls.push(fm);
-            return {};
-          },
-        }) as never,
+      (): IRfcConversation => ({
+        alive: true,
+        open: async () => {},
+        close: async () => {},
+        call: async (fm: string) => {
+          calls.push(fm);
+          return {};
+        },
+      }),
     );
     await transport.open();
 
@@ -289,13 +310,12 @@ describe('establishing over RFC', () => {
 
   it('holds no token, because the wire never returns one', async () => {
     const transport = new RfcTransport(
-      () =>
-        ({
-          alive: true,
-          open: async () => {},
-          close: async () => {},
-          call: async () => ({}),
-        }) as never,
+      (): IRfcConversation => ({
+        alive: true,
+        open: async () => {},
+        close: async () => {},
+        call: async () => ({}),
+      }),
     );
     await transport.open();
 
@@ -339,7 +359,6 @@ describe('a refused logon over HTTP', () => {
 
     const error = await transport
       .establish({
-        baseUrl: stub.baseUrl,
         authorize: async () => {},
         logon: async () => {},
         observe: (headers) => observed.push(headers),
@@ -349,12 +368,10 @@ describe('a refused logon over HTTP', () => {
       .catch((e: unknown) => e);
 
     assert.ok(error instanceof WireLogonError);
-    assert.strictEqual((error as WireLogonError).status, 401);
-    assert.strictEqual(
-      ((error as WireLogonError).cause as { response?: { status?: number } })
-        .response?.status,
-      401,
-    );
+    assert.strictEqual(instanceOf(error, WireLogonError).status, 401);
+    assertMatchObject(instanceOf(error, WireLogonError).cause, {
+      response: { status: 401 },
+    });
     assert.ok(transport.cookies()?.includes('sap-login-XSRF_STUB=L1'));
     assert.strictEqual(observed.length, 1);
     // Not retried: asking again with the credential just refused tells the
@@ -367,7 +384,6 @@ describe('a refused logon over HTTP', () => {
     const transport = wire();
 
     await transport.establish({
-      baseUrl: stub.baseUrl,
       authorize: async () => {},
       logon: async () => {},
       observe: () => {},

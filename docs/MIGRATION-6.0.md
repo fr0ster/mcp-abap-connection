@@ -153,6 +153,8 @@ about the certificate.
 
 ## Taking the RFC wire
 
+> Superseded by 20.0.0: the address is stated, see [MIGRATION-20.0](./MIGRATION-20.0.md).
+
 `connectionType: 'rfc'` is gone. The wire is an argument now, which is what it
 always was in fact:
 

@@ -44,7 +44,7 @@ AbstractAbapConnection ──┬── AdtOnPremConnector   IAuthProvider ──
 ```
 
 The providers (`BasicAuthProvider`, `TokenAuthProvider`, `SamlAuthProvider`,
-`CertificateAuthProvider`) live in `@mcp-abap-adt/auth-providers` (6.0.0), which this
+`CertificateAuthProvider`) live in `@mcp-abap-adt/auth-providers` (`^6.0.2`), which this
 package uses as a **dev** dependency only (tests). It has no runtime dependency
 on it, and nothing here may branch on which provider it was handed.
 
@@ -102,8 +102,8 @@ the RFC wire could not connect at all as a result.
   refused by its rule alone. `npm test` runs it, and so does `npm run
   test:shape`, which `prepublishOnly` names in the place `lint:check` once
   ran the check; the test asserts both. There is no copy of the check here.
-- **The tests run the real auth-providers 6.0.0 providers** (devDependency
-  `^6.0.0`), handed to the connector unwrapped. A token provider needs
+- **The tests run the real auth-providers 6.x providers** (devDependency
+  `^6.0.2`), handed to the connector unwrapped. A token provider needs
   `renewal` (`refreshThenLogin()` / `refreshOnly()`); one that needs a browser
   gets a fake `IBrowser` — no test starts a real browser or program.
   `CertificateAuthProvider` checks its material in `prepare()`: load a real
@@ -160,10 +160,15 @@ fact belongs on the transport instead.
   `logoffCookies`, `sendIcfLogoff`). Tests: `disconnectWritten`.
 
 **Taking the RFC wire** needs the SAP NW RFC SDK on the machine and
-`@mcp-abap-adt/sap-rfc-lite` installed; `rfcConversationFrom(config)` derives
-`ashost`/`sysnr` (no user or password: the provider's logon parameters are spread
-over them at each open) and loads the SDK lazily, so a machine without it fails at
-`connect()` rather than at construction.
+`@mcp-abap-adt/sap-rfc-lite` installed. An RFC config is an `ISapRfcConfig` (`SapRfcConfig`):
+`connectionType: 'rfc'`, `client`, `language`, and one address — `ashost` + `sysnr`, or
+`mshost` + `msserv` / `sysid` (or both) + `group` — and no URL. `rfcConversationFrom(config)`
+hands the SDK that address as stated: nothing derived from a URL, no `SAP_SYSNR` from the
+environment, no defaults, no trimming. It reads no user or password: the provider's logon
+parameters are spread over the address at each open, and win a shared key. The SDK is loaded
+lazily, so a machine without it fails at `connect()` rather than at construction. An RFC
+connection's `getBaseUrl()` answers `undefined`; an HTTP transport holds its own `baseUrl`
+(required), and the session context carries none.
 
 ## Conventions
 
@@ -175,7 +180,11 @@ over them at each open) and loads the SDK lazily, so a machine without it fails 
   no test framework is installed): `scripts/run-tests.mjs` compiles them with
   `tsconfig.test.json` into the git-ignored `.test-build/` and runs the compiled files with
   `node --test`; `tsconfig.json` (the published build) leaves them out
-- Tests use `(instance as any).method()` to access protected members
+- Tests reach what they check through the public surface, a stub under the subject, or a
+  real local stand. No cast, no `any`: a protected member a test needs is a sign the
+  subject's surface is missing something. Compile-only checks use `@ts-expect-error` on the
+  exact line that must not compile. Existing `as any` uses are removed as their files are
+  touched.
 - Stub a transport UNDER what you are testing, not instead of it: replacing
   `transport.send` skips everything the wire adds to its own requests, so
   replace `transport.client` when the subject is cookies or affinity headers

@@ -9,18 +9,30 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it, type Mock, mock } from 'node:test';
-import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
-import type { SapConfig } from '../config/sapConfig.js';
+import { describe, it, mock } from 'node:test';
+import {
+  BasicAuthProvider,
+  TokenAuthProvider,
+} from '@mcp-abap-adt/auth-providers';
+import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
+import type { SapHttpConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
-import type { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
+import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
+import type { IAdtSessionContext } from '../connection/IAdtTransport.js';
 import type { ILogger } from '../logger.js';
-import { assertMatchObject } from './helpers/assertions.js';
-import { reportableLogoff, wroteIt } from './helpers/logoffWrite.js';
-import { cloudHttpTransport, onPrem } from './helpers/onPrem.js';
+import { assertMatchObject, messageOf } from './helpers/assertions.js';
+import {
+  type HttpClientStub,
+  httpClientStub,
+  type Responder,
+  type SentRequest,
+  type StubResponse,
+} from './helpers/httpClientStub.js';
+import { cloudHttpTransport, onPremHttpTransport } from './helpers/onPrem.js';
 import { settled } from './helpers/settled.js';
+import { stubProvider } from './helpers/stubProvider.js';
 
-const baseConfig: SapConfig = {
+const baseConfig: SapHttpConfig = {
   url: 'https://sap.example.com',
   authType: 'basic',
   username: 'u',
@@ -28,52 +40,81 @@ const baseConfig: SapConfig = {
   client: '100',
 };
 
-function makeLogger(): ILogger {
+/** The cloud's config: a bearer token instead of a password. */
+const jwtConfig: SapHttpConfig = {
+  ...baseConfig,
+  authType: 'jwt',
+  jwtToken: 'TOKEN',
+};
+
+function makeLogger() {
   return {
-    info: mock.fn(),
-    warn: mock.fn(),
-    error: mock.fn(),
-    debug: mock.fn(),
+    info: mock.fn<ILogger['info']>(),
+    warn: mock.fn<ILogger['warn']>(),
+    error: mock.fn<ILogger['error']>(),
+    debug: mock.fn<ILogger['debug']>(),
   };
 }
 
-type Seen = {
-  url: string;
-  method: string;
-  headers: Record<string, string>;
-  timeout?: number;
+type Seen = SentRequest;
+
+/** A session context that logs on with nothing and authorizes nothing. */
+const QUIET_CONTEXT: IAdtSessionContext = {
+  authorize: async () => {},
+  logon: async () => {},
+  observe: () => {},
 };
 
+/** What a server answers when it opens a session: a token and a cookie. */
+const OPENS_A_SESSION: Responder = async () => ({
+  status: 200,
+  data: '<service/>',
+  headers: {
+    'x-csrf-token': 'TOKEN',
+    'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
+  },
+});
+
+/**
+ * Answer the wire's requests with `answer` from now on, recording each into
+ * `seen` — UNDER the wire, so what it adds to its own requests is recorded.
+ */
 function attachMockAxios(
-  conn: AdtOnPremConnector,
+  client: HttpClientStub,
   seen: Seen[],
-  answer: (cfg: any) => Promise<any> = async () => ({
-    status: 200,
-    data: '<service/>',
-    headers: {
-      'x-csrf-token': 'TOKEN',
-      'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-    },
-  }),
+  answer: Responder = OPENS_A_SESSION,
 ): void {
-  const instance = async (cfg: any) => {
-    seen.push({
-      url: cfg.url,
-      method: cfg.method,
-      headers: cfg.headers ?? {},
-      timeout: cfg.timeout,
-    });
-    wroteIt(cfg);
-    return answer(cfg);
-  };
-  // clearSessionState() detaches interceptors before dropping the instance, so
-  // the double has to carry them — the earlier doubles never reached teardown.
-  (instance as any).interceptors = {
-    request: { clear: mock.fn() },
-    response: { clear: mock.fn() },
-  };
-  (conn as any).transport.instance = instance;
-  reportableLogoff((conn as any).transport);
+  client.answer(async (request) => {
+    seen.push(request);
+    return answer(request);
+  });
+}
+
+/** An on-prem connection over an injected client. */
+function onPremStubbed(
+  logger: ILogger | null,
+  credential: IAuthProvider = new BasicAuthProvider('u', 'p'),
+) {
+  const client = httpClientStub();
+  const conn = new AdtOnPremConnector(
+    baseConfig,
+    credential,
+    onPremHttpTransport(baseConfig, logger, client),
+    logger,
+  );
+  return { conn, client };
+}
+
+/** A cloud connection over an injected client. */
+function cloudStubbed(wireLogger: ILogger | null) {
+  const client = httpClientStub();
+  const conn = new AdtCloudConnector(
+    jwtConfig,
+    TokenAuthProvider.fixed('TOKEN'),
+    cloudHttpTransport(jwtConfig, wireLogger, client),
+    makeLogger(),
+  );
+  return { conn, client };
 }
 
 /**
@@ -86,10 +127,10 @@ function attachMockAxios(
  */
 describe('the session mechanism is chosen by the connection, not probed', () => {
   it('on-prem keeps the platform logoff, even where the session resource answers', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     const seen: Seen[] = [];
     // A system that publishes BOTH — which is what S/4HANA on-prem does.
-    attachMockAxios(conn, seen, async () => ({
+    attachMockAxios(client, seen, async () => ({
       status: 200,
       data: '<http:session><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/></http:session>',
       headers: {
@@ -117,17 +158,9 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
   });
 
   it('cloud opens the session resource and gives it back through the logoff it links to', async () => {
-    const conn = new AdtCloudConnector(
-      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      TokenAuthProvider.fixed('TOKEN'),
-      cloudHttpTransport(
-        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-        makeLogger(),
-      ),
-      makeLogger(),
-    );
+    const { conn, client } = cloudStubbed(makeLogger());
     const seen: Seen[] = [];
-    attachMockAxios(conn as never, seen, async () => ({
+    attachMockAxios(client, seen, async () => ({
       status: 200,
       data: '<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom"><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/><atom:link href="/sap/public/bc/icf/logoff" rel="http://www.sap.com/adt/categories/core/http/sessions/logoff"/></http:session>',
       headers: {
@@ -164,17 +197,9 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
 
   it('cloud ends a session the server linked no logoff for with the platform logoff, without sap-contextid, resolving on the write', async () => {
     const logger = makeLogger();
-    const conn = new AdtCloudConnector(
-      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      TokenAuthProvider.fixed('TOKEN'),
-      cloudHttpTransport(
-        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-        logger,
-      ),
-      makeLogger(),
-    );
+    const { conn, client } = cloudStubbed(logger);
     const seen: Seen[] = [];
-    attachMockAxios(conn as never, seen, async (cfg) =>
+    attachMockAxios(client, seen, async (cfg) =>
       // The logoff's answer never comes: disconnect() resolves on its write.
       String(cfg.url).includes('/icf/logoff')
         ? new Promise(() => {})
@@ -208,9 +233,7 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
     assert.strictEqual(sent[0]?.headers['x-sap-security-session'], undefined);
     assert.strictEqual(sent[0]?.headers.Authorization, undefined);
     assert.ok(
-      (
-        logger.debug as unknown as Mock<(...args: any[]) => void>
-      ).mock.calls.some(
+      logger.debug.mock.calls.some(
         ({ arguments: args }) =>
           args.length === 1 &&
           typeof args[0] === 'string' &&
@@ -222,16 +245,8 @@ describe('the session mechanism is chosen by the connection, not probed', () => 
 
 describe('the cloud logoff link', () => {
   function cloudWithLogoffHref(href: string, logger: ILogger, seen: Seen[]) {
-    const conn = new AdtCloudConnector(
-      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      TokenAuthProvider.fixed('TOKEN'),
-      cloudHttpTransport(
-        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-        logger,
-      ),
-      makeLogger(),
-    );
-    attachMockAxios(conn as never, seen, async () => ({
+    const { conn, client } = cloudStubbed(logger);
+    attachMockAxios(client, seen, async () => ({
       status: 200,
       data: `<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom"><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/><atom:link href="${href}" rel="http://www.sap.com/adt/categories/core/http/sessions/logoff"/></http:session>`,
       headers: {
@@ -263,14 +278,10 @@ describe('the cloud logoff link', () => {
 
     await conn.connect();
     const before = seen.length;
-    const transport = (conn as any).transport;
     assert.strictEqual(await conn.disconnect(), undefined);
     await settled();
     // And the wire's own close, asked again, has nothing left that can throw.
-    assert.strictEqual(
-      await transport.close({ baseUrl: 'https://sap.example.com' }),
-      undefined,
-    );
+    assert.strictEqual(await conn.transport.close(QUIET_CONTEXT), undefined);
 
     // One logoff, the platform's; the second close has no session left.
     assert.deepStrictEqual(
@@ -278,9 +289,7 @@ describe('the cloud logoff link', () => {
       ['https://sap.example.com/sap/public/bc/icf/logoff'],
     );
     assert.ok(
-      (
-        logger.debug as unknown as Mock<(...args: any[]) => void>
-      ).mock.calls.some(
+      logger.debug.mock.calls.some(
         ({ arguments: args }) =>
           args.length === 1 &&
           typeof args[0] === 'string' &&
@@ -290,44 +299,38 @@ describe('the cloud logoff link', () => {
   });
 
   it('carries no credential even when the context holds one', async () => {
-    const transport = cloudHttpTransport(
-      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      makeLogger(),
-    );
-    transport.ingest({
-      'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'],
-    });
-    (transport as any).logoff =
-      'https://sap.example.com/sap/public/bc/icf/logoff';
-    const seen: Seen[] = [];
-    const instance = async (cfg: any) => {
-      seen.push({
-        url: cfg.url,
-        method: cfg.method,
-        headers: cfg.headers ?? {},
-      });
-      return { status: 200, data: '', headers: {} };
-    };
-    (instance as any).interceptors = {
-      request: { clear: mock.fn() },
-      response: { clear: mock.fn() },
-    };
-    (transport as any).instance = instance;
-    const authorize = mock.fn();
+    // The session and its linked logoff come from a real preflight, through
+    // the wire's own open — the server links the logoff resource.
+    const client = httpClientStub(async () => ({
+      status: 200,
+      data: '<http:session xmlns:http="http://www.sap.com/adt/http" xmlns:atom="http://www.w3.org/2005/Atom"><atom:link href="/sap/bc/adt/core/http/sessions/ABC" rel="http://www.sap.com/adt/categories/core/http/sessions/securitysession"/><atom:link href="/sap/public/bc/icf/logoff" rel="http://www.sap.com/adt/categories/core/http/sessions/logoff"/></http:session>',
+      headers: { 'set-cookie': ['SAP_SESSIONID_STUB_100=abc%3d; path=/'] },
+    }));
+    const transport = cloudHttpTransport(jwtConfig, makeLogger(), client);
+    await transport.open(QUIET_CONTEXT);
+    const before = client.sent.length;
+    const authorize = mock.fn<IAdtSessionContext['authorize']>(async () => {});
 
     await transport.close({
-      baseUrl: 'https://sap.example.com',
+      ...QUIET_CONTEXT,
       authorize,
       extraHeaders: {
         authorization: 'Bearer LEAKED',
         'sap-adt-connection-id': 'C-1',
       },
-    } as never);
+    });
 
+    const seen = client.sent.slice(before);
     assert.strictEqual(seen.length, 1);
-    const names = Object.keys(seen[0].headers).map((n) => n.toLowerCase());
+    assert.strictEqual(
+      seen[0]?.url,
+      'https://sap.example.com/sap/public/bc/icf/logoff',
+    );
+    const names = Object.keys(seen[0]?.headers ?? {}).map((n) =>
+      n.toLowerCase(),
+    );
     assert.ok(!names.includes('authorization'));
-    assert.strictEqual(seen[0].headers['sap-adt-connection-id'], 'C-1');
+    assert.strictEqual(seen[0]?.headers['sap-adt-connection-id'], 'C-1');
     assert.strictEqual(authorize.mock.callCount(), 0);
   });
 });
@@ -345,10 +348,10 @@ describe('a connection the server gave no session says so', () => {
    * whether this connect got a session.
    */
   it('refuses to connect when the server issued no SAP_SESSIONID', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     // What an on-prem server answers when it will not open a session: the CSRF
     // cookie, and nothing to hold a lock against.
-    attachMockAxios(conn, [], async () => ({
+    attachMockAxios(client, [], async () => ({
       status: 200,
       data: '<service/>',
       headers: {
@@ -358,7 +361,7 @@ describe('a connection the server gave no session says so', () => {
     }));
 
     await assert.rejects(conn.connect(), (e: unknown) =>
-      /opened no ABAP session/.test((e as Error).message),
+      /opened no ABAP session/.test(messageOf(e)),
     );
     assert.strictEqual(conn.isConnected(), false);
     assert.strictEqual(conn.getSessionIdentity(), null);
@@ -368,8 +371,8 @@ describe('a connection the server gave no session says so', () => {
   // and it cannot decide from "NOT_CONNECTED" alone. It has to say what the
   // server did, what still works, what does not, and who is expected to act.
   it('says what happened, what it costs, and whose call it is', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
-    attachMockAxios(conn, [], async () => ({
+    const { conn, client } = onPremStubbed(makeLogger());
+    attachMockAxios(client, [], async () => ({
       status: 200,
       data: '<service/>',
       headers: {
@@ -381,7 +384,7 @@ describe('a connection the server gave no session says so', () => {
     const error = await conn.connect().catch((e: Error) => e);
 
     assert.ok(error instanceof Error);
-    const message = (error as Error).message;
+    const message = messageOf(error);
     // Names the WIRE rather than the cookie: what a session is addressed by is
     // the wire's business, and the base no longer knows that HTTP's answer is a
     // SAP_SESSIONID.
@@ -393,15 +396,13 @@ describe('a connection the server gave no session says so', () => {
 
   it('stays quiet when a session was established', async () => {
     const logger = makeLogger();
-    const conn = onPrem(baseConfig, logger);
-    attachMockAxios(conn, []);
+    const { conn, client } = onPremStubbed(logger);
+    attachMockAxios(client, []);
 
     await conn.connect();
 
     assert.ok(
-      !(
-        logger.warn as unknown as Mock<(...args: any[]) => void>
-      ).mock.calls.some(
+      !logger.warn.mock.calls.some(
         ({ arguments: args }) =>
           args.length === 1 &&
           typeof args[0] === 'string' &&
@@ -423,30 +424,6 @@ describe('a connection the server gave no session says so', () => {
  * taken for "the release still owed", so session B's logoff was never sent.
  */
 describe('every session of a reconnect cycle is released', () => {
-  /** A double that survives clearSessionState(), as a reconnect requires. */
-  function surviving(
-    conn: AdtOnPremConnector,
-    seen: Seen[],
-    answer: (cfg: any) => Promise<any>,
-  ): void {
-    const instance = async (cfg: any) => {
-      seen.push({
-        url: cfg.url,
-        method: cfg.method,
-        headers: cfg.headers ?? {},
-        timeout: cfg.timeout,
-      });
-      wroteIt(cfg);
-      return answer(cfg);
-    };
-    (instance as any).interceptors = {
-      request: { clear: mock.fn() },
-      response: { clear: mock.fn() },
-    };
-    (conn as any).transport.instance = instance;
-    reportableLogoff((conn as any).transport);
-  }
-
   /**
    * A repeat connect() is a NEW session, with a new SAP_SESSIONID. The release
    * of the previous one is not this session's — reusing it, on the reasoning
@@ -454,14 +431,14 @@ describe('every session of a reconnect cycle is released', () => {
    * second session never released at all.
    */
   it('a reconnect on a disconnected instance is refused: its one logoff carries its own session', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     const seen: Seen[] = [];
     // A server issues ONE session and keeps handing back the same id until it
     // is told the session is finished — it does not mint a new one per request.
     // Modelling it the other way made every count depend on how many requests
     // connect() happens to make.
     let session = 1;
-    surviving(conn, seen, async (cfg) => {
+    attachMockAxios(client, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
         // Never answers: the first release stays in flight across the reconnect.
         // The next connect is a new session all the same.
@@ -514,9 +491,9 @@ describe('every session of a reconnect cycle is released', () => {
    */
 
   it('refuses a repeat disconnect() and does not re-send the release', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     const seen: Seen[] = [];
-    surviving(conn, seen, async (cfg) => {
+    attachMockAxios(client, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
         await new Promise<never>(() => undefined);
       }
@@ -554,17 +531,11 @@ describe('every session of a reconnect cycle is released', () => {
  */
 describe('requests stay on the server the session lives on', () => {
   function pinning(
-    conn: AdtOnPremConnector,
+    client: HttpClientStub,
     seen: Seen[],
     server?: string,
   ): void {
-    const instance = async (cfg: any) => {
-      seen.push({
-        url: cfg.url,
-        method: cfg.method,
-        headers: cfg.headers ?? {},
-        timeout: cfg.timeout,
-      });
+    attachMockAxios(client, seen, async () => {
       return {
         status: 200,
         data: '<service/>',
@@ -574,17 +545,16 @@ describe('requests stay on the server the session lives on', () => {
           ...(server ? { 'sap-adt-saplb': server } : {}),
         },
       };
-    };
+    });
     // UNDER the wire, not instead of it: the affinity headers this test is
     // about are what the wire adds to its own requests, so a stub that replaced
     // `send()` would be measuring a wire that never ran.
-    (conn as any).transport.client = () => instance;
   }
 
   it('asks the server to name itself, then sends that name back', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     const seen: Seen[] = [];
-    pinning(conn, seen, 'appserver-c5zhg');
+    pinning(client, seen, 'appserver-c5zhg');
 
     await conn.connect();
     await conn.makeAdtRequest({
@@ -612,9 +582,9 @@ describe('requests stay on the server the session lives on', () => {
   });
 
   it('sends no name when the server never gave one', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     const seen: Seen[] = [];
-    pinning(conn, seen);
+    pinning(client, seen);
 
     await conn.connect();
 
@@ -626,19 +596,37 @@ describe('requests stay on the server the session lives on', () => {
   });
 
   it('forgets the server when the session it belonged to is gone', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     const seen: Seen[] = [];
-    pinning(conn, seen, 'appserver-c5zhg');
+    pinning(client, seen, 'appserver-c5zhg');
 
     await conn.connect();
     assert.strictEqual(
       conn.transport.affinityHeaders().saplb,
       'appserver-c5zhg',
     );
-    // The session is lost (a dead session, a changed SAP_SESSIONID): the wire
+    // The session is lost — the server says it no longer exists: the wire
     // forgets the server it lived on, and asks again rather than asserting it.
-    (conn as unknown as { raiseSessionLost(r: string): void }).raiseSessionLost(
-      'test: the session was lost',
+    client.answer(async () => {
+      throw Object.assign(new Error('status 400'), {
+        response: {
+          status: 400,
+          statusText: 'Session not found',
+          headers: {},
+          data: 'Session not found',
+        },
+      });
+    });
+    await assert.rejects(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/gone',
+        method: 'GET',
+        timeout: 5000,
+      }),
+      (e: unknown) => {
+        assertMatchObject(e, { code: 'ADT_SESSION_REPLACED' });
+        return true;
+      },
     );
     await settled();
 
@@ -667,16 +655,11 @@ describe('a session opened before a failed connect is not abandoned', () => {
     '<atom:link href="/sap/public/bc/icf/logoff" rel="http://www.sap.com/adt/categories/core/http/sessions/logoff" title="Logoff resource"/>' +
     '</http:session>';
 
-  function cloudThenFailing(conn: AdtOnPremConnector, seen: Seen[]): void {
-    const instance = async (cfg: any) => {
-      seen.push({
-        url: cfg.url,
-        method: cfg.method,
-        headers: cfg.headers ?? {},
-        timeout: cfg.timeout,
-      });
+  function cloudThenFailing(client: HttpClientStub, seen: Seen[]): void {
+    client.answer(async (request): Promise<StubResponse> => {
+      seen.push(request);
       // The preflight succeeds and opens a session.
-      if (String(cfg.url).includes('/core/http/sessions?')) {
+      if (request.url.includes('/core/http/sessions?')) {
         return {
           status: 200,
           data: SESSION_DOC,
@@ -684,35 +667,22 @@ describe('a session opened before a failed connect is not abandoned', () => {
         };
       }
       // The logoff that says goodbye.
-      if (String(cfg.url).includes('/icf/logoff')) {
+      if (request.url.includes('/icf/logoff')) {
         return { status: 200, data: '', headers: {} };
       }
       // Establishing then fails, as it can on a credential the preflight did
       // not use.
       throw new Error('establishment refused');
-    };
-    (instance as any).interceptors = {
-      request: { clear: mock.fn() },
-      response: { clear: mock.fn() },
-    };
-    (conn as any).transport.instance = instance;
+    });
   }
 
   it('says goodbye to it when establishing fails afterwards', async () => {
     // A CLOUD connection: it is the one that opens a session resource, so it is
     // the one that can leave one open when establishing fails after the
     // preflight. On-prem opens nothing to leave behind.
-    const conn = new AdtCloudConnector(
-      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      TokenAuthProvider.fixed('TOKEN'),
-      cloudHttpTransport(
-        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-        makeLogger(),
-      ),
-      makeLogger(),
-    );
+    const { conn, client } = cloudStubbed(makeLogger());
     const seen: Seen[] = [];
-    cloudThenFailing(conn as never, seen);
+    cloudThenFailing(client, seen);
 
     await assert.rejects(conn.connect());
     // The goodbye is dispatched but not awaited — the caller is owed the
@@ -729,39 +699,22 @@ describe('a session opened before a failed connect is not abandoned', () => {
   });
 
   it('says nothing when the preflight opened nothing', async () => {
-    const conn = new AdtCloudConnector(
-      { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-      TokenAuthProvider.fixed('TOKEN'),
-      cloudHttpTransport(
-        { ...baseConfig, authType: 'jwt', jwtToken: 'TOKEN' } as never,
-        makeLogger(),
-      ),
-      makeLogger(),
-    ) as never as AdtOnPremConnector;
+    const { conn, client } = cloudStubbed(makeLogger());
     const seen: Seen[] = [];
-    const instance = async (cfg: any) => {
-      seen.push({
-        url: cfg.url,
-        method: cfg.method,
-        headers: cfg.headers ?? {},
-        timeout: cfg.timeout,
-      });
-      // No session resource on this system.
-      if (String(cfg.url).includes('/core/http/sessions')) {
-        return { status: 404, data: '', headers: {} };
+    client.answer(async (request) => {
+      seen.push(request);
+      // No session resource on this system — and the debris: a cookie left
+      // behind by the answer, which is no session, which is why "there are
+      // cookies" cannot be the test for whether to say goodbye.
+      if (request.url.includes('/core/http/sessions')) {
+        return {
+          status: 404,
+          data: '',
+          headers: { 'set-cookie': ['sap-usercontext=sap-client=100; path=/'] },
+        };
       }
       throw new Error('establishment refused');
-    };
-    (instance as any).interceptors = {
-      request: { clear: mock.fn() },
-      response: { clear: mock.fn() },
-    };
-    (conn as any).transport.instance = instance;
-    // The debris: a cookie left behind by the response that rejected us. It
-    // looks exactly like a session and is not one, which is why "there are
-    // cookies" cannot be the test for whether to say goodbye.
-    (conn as unknown as { cookies: string }).cookies =
-      'SAP_SESSIONID_STUB_100=junk%3d';
+    });
 
     await assert.rejects(conn.connect());
     await new Promise((r) => setTimeout(r, 20));
@@ -779,9 +732,9 @@ describe('a session opened before a failed connect is not abandoned', () => {
 
 describe('disconnect ends the server session', () => {
   it('calls the logoff endpoint with the session cookies', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     const seen: Seen[] = [];
-    attachMockAxios(conn, seen);
+    attachMockAxios(client, seen);
 
     await conn.connect();
     await conn.disconnect();
@@ -805,9 +758,9 @@ describe('disconnect ends the server session', () => {
   it('disconnects anyway when the logoff fails', async () => {
     // A session we could not close is strictly better than a teardown that
     // hangs or throws — disconnect() must always settle.
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     const seen: Seen[] = [];
-    attachMockAxios(conn, seen, async (cfg) => {
+    attachMockAxios(client, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
         throw new Error('network is down');
       }
@@ -833,9 +786,9 @@ describe('disconnect ends the server session', () => {
    * caught up — lock, update, unlock, activate. A teardown has no successor.
    */
   it('does not wait by default, even if the logoff never answers', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     const seen: Seen[] = [];
-    attachMockAxios(conn, seen, async (cfg) => {
+    attachMockAxios(client, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
         // Never answers at all.
         await new Promise<never>(() => undefined);
@@ -879,9 +832,9 @@ describe('disconnect ends the server session', () => {
    */
 
   it('refuses a repeat call and sends nothing when the first logoff succeeded', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     const seen: Seen[] = [];
-    attachMockAxios(conn, seen);
+    attachMockAxios(client, seen);
 
     await conn.connect();
     await conn.disconnect();
@@ -896,10 +849,10 @@ describe('disconnect ends the server session', () => {
   });
 
   it('refuses a repeat call while the release is still in flight, and opens no second', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     const seen: Seen[] = [];
     let releaseLogoff: (() => void) | undefined;
-    attachMockAxios(conn, seen, async (cfg) => {
+    attachMockAxios(client, seen, async (cfg) => {
       if (String(cfg.url).includes('logoff')) {
         await new Promise<void>((resolve) => {
           releaseLogoff = resolve;
@@ -943,45 +896,91 @@ describe('disconnect ends the server session', () => {
    * called from a `finally`, so a throw here would replace the error that sent
    * the caller there, and would leave the teardown half-done.
    */
+  /** Whether the wire said, on its logger, that the goodbye did not go. */
+  const saidNoGoodbye = (logger: ReturnType<typeof makeLogger>) =>
+    logger.debug.mock.calls.some(
+      ({ arguments: [line] }) =>
+        typeof line === 'string' &&
+        line.startsWith('Could not tell the server the session is finished'),
+    );
+
   it('disconnects even when the logoff cannot be assembled', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const logger = makeLogger();
+    const { conn, client } = onPremStubbed(logger);
     const seen: Seen[] = [];
-    attachMockAxios(conn, seen);
+    attachMockAxios(client, seen);
 
     await conn.connect();
     // Building the request throws, as a certificate connection's agent can.
-    (conn as any).transport.client = () => {
-      throw new Error('no material to build the agent from');
-    };
+    client.failLogoffWith(new Error('no material to build the agent from'));
 
     assert.strictEqual(await conn.disconnect(), undefined);
     await settled();
     assert.strictEqual(conn.isConnected(), false);
     assert.strictEqual(conn.getSessionIdentity(), null);
+    assert.ok(saidNoGoodbye(logger));
+  });
+
+  it('disconnects even when the client cannot be built for the logoff', async () => {
+    const logger = makeLogger();
+    const { conn, client } = onPremStubbed(logger);
+    const seen: Seen[] = [];
+    attachMockAxios(client, seen);
+
+    await conn.connect();
+    // A logon offering other TLS material drops the client, so the logoff is
+    // the request that builds the next one — and building it throws, as a
+    // certificate connection's agent can.
+    await conn.transport.open({
+      ...QUIET_CONTEXT,
+      logon: async (target) => {
+        target.tlsMaterial({ cert: 'OTHER-CERT', key: 'OTHER-KEY' });
+      },
+    });
+    client.failNextBuild(new Error('no material to build the agent from'));
+    const builtBefore = client.built.length;
+
+    assert.strictEqual(await conn.disconnect(), undefined);
+    await settled();
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(conn.getSessionIdentity(), null);
+    // The build was attempted and failed: no client built, nothing sent.
+    assert.strictEqual(client.built.length, builtBefore);
+    assert.strictEqual(seen.filter((r) => r.url.includes('/logoff')).length, 0);
+    assert.ok(saidNoGoodbye(logger));
   });
 
   it('asks nothing of the credential to say goodbye', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    // A credential that cannot build a header any more once connected: the
+    // logoff never asks it, so it does not keep the session open.
+    let broken = false;
+    const credential = stubProvider({
+      authorize: [
+        () => {
+          if (broken) throw new Error('no credential to build a header from');
+          return { ok: true };
+        },
+      ],
+    });
+    const { conn, client } = onPremStubbed(makeLogger(), credential);
     const seen: Seen[] = [];
-    attachMockAxios(conn, seen);
+    attachMockAxios(client, seen);
 
     await conn.connect();
-    // The session context's `authorize` is `credentialHeaders`: the logoff
-    // never reaches it, so a credential that cannot build a header any more
-    // does not keep the session open.
-    (conn as any).credentialHeaders = async () => {
-      throw new Error('no credential to build a header from');
-    };
+    broken = true;
+    const asked = credential.calls.length;
 
     assert.strictEqual(await conn.disconnect(), undefined);
     await settled();
     assert.strictEqual(seen.filter((r) => r.url.includes('/logoff')).length, 1);
+    // Nothing at all was asked of the credential for the goodbye.
+    assert.strictEqual(credential.calls.length, asked);
   });
 
   it('sends nothing when there is no session to end', async () => {
-    const conn = onPrem(baseConfig, makeLogger());
+    const { conn, client } = onPremStubbed(makeLogger());
     const seen: Seen[] = [];
-    attachMockAxios(conn, seen);
+    attachMockAxios(client, seen);
 
     await conn.disconnect();
 

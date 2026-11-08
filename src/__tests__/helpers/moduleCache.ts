@@ -12,14 +12,16 @@
  */
 import Module from 'node:module';
 
-type Cache = Record<string, NodeJS.Module | undefined>;
+/** Node's resolver, which `@types/node` does not declare. */
+type Resolve = (request: string, ...rest: unknown[]) => string;
 
 export function isolatedRequire<T>(id: string): T {
-  const cache = require.cache as Cache;
+  const cache = require.cache;
   const saved = { ...cache };
   for (const key of Object.keys(cache)) delete cache[key];
   try {
-    return require(id) as T;
+    const loaded: T = require(id);
+    return loaded;
   } finally {
     for (const key of Object.keys(cache)) delete cache[key];
     Object.assign(cache, saved);
@@ -31,24 +33,49 @@ export function withModule(
   exports: unknown,
   run: () => void,
 ): void {
-  const cache = require.cache as Cache;
-  const loader = Module as unknown as {
-    _resolveFilename: (request: string, ...rest: unknown[]) => string;
-  };
-  const resolve = loader._resolveFilename;
+  const restore = install(id, exports);
+  try {
+    run();
+  } finally {
+    restore();
+  }
+}
+
+/** `withModule` for a `run` that settles later: put back once it has. */
+export async function withModuleAsync<T>(
+  id: string,
+  exports: unknown,
+  run: () => Promise<T>,
+): Promise<T> {
+  const restore = install(id, exports);
+  try {
+    return await run();
+  } finally {
+    restore();
+  }
+}
+
+/** Makes `require(id)` answer `exports`; returns what puts the cache back. */
+function install(id: string, exports: unknown): () => void {
+  const cache = require.cache;
+  const resolve: unknown = Reflect.get(Module, '_resolveFilename');
+  if (typeof resolve !== 'function') {
+    throw new Error('node:module has no _resolveFilename to stand in for');
+  }
   const key = `stubbed:${id}`;
-  loader._resolveFilename = function (request: string, ...rest: unknown[]) {
-    return request === id ? key : resolve.call(this, request, ...rest);
+  const standIn: Resolve = function (this: unknown, request, ...rest) {
+    return request === id
+      ? key
+      : Reflect.apply(resolve, this, [request, ...rest]);
   };
+  Reflect.set(Module, '_resolveFilename', standIn);
   const stub = new Module(key);
   stub.filename = key;
   stub.loaded = true;
   stub.exports = exports;
   cache[key] = stub;
-  try {
-    run();
-  } finally {
-    loader._resolveFilename = resolve;
+  return () => {
+    Reflect.set(Module, '_resolveFilename', resolve);
     delete cache[key];
-  }
+  };
 }

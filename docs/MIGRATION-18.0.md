@@ -1,5 +1,7 @@
 # Migration to 18.0
 
+> Superseded by 20.0.0: the address is stated, see [MIGRATION-20.0](./MIGRATION-20.0.md).
+
 18.0.0 adds RFC logon through a message server and a logon group
 (load-balanced logon). For a consumer on 17.x, the change is confined to the
 types of one function.

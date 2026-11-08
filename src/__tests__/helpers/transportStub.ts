@@ -1,4 +1,5 @@
 import { HttpTransport } from '../../connection/HttpTransport.js';
+import type { IAdtTransport } from '../../connection/IAdtTransport.js';
 /**
  * The session-state half of `IAdtTransport`, for a stub whose subject is
  * something else.
@@ -44,9 +45,11 @@ export function holdsItsSession(
     method: string;
     url: string;
     headers?: Record<string, string>;
-  }) => Promise<{ headers?: unknown }>,
+  }) => Promise<{ headers?: Record<string, unknown> }>,
+  /** The server it addresses, as an HTTP wire holds its own. */
+  baseUrl = 'https://sap.example.com',
 ) {
-  const state = new HttpTransport();
+  const state = new HttpTransport(undefined, null, { baseUrl });
   return {
     // Empty, and true of it: an HTTP wire's session arrives with the
     // establishing call below, so there is nothing to ask for and nothing to
@@ -60,7 +63,6 @@ export function holdsItsSession(
      * session, and the connection would rightly refuse to connect over it.
      */
     establish: async (context: {
-      baseUrl: string;
       authorize: (headers: Record<string, string>) => Promise<void>;
       observe: (headers: unknown) => void;
     }) => {
@@ -69,11 +71,11 @@ export function holdsItsSession(
       await context.authorize(auth);
       const response = await send({
         method: 'GET',
-        url: `${context.baseUrl}/sap/bc/adt/core/discovery`,
+        url: `${baseUrl}/sap/bc/adt/core/discovery`,
         headers: { ...auth, 'x-csrf-token': 'fetch' },
       });
       context.observe(response.headers);
-      state.ingest(response.headers as Record<string, unknown>);
+      state.ingest(response.headers);
       state.adoptCsrfToken('TOKEN');
     },
     csrfToken: () => state.csrfToken(),
@@ -95,13 +97,18 @@ export function holdsItsSession(
  * while both lived on the connection. They are the transport's now, and a test
  * that reached around it would be seeding a jar nobody reads.
  */
-export function seedCookies(conn: any, cookies: string): void {
+export function seedCookies(
+  conn: { transport: Pick<IAdtTransport, 'ingest'> },
+  cookies: string,
+): void {
   conn.transport.ingest({
     'set-cookie': cookies.split(';').map((entry: string) => entry.trim()),
   });
 }
 
 /** What the wire is holding, for an assertion that used to read a field. */
-export function heldCookies(conn: any): string | null {
+export function heldCookies(conn: {
+  transport: Pick<IAdtTransport, 'cookies'>;
+}): string | null {
   return conn.transport.cookies();
 }

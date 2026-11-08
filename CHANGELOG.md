@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [20.0.0] - 2026-11-08
+
+An RFC destination states its own address. Breaking for an RFC config and for code that reads
+`getBaseUrl()`, builds an HTTP transport by hand or reads the session context's `baseUrl`; an HTTP
+config passed to `createConnection` or the connectors compiles and behaves as before. See
+[docs/MIGRATION-20.0.md](docs/MIGRATION-20.0.md).
+
+### Changed — breaking
+
+- **`@mcp-abap-adt/interfaces-auth-sap` ^4.0.0 and `@mcp-abap-adt/interfaces-adt-connection`
+  ^4.0.0** (from ^3.4.0 and ^3.0.0). `ISapConfig` is a union by `connectionType`: an
+  `ISapHttpConfig` carries `url` and no RFC key; an `ISapRfcConfig` carries `client`, `language`
+  and one address — `ashost` + `sysnr`, or `mshost` + `msserv` / `sysid` (or both) + `group` —
+  and no `url`.
+- **`rfcParamsFrom` / `rfcConversationFrom` take an `ISapRfcConfig` and read it as stated.** No
+  host or system number from a URL (the `80NN` port convention is gone), no `SAP_SYSNR` from the
+  environment, no `'000'` / `'EN'` / `'PUBLIC'` defaults, no trimming, no throw. `language` is the
+  SDK's `lang`; `msserv`, `sysid` and `saprouter` are sent exactly when stated.
+  `RfcMessageServerParams` is the "`msserv`, `sysid` or both" shape.
+- **`createConnection`: each spec takes its own config shape** — `ISapHttpConfig` for the HTTP
+  wires, `ISapRfcConfig` for RFC — and the spec is narrowed by the compiler, with no cast. A `null`
+  or `undefined` spec fails with the runtime's own `TypeError`; any other value built past the
+  types is refused in the fixed words, as before.
+- **`getBaseUrl(): Promise<string | undefined>`**: the `url`'s origin over HTTP, `undefined` over
+  RFC. An RFC config's construction parses no URL.
+- **The HTTP transports take `baseUrl` as a required option**; a caller's path is put on it, and
+  the CSRF fetch, the cloud preflight and the logoff go to its origin, as before.
+  **`IAdtSessionContext` has no `baseUrl`**, and `establishSession` reads no `getBaseUrl()`.
+
+### Added
+
+- `SapHttpConfig` and `SapRfcConfig`, the two shapes of `SapConfig`.
+- **`httpClient`, an option of the HTTP transports** (`HttpTransport`, `OnPremHttpTransport`,
+  `LegacyOnPremHttpTransport`, `CloudHttpTransport`): an `HttpClientFactory` — `create(agents)`
+  returns the axios instance the wire sends through, built from its two pooled agents
+  (`HttpClientAgents`), and `logoffRequest(options, onResponse)` the Node request a logoff goes
+  out on. Left out, it is the exported `nodeHttpClient`, which is what the wire used before:
+  nothing changes for a wire built without it. A test double goes under the wire through it.
+  `createConnection` passes it through for cloud + http, on-prem + http and on-prem + legacy-http
+  (`httpClient` beside `agentOptions` in `CloudHttpSpec` / `OnPremHttpSpec`).
+
+### Fixed
+
+- **`sapConfigSignature` names the RFC address**: it carries `connectionType`, `ashost`, `sysnr`,
+  `mshost`, `msserv`, `sysid`, `group`, `saprouter` and `language` besides `url` and `client`, so
+  two configs that dial different servers no longer share a signature.
+
 ## [19.1.0] - 2026-10-23
 
 The HTTP wire's sockets change (below: Fixed and the first two Changed entries; a minor release because `https:` now keeps sockets alive); the
@@ -2790,7 +2837,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.0.0...HEAD
+[20.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v19.1.0...v20.0.0
 [19.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v19.0.0...v19.1.0
 [19.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.1...v19.0.0
 [18.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.0...v18.0.1

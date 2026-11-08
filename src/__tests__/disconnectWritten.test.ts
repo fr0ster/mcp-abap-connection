@@ -19,17 +19,22 @@ import {
   createServer,
   request as httpRequest,
   type IncomingMessage,
+  type RequestOptions,
   type ServerResponse,
 } from 'node:http';
 import type { Socket } from 'node:net';
 import { Duplex } from 'node:stream';
 import { afterEach, describe, it } from 'node:test';
 import { TokenAuthProvider } from '@mcp-abap-adt/auth-providers';
-import type { SapConfig } from '../config/sapConfig.js';
+import type { SapHttpConfig } from '../config/sapConfig.js';
 import { AdtCloudConnector } from '../connection/AdtCloudConnector.js';
+import {
+  type HttpClientFactory,
+  nodeHttpClient,
+} from '../connection/HttpTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import type { ILogger } from '../logger.js';
-import { assertMatchObject } from './helpers/assertions.js';
+import { assertMatchObject, messageOf } from './helpers/assertions.js';
 import {
   cloudHttpTransport,
   onPrem,
@@ -188,7 +193,7 @@ async function standIn(
   };
 }
 
-const configFor = (url: string): SapConfig => ({
+const configFor = (url: string): SapHttpConfig => ({
   url,
   authType: 'basic',
   username: 'u',
@@ -217,17 +222,19 @@ async function turns(count: number, until?: () => boolean): Promise<void> {
 }
 
 /**
- * Sends the wire's logoffs over a socket that accepts nothing: every write
- * stays pending, so no request's `finish` comes. Destroying it fails them.
+ * An HTTP client whose logoffs go over a socket that accepts nothing: every
+ * write stays pending, so no request's `finish` comes. Destroying it fails them.
+ * Everything else goes out as the shipped client sends it.
  */
-function bytesNeverTaken(transport: unknown): {
+function bytesNeverTaken(): {
+  httpClient: HttpClientFactory;
   fail: () => void;
   /** Settles when the wire has opened its logoff request. */
   requested: Promise<void>;
   /** The options of every logoff request the wire opened, in order. */
-  logoffs: Record<string, unknown>[];
+  logoffs: RequestOptions[];
 } {
-  const logoffs: Record<string, unknown>[] = [];
+  const logoffs: RequestOptions[] = [];
   let opened!: () => void;
   const requested = new Promise<void>((resolve) => {
     opened = resolve;
@@ -245,22 +252,19 @@ function bytesNeverTaken(transport: unknown): {
     ref: () => socket,
     unref: () => socket,
   });
-  (
-    transport as {
-      logoffRequest: (
-        options: Record<string, unknown>,
-        onResponse: (response: IncomingMessage) => void,
-      ) => unknown;
-    }
-  ).logoffRequest = (options, onResponse) => {
-    logoffs.push(options);
-    opened();
-    return httpRequest(
-      { ...options, agent: undefined, createConnection: () => socket } as never,
-      onResponse,
-    );
+  const httpClient: HttpClientFactory = {
+    ...nodeHttpClient,
+    logoffRequest: (options, onResponse) => {
+      logoffs.push(options);
+      opened();
+      return httpRequest(
+        { ...options, agent: undefined, createConnection: () => socket },
+        onResponse,
+      );
+    },
   };
   return {
+    httpClient,
     fail: () => socket.destroy(new Error('the server never took the bytes')),
     requested,
     logoffs,
@@ -304,9 +308,14 @@ describe('disconnect() resolves once the logoff is written', () => {
 
   it('a server that never takes the bytes: disconnect() waits for the write, and resolves when the socket fails', async () => {
     server = await standIn();
-    const conn = onPrem(configFor(server.baseUrl), null);
+    const wire = bytesNeverTaken();
+    const conn = onPrem(
+      configFor(server.baseUrl),
+      null,
+      undefined,
+      wire.httpClient,
+    );
     await conn.connect();
-    const wire = bytesNeverTaken(conn.transport);
 
     const disconnected = watched(conn.disconnect());
     await turns(20);
@@ -332,9 +341,14 @@ describe('disconnect() resolves once the logoff is written', () => {
 
     it('a second call while the first is writing rejects; the first still resolves on the write', async () => {
       server = await standIn();
-      const conn = onPrem(configFor(server.baseUrl), null);
+      const wire = bytesNeverTaken();
+      const conn = onPrem(
+        configFor(server.baseUrl),
+        null,
+        undefined,
+        wire.httpClient,
+      );
       await conn.connect();
-      const wire = bytesNeverTaken(conn.transport);
 
       const first = conn.disconnect();
       const firstDone = watched(first);
@@ -368,11 +382,11 @@ describe('disconnect() resolves once the logoff is written', () => {
   describe('a failed connect() that logged off, and every establishment attempt', () => {
     it('cloud: a preflight session, then a renewable 401 at discovery — one logoff, no second establishment, the original failure', async () => {
       server = await standIn({ discoveryStatus: 401 });
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const { stubProvider } = await import('./helpers/stubProvider.js');
       const provider = stubProvider();
       const conn = new AdtCloudConnector(
@@ -457,16 +471,14 @@ describe('disconnect() resolves once the logoff is written', () => {
       const send = conn.transport.send.bind(conn.transport);
       conn.transport.send = async (request) => {
         if (request.url.includes('/gone')) {
-          const error = new Error('status 400') as Error & {
-            response: unknown;
-          };
-          error.response = {
-            status: 400,
-            statusText: 'Session not found',
-            headers: {},
-            data: 'Session not found',
-          };
-          throw error;
+          throw Object.assign(new Error('status 400'), {
+            response: {
+              status: 400,
+              statusText: 'Session not found',
+              headers: {},
+              data: 'Session not found',
+            },
+          });
         }
         return send(request);
       };
@@ -562,11 +574,11 @@ describe('disconnect() resolves once the logoff is written', () => {
           ],
         },
       });
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
@@ -611,8 +623,13 @@ describe('disconnect() resolves once the logoff is written', () => {
           '/sap/bc/adt/discovery': ['SAP_SESSIONID_STUB_100=S2; Path=/'],
         },
       });
-      const conn = onPrem(configFor(server.baseUrl), null);
-      const wire = bytesNeverTaken(conn.transport);
+      const wire = bytesNeverTaken();
+      const conn = onPrem(
+        configFor(server.baseUrl),
+        null,
+        undefined,
+        wire.httpClient,
+      );
 
       const connecting = conn.connect();
       const rejected = watched(connecting);
@@ -634,11 +651,13 @@ describe('disconnect() resolves once the logoff is written', () => {
       // found the cookies already forgotten and sent none of its own.
       assert.strictEqual(server.logoffs(), 0);
       assert.strictEqual(wire.logoffs.length, 1);
-      const headers = (wire.logoffs[0]?.headers ?? {}) as Record<
-        string,
-        unknown
-      >;
-      const cookie = String(headers.Cookie ?? headers.cookie ?? '');
+      const headers = wire.logoffs[0]?.headers;
+      assert.ok(typeof headers === 'object' && headers !== null);
+      const cookie = String(
+        ('Cookie' in headers ? headers.Cookie : undefined) ??
+          ('cookie' in headers ? headers.cookie : undefined) ??
+          '',
+      );
       assert.ok(cookie.includes('SAP_SESSIONID_STUB_100=S2'));
       assert.ok(!cookie.includes('S1'));
     });
@@ -857,7 +876,7 @@ describe('disconnect() resolves once the logoff is written', () => {
       const conn = new AdtOnPremConnector(
         configFor(server.baseUrl),
         new BasicAuthProvider('u', 'p'),
-        transport as never,
+        transport,
         null,
       );
 
@@ -868,25 +887,25 @@ describe('disconnect() resolves once the logoff is written', () => {
 
       write();
       await assert.rejects(connecting, (e: unknown) =>
-        /opened no ABAP session/.test((e as Error).message),
+        /opened no ABAP session/.test(messageOf(e)),
       );
     });
 
     it('the establishment failing after the cloud preflight opened a session', async () => {
       // A refused establishment fails at once, with no retry to wait out.
       server = await standIn({ discoveryStatus: 401 });
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
+      const wire = bytesNeverTaken();
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
-        cloudHttpTransport(config, null),
+        cloudHttpTransport(config, null, wire.httpClient),
         null,
       );
-      const wire = bytesNeverTaken(conn.transport);
 
       const connecting = conn.connect();
       const settled = watched(connecting);
@@ -970,7 +989,7 @@ describe('disconnect() resolves once the logoff is written', () => {
       const conn = onPrem(configFor(server.baseUrl), null);
 
       await assert.rejects(conn.connect(), (e: unknown) =>
-        /opened no ABAP session/.test((e as Error).message),
+        /opened no ABAP session/.test(messageOf(e)),
       );
       assert.strictEqual(await conn.disconnect(), undefined);
       await turns(5);
@@ -981,7 +1000,6 @@ describe('disconnect() resolves once the logoff is written', () => {
       server = await standIn();
       const transport = onPremHttpTransport(configFor(server.baseUrl));
       const context = {
-        baseUrl: server.baseUrl,
         authorize: async () => {},
         logon: async () => {},
         observe: () => {},
@@ -1053,7 +1071,6 @@ describe('disconnect() resolves once the logoff is written', () => {
       transport.ingest({ 'set-cookie': ['SAP_SESSIONID_STUB_100=; Path=/'] });
       assert.strictEqual(transport.sessionEstablished(), false);
       await transport.close({
-        baseUrl: server.baseUrl,
         authorize: async () => {},
         logon: async () => {},
         observe: () => {},
@@ -1064,11 +1081,11 @@ describe('disconnect() resolves once the logoff is written', () => {
 
     it('cloud: a preflight session document without SAP_SESSIONID: nothing is sent', async () => {
       server = await standIn({ sessionCookie: false });
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
@@ -1077,7 +1094,7 @@ describe('disconnect() resolves once the logoff is written', () => {
       );
 
       await assert.rejects(conn.connect(), (e: unknown) =>
-        /opened no ABAP session/.test((e as Error).message),
+        /opened no ABAP session/.test(messageOf(e)),
       );
       assert.strictEqual(await conn.disconnect(), undefined);
       await turns(5);
@@ -1128,11 +1145,11 @@ describe('disconnect() resolves once the logoff is written', () => {
           'sap-contextid=CTX; Path=/',
         ],
       });
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
@@ -1167,11 +1184,11 @@ describe('disconnect() resolves once the logoff is written', () => {
         discoveryStatus: 404,
         fallbackStatus: 404,
       });
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
@@ -1194,11 +1211,11 @@ describe('disconnect() resolves once the logoff is written', () => {
 
     it('cloud: a context in the jar stays off the logoff', async () => {
       server = await standIn();
-      const config = {
+      const config: SapHttpConfig = {
         ...configFor(server.baseUrl),
         authType: 'jwt',
         jwtToken: 'TOKEN',
-      } as SapConfig;
+      };
       const conn = new AdtCloudConnector(
         config,
         TokenAuthProvider.fixed('TOKEN'),
@@ -1253,11 +1270,11 @@ describe('disconnect() resolves once the logoff is written', () => {
 
   it('on the cloud wire: has resolved while the server holds its answer', async () => {
     server = await standIn();
-    const config = {
+    const config: SapHttpConfig = {
       ...configFor(server.baseUrl),
       authType: 'jwt',
       jwtToken: 'TOKEN',
-    } as SapConfig;
+    };
     const conn = new AdtCloudConnector(
       config,
       TokenAuthProvider.fixed('TOKEN'),
