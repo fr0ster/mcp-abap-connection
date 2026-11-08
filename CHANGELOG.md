@@ -27,8 +27,9 @@ config passed to `createConnection` or the connectors compiles and behaves as be
   SDK's `lang`; `msserv`, `sysid` and `saprouter` are sent exactly when stated.
   `RfcMessageServerParams` is the "`msserv`, `sysid` or both" shape.
 - **`createConnection`: each spec takes its own config shape** — `ISapHttpConfig` for the HTTP
-  wires, `ISapRfcConfig` for RFC — and the spec is narrowed by the compiler, with no cast. A spec
-  that is not an object fails with the runtime's own `TypeError`.
+  wires, `ISapRfcConfig` for RFC — and the spec is narrowed by the compiler, with no cast. A `null`
+  or `undefined` spec fails with the runtime's own `TypeError`; any other value built past the
+  types is refused in the fixed words, as before.
 - **`getBaseUrl(): Promise<string | undefined>`**: the `url`'s origin over HTTP, `undefined` over
   RFC. An RFC config's construction parses no URL.
 - **The HTTP transports take `baseUrl` as a required option**; a caller's path is put on it, and
