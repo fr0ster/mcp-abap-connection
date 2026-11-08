@@ -44,8 +44,7 @@ where `getBaseUrl()` may answer `undefined`. Both are required (`^4.0.0`).
   and `transport` that does not exist does not compile either; built past the
   types, it is still refused with the fixed `TypeError`, as is any other value
   passed as the spec. Only a `null` or `undefined` spec now fails with the
-  runtime's own `TypeError` (reading its `transport`) rather than those fixed
-  words.
+  runtime's own `TypeError` rather than those fixed words.
 - **`getBaseUrl(): Promise<string | undefined>`.** An HTTP connection answers
   the origin of its `url`, as before. An RFC connection answers `undefined`: it
   has no HTTP origin, and none is invented. Construction no longer parses a URL
