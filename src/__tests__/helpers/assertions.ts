@@ -40,10 +40,13 @@ export function assertMatchObject(
         typeof actual === 'function',
       `${path} is not an object`,
     );
-    const target = actual as Record<string, unknown>;
     for (const key of Object.keys(expected)) {
-      assert.ok(key in target, `${path}.${key} is missing`);
-      assertMatchObject(target[key], expected[key], `${path}.${key}`);
+      assert.ok(key in actual, `${path}.${key} is missing`);
+      assertMatchObject(
+        Reflect.get(actual, key),
+        expected[key],
+        `${path}.${key}`,
+      );
     }
     return;
   }
