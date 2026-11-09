@@ -193,6 +193,11 @@ describe('the address of a message server', () => {
 });
 
 describe('the conversation factory', () => {
+  it('states the logon language it opens every conversation in', () => {
+    assert.strictEqual(rfcConversationFrom(appServer).language, 'DE');
+    assert.strictEqual(rfcConversationFrom(messageServer).language, 'UK');
+  });
+
   /** What the stand-in SDK client was constructed with, one entry per open. */
   function constructedFrom(
     open: () => void,

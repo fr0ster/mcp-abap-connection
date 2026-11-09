@@ -1003,7 +1003,7 @@ establishing, and whatever session state it keeps.
 ```text
 new HttpTransport(agentOptions?, logger?, { client?, baseUrl, httpClient? })
 new RfcTransport(
-  connect: (logon: Readonly<Record<string, string>>) => IRfcConversation,
+  connect: RfcConversationFactory, // (logon) => IRfcConversation, and its logon `language`
   logger?,
   { logWire?, maxLoggedBodyChars? },
 )
@@ -1028,7 +1028,14 @@ here, under the wire, so what the wire adds to its own requests still runs.
 `RfcTransport` you build
 with `rfcConversationFrom(rfcConfig)`, which takes the RFC config's stated
 address, `client` and `language` as they are and loads the SAP NW RFC SDK only
-when a conversation opens.
+when a conversation opens. It states that `language` as the factory's logon
+language. A request's `sap-language` (header or query parameter) is compared
+with the logon language of the conversation that would carry it — the `lang`
+its logon carries: the provider's where it writes one, else the factory's. A
+non-stateful request naming another one goes on a conversation logged on in
+it, opened for that call and closed after it, and a stateful one is refused
+before it is sent — a session cannot change its language. See the README, "A request's
+language over RFC".
 
 **What the wire takes from the credential.** The provider writes it, the wire
 carries it; the wire never reads `config.username` or `config.password`.
