@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [20.1.0] - 2026-11-09
+
+A request runs in its `sap-language` over RFC as it does over HTTP.
+
+### Fixed
+
+- **`RfcTransport` honours a request's `sap-language`.** `SADT_REST_RFC_ENDPOINT` has no ICF
+  logon: it ran every request in the conversation's logon language and ignored `sap-language`
+  as a header, a query parameter or a body attribute — a class created with `sap-language: RU`
+  on an EN logon got master language EN, where over HTTP it gets RU (measured on S/4HANA 2025).
+  Now a non-stateful request whose `sap-language` (a header, or the query parameter in `params`
+  or in the URL) names another language than the logon one goes on a conversation logged on in
+  that language, opened for that call and closed after it, whatever the answer; nothing is
+  kept. A stateful request naming another language is refused before anything is sent, in words
+  naming both languages: a session cannot change its language. A request naming two different
+  languages is refused the same way. Language keys are compared without case; the same
+  language, or none, goes as before. `HttpTransport` is unchanged. Measured on E19 (2026-11-09):
+  a class created over RFC with `sap-language: RU` on an EN logon reads back
+  `adtcore:masterLanguage="RU"`.
+
+### Added
+
+- **`RfcConversationFactory`**: what `RfcTransport` takes — the factory function, and its logon
+  `language` where stated. `rfcConversationFrom(config)` states the config's `language`. A plain
+  factory function still compiles; one that states no `language` has every request naming a
+  `sap-language` treated as naming another one.
+
 ## [20.0.0] - 2026-11-08
 
 An RFC destination states its own address. Breaking for an RFC config and for code that reads
@@ -2837,7 +2864,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.1.0...HEAD
+[20.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.0.0...v20.1.0
 [20.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v19.1.0...v20.0.0
 [19.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v19.0.0...v19.1.0
 [19.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v18.0.1...v19.0.0

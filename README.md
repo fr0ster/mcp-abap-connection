@@ -908,7 +908,9 @@ install rather than at construction.
 ```text
 function rfcConversationFrom(
   config: SapRfcConfig,
-): (logon: Readonly<Record<string, string>>) => IRfcConversation;
+): RfcConversationFactory & { readonly language: string };
+// RfcConversationFactory = ((logon: Readonly<Record<string, string>>) => IRfcConversation)
+//                          & { readonly language?: string }   // the logon language
 function rfcParamsFrom(config: SapRfcConfig): RfcAddress; // the address only
 // RfcAddress = RfcConnectionParams (ashost, sysnr) | RfcMessageServerParams (mshost, msserv and/or sysid, group)
 ```
@@ -942,6 +944,32 @@ body — which is how you see that a payload was mis-serialised before it reache
 themselves are not redacted, so read a captured log before pasting it into an
 issue. `HttpTransport` never logs bodies, so this is the one wire whose debug
 channel can be asked for the payload.
+
+#### A request's language over RFC
+
+A request runs in the language its `sap-language` names — a header, or the
+`sap-language` query parameter in `params` or in the URL — on both wires. Over
+HTTP the ICF layer reads it. `SADT_REST_RFC_ENDPOINT` runs a request in its
+conversation's logon language and ignores `sap-language`, so `RfcTransport`
+compares the two (SAP language keys, without case) against the logon language
+its factory states — `rfcConversationFrom` states the config's `language`:
+
+- **The same language, or none named:** the request goes as any other.
+- **Another language, a non-stateful request:** it goes on a conversation
+  logged on in that language (`lang` as the request names it), opened for that
+  one call and closed when it answers, whatever the answer. Nothing is kept:
+  the next such call logs on again.
+- **Another language, a stateful request** (a `LOCK`, an `UNLOCK`, anything in
+  the lock's session): refused before anything is sent, with an error naming
+  both languages — a session cannot change its language. Connect with the
+  language the locked work needs.
+- **Two different languages named on one request:** refused before anything is
+  sent.
+
+A factory of your own that does not state `language` leaves the wire without a
+logon language to compare: every non-stateful request naming a
+`sap-language` then takes a conversation of its own in that language, and every
+stateful one naming it is refused.
 
 #### `CSRF_CONFIG` and `CSRF_ERROR_MESSAGES`
 
