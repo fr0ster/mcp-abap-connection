@@ -1030,10 +1030,11 @@ with `rfcConversationFrom(rfcConfig)`, which takes the RFC config's stated
 address, `client` and `language` as they are and loads the SAP NW RFC SDK only
 when a conversation opens. It states that `language` as the factory's logon
 language. A request's `sap-language` (header or query parameter) is compared
-with the effective logon language — the provider's `lang` where it writes one,
-else the factory's: a non-stateful request naming another one goes on a conversation logged on in it, opened
-for that call and closed after it, and a stateful one is refused before it is
-sent — a session cannot change its language. See the README, "A request's
+with the logon language of the conversation that would carry it — the `lang`
+its logon carries: the provider's where it writes one, else the factory's. A
+non-stateful request naming another one goes on a conversation logged on in
+it, opened for that call and closed after it, and a stateful one is refused
+before it is sent — a session cannot change its language. See the README, "A request's
 language over RFC".
 
 **What the wire takes from the credential.** The provider writes it, the wire

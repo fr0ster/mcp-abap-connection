@@ -18,16 +18,20 @@ A request runs in its `sap-language` over RFC as it does over HTTP.
   as a header, a query parameter or a body attribute — a class created with `sap-language: RU`
   on an EN logon got master language EN, where over HTTP it gets RU (measured on S/4HANA 2025).
   Now a non-stateful request whose `sap-language` (a header, or the query parameter in `params`
-  or in the URL) names another language than the effective logon one — the `lang` the stateful
-  conversation logged on with: the provider's where it writes one, else the factory's — goes on
-  a conversation logged on in that language (its `lang` over any the provider writes), opened
-  for that call and closed after it, whatever the answer — a logger that throws included;
-  nothing is kept. A stateful request naming another language is refused before anything is sent, in words
-  naming both languages: a session cannot change its language. A request naming two different
+  or in the URL) names another language than the logon language of the conversation that would
+  carry it — the `lang` its logon carries: the provider's where it writes one, else the
+  factory's — goes on a conversation logged on in that language (its `lang` over any the
+  provider writes), opened for that call and closed after it, whatever the answer — a logger
+  that throws included; nothing is kept. A stateful request naming another language than the
+  stateful conversation's is refused before anything is sent, in words naming both languages: a session cannot change its language. A request naming two different
   languages is refused the same way. Language keys are compared without case; the same
   language, or none, goes as before. `HttpTransport` is unchanged. Measured on E19 (2026-11-09):
   a class created over RFC with `sap-language: RU` on an EN logon reads back
   `adtcore:masterLanguage="RU"`.
+- **`RfcTransport.close()` closes every conversation whatever a close or the logger does.** A
+  stateless conversation whose close rejected, under a logger whose `debug` threw, stopped
+  `close()` before the stateful conversation was closed. Every close-path log line is now
+  written so that it cannot throw.
 
 ### Added
 

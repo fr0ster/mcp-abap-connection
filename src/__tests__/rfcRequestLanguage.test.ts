@@ -50,6 +50,7 @@ class FakeConversation implements IRfcConversation {
     readonly logon: Readonly<Record<string, string>>,
     private readonly failCall: boolean,
     canReset = true,
+    private readonly failClose = false,
   ) {
     if (canReset) {
       this.resetServerContext = async () => {
@@ -66,6 +67,7 @@ class FakeConversation implements IRfcConversation {
   async close(): Promise<void> {
     this.closes += 1;
     this.alive = false;
+    if (this.failClose) throw new Error('RFC_CLOSE_FAILURE');
   }
 
   async call(
@@ -90,8 +92,15 @@ function wire(
   options: {
     language?: string;
     failCallsAfter?: number;
-    /** What the provider writes at every logon, as `context.logon()` would. */
-    providerWrites?: Readonly<Record<string, string>>;
+    /**
+     * What the provider writes at a logon, as `context.logon()` would: the
+     * same at every logon, or by the logon's index (0 is `open()`'s).
+     */
+    providerWrites?:
+      | Readonly<Record<string, string>>
+      | ((logon: number) => Readonly<Record<string, string>>);
+    /** The index of the conversation whose close rejects. */
+    failCloseOf?: number;
     logger?: ILogger;
     canReset?: boolean;
   } = {},
@@ -109,6 +118,7 @@ function wire(
       logon,
       failCall,
       options.canReset ?? true,
+      opened.length === options.failCloseOf,
     );
     opened.push(conversation);
     return conversation;
@@ -118,13 +128,18 @@ function wire(
       ? open
       : Object.assign(open, { language: options.language });
   const writes = options.providerWrites;
+  let logons = 0;
   const context: IAdtSessionContext | undefined =
     writes === undefined
       ? undefined
       : {
           authorize: async () => {},
           logon: async (target) => {
-            target.logonParameters(writes);
+            const n = logons;
+            logons += 1;
+            target.logonParameters(
+              typeof writes === 'function' ? writes(n) : writes,
+            );
           },
           observe: () => {},
         };
@@ -135,14 +150,16 @@ function wire(
   };
 }
 
-/** A logger whose `debug` throws on the lines that start with `prefix`. */
-function throwingOn(prefix: string): ILogger {
+/** A logger whose `debug` throws on the lines that start with a prefix given. */
+function throwingOn(...prefixes: string[]): ILogger {
   return {
     info: () => {},
     warn: () => {},
     error: () => {},
     debug: (message) => {
-      if (message.startsWith(prefix)) throw new Error('logger broke');
+      if (prefixes.some((prefix) => message.startsWith(prefix))) {
+        throw new Error('logger broke');
+      }
     },
   };
 }
@@ -539,5 +556,95 @@ describe('RFC: a conversation opened for one call is closed even when the logger
 
     assert.strictEqual(opened.length, 3);
     assert.strictEqual(opened[2]?.closes, 1);
+  });
+});
+
+describe('RFC: a non-stateful request is compared with the conversation that carries it', () => {
+  // The provider writes FR at open() and DE at every later logon: the kept
+  // stateless conversation logs on in DE, the stateful one in FR.
+  const frThenDe = {
+    language: 'EN',
+    providerWrites: (logon: number) => ({ lang: logon === 0 ? 'FR' : 'DE' }),
+  };
+
+  it('does not open the kept conversation in another language for it', async () => {
+    const { opened, transport, context } = wire(frThenDe);
+    await transport.open(context);
+
+    await transport.send(put({ headers: { 'sap-language': 'FR' } }));
+    await transport.send(put({ headers: { 'sap-language': 'FR' } }));
+
+    assert.deepStrictEqual(
+      opened.slice(1).map((c) => [c.logon.lang, c.calls.length, c.closes]),
+      [
+        ['FR', 1, 1],
+        ['FR', 1, 1],
+      ],
+    );
+  });
+
+  it('does not carry it on a kept conversation logged on in another language', async () => {
+    const { opened, transport, context } = wire(frThenDe);
+    await transport.open(context);
+    await transport.send(put({}));
+    assert.strictEqual(opened[1]?.logon.lang, 'DE');
+
+    await transport.send(put({ headers: { 'sap-language': 'FR' } }));
+
+    assert.strictEqual(opened[1]?.calls.length, 1);
+    assert.strictEqual(opened[2]?.logon.lang, 'FR');
+    assert.strictEqual(opened[2]?.closes, 1);
+  });
+
+  it('carries it on the kept conversation when that one speaks its language', async () => {
+    const { opened, transport, context } = wire(frThenDe);
+    await transport.open(context);
+    await transport.send(put({}));
+
+    await transport.send(put({ headers: { 'sap-language': 'de' } }));
+
+    assert.strictEqual(opened.length, 2);
+    assert.strictEqual(opened[1]?.calls.length, 2);
+  });
+
+  it('a request naming no language takes the kept conversation as before', async () => {
+    const { opened, transport, context } = wire(frThenDe);
+    await transport.open(context);
+
+    await transport.send(put({}));
+    await transport.send(put({}));
+
+    assert.strictEqual(opened.length, 2);
+    assert.strictEqual(opened[1]?.calls.length, 2);
+    assert.strictEqual(opened[1]?.resets, 2);
+  });
+});
+
+describe('RFC: close() closes every conversation, whatever a close or the logger does', () => {
+  it('closes the stateful conversation when the stateless close rejects and the logger throws', async () => {
+    const { opened, transport } = wire({
+      language: 'EN',
+      failCloseOf: 1,
+      logger: throwingOn('RFC close error'),
+    });
+    await transport.open();
+    await transport.send(put({}));
+
+    await transport.close();
+
+    assert.strictEqual(opened[1]?.closes, 1);
+    assert.strictEqual(opened[0]?.closes, 1);
+  });
+
+  it('settles when the logger throws on the stateful close', async () => {
+    const { opened, transport } = wire({
+      language: 'EN',
+      logger: throwingOn('RFC conversation closed', 'RFC close error'),
+    });
+    await transport.open();
+
+    await transport.close();
+
+    assert.strictEqual(opened[0]?.closes, 1);
   });
 });

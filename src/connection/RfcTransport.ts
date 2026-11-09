@@ -44,12 +44,13 @@
  * header or a query parameter — and runs the request in it. This endpoint has
  * no ICF logon: it runs a request in the conversation's logon language and
  * ignores `sap-language` wherever it is written (measured on S/4HANA 2025,
- * 2026-11-09). So a request naming another language than the effective logon
- * one — the `lang` the stateful conversation logged on with: the provider's
- * where it wrote one, else the factory's — is carried on a conversation logged on in that language:
- * a non-stateful one on a conversation opened for that call and closed after
- * it, nothing kept; a stateful one is refused before anything is sent, because
- * a session cannot change its language.
+ * 2026-11-09). So a request's `sap-language` is compared with the logon
+ * language of the conversation that would carry it — the `lang` its logon
+ * carries: the provider's where it wrote one, else the factory's. Another
+ * language: a non-stateful request goes on a conversation logged on in it,
+ * opened for that call and closed after it, nothing kept; a stateful one is
+ * refused before anything is sent, because a session cannot change its
+ * language.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -150,6 +151,32 @@ function requestedLanguage(request: IAdtTransportRequest): string | undefined {
     }
   }
   return language;
+}
+
+/**
+ * `language` when a request names it and the conversation's logon language is
+ * another (or unknown); `undefined` when it names none or the same one.
+ */
+function otherLanguage(
+  language: string | undefined,
+  logonLanguage: string | undefined,
+): string | undefined {
+  return language !== undefined && !sameLanguage(language, logonLanguage)
+    ? language
+    : undefined;
+}
+
+/**
+ * The provider's logon parameters, with the request's language as `lang` over
+ * any `lang` the provider wrote — or as they are when the request names none.
+ */
+function inLanguage(
+  parameters: Readonly<Record<string, string>>,
+  language: string | undefined,
+): Readonly<Record<string, string>> {
+  return language === undefined
+    ? parameters
+    : { ...parameters, lang: language };
 }
 
 /** SAP language keys are read without case: `ru` and `RU` are one language. */
@@ -293,6 +320,8 @@ export class RfcTransport implements IOnPremTransport {
    * states one.
    */
   private logonLanguage: string | undefined;
+  /** The language the kept stateless conversation logged on in, the same way. */
+  private statelessLanguage: string | undefined;
   /**
    * Where each logon asks the provider what to open with. Kept from `open()`;
    * `null` when the wire is driven without a lifecycle, and then a conversation
@@ -408,7 +437,8 @@ export class RfcTransport implements IOnPremTransport {
     if (context) this.context = context;
     if (this.conversation?.alive) return;
     const generation = this.generation;
-    const { conversation, language } = await this.loggedOn();
+    const parameters = await this.logonParameters();
+    const conversation = await this.openedWith(parameters);
     // close() ran while this logged on: the session it would have handed out
     // belongs to a wire already given back, so it is closed, not kept.
     if (generation !== this.generation) {
@@ -416,7 +446,7 @@ export class RfcTransport implements IOnPremTransport {
       throw new Error('RFC transport was closed while it was being opened.');
     }
     this.conversation = conversation;
-    this.logonLanguage = language;
+    this.logonLanguage = this.languageOf(parameters);
     // Minted here, where the session begins. A conversation opened after an
     // earlier one closed is a DIFFERENT ABAP session, and the fingerprint has
     // to say so — a constant would report `unchanged` across a reconnect and
@@ -441,14 +471,16 @@ export class RfcTransport implements IOnPremTransport {
     this.conversation = null;
     this.conversationId = '';
     this.logonLanguage = undefined;
+    this.statelessLanguage = undefined;
     if (stateless) await this.closeQuietly(stateless);
     if (!conversation) return;
     try {
       await conversation.close();
-      this.logger?.debug('RFC conversation closed');
     } catch (e) {
-      this.logger?.debug(`RFC close error: ${message(e)}`);
+      this.logQuietly(() => `RFC close error: ${message(e)}`);
+      return;
     }
+    this.logQuietly(() => 'RFC conversation closed');
   }
 
   async send(request: IAdtTransportRequest): Promise<IAdtTransportResponse> {
@@ -462,42 +494,16 @@ export class RfcTransport implements IOnPremTransport {
     // that finds the wire closed since it began sends nothing.
     const generation = this.generation;
     const language = requestedLanguage(request);
-    const otherLanguage =
-      language !== undefined && !sameLanguage(language, this.logonLanguage)
-        ? language
-        : undefined;
     if (isStatefulRequest(request)) {
-      if (otherLanguage !== undefined) {
+      const other = otherLanguage(language, this.logonLanguage);
+      if (other !== undefined) {
         throw new Error(
-          `The request asks for ${LANGUAGE_FIELD} ${otherLanguage}, but the stateful RFC session is logged on in ${this.logonLanguage ?? 'a language neither the RFC conversation factory nor the provider states'}: a session cannot change its language, so the request was not sent.`,
+          `The request asks for ${LANGUAGE_FIELD} ${other}, but the stateful RFC session is logged on in ${this.logonLanguage ?? 'a language neither the RFC conversation factory nor the provider states'}: a session cannot change its language, so the request was not sent.`,
         );
       }
       return this.carry(request, this.conversation, generation);
     }
-    return otherLanguage === undefined
-      ? this.carryOnItsOwn(request, generation)
-      : this.carryInLanguage(request, otherLanguage, generation);
-  }
-
-  /**
-   * A non-stateful request in another language than the logon one: on a
-   * conversation logged on in that language, opened for this call and closed
-   * when it answers, whatever the answer. Nothing is kept for the next call.
-   */
-  private async carryInLanguage(
-    request: IAdtTransportRequest,
-    language: string,
-    generation: number,
-  ): Promise<IAdtTransportResponse> {
-    const own = await this.openOwn(generation, { lang: language });
-    try {
-      this.logger?.debug(
-        'RFC conversation opened for one call in another language',
-      );
-      return await this.carry(request, own, generation);
-    } finally {
-      await this.closeQuietly(own);
-    }
+    return this.carryOnItsOwn(request, language, generation);
   }
 
   /**
@@ -513,25 +519,48 @@ export class RfcTransport implements IOnPremTransport {
    * before the first one's reset would run in the first one's context — a
    * package the first one saved would refuse the second one's write (PAK/058).
    * So a concurrent call takes a conversation of its own instead of waiting.
+   *
+   * A request that names a `sap-language` runs on a conversation logged on in
+   * it: the kept one when that one's logon language is the same, else one of
+   * its own logged on with that `lang`, closed after the call.
    */
   private async carryOnItsOwn(
     request: IAdtTransportRequest,
+    language: string | undefined,
     generation: number,
   ): Promise<IAdtTransportResponse> {
     if (this.canReset !== false && !this.statelessBusy) {
-      return this.carryOnKept(request, generation);
+      return this.carryOnKept(request, language, generation);
     }
-    return this.carryOnThrowaway(request, generation);
+    return this.carryOnThrowaway(
+      request,
+      inLanguage(await this.logonParameters(), language),
+      generation,
+    );
   }
 
   private async carryOnKept(
     request: IAdtTransportRequest,
+    language: string | undefined,
     generation: number,
   ): Promise<IAdtTransportResponse> {
     this.statelessBusy = true;
     try {
-      if (!this.stateless?.alive) {
-        const opened = await this.openOwn(generation);
+      let kept = this.stateless;
+      if (!kept?.alive) {
+        // The provider is asked first: what it writes says which language the
+        // kept conversation would log on in, before any logon is made.
+        const parameters = await this.logonParameters();
+        if (
+          otherLanguage(language, this.languageOf(parameters)) !== undefined
+        ) {
+          return await this.carryOnThrowaway(
+            request,
+            inLanguage(parameters, language),
+            generation,
+          );
+        }
+        const opened = await this.openOwn(parameters, generation);
         // Checked again after the await: close() may have run since openOwn()
         // checked, and a conversation of a closed wire must not become the
         // kept one of the next.
@@ -553,11 +582,20 @@ export class RfcTransport implements IOnPremTransport {
         }
         this.canReset = true;
         this.stateless = opened;
+        this.statelessLanguage = this.languageOf(parameters);
+        kept = opened;
         this.logger?.debug(
           'RFC stateless conversation opened (reset per call)',
         );
+      } else if (
+        otherLanguage(language, this.statelessLanguage) !== undefined
+      ) {
+        return await this.carryOnThrowaway(
+          request,
+          inLanguage(await this.logonParameters(), language),
+          generation,
+        );
       }
-      const kept = this.stateless;
       try {
         return await this.carry(request, kept, generation);
       } finally {
@@ -565,10 +603,13 @@ export class RfcTransport implements IOnPremTransport {
           await kept.resetServerContext?.();
         } catch (e) {
           // A context that could not be reset must not serve the next call.
-          this.logger?.debug(
-            `RFC reset failed, dropping the conversation: ${message(e)}`,
+          this.logQuietly(
+            () => `RFC reset failed, dropping the conversation: ${message(e)}`,
           );
-          if (this.stateless === kept) this.stateless = null;
+          if (this.stateless === kept) {
+            this.stateless = null;
+            this.statelessLanguage = undefined;
+          }
           await this.closeQuietly(kept);
         }
       }
@@ -577,12 +618,16 @@ export class RfcTransport implements IOnPremTransport {
     }
   }
 
-  /** A conversation opened for this one call, closed when it answers. */
+  /**
+   * A conversation opened for this one call with `parameters`, closed when it
+   * answers, whatever the answer.
+   */
   private async carryOnThrowaway(
     request: IAdtTransportRequest,
+    parameters: Readonly<Record<string, string>>,
     generation: number,
   ): Promise<IAdtTransportResponse> {
-    const own = await this.openOwn(generation);
+    const own = await this.openOwn(parameters, generation);
     try {
       this.logger?.debug('RFC conversation opened for one stateless call');
       return await this.carry(request, own, generation);
@@ -592,15 +637,16 @@ export class RfcTransport implements IOnPremTransport {
   }
 
   /**
-   * A new conversation, logged on. The logon takes time (~0.5 s on E19); if the
-   * wire was closed meanwhile, the conversation is closed again and nothing is
-   * sent — not a PUT, not a DELETE — on a wire already given back.
+   * A new conversation, logged on with `parameters`. The logon takes time
+   * (~0.5 s on E19); if the wire was closed meanwhile, the conversation is
+   * closed again and nothing is sent — not a PUT, not a DELETE — on a wire
+   * already given back.
    */
   private async openOwn(
+    parameters: Readonly<Record<string, string>>,
     generation: number,
-    over: Readonly<Record<string, string>> = {},
   ): Promise<IRfcConversation> {
-    const { conversation: own } = await this.loggedOn(over);
+    const own = await this.openedWith(parameters);
     if (generation !== this.generation || !this.conversation?.alive) {
       await this.closeQuietly(own);
       throw new Error(
@@ -633,34 +679,59 @@ export class RfcTransport implements IOnPremTransport {
     };
   }
 
-  /**
-   * A new conversation, logged on: the provider is asked what to open with,
-   * every time, and a failed open is a refused logon whose cause is the SDK's
-   * own error, untouched — a provider reads its `key` and message. `over` is
-   * spread over what the provider wrote: the `lang` of a call in another
-   * language wins over a provider's. `language` is the one it logged on in:
-   * the `lang` it was opened with, else the factory's.
-   */
-  private async loggedOn(
-    over: Readonly<Record<string, string>> = {},
-  ): Promise<{ conversation: IRfcConversation; language: string | undefined }> {
+  /** What the provider writes for one logon: asked every time. */
+  private async logonParameters(): Promise<Record<string, string>> {
     const parameters: Record<string, string> = {};
     await this.context?.logon(this.logonTarget(parameters));
-    const logon = { ...parameters, ...over };
-    const conversation = this.connect(logon);
+    return parameters;
+  }
+
+  /**
+   * The language a logon with `parameters` logs on in: its `lang` — the
+   * provider's, or the one a call in another language put over it — else the
+   * factory's.
+   */
+  private languageOf(
+    parameters: Readonly<Record<string, string>>,
+  ): string | undefined {
+    return parameters.lang ?? this.connect.language;
+  }
+
+  /**
+   * A new conversation, logged on with `parameters`; a failed open is a
+   * refused logon whose cause is the SDK's own error, untouched — a provider
+   * reads its `key` and message.
+   */
+  private async openedWith(
+    parameters: Readonly<Record<string, string>>,
+  ): Promise<IRfcConversation> {
+    const conversation = this.connect(parameters);
     try {
       await conversation.open();
     } catch (e) {
       throw new WireLogonError(e);
     }
-    return { conversation, language: logon.lang ?? this.connect.language };
+    return conversation;
+  }
+
+  /**
+   * A debug line that cannot throw: the line is built and written inside the
+   * guard, so neither a value that will not stringify nor a logger that throws
+   * stops what logs it — a close above all.
+   */
+  private logQuietly(line: () => string): void {
+    try {
+      this.logger?.debug(line());
+    } catch {
+      // A broken logger must not stop a close; there is nowhere left to say so.
+    }
   }
 
   private async closeQuietly(conversation: IRfcConversation): Promise<void> {
     try {
       await conversation.close();
     } catch (e) {
-      this.logger?.debug(`RFC close error: ${message(e)}`);
+      this.logQuietly(() => `RFC close error: ${message(e)}`);
     }
   }
 

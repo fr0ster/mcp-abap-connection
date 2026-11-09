@@ -951,29 +951,34 @@ A request runs in the language its `sap-language` names — a header, or the
 `sap-language` query parameter in `params` or in the URL — on both wires. Over
 HTTP the ICF layer reads it. `SADT_REST_RFC_ENDPOINT` runs a request in its
 conversation's logon language and ignores `sap-language`, so `RfcTransport`
-compares the two (SAP language keys, without case). What it compares with is
-the effective logon language: the `lang` the stateful conversation logged on
-with — the provider's, where it writes one among its logon parameters, else
-the one the factory states (`rfcConversationFrom` states the config's
-`language`):
+compares the two (SAP language keys, without case) — the request's language
+with the logon language of the conversation that would carry it. A
+conversation's logon language is the `lang` its logon carries: the provider's,
+where it writes one among its logon parameters at that logon, else the one the
+factory states (`rfcConversationFrom` states the config's `language`):
 
-- **The same language, or none named:** the request goes as any other.
-- **Another language, a non-stateful request:** it goes on a conversation
-  logged on in that language (`lang` as the request names it, over any `lang`
-  the provider writes), opened for that
-  one call and closed when it answers, whatever the answer. Nothing is kept:
-  the next such call logs on again.
-- **Another language, a stateful request** (a `LOCK`, an `UNLOCK`, anything in
-  the lock's session): refused before anything is sent, with an error naming
+- **None named:** the request goes as any other.
+- **A stateful request** is compared with the stateful conversation's logon
+  language.
+- **A non-stateful request** is compared with the kept stateless
+  conversation's logon language — once it is open, the language it logged on
+  in; before, the language the provider's logon parameters for it name. The
+  same language: it goes on the kept conversation, as any other. Another: it
+  goes on a conversation logged on in the request's language (`lang` as the
+  request names it, over any `lang` the provider writes), opened for that one
+  call and closed when it answers, whatever the answer. Nothing is kept: the
+  next such call logs on again.
+- **A stateful request in another language** (a `LOCK`, an `UNLOCK`, anything
+  in the lock's session): refused before anything is sent, with an error naming
   both languages — a session cannot change its language. Connect with the
   language the locked work needs.
 - **Two different languages named on one request:** refused before anything is
   sent.
 
 A factory of your own that does not state `language`, with a provider that
-writes no `lang`, leaves the wire without a logon language to compare: every non-stateful request naming a
-`sap-language` then takes a conversation of its own in that language, and every
-stateful one naming it is refused.
+writes no `lang`, leaves the wire without a logon language to compare: every
+non-stateful request naming a `sap-language` then takes a conversation of its
+own in that language, and every stateful one naming it is refused.
 
 #### `CSRF_CONFIG` and `CSRF_ERROR_MESSAGES`
 
