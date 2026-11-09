@@ -13,7 +13,10 @@
  */
 
 import type { ISapRfcConfig } from '@mcp-abap-adt/interfaces-auth-sap';
-import type { IRfcConversation } from './RfcTransport.js';
+import type {
+  IRfcConversation,
+  RfcConversationFactory,
+} from './RfcTransport.js';
 
 /**
  * Where the native client dials: one application server. What it logs on with
@@ -81,6 +84,9 @@ export function rfcParamsFrom(config: ISapRfcConfig): RfcAddress {
  * for this open go in, spread over the address the config states; nothing
  * else is added.
  *
+ * It states its logon language (`language`, the config's), so `RfcTransport`
+ * can tell a request that names another `sap-language` apart.
+ *
  * The SDK is loaded when a conversation is opened, not when this is called, so
  * a consumer can build the transport on a machine that has no SDK and find out
  * at `connect()` rather than at construction — with a message that says what to
@@ -88,10 +94,10 @@ export function rfcParamsFrom(config: ISapRfcConfig): RfcAddress {
  */
 export function rfcConversationFrom(
   config: ISapRfcConfig,
-): (logon: Readonly<Record<string, string>>) => IRfcConversation {
+): RfcConversationFactory & { readonly language: string } {
   const params = rfcParamsFrom(config);
 
-  return (logon) => {
+  const open = (logon: Readonly<Record<string, string>>): IRfcConversation => {
     let Client: new (
       params: RfcAddress & Readonly<Record<string, string>>,
     ) => IRfcConversation;
@@ -108,4 +114,8 @@ export function rfcConversationFrom(
     }
     return new Client({ ...params, ...logon });
   };
+  // The language every conversation it opens logs on in, unless the logon
+  // names another: what `RfcTransport` tells a request's `sap-language` apart
+  // from.
+  return Object.assign(open, { language: params.lang });
 }

@@ -39,6 +39,16 @@
  * Eclipse's JCo trace carries no session header either. A transport that
  * also captured cookies would be doing that work twice, and the two copies
  * would disagree the first time one of them was cleared.
+ *
+ * **A request's language.** Over HTTP the ICF layer reads `sap-language` — a
+ * header or a query parameter — and runs the request in it. This endpoint has
+ * no ICF logon: it runs a request in the conversation's logon language and
+ * ignores `sap-language` wherever it is written (measured on S/4HANA 2025,
+ * 2026-11-09). So a request naming another language than the one the
+ * factory logs on in is carried on a conversation logged on in that language:
+ * a non-stateful one on a conversation opened for that call and closed after
+ * it, nothing kept; a stateful one is refused before anything is sent, because
+ * a session cannot change its language.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -81,6 +91,68 @@ export interface IRfcConversation {
    * where it does not, each such call opens a conversation of its own.
    */
   resetServerContext?(): Promise<void>;
+}
+
+/**
+ * What `RfcTransport` opens its conversations with: the logon parameters the
+ * provider wrote go in, a conversation comes out. `language` is the logon
+ * language that conversation opens in, where the factory states it —
+ * `rfcConversationFrom` does, from the config. Where it is not stated, the
+ * wire cannot know the logon language, and every request that names a
+ * `sap-language` is treated as naming another one.
+ */
+export type RfcConversationFactory = ((
+  logon: Readonly<Record<string, string>>,
+) => IRfcConversation) & { readonly language?: string };
+
+/** The header and query parameter that name the language a request runs in. */
+const LANGUAGE_FIELD = 'sap-language';
+
+/**
+ * The language a request names in `sap-language` — a header, a query
+ * parameter in `params`, or one written into the URL — or `undefined` when it
+ * names none. Names are read without case, as HTTP reads them; an empty value
+ * names no language. A request that names two different languages is refused:
+ * which of them a system would take is not something this wire decides.
+ */
+function requestedLanguage(request: IAdtTransportRequest): string | undefined {
+  const named: string[] = [];
+  for (const [name, value] of Object.entries(request.headers ?? {})) {
+    if (name.toLowerCase() === LANGUAGE_FIELD) named.push(String(value));
+  }
+  for (const [name, value] of Object.entries(request.params ?? {})) {
+    if (
+      name.toLowerCase() === LANGUAGE_FIELD &&
+      value !== undefined &&
+      value !== null
+    ) {
+      named.push(String(value));
+    }
+  }
+  const queryStart = request.url.indexOf('?');
+  if (queryStart >= 0) {
+    const query = new URLSearchParams(request.url.slice(queryStart + 1));
+    for (const [name, value] of query) {
+      if (name.toLowerCase() === LANGUAGE_FIELD) named.push(value);
+    }
+  }
+  let language: string | undefined;
+  for (const value of named) {
+    if (value === '') continue;
+    if (language === undefined) {
+      language = value;
+    } else if (!sameLanguage(language, value)) {
+      throw new Error(
+        `The request names two languages in ${LANGUAGE_FIELD}, ${language} and ${value}; nothing was sent.`,
+      );
+    }
+  }
+  return language;
+}
+
+/** SAP language keys are read without case: `ru` and `RU` are one language. */
+function sameLanguage(a: string, b: string | undefined): boolean {
+  return b !== undefined && a.toUpperCase() === b.toUpperCase();
 }
 
 /**
@@ -303,9 +375,7 @@ export class RfcTransport implements IOnPremTransport {
    * machine without it.
    */
   constructor(
-    private readonly connect: (
-      logon: Readonly<Record<string, string>>,
-    ) => IRfcConversation,
+    private readonly connect: RfcConversationFactory,
     private readonly logger: ILogger | null = null,
     private readonly options: IRfcTransportOptions = {},
   ) {}
@@ -380,9 +450,43 @@ export class RfcTransport implements IOnPremTransport {
     // Taken once, here: every await below compares against it, and a call
     // that finds the wire closed since it began sends nothing.
     const generation = this.generation;
-    return isStatefulRequest(request)
-      ? this.carry(request, this.conversation, generation)
-      : this.carryOnItsOwn(request, generation);
+    const language = requestedLanguage(request);
+    const otherLanguage =
+      language !== undefined && !sameLanguage(language, this.connect.language)
+        ? language
+        : undefined;
+    if (isStatefulRequest(request)) {
+      if (otherLanguage !== undefined) {
+        throw new Error(
+          `The request asks for ${LANGUAGE_FIELD} ${otherLanguage}, but the stateful RFC session is logged on in ${this.connect.language ?? 'a language the RFC conversation factory does not state'}: a session cannot change its language, so the request was not sent.`,
+        );
+      }
+      return this.carry(request, this.conversation, generation);
+    }
+    return otherLanguage === undefined
+      ? this.carryOnItsOwn(request, generation)
+      : this.carryInLanguage(request, otherLanguage, generation);
+  }
+
+  /**
+   * A non-stateful request in another language than the logon one: on a
+   * conversation logged on in that language, opened for this call and closed
+   * when it answers, whatever the answer. Nothing is kept for the next call.
+   */
+  private async carryInLanguage(
+    request: IAdtTransportRequest,
+    language: string,
+    generation: number,
+  ): Promise<IAdtTransportResponse> {
+    const own = await this.openOwn(generation, { lang: language });
+    this.logger?.debug(
+      'RFC conversation opened for one call in another language',
+    );
+    try {
+      return await this.carry(request, own, generation);
+    } finally {
+      await this.closeQuietly(own);
+    }
   }
 
   /**
@@ -481,8 +585,11 @@ export class RfcTransport implements IOnPremTransport {
    * wire was closed meanwhile, the conversation is closed again and nothing is
    * sent — not a PUT, not a DELETE — on a wire already given back.
    */
-  private async openOwn(generation: number): Promise<IRfcConversation> {
-    const own = await this.loggedOn();
+  private async openOwn(
+    generation: number,
+    over: Readonly<Record<string, string>> = {},
+  ): Promise<IRfcConversation> {
+    const own = await this.loggedOn(over);
     if (generation !== this.generation || !this.conversation?.alive) {
       await this.closeQuietly(own);
       throw new Error(
@@ -518,12 +625,16 @@ export class RfcTransport implements IOnPremTransport {
   /**
    * A new conversation, logged on: the provider is asked what to open with,
    * every time, and a failed open is a refused logon whose cause is the SDK's
-   * own error, untouched — a provider reads its `key` and message.
+   * own error, untouched — a provider reads its `key` and message. `over` is
+   * spread over what the provider wrote: the `lang` of a call in another
+   * language.
    */
-  private async loggedOn(): Promise<IRfcConversation> {
+  private async loggedOn(
+    over: Readonly<Record<string, string>> = {},
+  ): Promise<IRfcConversation> {
     const parameters: Record<string, string> = {};
     await this.context?.logon(this.logonTarget(parameters));
-    const conversation = this.connect(parameters);
+    const conversation = this.connect({ ...parameters, ...over });
     try {
       await conversation.open();
     } catch (e) {
