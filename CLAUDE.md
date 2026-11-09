@@ -165,7 +165,7 @@ fact belongs on the transport instead.
 `mshost` + `msserv` / `sysid` (or both) + `group` — and no URL. `rfcConversationFrom(config)`
 hands the SDK that address as stated: nothing derived from a URL, no `SAP_SYSNR` from the
 environment, no defaults, no trimming. It reads no user or password: the provider's logon
-parameters are spread over the address at each open, and win a shared key. The SDK is loaded
+parameters are spread over the address at each open, and win a shared key. A request's `sap-language` (a header, or the query parameter in `params` or the URL) is compared, without case, with the logon language of the conversation that would carry it — the `lang` its logon carried: the provider's where it writes one, else the factory's `language` (`RfcConversationFactory`; `rfcConversationFrom` states the config's). Another language goes, non-stateful, on a conversation logged on with that `lang` (over the provider's) for the one call and closed in a `finally`, and is refused, stateful, before anything is sent — `SADT_REST_RFC_ENDPOINT` has no ICF logon and ignores `sap-language`. The SDK is loaded
 lazily, so a machine without it fails at `connect()` rather than at construction. An RFC
 connection's `getBaseUrl()` answers `undefined`; an HTTP transport holds its own `baseUrl`
 (required), and the session context carries none.
