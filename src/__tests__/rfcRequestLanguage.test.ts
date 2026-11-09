@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ISapRfcApplicationServer } from '@mcp-abap-adt/interfaces-auth-sap';
 import type {
+  IAdtSessionContext,
   IAdtTransportRequest,
   IAdtTransportResponse,
 } from '../connection/IAdtTransport.js';
@@ -26,6 +27,7 @@ import {
   RfcTransport,
 } from '../connection/RfcTransport.js';
 import { rfcConversationFrom } from '../connection/rfcConversation.js';
+import type { ILogger } from '../logger.js';
 import { withModuleAsync } from './helpers/moduleCache.js';
 
 const ok = {
@@ -47,7 +49,14 @@ class FakeConversation implements IRfcConversation {
   constructor(
     readonly logon: Readonly<Record<string, string>>,
     private readonly failCall: boolean,
-  ) {}
+    canReset = true,
+  ) {
+    if (canReset) {
+      this.resetServerContext = async () => {
+        this.resets += 1;
+      };
+    }
+  }
 
   async open(): Promise<void> {
     this.opens += 1;
@@ -68,9 +77,8 @@ class FakeConversation implements IRfcConversation {
     return ok;
   }
 
-  async resetServerContext(): Promise<void> {
-    this.resets += 1;
-  }
+  /** Absent on a client that cannot reset: every non-stateful call then opens its own. */
+  readonly resetServerContext?: () => Promise<void>;
 }
 
 /**
@@ -78,16 +86,30 @@ class FakeConversation implements IRfcConversation {
  * it, and records every conversation it opens. The first is the stateful one
  * `open()` makes.
  */
-function wire(options: { language?: string; failCallsAfter?: number } = {}): {
+function wire(
+  options: {
+    language?: string;
+    failCallsAfter?: number;
+    /** What the provider writes at every logon, as `context.logon()` would. */
+    providerWrites?: Readonly<Record<string, string>>;
+    logger?: ILogger;
+    canReset?: boolean;
+  } = {},
+): {
   opened: FakeConversation[];
   transport: RfcTransport;
+  context: IAdtSessionContext | undefined;
 } {
   const opened: FakeConversation[] = [];
   const open = (logon: Readonly<Record<string, string>>) => {
     const failCall =
       options.failCallsAfter !== undefined &&
       opened.length >= options.failCallsAfter;
-    const conversation = new FakeConversation(logon, failCall);
+    const conversation = new FakeConversation(
+      logon,
+      failCall,
+      options.canReset ?? true,
+    );
     opened.push(conversation);
     return conversation;
   };
@@ -95,7 +117,34 @@ function wire(options: { language?: string; failCallsAfter?: number } = {}): {
     options.language === undefined
       ? open
       : Object.assign(open, { language: options.language });
-  return { opened, transport: new RfcTransport(factory, null) };
+  const writes = options.providerWrites;
+  const context: IAdtSessionContext | undefined =
+    writes === undefined
+      ? undefined
+      : {
+          authorize: async () => {},
+          logon: async (target) => {
+            target.logonParameters(writes);
+          },
+          observe: () => {},
+        };
+  return {
+    opened,
+    context,
+    transport: new RfcTransport(factory, options.logger ?? null),
+  };
+}
+
+/** A logger whose `debug` throws on the lines that start with `prefix`. */
+function throwingOn(prefix: string): ILogger {
+  return {
+    info: () => {},
+    warn: () => {},
+    error: () => {},
+    debug: (message) => {
+      if (message.startsWith(prefix)) throw new Error('logger broke');
+    },
+  };
 }
 
 /** The header fields a conversation's one call carried. */
@@ -392,5 +441,103 @@ describe('RFC: the logon language from the config', () => {
       constructed.map((params) => params.lang),
       ['EN', 'EN', 'RU'],
     );
+  });
+});
+
+describe('RFC: the effective logon language, a provider’s lang included', () => {
+  // The provider's logon parameters are spread over the config's address, and
+  // win a shared key: a provider that writes `lang` logs every conversation on
+  // in it, whatever the factory states.
+  const french = { language: 'EN', providerWrites: { lang: 'FR' } };
+
+  it('refuses a stateful request in the factory’s language when the session logged on in the provider’s', async () => {
+    const { opened, transport, context } = wire(french);
+    await transport.open(context);
+    assert.strictEqual(opened[0]?.logon.lang, 'FR');
+
+    const message = await refusal(
+      transport.send(
+        put({ stateful: true, headers: { 'sap-language': 'EN' } }),
+      ),
+    );
+
+    assert.match(message, /sap-language EN/);
+    assert.match(message, /logged on in FR/);
+    assert.strictEqual(opened[0]?.calls.length, 0);
+  });
+
+  it('carries a stateful request in the provider’s language on the stateful conversation', async () => {
+    const { opened, transport, context } = wire(french);
+    await transport.open(context);
+
+    await transport.send(
+      put({ stateful: true, headers: { 'sap-language': 'fr' } }),
+    );
+
+    assert.strictEqual(opened.length, 1);
+    assert.strictEqual(opened[0]?.calls.length, 1);
+  });
+
+  it('carries a non-stateful request in the factory’s language on a conversation logged on in it', async () => {
+    const { opened, transport, context } = wire(french);
+    await transport.open(context);
+
+    await transport.send(put({ headers: { 'sap-language': 'EN' } }));
+
+    assert.strictEqual(opened[1]?.logon.lang, 'EN');
+    assert.strictEqual(opened[1]?.closes, 1);
+  });
+
+  it('carries a non-stateful request in the provider’s language on the kept conversation', async () => {
+    const { opened, transport, context } = wire(french);
+    await transport.open(context);
+
+    await transport.send(put({ headers: { 'sap-language': 'FR' } }));
+
+    assert.strictEqual(opened.length, 2);
+    assert.strictEqual(opened[1]?.logon.lang, 'FR');
+    assert.strictEqual(opened[1]?.resets, 1);
+    assert.strictEqual(opened[1]?.closes, 0);
+  });
+
+  it('logs the conversation for another language on in the requested lang, over the provider’s', async () => {
+    const { opened, transport, context } = wire(french);
+    await transport.open(context);
+
+    await transport.send(put({ headers: { 'sap-language': 'RU' } }));
+
+    assert.strictEqual(opened[1]?.logon.lang, 'RU');
+    assert.strictEqual(opened[1]?.closes, 1);
+  });
+});
+
+describe('RFC: a conversation opened for one call is closed even when the logger throws', () => {
+  it('in another language', async () => {
+    const { opened, transport } = wire({
+      language: 'EN',
+      logger: throwingOn('RFC conversation opened for one'),
+    });
+    await transport.open();
+
+    await refusal(transport.send(put({ headers: { 'sap-language': 'RU' } })));
+
+    assert.strictEqual(opened[1]?.logon.lang, 'RU');
+    assert.strictEqual(opened[1]?.closes, 1);
+  });
+
+  it('on a client that cannot reset', async () => {
+    const { opened, transport } = wire({
+      language: 'EN',
+      canReset: false,
+      logger: throwingOn('RFC conversation opened for one'),
+    });
+    await transport.open();
+    // the first call finds the client cannot reset; the second opens its own
+    await transport.send(put({}));
+
+    await refusal(transport.send(put({})));
+
+    assert.strictEqual(opened.length, 3);
+    assert.strictEqual(opened[2]?.closes, 1);
   });
 });

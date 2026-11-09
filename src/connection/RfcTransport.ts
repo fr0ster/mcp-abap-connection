@@ -44,8 +44,9 @@
  * header or a query parameter — and runs the request in it. This endpoint has
  * no ICF logon: it runs a request in the conversation's logon language and
  * ignores `sap-language` wherever it is written (measured on S/4HANA 2025,
- * 2026-11-09). So a request naming another language than the one the
- * factory logs on in is carried on a conversation logged on in that language:
+ * 2026-11-09). So a request naming another language than the effective logon
+ * one — the `lang` the stateful conversation logged on with: the provider's
+ * where it wrote one, else the factory's — is carried on a conversation logged on in that language:
  * a non-stateful one on a conversation opened for that call and closed after
  * it, nothing kept; a stateful one is refused before anything is sent, because
  * a session cannot change its language.
@@ -96,10 +97,11 @@ export interface IRfcConversation {
 /**
  * What `RfcTransport` opens its conversations with: the logon parameters the
  * provider wrote go in, a conversation comes out. `language` is the logon
- * language that conversation opens in, where the factory states it —
- * `rfcConversationFrom` does, from the config. Where it is not stated, the
- * wire cannot know the logon language, and every request that names a
- * `sap-language` is treated as naming another one.
+ * language a conversation opens in when its logon names no `lang`, where the
+ * factory states it — `rfcConversationFrom` does, from the config. The
+ * effective logon language is the `lang` the logon carried, else this. Where
+ * neither states one, the wire cannot know the logon language, and every
+ * request that names a `sap-language` is treated as naming another one.
  */
 export type RfcConversationFactory = ((
   logon: Readonly<Record<string, string>>,
@@ -285,6 +287,13 @@ export class RfcTransport implements IOnPremTransport {
   /** Names the conversation, and so the ABAP session it carries. */
   private conversationId = '';
   /**
+   * The language the stateful conversation logged on in: the `lang` its logon
+   * carried — the provider's where it wrote one, else the factory's. What a
+   * request's `sap-language` is compared with. `undefined` when neither
+   * states one.
+   */
+  private logonLanguage: string | undefined;
+  /**
    * Where each logon asks the provider what to open with. Kept from `open()`;
    * `null` when the wire is driven without a lifecycle, and then a conversation
    * opens with the address alone.
@@ -399,7 +408,7 @@ export class RfcTransport implements IOnPremTransport {
     if (context) this.context = context;
     if (this.conversation?.alive) return;
     const generation = this.generation;
-    const conversation = await this.loggedOn();
+    const { conversation, language } = await this.loggedOn();
     // close() ran while this logged on: the session it would have handed out
     // belongs to a wire already given back, so it is closed, not kept.
     if (generation !== this.generation) {
@@ -407,6 +416,7 @@ export class RfcTransport implements IOnPremTransport {
       throw new Error('RFC transport was closed while it was being opened.');
     }
     this.conversation = conversation;
+    this.logonLanguage = language;
     // Minted here, where the session begins. A conversation opened after an
     // earlier one closed is a DIFFERENT ABAP session, and the fingerprint has
     // to say so — a constant would report `unchanged` across a reconnect and
@@ -430,6 +440,7 @@ export class RfcTransport implements IOnPremTransport {
     this.stateless = null;
     this.conversation = null;
     this.conversationId = '';
+    this.logonLanguage = undefined;
     if (stateless) await this.closeQuietly(stateless);
     if (!conversation) return;
     try {
@@ -452,13 +463,13 @@ export class RfcTransport implements IOnPremTransport {
     const generation = this.generation;
     const language = requestedLanguage(request);
     const otherLanguage =
-      language !== undefined && !sameLanguage(language, this.connect.language)
+      language !== undefined && !sameLanguage(language, this.logonLanguage)
         ? language
         : undefined;
     if (isStatefulRequest(request)) {
       if (otherLanguage !== undefined) {
         throw new Error(
-          `The request asks for ${LANGUAGE_FIELD} ${otherLanguage}, but the stateful RFC session is logged on in ${this.connect.language ?? 'a language the RFC conversation factory does not state'}: a session cannot change its language, so the request was not sent.`,
+          `The request asks for ${LANGUAGE_FIELD} ${otherLanguage}, but the stateful RFC session is logged on in ${this.logonLanguage ?? 'a language neither the RFC conversation factory nor the provider states'}: a session cannot change its language, so the request was not sent.`,
         );
       }
       return this.carry(request, this.conversation, generation);
@@ -479,10 +490,10 @@ export class RfcTransport implements IOnPremTransport {
     generation: number,
   ): Promise<IAdtTransportResponse> {
     const own = await this.openOwn(generation, { lang: language });
-    this.logger?.debug(
-      'RFC conversation opened for one call in another language',
-    );
     try {
+      this.logger?.debug(
+        'RFC conversation opened for one call in another language',
+      );
       return await this.carry(request, own, generation);
     } finally {
       await this.closeQuietly(own);
@@ -572,8 +583,8 @@ export class RfcTransport implements IOnPremTransport {
     generation: number,
   ): Promise<IAdtTransportResponse> {
     const own = await this.openOwn(generation);
-    this.logger?.debug('RFC conversation opened for one stateless call');
     try {
+      this.logger?.debug('RFC conversation opened for one stateless call');
       return await this.carry(request, own, generation);
     } finally {
       await this.closeQuietly(own);
@@ -589,7 +600,7 @@ export class RfcTransport implements IOnPremTransport {
     generation: number,
     over: Readonly<Record<string, string>> = {},
   ): Promise<IRfcConversation> {
-    const own = await this.loggedOn(over);
+    const { conversation: own } = await this.loggedOn(over);
     if (generation !== this.generation || !this.conversation?.alive) {
       await this.closeQuietly(own);
       throw new Error(
@@ -627,20 +638,22 @@ export class RfcTransport implements IOnPremTransport {
    * every time, and a failed open is a refused logon whose cause is the SDK's
    * own error, untouched — a provider reads its `key` and message. `over` is
    * spread over what the provider wrote: the `lang` of a call in another
-   * language.
+   * language wins over a provider's. `language` is the one it logged on in:
+   * the `lang` it was opened with, else the factory's.
    */
   private async loggedOn(
     over: Readonly<Record<string, string>> = {},
-  ): Promise<IRfcConversation> {
+  ): Promise<{ conversation: IRfcConversation; language: string | undefined }> {
     const parameters: Record<string, string> = {};
     await this.context?.logon(this.logonTarget(parameters));
-    const conversation = this.connect({ ...parameters, ...over });
+    const logon = { ...parameters, ...over };
+    const conversation = this.connect(logon);
     try {
       await conversation.open();
     } catch (e) {
       throw new WireLogonError(e);
     }
-    return conversation;
+    return { conversation, language: logon.lang ?? this.connect.language };
   }
 
   private async closeQuietly(conversation: IRfcConversation): Promise<void> {
