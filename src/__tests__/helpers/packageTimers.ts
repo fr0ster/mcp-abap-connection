@@ -15,6 +15,22 @@
  *
  * The counter is itself tested, with a deliberate package-side delay through
  * each API (`packageTimers.test.ts`).
+ *
+ * What it cannot see — each counts as 0:
+ *
+ * - a timer the package arms THROUGH a dependency: the caller is the
+ *   dependency's file under `node_modules`, so the call is the dependency's;
+ * - a timer function captured before `watchTimers()` runs — a module-level
+ *   `const { setTimeout } = require('node:timers')`, or a reference kept
+ *   anywhere else: the mock replaces the property, not the captured function;
+ * - a call whose stack does not show the package's frame: a stack truncated
+ *   (`Error.stackTraceLimit`) before it, or a package file compiled to a path
+ *   outside a `src/` directory, such as `dist/`.
+ *
+ * So it is a guard against the obvious delay put back, not a proof. The main
+ * proof that the CSRF fetch happens once is in the tests that use it: the
+ * count of requests the wire sent (one, or two with the 404/501 fallback) and
+ * the error arriving at once, on a real local socket.
  */
 import { mock } from 'node:test';
 
