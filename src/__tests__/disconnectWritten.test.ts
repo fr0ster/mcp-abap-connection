@@ -919,14 +919,8 @@ describe('disconnect() resolves once the logoff is written', () => {
   });
 
   describe('the logoff is sent if and only if the wire holds a SAP_SESSIONID it received', () => {
-    // The establishment retries a refused GET, with its own delay between
-    // attempts: these take a few seconds of the wire's retries.
-    const RETRIES = 30_000;
-
     for (const status of [404, 403]) {
-      it(`connect() answered ${status} after logon, with SAP_SESSIONID: the logoff is sent, and connect() rejects once it is written`, {
-        timeout: RETRIES,
-      }, async () => {
+      it(`connect() answered ${status} after logon, with SAP_SESSIONID: the logoff is sent, and connect() rejects once it is written`, async () => {
         server = await standIn({ discoveryStatus: status });
         const conn = onPrem(configFor(server.baseUrl), null);
 
@@ -939,9 +933,7 @@ describe('disconnect() resolves once the logoff is written', () => {
       });
     }
 
-    it('core discovery 404 with SAP_SESSIONID, fallback 200: connect() resolves, no logoff, the fallback ran in the same session', {
-      timeout: RETRIES,
-    }, async () => {
+    it('core discovery 404 with SAP_SESSIONID, fallback 200: connect() resolves, no logoff, the fallback ran in the same session', async () => {
       server = await standIn({ discoveryStatus: 404, fallbackStatus: 200 });
       const conn = onPrem(configFor(server.baseUrl), null);
 
@@ -958,9 +950,7 @@ describe('disconnect() resolves once the logoff is written', () => {
       server.answerLogoff();
     });
 
-    it('core discovery 404 and fallback 404, both with SAP_SESSIONID: one logoff, then connect() rejects', {
-      timeout: RETRIES,
-    }, async () => {
+    it('core discovery 404 and fallback 404, both with SAP_SESSIONID: one logoff, then connect() rejects', async () => {
       server = await standIn({ discoveryStatus: 404, fallbackStatus: 404 });
       const conn = onPrem(configFor(server.baseUrl), null);
 

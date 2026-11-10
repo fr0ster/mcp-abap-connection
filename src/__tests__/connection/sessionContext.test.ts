@@ -16,6 +16,7 @@ import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { AuthRefusedError } from '../../connection/authErrors.js';
 import { CloudHttpTransport } from '../../connection/CloudHttpTransport.js';
 import { HttpTransport } from '../../connection/HttpTransport.js';
+import { refusalOf } from '../../connection/IAdtTransport.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { assertMatchObject, instanceOf } from '../helpers/assertions.js';
 import {
@@ -360,19 +361,19 @@ describe('a 401 while establishing', () => {
     assert.strictEqual(conn.isConnected(), false);
   });
 
-  it('leaves a 500 to the wire’s own retry, and never asks rejected', {
-    timeout: 10000,
-  }, async () => {
+  it('a 500 is its own error: connect() rejects with it, unretried, and never asks rejected', async () => {
     const { conn, rejections } = onPremWith();
     stub.discovery.push(500);
 
-    await conn.connect();
+    const error = await conn.connect().catch((e: unknown) => e);
 
+    assert.strictEqual(refusalOf(error)?.status, 500);
     assert.strictEqual(rejections().length, 0);
     assert.deepStrictEqual(
       discoveryRequests().map((r) => r.status),
-      [500, 200],
+      [500],
     );
+    assert.strictEqual(conn.isConnected(), false);
   });
 
   it('lets the provider’s refusal to authorize through untouched, unretried', {
@@ -391,7 +392,7 @@ describe('a 401 while establishing', () => {
 });
 
 describe('the wire’s establishment', () => {
-  it('lets the provider’s refusal to authorize through at once, whatever isFatal says', async () => {
+  it('lets the provider’s refusal to authorize through at once', async () => {
     const transport = new HttpTransport(undefined, null, {
       baseUrl: stub.baseUrl,
     });
@@ -406,9 +407,6 @@ describe('the wire’s establishment', () => {
         },
         logon: async () => {},
         observe: () => {},
-        retries: 3,
-        retryDelayMs: 0,
-        isFatal: () => false,
       })
       .catch((e: unknown) => e);
 

@@ -406,13 +406,11 @@ describe('the upfront token fetch before a mutation', () => {
     assertMatchObject(rejections()[0], { at: 'logon', status: 401 });
   });
 
-  it('a fetch that fails any other way is swallowed, and the mutation goes on as today', {
-    timeout: 20000,
-  }, async () => {
+  it('a fetch that fails any other way is swallowed, and the mutation goes on as today', async () => {
     const { conn, transport, rejections } = await connected();
     transport.adoptCsrfToken(null);
-    // The upfront fetch's first try and its three retries.
-    stub.discovery.push(500, 500, 500, 500);
+    // The upfront fetch: one request, never retried.
+    stub.discovery.push(500);
 
     const response = await post(conn);
 
@@ -1014,7 +1012,7 @@ describe("a provider's Oops that arrives after the session went away", () => {
 describe('a subclass that fetches a token itself', () => {
   class Fetching extends AdtOnPremConnector {
     fetchWith(generation: number): Promise<string> {
-      return this.fetchCsrfToken('/sap/bc/adt/work', 0, 0, generation);
+      return this.fetchCsrfToken('/sap/bc/adt/work', generation);
     }
     current(): number {
       return this.sessionGeneration;

@@ -3,20 +3,12 @@
  *
  * Centralized constants for CSRF token fetching to ensure consistency
  * across different connection implementations.
+ *
+ * The fetch is one request per endpoint, never repeated and never delayed: a
+ * failed request is its own error. The fallback endpoint is asked only after
+ * the primary answered 404 (or 501) — a system without it — and is not a retry.
  */
 export const CSRF_CONFIG = {
-  /**
-   * Number of retry attempts for CSRF token fetch
-   * Default: 3 attempts (total of 4 requests: initial + 3 retries)
-   */
-  RETRY_COUNT: 3,
-
-  /**
-   * Delay between retry attempts (milliseconds)
-   * Default: 1000ms (1 second)
-   */
-  RETRY_DELAY: 1000,
-
   /**
    * CSRF token endpoint path (primary)
    * Standard SAP ADT core discovery endpoint (newer systems, returns smaller response)

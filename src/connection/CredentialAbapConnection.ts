@@ -116,10 +116,7 @@ export abstract class CredentialAbapConnection<
       // does not need one: the wire authorizes PER ATTEMPT, so a one-shot token
       // is offered on the establishing call and withheld afterwards by the
       // credential itself, with nobody deciding anything.
-      await this.transport.establish({
-        ...this.sessionContext(),
-        isFatal: (error) => this.endsTheExchange(error),
-      });
+      await this.transport.establish(this.sessionContext());
       this.logger?.debug('Connected', {
         credential: this.credential.kind,
         hasCsrfToken: !!this.getCsrfToken(),
