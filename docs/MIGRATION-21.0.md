@@ -14,6 +14,19 @@ The one named resend stays too: a request sent on a pooled kept-alive socket
 that ended before any byte of an answer is sent once more on a new connection
 (see "Kept-alive connections, and the one resend" in [USAGE](./USAGE.md)).
 
+Two more named exceptions stay, unchanged, and are named now beside it (see
+"Two more named resends" in [USAGE](./USAGE.md)). Each sends a request once
+more, at most once for a request, and neither is a plain retry — the second
+attempt carries something the first did not:
+
+- **The CSRF recovery.** A request SAP refused over its CSRF token (a `403`
+  "CSRF token validation failed", or a `401` to a `POST`, `PUT` or `DELETE`
+  sent without a token) gets a token fetched in the same session — one fetch,
+  no retry — and is sent once more with it.
+- **The credential's renewal.** A `401`, or a refused logon, goes to the
+  provider's `rejected()`; on Ok the request or the logon is sent once more
+  with the renewed credential. A second refusal is `AuthRefusedError`.
+
 ## What changed
 
 - **The token fetch is one request per endpoint**, with no delay: on
@@ -45,7 +58,7 @@ that ended before any byte of an answer is sent once more on a new connection
 **Code that read `CSRF_CONFIG.RETRY_COUNT` or `RETRY_DELAY`** (a connection
 class of your own, say) drops them. To fetch a token the way this package
 does: one request to `ENDPOINT`, and one to `FALLBACK_ENDPOINT` only when the
-first answered `404` — see the `CSRF_CONFIG` example in [USAGE](./USAGE.md).
+first answered `404` or `501` — see the `CSRF_CONFIG` example in [USAGE](./USAGE.md).
 
 **A wire of your own** (`IAdtTransport.establish(context)`) that read
 `context.retries`, `context.retryDelayMs` or `context.isFatal` stops reading

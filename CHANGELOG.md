@@ -30,6 +30,20 @@ changes nothing. See [docs/MIGRATION-21.0.md](docs/MIGRATION-21.0.md).
   an absent endpoint); the `retryCount` / `retryDelay` parameters of the protected
   `fetchCsrfToken`, now `fetchCsrfToken(url, fence?)`; the protected `endsTheExchange`.
 
+### Fixed
+
+- **A CSRF token is read as one non-empty string.** Response headers come from outside the type
+  system: an `x-csrf-token` that arrived as an array (the header twice), a number or an empty
+  value was stored as the token; it is now no token — on a success the fetch fails
+  `NOT_IN_HEADERS`, on a refusal nothing is kept.
+
+### Documentation
+
+- **The two other resends are named beside the #314 one**, in the README and USAGE ("Two more
+  named resends"): the CSRF recovery (a token fetched in the same session and one resend after a
+  refusal over the token) and the credential's renewal (one more attempt after `rejected()`
+  answers Ok). Both are unchanged; each happens at most once for a request.
+
 ## [20.1.0] - 2026-11-09
 
 A request runs in its `sap-language` over RFC as it does over HTTP.

@@ -302,6 +302,31 @@ answer would run it twice; for a socket the server closed while it was idle,
 that does not happen. Without the resend, a cleanup `UNLOCK` died so and the
 enqueue lock stayed until SM12 (mcp-abap-adt#314).
 
+**Two more named resends** (named in 21.0.0; the behaviour is older). Beside
+the one above, a request is sent once more in exactly two cases — each at most
+once for a request, never a second time:
+
+- **The CSRF recovery.** SAP refused the request over its CSRF token — a `403`
+  "CSRF token validation failed", or an answer whose body names the CSRF token
+  — or answered `401` to a `POST`, `PUT` or `DELETE` sent while the wire held
+  no token. The wire fetches a token in the same session (its cookies kept; one
+  fetch, no retry) and sends the request once more, authorized anew. Not a plain
+  retry: the request was refused for what it carried — a stale or missing token
+  — and goes again carrying something different, the fresh token; sent as it
+  was, it would only be refused again. A resend that fails ends the request: a
+  session verdict or the credential's refusal is thrown, anything else rethrows
+  the error the recovery started from.
+- **The credential's renewal.** A `401`, or a logon the system refused, goes to
+  the provider (`rejected()`); when it answers Ok, the request — or the logon —
+  is authorized again and sent once more, in the same session. Not a plain retry
+  either: the provider renewed what the attempt carries, and the attempt carries
+  the new credential. One per request: a second refusal is `AuthRefusedError`
+  (refused again), and the provider is not asked twice. A `403` never goes to
+  the provider.
+
+Nothing else is sent again: a failed request — the CSRF token fetch included
+(21.0.0) — is its own error.
+
 ### An instance on an existing session
 
 An instance may be built on a session that already exists, instead of logging
@@ -1010,7 +1035,7 @@ const yourHttpClient = {
     ({ headers: {} as Record<string, string> }),
 };
 
-// One request, and the fallback endpoint only when the first answers 404 —
+// One request, and the fallback endpoint only when the first answers 404 or 501 —
 // the way this package fetches its own: no retry, no delay. A failed request
 // is its own error, and the caller decides what to do about it.
 async function fetchCsrfToken(baseUrl: string): Promise<string> {
@@ -1022,7 +1047,7 @@ async function fetchCsrfToken(baseUrl: string): Promise<string> {
   } catch (error) {
     const status = (error as { response?: { status?: number } }).response
       ?.status;
-    if (status !== 404) throw error;
+    if (status !== 404 && status !== 501) throw error;
     response = await yourHttpClient.get(
       `${baseUrl}${CSRF_CONFIG.FALLBACK_ENDPOINT}`,
       { headers: CSRF_CONFIG.REQUIRED_HEADERS },
