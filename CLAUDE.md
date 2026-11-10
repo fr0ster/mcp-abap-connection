@@ -134,9 +134,9 @@ fact belongs on the transport instead.
   global agent — it closes idle pooled sockets only, no request deadline); `agentOptions`
   `keepAlive: false` turns reuse off. The logoff always goes on its own connection
   (`Connection: close`)
-- CSRF fetch retries 3 times, falling back to `/sap/bc/adt/discovery` only when
-  the primary endpoint answers 404 — a host that is not answering will not
-  answer a different path either
+- The CSRF token fetch makes one request, no retry, no delay;
+  `/sap/bc/adt/discovery` is asked only after a 404/501 on
+  `/sap/bc/adt/core/discovery`
 - `RfcTransport` supplies a default `Accept`: axios adds one over HTTP, and ADT
   refuses a request without it (`400 ExceptionResourceBadRequest`)
 - BASIS 7.40 is a WIRE, not a flag: `LegacyOnPremHttpTransport` never sends the
@@ -144,9 +144,7 @@ fact belongs on the transport instead.
   the enqueue table, so the next `PUT` comes back 423) and reports a session as
   established, because that system names none. The old `skipSessionType` option
   is gone — taking the class is how you say which deployment this is
-- Timeouts: the library applies exactly two of its own — `SAP_TIMEOUT_CSRF` for
-  establishing a session, and `SAP_TIMEOUT_CRITICAL` as the ceiling it raises a
-  request to inside a critical section. `SAP_TIMEOUT_DEFAULT` and
+- Timeouts: `SAP_TIMEOUT_DEFAULT` and
   `SAP_TIMEOUT_LONG` configure `getTimeout()`, which is exported for callers to
   pass back in `makeAdtRequest`; nothing in `src/` reads either. A per-request
   deadline is the caller's choice and is honoured only by the HTTP wire — RFC
