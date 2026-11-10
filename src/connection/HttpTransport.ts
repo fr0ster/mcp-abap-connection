@@ -250,6 +250,45 @@ function withoutContextCookie(cookie: string | undefined): string | undefined {
 export { isStatefulRequest } from './statefulRequest.js';
 
 /** A 404 there means the system has no such endpoint, not that it is unwell. */
+/**
+ * A response's headers as fields, or none. They come from outside the type
+ * system: whatever is not a plain object of fields is no headers at all.
+ */
+function headerFields(headers: unknown): Record<string, unknown> | undefined {
+  return isFields(headers) ? headers : undefined;
+}
+
+function isFields(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The headers of the response a failed request carries, or none. */
+function refusalHeaders(error: unknown): Record<string, unknown> | undefined {
+  if (typeof error !== 'object' || error === null || !('response' in error)) {
+    return undefined;
+  }
+  const response = error.response;
+  if (
+    typeof response !== 'object' ||
+    response === null ||
+    !('headers' in response)
+  ) {
+    return undefined;
+  }
+  return headerFields(response.headers);
+}
+
+/**
+ * The CSRF token a response's headers carry: a non-empty string, else none —
+ * an array, a number or an empty value is no token.
+ */
+function csrfTokenIn(headers: unknown): string | undefined {
+  const fields = headerFields(headers);
+  if (fields === undefined) return undefined;
+  const token = fields['x-csrf-token'];
+  return typeof token === 'string' && token !== '' ? token : undefined;
+}
+
 function absentEndpoint(error: unknown): boolean {
   const status = (error as { response?: { status?: number } } | undefined)
     ?.response?.status;
@@ -778,12 +817,10 @@ export class HttpTransport implements IAdtTransport {
         // connection refuses as a gone session's throws here, and nothing
         // of it reaches the jar.
         context.observe(response.headers);
-        this.ingest(response.headers as Record<string, unknown>);
+        this.ingest(headerFields(response.headers));
 
-        const token = (response.headers as Record<string, unknown>)[
-          'x-csrf-token'
-        ] as string | undefined;
-        if (token) {
+        const token = csrfTokenIn(response.headers);
+        if (token !== undefined) {
           this.token = token;
           this.logger?.debug('CSRF token obtained');
           return;
@@ -799,14 +836,12 @@ export class HttpTransport implements IAdtTransport {
         if (error instanceof AuthRefusedError) throw error;
 
         last = error instanceof Error ? error : new Error(String(error));
-        const response = (
-          error as { response?: { headers?: Record<string, unknown> } }
-        ).response;
-        if (response?.headers) {
+        const headers = refusalHeaders(error);
+        if (headers !== undefined) {
           // A refusal can still carry the cookies that matter — handed up
           // first, so one the connection refuses is not folded in.
-          context.observe(response.headers);
-          this.ingest(response.headers);
+          context.observe(headers);
+          this.ingest(headers);
         }
 
         // A refused logon, named as one — after its cookies are in. What to
@@ -815,18 +850,14 @@ export class HttpTransport implements IAdtTransport {
           throw new WireLogonError(error, 401);
         }
 
-        if (response?.headers) {
-          // …and the token itself. SAP answers 405 to a GET on some
-          // endpoints and puts the token in the header anyway, and other
-          // refusals carry one too.
-          const onError = response.headers['x-csrf-token'] as
-            | string
-            | undefined;
-          if (onError) {
-            this.token = onError;
-            this.logger?.debug('CSRF token arrived on a refusal, and is kept');
-            return;
-          }
+        // …and the token itself. SAP answers 405 to a GET on some endpoints
+        // and puts the token in the header anyway, and other refusals carry
+        // one too.
+        const onError = csrfTokenIn(headers);
+        if (onError !== undefined) {
+          this.token = onError;
+          this.logger?.debug('CSRF token arrived on a refusal, and is kept');
+          return;
         }
       }
     }

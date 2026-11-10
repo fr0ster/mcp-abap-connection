@@ -12,7 +12,8 @@
  * `/sap/bc/adt/core/discovery`.
  *
  * Read on a real local socket (the stub SAP, a port nobody listens on) and with
- * `setTimeout` watched, so a delay put back is caught however short it is.
+ * every timer API watched (`helpers/packageTimers.ts`), so a delay put back is
+ * caught however short it is and whichever API arms it.
  */
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
@@ -26,6 +27,7 @@ import {
   refusalOf,
 } from '../connection/IAdtTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
+import { watchTimers } from './helpers/packageTimers.js';
 import { type SapStub, startSapStub } from './helpers/sapStub.js';
 
 const CORE = '/sap/bc/adt/core/discovery';
@@ -86,31 +88,6 @@ const connectorOver = (url: string, transport: OnPremHttpTransport) =>
     transport,
     null,
   );
-
-/**
- * Watches `setTimeout`. A dependency may arm a timer of its own (the HTTP
- * client arms one per request), so what counts is a timer this package's own
- * code armed: a call whose stack names a compiled source file outside the
- * tests.
- */
-function watchTimers() {
-  const timers = mock.method(globalThis, 'setTimeout');
-  return {
-    /** The `setTimeout` calls made from this package's own code. */
-    ours: () =>
-      timers.mock.calls.filter((call) => {
-        const frames = (call.stack.stack ?? '').split('\n').slice(1);
-        return frames.some((frame) => {
-          const at = frame.split('\\').join('/');
-          return (
-            at.includes('/src/') &&
-            !at.includes('/src/__tests__/') &&
-            !at.includes('/node_modules/')
-          );
-        });
-      }).length,
-  };
-}
 
 describe('the CSRF fetch asks once', () => {
   let stub: SapStub;
