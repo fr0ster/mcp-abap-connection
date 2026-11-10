@@ -1115,9 +1115,8 @@ Exported constants for consistent CSRF token handling across different connectio
 
 // CSRF_CONFIG structure:
 const config = {
-  RETRY_COUNT: 3,                    // Number of retry attempts
-  RETRY_DELAY: 1000,                 // Delay between retries (ms)
   ENDPOINT: '/sap/bc/adt/core/discovery',  // CSRF token endpoint
+  FALLBACK_ENDPOINT: '/sap/bc/adt/discovery',  // asked only after a 404 there (BASIS < 7.52)
   REQUIRED_HEADERS: {
     'x-csrf-token': 'fetch',
     'Accept': 'application/atomsvc+xml'
@@ -1140,43 +1139,26 @@ import { executeHttpRequest } from '@sap-cloud-sdk/http-client';
 
 export class CloudSdkAbapConnection {
   async fetchCsrfToken(baseUrl: string): Promise<string> {
-    const csrfUrl = `${baseUrl}${CSRF_CONFIG.ENDPOINT}`;
-    
-    for (let attempt = 0; attempt <= CSRF_CONFIG.RETRY_COUNT; attempt++) {
-      try {
-        const response = await executeHttpRequest(
-          { destinationName: this.destination },
-          {
-            method: 'GET',
-            url: csrfUrl,
-            headers: CSRF_CONFIG.REQUIRED_HEADERS
-          }
-        );
-        
-        const token = response.headers['x-csrf-token'];
-        if (!token) {
-          if (attempt < CSRF_CONFIG.RETRY_COUNT) {
-            await new Promise(resolve => setTimeout(resolve, CSRF_CONFIG.RETRY_DELAY));
-            continue;
-          }
-          throw new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
-        }
-        
-        return token;
-      } catch (error) {
-        if (attempt >= CSRF_CONFIG.RETRY_COUNT) {
-          throw new Error(
-            CSRF_ERROR_MESSAGES.FETCH_FAILED(
-              CSRF_CONFIG.RETRY_COUNT + 1,
-              error instanceof Error ? failure.message : String(error)
-            )
-          );
-        }
-        await new Promise(resolve => setTimeout(resolve, CSRF_CONFIG.RETRY_DELAY));
-      }
+    // One request, and the fallback endpoint only when the first answers
+    // 404 — the way this package fetches its own: no retry, no delay. A
+    // failed request is its own error.
+    const ask = (path: string) =>
+      executeHttpRequest(
+        { destinationName: this.destination },
+        { method: 'GET', url: `${baseUrl}${path}`, headers: CSRF_CONFIG.REQUIRED_HEADERS }
+      );
+
+    let response;
+    try {
+      response = await ask(CSRF_CONFIG.ENDPOINT);
+    } catch (error) {
+      if (error?.response?.status !== 404) throw error;
+      response = await ask(CSRF_CONFIG.FALLBACK_ENDPOINT);
     }
-    
-    throw new Error(CSRF_ERROR_MESSAGES.FETCH_FAILED(CSRF_CONFIG.RETRY_COUNT + 1, 'Unknown error'));
+
+    const token = response.headers['x-csrf-token'];
+    if (!token) throw new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
+    return token;
   }
 }
 ```
