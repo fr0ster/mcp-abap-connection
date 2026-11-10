@@ -26,7 +26,7 @@ import {
   refusedAgain,
   WireLogonError,
 } from './authErrors.js';
-import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
+import { CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 import {
   type IAdtSessionContext,
   type IAdtTransport,
@@ -1670,9 +1670,7 @@ abstract class AbstractAbapConnection
       );
 
       try {
-        this.setCsrfToken(
-          await this.fetchCsrfToken(requestUrl, 5, 2000, lease),
-        );
+        this.setCsrfToken(await this.fetchCsrfToken(requestUrl, lease));
         const refreshedToken = this.getCsrfToken();
         if (refreshedToken) {
           requestHeaders['x-csrf-token'] = refreshedToken;
@@ -1948,8 +1946,6 @@ abstract class AbstractAbapConnection
    */
   protected async fetchCsrfToken(
     _url: string,
-    retryCount: number = CSRF_CONFIG.RETRY_COUNT,
-    retryDelay: number = CSRF_CONFIG.RETRY_DELAY,
     /**
      * The request's lease: fences what is sent and the response effects.
      * A plain session generation — what this parameter took before 10.0.1,
@@ -1968,9 +1964,6 @@ abstract class AbstractAbapConnection
       ...(typeof fence === 'number'
         ? this.leasedContext(undefined, fence)
         : this.leasedContext(fence)),
-      retries: retryCount,
-      retryDelayMs: retryDelay,
-      isFatal: (error) => this.endsTheExchange(error),
     });
 
     const token = this.transport.csrfToken();
@@ -2023,10 +2016,7 @@ abstract class AbstractAbapConnection
     /** The request's lease: fences what is sent and the response effects. */
     lease: Pick<RequestLease, 'generation'>,
   ): Promise<void> {
-    await this.transport.establish({
-      ...this.leasedContext(lease),
-      isFatal: (error) => this.endsTheExchange(error),
-    });
+    await this.transport.establish(this.leasedContext(lease));
   }
 
   /**
@@ -2038,7 +2028,7 @@ abstract class AbstractAbapConnection
    * written: that is the last await before the wire sends, and a provider may
    * take long enough for the caller to disconnect and connect again — sent
    * then, the request would carry the new session's cookies. The throw is a
-   * session verdict, so the exchange stops at once, past its retries.
+   * session verdict, so the exchange stops at once.
    *
    * Without one — connect()'s own establishment, which is making the session
    * rather than working in it — nothing is fenced. `generation` alone fences
@@ -2075,15 +2065,6 @@ abstract class AbstractAbapConnection
         this.observeResponse(headers as Record<string, unknown>, generation);
       },
     };
-  }
-
-  /**
-   * What stops a token exchange at once, past its retries: a session verdict,
-   * or the provider's refusal to authorize it — asking again would only ask
-   * the provider again.
-   */
-  protected endsTheExchange(error: unknown): boolean {
-    return this.isSessionVerdict(error) || error instanceof AuthRefusedError;
   }
 
   /**

@@ -179,15 +179,69 @@ describe('establishing over HTTP', () => {
       throw new Error('connect ECONNREFUSED');
     });
 
-    await assert.rejects(transport.establish(context({ retries: 0 })));
+    await assert.rejects(transport.establish(context()));
     assert.strictEqual(sent.length, 1);
   });
 
   it('refuses when the server answers without a token', async () => {
     const transport = http();
-    intercept(transport, async () => ({ status: 200, headers: {}, data: '' }));
+    const sent = intercept(transport, async () => ({
+      status: 200,
+      headers: {},
+      data: '',
+    }));
 
-    await assert.rejects(transport.establish(context({ retries: 0 })));
+    await assert.rejects(transport.establish(context()));
+    // Asked once: a 200 without a token is not an absent endpoint either.
+    assert.strictEqual(sent.length, 1);
+  });
+
+  it('takes no token from an x-csrf-token that is not one string', async () => {
+    // Headers come from outside the type system: an array (two headers of
+    // the name), an empty value or a number is no token, and is not stored.
+    for (const value of [['A', 'B'], '', 42]) {
+      const transport = http();
+      const sent = intercept(transport, async () => ({
+        status: 200,
+        headers: { 'x-csrf-token': value },
+        data: '',
+      }));
+
+      await assert.rejects(
+        transport.establish(context()),
+        /No CSRF token in response headers/,
+      );
+      assert.strictEqual(transport.csrfToken(), null);
+      assert.strictEqual(sent.length, 1);
+    }
+  });
+
+  it('takes no token from a refusal whose x-csrf-token is not one string', async () => {
+    const transport = http();
+    const refusal = Object.assign(new Error('method not allowed'), {
+      response: { status: 405, headers: { 'x-csrf-token': ['A', 'B'] } },
+    });
+    intercept(transport, async () => {
+      throw refusal;
+    });
+
+    const error = await transport.establish(context()).catch((e: unknown) => e);
+
+    assert.strictEqual(error, refusal);
+    assert.strictEqual(transport.csrfToken(), null);
+  });
+
+  it('keeps a token a refusal carries as one string', async () => {
+    const transport = http();
+    intercept(transport, async () => {
+      throw Object.assign(new Error('method not allowed'), {
+        response: { status: 405, headers: { 'x-csrf-token': 'ON-405' } },
+      });
+    });
+
+    await transport.establish(context());
+
+    assert.strictEqual(transport.csrfToken(), 'ON-405');
   });
 
   it('is a no-op once the wire already holds a token', async () => {
@@ -362,8 +416,6 @@ describe('a refused logon over HTTP', () => {
         authorize: async () => {},
         logon: async () => {},
         observe: (headers) => observed.push(headers),
-        retries: 3,
-        retryDelayMs: 0,
       })
       .catch((e: unknown) => e);
 
@@ -379,19 +431,19 @@ describe('a refused logon over HTTP', () => {
     assert.strictEqual(stub.sentTo('/sap/bc/adt/core/discovery').length, 1);
   });
 
-  it('still retries a 500', async () => {
+  it('does not retry a 500 either: it is its own error', async () => {
     stub.discovery.push(500);
     const transport = wire();
 
-    await transport.establish({
-      authorize: async () => {},
-      logon: async () => {},
-      observe: () => {},
-      retries: 3,
-      retryDelayMs: 0,
-    });
+    await assert.rejects(
+      transport.establish({
+        authorize: async () => {},
+        logon: async () => {},
+        observe: () => {},
+      }),
+    );
 
-    assert.strictEqual(transport.csrfToken(), 'TOKEN-1');
-    assert.strictEqual(stub.sentTo('/sap/bc/adt/core/discovery').length, 2);
+    assert.strictEqual(transport.csrfToken(), null);
+    assert.strictEqual(stub.sentTo('/sap/bc/adt/core/discovery').length, 1);
   });
 });

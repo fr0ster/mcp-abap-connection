@@ -11,8 +11,8 @@
  * to cookie and no cross-site request to forge a token against. The machinery
  * above the seam is therefore managing state that never arrives:
  *
- *   - the CSRF fetch cannot succeed, and after its retries throws
- *     `NOT_IN_HEADERS`, so `connect()` fails outright;
+ *   - the CSRF fetch cannot succeed, and throws `NOT_IN_HEADERS`, so
+ *     `connect()` fails outright;
  *   - the cookie jar stays empty, so the ICF logoff `disconnect()` performs has
  *     no session to give back.
  *

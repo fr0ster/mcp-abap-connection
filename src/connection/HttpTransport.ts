@@ -250,6 +250,45 @@ function withoutContextCookie(cookie: string | undefined): string | undefined {
 export { isStatefulRequest } from './statefulRequest.js';
 
 /** A 404 there means the system has no such endpoint, not that it is unwell. */
+/**
+ * A response's headers as fields, or none. They come from outside the type
+ * system: whatever is not a plain object of fields is no headers at all.
+ */
+function headerFields(headers: unknown): Record<string, unknown> | undefined {
+  return isFields(headers) ? headers : undefined;
+}
+
+function isFields(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The headers of the response a failed request carries, or none. */
+function refusalHeaders(error: unknown): Record<string, unknown> | undefined {
+  if (typeof error !== 'object' || error === null || !('response' in error)) {
+    return undefined;
+  }
+  const response = error.response;
+  if (
+    typeof response !== 'object' ||
+    response === null ||
+    !('headers' in response)
+  ) {
+    return undefined;
+  }
+  return headerFields(response.headers);
+}
+
+/**
+ * The CSRF token a response's headers carry: a non-empty string, else none —
+ * an array, a number or an empty value is no token.
+ */
+function csrfTokenIn(headers: unknown): string | undefined {
+  const fields = headerFields(headers);
+  if (fields === undefined) return undefined;
+  const token = fields['x-csrf-token'];
+  return typeof token === 'string' && token !== '' ? token : undefined;
+}
+
 function absentEndpoint(error: unknown): boolean {
   const status = (error as { response?: { status?: number } } | undefined)
     ?.response?.status;
@@ -748,96 +787,77 @@ export class HttpTransport implements IAdtTransport {
       // BASIS < 7.52 has no /sap/bc/adt/core/discovery.
       `${base}${CSRF_CONFIG.FALLBACK_ENDPOINT}`,
     ];
-    const retries = context.retries ?? CSRF_CONFIG.RETRY_COUNT;
-    const delay = context.retryDelayMs ?? CSRF_CONFIG.RETRY_DELAY;
-
     let last: Error | undefined;
     for (const [index, url] of endpoints.entries()) {
-      // The fallback exists for a system that HAS no
-      // `/sap/bc/adt/core/discovery` — BASIS < 7.52 — which the server says by
-      // answering 404 there. Trying it after a refused connection or a network
-      // asks a host that is not answering to answer a different path, which
-      // doubles the wait before the caller is told what is actually wrong.
+      // One request per endpoint, and no delay: a failed request is its own
+      // error, and asked again a host that refused the connection or answered
+      // 500 says nothing new. The second endpoint is not a retry — it exists
+      // for a system that HAS no `/sap/bc/adt/core/discovery` (BASIS < 7.52),
+      // which the server says by answering 404 there. Asked after a refused
+      // connection or a network error, it would ask a host that is not
+      // answering to answer a different path.
       if (index > 0 && !absentEndpoint(last)) break;
-      for (let attempt = 0; attempt <= retries; attempt++) {
-        try {
-          // Authorized per attempt: a provider may renew behind the call.
-          const auth: Record<string, string> = {};
-          await context.authorize(auth);
-          const response = await this.send({
-            method: 'GET',
-            url,
-            headers: {
-              ...auth,
-              ...context.extraHeaders,
-              ...CSRF_CONFIG.REQUIRED_HEADERS,
-            },
-          });
+      try {
+        // Authorized per request: a provider may renew behind the call.
+        const auth: Record<string, string> = {};
+        await context.authorize(auth);
+        const response = await this.send({
+          method: 'GET',
+          url,
+          headers: {
+            ...auth,
+            ...context.extraHeaders,
+            ...CSRF_CONFIG.REQUIRED_HEADERS,
+          },
+        });
 
-          // Handed up BEFORE the token is read: the cookies are the session,
-          // and a fold that only happened on success would lose the session a
-          // tokenless answer still opened. And before the fold: an answer the
-          // connection refuses as a gone session's throws here, and nothing
-          // of it reaches the jar.
-          context.observe(response.headers);
-          this.ingest(response.headers as Record<string, unknown>);
+        // Handed up BEFORE the token is read: the cookies are the session,
+        // and a fold that only happened on success would lose the session a
+        // tokenless answer still opened. And before the fold: an answer the
+        // connection refuses as a gone session's throws here, and nothing
+        // of it reaches the jar.
+        context.observe(response.headers);
+        this.ingest(headerFields(response.headers));
 
-          const token = (response.headers as Record<string, unknown>)[
-            'x-csrf-token'
-          ] as string | undefined;
-          if (token) {
-            this.token = token;
-            this.logger?.debug('CSRF token obtained');
-            return;
-          }
-          last = new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
-        } catch (error) {
-          // Not a failed exchange: see `isFatal`. Leaves immediately, past the
-          // retries and past the fallback endpoint. So does the provider's
-          // refusal to authorize: it is its word, and asking again only asks
-          // it again.
-          if (error instanceof AuthRefusedError || context.isFatal?.(error)) {
-            throw error;
-          }
-
-          last = error instanceof Error ? error : new Error(String(error));
-          const response = (
-            error as { response?: { headers?: Record<string, unknown> } }
-          ).response;
-          if (response?.headers) {
-            // A refusal can still carry the cookies that matter — handed up
-            // first, so one the connection refuses is not folded in.
-            context.observe(response.headers);
-            this.ingest(response.headers);
-          }
-
-          // A refused logon, named as one — after its cookies are in, and
-          // without a retry: asking again with the credential just refused
-          // tells the system nothing new. What to do about it is not the
-          // wire's to decide.
-          if (refusalOf(error)?.status === 401) {
-            throw new WireLogonError(error, 401);
-          }
-
-          if (response?.headers) {
-            // …and the token itself. SAP answers 405 to a GET on some
-            // endpoints and puts the token in the header anyway, and other
-            // refusals carry one too. A retry would throw away a token the
-            // server already handed over.
-            const onError = response.headers['x-csrf-token'] as
-              | string
-              | undefined;
-            if (onError) {
-              this.token = onError;
-              this.logger?.debug(
-                'CSRF token arrived on a refusal, and is kept',
-              );
-              return;
-            }
-          }
+        const token = csrfTokenIn(response.headers);
+        if (token !== undefined) {
+          this.token = token;
+          this.logger?.debug('CSRF token obtained');
+          return;
         }
-        if (attempt < retries) {
-          await new Promise((resolve) => setTimeout(resolve, delay));
+        // A 200 without a token is not an absent endpoint: the fallback is
+        // not asked, and this is the error.
+        last = new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
+      } catch (error) {
+        // The provider's refusal to authorize leaves as it is: it is its
+        // word. So does a session verdict — the connection's own, thrown by
+        // `authorize` or `observe`: it carries no response, so nothing below
+        // folds anything of it in or reads it as an absent endpoint.
+        if (error instanceof AuthRefusedError) throw error;
+
+        last = error instanceof Error ? error : new Error(String(error));
+        const headers = refusalHeaders(error);
+        if (headers !== undefined) {
+          // A refusal can still carry the cookies that matter — handed up
+          // first, so one the connection refuses is not folded in.
+          context.observe(headers);
+          this.ingest(headers);
+        }
+
+        // A refused logon, named as one — after its cookies are in. What to
+        // do about it is not the wire's to decide.
+        if (refusalOf(error)?.status === 401) {
+          throw new WireLogonError(error, 401);
+        }
+
+        // …and the token itself. SAP answers 405 to a GET on some endpoints
+        // and puts the token in the header anyway, and other refusals carry
+        // one too.
+        const onError = csrfTokenIn(headers);
+        if (onError !== undefined) {
+          this.token = onError;
+          this.logger?.debug('CSRF token arrived on a refusal, and is kept');
+          return;
         }
       }
     }

@@ -209,7 +209,7 @@ What `connect()` does then:
 1. It prepares the credential as always, and **logs on nowhere**.
 2. It makes **one request in that session, without the credential**: the CSRF
    fetch (`GET /sap/bc/adt/core/discovery` with `x-csrf-token: fetch`, the
-   fallback `/sap/bc/adt/discovery` on a `404`; on cloud with
+   fallback `/sap/bc/adt/discovery` on a `404` or `501`; on cloud with
    `x-sap-security-session: use`, and no preflight), following no redirect.
    Without the credential,
    because a credential on that request would open a NEW session when the old
@@ -1069,6 +1069,30 @@ carries it; the wire never reads `config.username` or `config.password`.
   enqueue lock stayed until SM12 (mcp-abap-adt#314).
   The logoff goes out on a connection of its own, with `Connection: close`,
   whatever your `agentOptions` say.
+- **Two more named resends** (named in 21.0.0; the behaviour is older). Beside
+  the one above, a request is sent once more in exactly two cases — each at most
+  once for a request, never a second time:
+
+  - **The CSRF recovery.** SAP refused the request over its CSRF token — a `403`
+    "CSRF token validation failed", or an answer whose body names the CSRF token
+    — or answered `401` to a `POST`, `PUT` or `DELETE` sent while the wire held
+    no token. The wire fetches a token in the same session (its cookies kept; one
+    fetch, no retry) and sends the request once more, authorized anew. Not a plain
+    retry: the request was refused for what it carried — a stale or missing token
+    — and goes again carrying something different, the fresh token; sent as it
+    was, it would only be refused again. A resend that fails ends the request: a
+    session verdict or the credential's refusal is thrown, anything else rethrows
+    the error the recovery started from.
+  - **The credential's renewal.** A `401`, or a logon the system refused, goes to
+    the provider (`rejected()`); when it answers Ok, the request — or the logon —
+    is authorized again and sent once more, in the same session. Not a plain retry
+    either: the provider renewed what the attempt carries, and the attempt carries
+    the new credential. One per request: a second refusal is `AuthRefusedError`
+    (refused again), and the provider is not asked twice. A `403` never goes to
+    the provider.
+
+  Nothing else is sent again: a failed request — the CSRF token fetch included
+  (21.0.0) — is its own error.
 - RFC takes logon parameters (a password, or SNC settings) on every conversation
   it opens, the session's own and each per-call one. RFC refuses TLS material,
   and a provider that writes no logon parameters (a bearer token) cannot log on
@@ -1115,9 +1139,8 @@ Exported constants for consistent CSRF token handling across different connectio
 
 // CSRF_CONFIG structure:
 const config = {
-  RETRY_COUNT: 3,                    // Number of retry attempts
-  RETRY_DELAY: 1000,                 // Delay between retries (ms)
   ENDPOINT: '/sap/bc/adt/core/discovery',  // CSRF token endpoint
+  FALLBACK_ENDPOINT: '/sap/bc/adt/discovery',  // asked only after a 404 or 501 there (BASIS < 7.52)
   REQUIRED_HEADERS: {
     'x-csrf-token': 'fetch',
     'Accept': 'application/atomsvc+xml'
@@ -1140,43 +1163,27 @@ import { executeHttpRequest } from '@sap-cloud-sdk/http-client';
 
 export class CloudSdkAbapConnection {
   async fetchCsrfToken(baseUrl: string): Promise<string> {
-    const csrfUrl = `${baseUrl}${CSRF_CONFIG.ENDPOINT}`;
-    
-    for (let attempt = 0; attempt <= CSRF_CONFIG.RETRY_COUNT; attempt++) {
-      try {
-        const response = await executeHttpRequest(
-          { destinationName: this.destination },
-          {
-            method: 'GET',
-            url: csrfUrl,
-            headers: CSRF_CONFIG.REQUIRED_HEADERS
-          }
-        );
-        
-        const token = response.headers['x-csrf-token'];
-        if (!token) {
-          if (attempt < CSRF_CONFIG.RETRY_COUNT) {
-            await new Promise(resolve => setTimeout(resolve, CSRF_CONFIG.RETRY_DELAY));
-            continue;
-          }
-          throw new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
-        }
-        
-        return token;
-      } catch (error) {
-        if (attempt >= CSRF_CONFIG.RETRY_COUNT) {
-          throw new Error(
-            CSRF_ERROR_MESSAGES.FETCH_FAILED(
-              CSRF_CONFIG.RETRY_COUNT + 1,
-              error instanceof Error ? failure.message : String(error)
-            )
-          );
-        }
-        await new Promise(resolve => setTimeout(resolve, CSRF_CONFIG.RETRY_DELAY));
-      }
+    // One request, and the fallback endpoint only when the first answers
+    // 404 or 501 — the way this package fetches its own: no retry, no delay. A
+    // failed request is its own error.
+    const ask = (path: string) =>
+      executeHttpRequest(
+        { destinationName: this.destination },
+        { method: 'GET', url: `${baseUrl}${path}`, headers: CSRF_CONFIG.REQUIRED_HEADERS }
+      );
+
+    let response;
+    try {
+      response = await ask(CSRF_CONFIG.ENDPOINT);
+    } catch (error) {
+      const status = error?.response?.status;
+      if (status !== 404 && status !== 501) throw error;
+      response = await ask(CSRF_CONFIG.FALLBACK_ENDPOINT);
     }
-    
-    throw new Error(CSRF_ERROR_MESSAGES.FETCH_FAILED(CSRF_CONFIG.RETRY_COUNT + 1, 'Unknown error'));
+
+    const token = response.headers['x-csrf-token'];
+    if (!token) throw new Error(CSRF_ERROR_MESSAGES.NOT_IN_HEADERS);
+    return token;
   }
 }
 ```

@@ -114,22 +114,13 @@ export interface IAdtEstablishContext extends IAdtSessionContext {
    *
    * Handed up BEFORE the wire folds the answer in. It may throw a session
    * verdict — the answer belongs to a session that is gone — and the wire then
-   * folds nothing of it and ends the exchange (`isFatal`).
+   * folds nothing of it and ends the exchange: the verdict carries no
+   * response, so it is neither folded in nor read as an absent endpoint.
+   *
+   * The exchange is one request, never repeated and never delayed; the second
+   * endpoint is asked only after the first answered that it does not exist.
    */
   observe: (headers: unknown) => void;
-  /** How many times to ask again. Absent means the transport's own default. */
-  retries?: number;
-  /** Milliseconds between attempts. Absent means the transport's own default. */
-  retryDelayMs?: number;
-  /**
-   * Which failures must not be retried.
-   *
-   * A verdict about the session — "the one we were on is gone" — is not a
-   * failed exchange: retrying would observe the SAME new session, read it as
-   * unchanged, and lose the replacement for good. The wire cannot tell those
-   * apart, so it asks.
-   */
-  isFatal?: (error: unknown) => boolean;
 }
 
 export interface IAdtTransport {

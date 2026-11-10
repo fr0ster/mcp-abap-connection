@@ -68,9 +68,8 @@ function httpSubstrate() {
       return { status: 200, statusText: 'OK', headers: {}, data: '' };
     }
 
-    // Stays on until an establishment is expected to succeed again. A one-shot
-    // refusal would be spent by the first of `HttpTransport.establish()`'s
-    // retries and the next attempt would connect — which says nothing about
+    // Stays on until an establishment is expected to succeed again, so a
+    // second logon the provider asks for meets the refusal too — which is
     // what a connection does when the server keeps refusing.
     if (refusing) {
       // No cookie at all: the refusal opened no session, which is the thing the

@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [21.0.0] - 2026-11-11
+
+The CSRF token fetch asks once. Breaking for code that reads `CSRF_CONFIG.RETRY_COUNT` /
+`RETRY_DELAY`, for a wire of its own that reads the establish context's `retries`,
+`retryDelayMs` or `isFatal`, and for a subclass that calls `fetchCsrfToken` with retry numbers or
+overrides `endsTheExchange`; a caller of `createConnection`, the connectors and `makeAdtRequest`
+changes nothing. See [docs/MIGRATION-21.0.md](docs/MIGRATION-21.0.md).
+
+### Changed — breaking
+
+- **The CSRF token fetch is one request per endpoint, with no retry and no delay.** A logon
+  against a closed port made four requests about a second apart and reported its failure some
+  three seconds later; the recovery after a `403` "CSRF token validation failed" asked up to six
+  times, two seconds apart. A failed request is its own error now: `connect()` rejects with it at
+  once. The fallback endpoint `/sap/bc/adt/discovery` is still asked, once, only after
+  `/sap/bc/adt/core/discovery` answered `404` or `501` (BASIS < 7.52) — it is not a retry. The
+  named resend on a pooled socket that ended before any answer byte (#314) is unchanged.
+- **Removed:** `CSRF_CONFIG.RETRY_COUNT`, `CSRF_CONFIG.RETRY_DELAY`;
+  `IAdtEstablishContext.retries`, `.retryDelayMs` and `.isFatal` (with nothing retried it decides
+  nothing: a session verdict carries no response, so the wire neither folds it in nor reads it as
+  an absent endpoint); the `retryCount` / `retryDelay` parameters of the protected
+  `fetchCsrfToken`, now `fetchCsrfToken(url, fence?)`; the protected `endsTheExchange`.
+
+### Fixed
+
+- **A CSRF token is read as one non-empty string.** Response headers come from outside the type
+  system: an `x-csrf-token` that arrived as an array (the header twice), a number or an empty
+  value was stored as the token; it is now no token — on a success the fetch fails
+  `NOT_IN_HEADERS`, on a refusal nothing is kept.
+
+### Documentation
+
+- **The two other resends are named beside the #314 one**, in the README and USAGE ("Two more
+  named resends"): the CSRF recovery (a token fetched in the same session and one resend after a
+  refusal over the token) and the credential's renewal (one more attempt after `rejected()`
+  answers Ok). Both are unchanged; each happens at most once for a request.
+
 ## [20.1.0] - 2026-11-09
 
 A request runs in its `sap-language` over RFC as it does over HTTP.
@@ -2870,7 +2907,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.1.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v21.0.0...HEAD
+[21.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.1.0...v21.0.0
 [20.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.0.0...v20.1.0
 [20.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v19.1.0...v20.0.0
 [19.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v19.0.0...v19.1.0
