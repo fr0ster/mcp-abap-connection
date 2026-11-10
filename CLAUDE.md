@@ -144,9 +144,7 @@ fact belongs on the transport instead.
   the enqueue table, so the next `PUT` comes back 423) and reports a session as
   established, because that system names none. The old `skipSessionType` option
   is gone — taking the class is how you say which deployment this is
-- Timeouts: `SAP_TIMEOUT_DEFAULT` and
-  `SAP_TIMEOUT_LONG` configure `getTimeout()`, which is exported for callers to
-  pass back in `makeAdtRequest`; nothing in `src/` reads either. A per-request
+- Timeouts: a per-request
   deadline is the caller's choice and is honoured only by the HTTP wire — RFC
   is a synchronous call with nothing to cancel. There is no per-request
   signal (15.1.0 had one; 16.0.0 removed it): ABAP neither cancels nor rolls
