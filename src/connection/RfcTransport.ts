@@ -86,9 +86,16 @@ function record(value: unknown): Record<string, unknown> | undefined {
 export interface IRfcConversation {
   open(): Promise<void>;
   close(): Promise<void>;
+  /**
+   * `options.passport`, when given, is the SAP passport sent with this call
+   * only (`@mcp-abap-adt/sap-rfc-lite` >= 0.4.0). A conversation written for
+   * two arguments still conforms: it is never handed a third unless a request
+   * carried a passport.
+   */
   call(
     fm: string,
     params: Record<string, unknown>,
+    options?: { passport?: Buffer | undefined },
   ): Promise<Record<string, unknown>>;
   readonly alive: boolean;
   /**
@@ -348,6 +355,66 @@ function isSecretHeader(name: string): boolean {
 }
 
 /**
+ * The header an HTTP request carries the SAP passport in. Over RFC it is not a
+ * header field: `SADT_REST_RFC_ENDPOINT` does not read one there, so the
+ * passport goes to the SDK as the call's own.
+ */
+const PASSPORT_HEADER = 'sap-passport';
+
+function isPassportHeader(name: string): boolean {
+  return asciiLowerCase(name) === PASSPORT_HEADER;
+}
+
+/** `0`–`9`, `A`–`F`, `a`–`f`. */
+function isHexDigit(unit: number): boolean {
+  return (
+    (unit >= 0x30 && unit <= 0x39) ||
+    (unit >= 0x41 && unit <= 0x46) ||
+    (unit >= 0x61 && unit <= 0x66)
+  );
+}
+
+/** Non-empty, of even length, and every character a hex digit. */
+function isHex(value: string): boolean {
+  if (value.length === 0 || value.length % 2 !== 0) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    if (!isHexDigit(value.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+/**
+ * The passport a request carries in `SAP-PASSPORT` (its name read without
+ * case), decoded; `undefined` when it carries none. Refused, before anything
+ * is sent, when the header is named more than once or its value is not hex —
+ * the header named, its value never quoted. The passport's structure is the
+ * SDK's to check.
+ */
+function passportOf(
+  headers: Readonly<Record<string, string>> | undefined,
+): Buffer | undefined {
+  let value: string | undefined;
+  for (const [name, each] of Object.entries(headers ?? {})) {
+    if (!isPassportHeader(name)) continue;
+    if (value !== undefined) {
+      throw new Error(
+        'The request names SAP-PASSPORT more than once; nothing was sent.',
+      );
+    }
+    value = each;
+  }
+  if (value === undefined) return undefined;
+  if (!isHex(value)) {
+    throw new Error(
+      'The SAP-PASSPORT header is not a passport in hex; nothing was sent.',
+    );
+  }
+  // Only after the test: `Buffer.from(…, 'hex')` stops silently at the first
+  // pair that is not hex.
+  return Buffer.from(value, 'hex');
+}
+
+/**
  * The NAME is kept and only the VALUE goes — a redacted header still says it
  * was sent, which is half of what the log is read for.
  */
@@ -603,6 +670,7 @@ export class RfcTransport implements IOnPremTransport {
     // Taken once, here: every await below compares against it, and a call
     // that finds the wire closed since it began sends nothing.
     const generation = this.generation;
+    const passport = passportOf(request.headers);
     const language = requestedLanguage(request);
     if (isStatefulRequest(request)) {
       const other = otherLanguage(language, this.logonLanguage);
@@ -611,9 +679,9 @@ export class RfcTransport implements IOnPremTransport {
           `The request asks for ${LANGUAGE_FIELD} ${other}, but the stateful RFC session is logged on in ${this.logonLanguage ?? 'a language neither the RFC conversation factory nor the provider states'}: a session cannot change its language, so the request was not sent.`,
         );
       }
-      return this.carry(request, this.conversation, generation);
+      return this.carry(request, this.conversation, generation, passport);
     }
-    return this.carryOnItsOwn(request, language, generation);
+    return this.carryOnItsOwn(request, language, generation, passport);
   }
 
   /**
@@ -638,14 +706,16 @@ export class RfcTransport implements IOnPremTransport {
     request: IAdtTransportRequest,
     language: string | undefined,
     generation: number,
+    passport: Buffer | undefined,
   ): Promise<IAdtTransportResponse> {
     if (this.canReset !== false && !this.statelessBusy) {
-      return this.carryOnKept(request, language, generation);
+      return this.carryOnKept(request, language, generation, passport);
     }
     return this.carryOnThrowaway(
       request,
       inLanguage(await this.logonParameters(), language),
       generation,
+      passport,
     );
   }
 
@@ -653,6 +723,7 @@ export class RfcTransport implements IOnPremTransport {
     request: IAdtTransportRequest,
     language: string | undefined,
     generation: number,
+    passport: Buffer | undefined,
   ): Promise<IAdtTransportResponse> {
     this.statelessBusy = true;
     try {
@@ -668,6 +739,7 @@ export class RfcTransport implements IOnPremTransport {
             request,
             inLanguage(parameters, language),
             generation,
+            passport,
           );
         }
         const opened = await this.openOwn(parameters, generation);
@@ -685,7 +757,7 @@ export class RfcTransport implements IOnPremTransport {
           // and every later call opens its own.
           this.canReset = false;
           try {
-            return await this.carry(request, opened, generation);
+            return await this.carry(request, opened, generation, passport);
           } finally {
             await this.closeQuietly(opened);
           }
@@ -704,10 +776,11 @@ export class RfcTransport implements IOnPremTransport {
           request,
           inLanguage(await this.logonParameters(), language),
           generation,
+          passport,
         );
       }
       try {
-        return await this.carry(request, kept, generation);
+        return await this.carry(request, kept, generation, passport);
       } finally {
         try {
           await kept.resetServerContext?.();
@@ -736,11 +809,12 @@ export class RfcTransport implements IOnPremTransport {
     request: IAdtTransportRequest,
     parameters: Readonly<Record<string, string>>,
     generation: number,
+    passport: Buffer | undefined,
   ): Promise<IAdtTransportResponse> {
     const own = await this.openOwn(parameters, generation);
     try {
       this.logger?.debug('RFC conversation opened for one stateless call');
-      return await this.carry(request, own, generation);
+      return await this.carry(request, own, generation, passport);
     } finally {
       await this.closeQuietly(own);
     }
@@ -849,6 +923,7 @@ export class RfcTransport implements IOnPremTransport {
     request: IAdtTransportRequest,
     conversation: IRfcConversation,
     generation: number,
+    passport: Buffer | undefined,
   ): Promise<IAdtTransportResponse> {
     const method = request.method.toUpperCase();
 
@@ -864,9 +939,11 @@ export class RfcTransport implements IOnPremTransport {
       ).toString();
       uri += (uri.includes('?') ? '&' : '?') + serialised;
     }
-    const headerFields = Object.entries(request.headers ?? {}).map(
-      ([NAME, VALUE]) => ({ NAME, VALUE: String(VALUE) }),
-    );
+    // The passport is not a header field over RFC: it goes to the SDK as the
+    // call's own (`passport`, read in `send()`).
+    const headerFields = Object.entries(request.headers ?? {})
+      .filter(([NAME]) => !isPassportHeader(NAME))
+      .map(([NAME, VALUE]) => ({ NAME, VALUE: String(VALUE) }));
 
     // ADT refuses a request with no Accept — `400 ExceptionResourceBadRequest:
     // Accept header missing`, measured on E19. Over HTTP axios supplies the
@@ -932,7 +1009,7 @@ export class RfcTransport implements IOnPremTransport {
     }
     let raw: Record<string, unknown>;
     try {
-      raw = await conversation.call('SADT_REST_RFC_ENDPOINT', {
+      const params = {
         REQUEST: {
           REQUEST_LINE: {
             METHOD: method,
@@ -942,7 +1019,15 @@ export class RfcTransport implements IOnPremTransport {
           HEADER_FIELDS: headerFields,
           MESSAGE_BODY: body ? Buffer.from(body, 'utf-8') : Buffer.alloc(0),
         },
-      });
+      };
+      // The passport, for this call only; without one, the call as it always
+      // was — two arguments, so a conversation written for two still works.
+      raw =
+        passport === undefined
+          ? await conversation.call('SADT_REST_RFC_ENDPOINT', params)
+          : await conversation.call('SADT_REST_RFC_ENDPOINT', params, {
+              passport,
+            });
     } catch (e) {
       // An RFC-level failure, not an answer: nothing came back to classify.
       const msg = message(e);
