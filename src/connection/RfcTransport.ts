@@ -55,6 +55,11 @@
 
 import { randomUUID } from 'node:crypto';
 import { authError } from '@mcp-abap-adt/auth-errors';
+import {
+  type IAbapConnectionError,
+  type IRfcErrorInfo,
+  RFC_RCS,
+} from '@mcp-abap-adt/interfaces-adt-connection';
 import type { AuthOutcome, ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '../logger.js';
 import { WireLogonError } from './authErrors.js';
@@ -232,6 +237,61 @@ function statusFromExceptionXml(body: string): { code: number; text: string } {
   return type && Object.hasOwn(EXCEPTION_STATUS, type)
     ? EXCEPTION_STATUS[type]
     : { code: 500, text: 'Internal Server Error' };
+}
+
+/** An own data property of `source`, read without running a getter. */
+function ownData(source: object, name: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(source, name);
+  return descriptor !== undefined && 'value' in descriptor
+    ? descriptor.value
+    : undefined;
+}
+
+function isInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value);
+}
+
+/**
+ * The SDK's error as fields, or `undefined` when `thrown` is not that shape.
+ *
+ * The one place an SDK error enters, so the one place it is checked: `key` and
+ * `codeString` own data properties holding strings, `group` and `code` own
+ * data properties holding integers, and `codeString` one of the closed list
+ * `RFC_RCS`. No getter runs, and an object whose traps throw reads as no
+ * shape. `name` and `message` are not read, and nothing is read out of a
+ * message.
+ */
+function rfcErrorOf(thrown: unknown): IRfcErrorInfo | undefined {
+  if (typeof thrown !== 'object' || thrown === null) return undefined;
+  try {
+    const key = ownData(thrown, 'key');
+    const group = ownData(thrown, 'group');
+    const code = ownData(thrown, 'code');
+    const codeString = ownData(thrown, 'codeString');
+    if (typeof key !== 'string' || !isInteger(group) || !isInteger(code)) {
+      return undefined;
+    }
+    // Compared with each listed name, so only a string can match: this is
+    // the check of `codeString`, and what is stored is the listed member.
+    const listed = RFC_RCS.find((name) => name === codeString);
+    if (listed === undefined) return undefined;
+    return Object.freeze({ key, group, code, codeString: listed });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What a failed call throws: an `Error` with today's words, and the SDK's
+ * fields as `rfc` when the SDK named the failure. The top-level `code` is not
+ * set: `rfc` does not change what it means.
+ */
+function rfcCallError(
+  text: string,
+  rfc: IRfcErrorInfo | undefined,
+): Error & IAbapConnectionError {
+  const error = new Error(text);
+  return rfc === undefined ? error : Object.assign(error, { rfc });
 }
 
 function message(e: unknown): string {
@@ -887,7 +947,10 @@ export class RfcTransport implements IOnPremTransport {
       // An RFC-level failure, not an answer: nothing came back to classify.
       const msg = message(e);
       this.logger?.error(`RFC call failed: ${msg}`);
-      throw new Error(`RFC call to SADT_REST_RFC_ENDPOINT failed: ${msg}`);
+      throw rfcCallError(
+        `RFC call to SADT_REST_RFC_ENDPOINT failed: ${msg}`,
+        rfcErrorOf(e),
+      );
     }
 
     const answer = record(raw.RESPONSE) ?? raw;
