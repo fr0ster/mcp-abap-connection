@@ -759,7 +759,7 @@ export class RfcTransport implements IOnPremTransport {
           try {
             return await this.carry(request, opened, generation, passport);
           } finally {
-            await this.closeQuietly(opened);
+            await this.closeUnlessReleased(opened);
           }
         }
         this.canReset = true;
@@ -782,18 +782,25 @@ export class RfcTransport implements IOnPremTransport {
       try {
         return await this.carry(request, kept, generation, passport);
       } finally {
-        try {
-          await kept.resetServerContext?.();
-        } catch (e) {
-          // A context that could not be reset must not serve the next call.
-          this.logQuietly(
-            () => `RFC reset failed, dropping the conversation: ${message(e)}`,
-          );
-          if (this.stateless === kept) {
-            this.stateless = null;
-            this.statelessLanguage = undefined;
+        if (!kept.alive) {
+          // An RFC error ended it, and the library released it: nothing is
+          // left to reset or close, and either would reject. It carried no
+          // session of this instance — a reset clears it after every call —
+          // so it is replaced as a failed reset replaces it: dropped, and the
+          // next call opens another.
+          this.dropStateless(kept);
+        } else {
+          try {
+            await kept.resetServerContext?.();
+          } catch (e) {
+            // A context that could not be reset must not serve the next call.
+            this.logQuietly(
+              () =>
+                `RFC reset failed, dropping the conversation: ${message(e)}`,
+            );
+            this.dropStateless(kept);
+            await this.closeQuietly(kept);
           }
-          await this.closeQuietly(kept);
         }
       }
     } finally {
@@ -816,8 +823,26 @@ export class RfcTransport implements IOnPremTransport {
       this.logger?.debug('RFC conversation opened for one stateless call');
       return await this.carry(request, own, generation, passport);
     } finally {
-      await this.closeQuietly(own);
+      await this.closeUnlessReleased(own);
     }
+  }
+
+  /** The kept stateless conversation is `conversation` no more. */
+  private dropStateless(conversation: IRfcConversation): void {
+    if (this.stateless === conversation) {
+      this.stateless = null;
+      this.statelessLanguage = undefined;
+    }
+  }
+
+  /**
+   * A conversation used for one call, closed — unless an RFC error ended it:
+   * the library has released it, and a close would only reject.
+   */
+  private async closeUnlessReleased(
+    conversation: IRfcConversation,
+  ): Promise<void> {
+    if (conversation.alive) await this.closeQuietly(conversation);
   }
 
   /**
