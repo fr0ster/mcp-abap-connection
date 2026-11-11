@@ -25,6 +25,7 @@ import {
   NO_CREDENTIAL_TO_RENEW,
   refusedAgain,
   WireLogonError,
+  WireSessionLostError,
 } from './authErrors.js';
 import { CSRF_ERROR_MESSAGES } from './csrfConfig.js';
 import {
@@ -1798,6 +1799,9 @@ abstract class AbstractAbapConnection
     error: unknown,
     lease: Pick<RequestLease, 'generation'>,
   ): void {
+    if (error instanceof WireSessionLostError) {
+      this.throwWireSessionLost(error, lease);
+    }
     if (!this.isDeadSessionResponse(error)) return;
     if (!this.lifecycle.isCurrent(lease)) return;
     this.raiseSessionLost('the server reports the session no longer exists');
@@ -1807,6 +1811,29 @@ abstract class AbstractAbapConnection
       ADT_SESSION_ERROR.SESSION_REPLACED,
       'The SAP session no longer exists; any lock handle from it is dead',
     );
+  }
+
+  /**
+   * The wire saying the session it carried has ended — over RFC, an RFC error
+   * ended the stateful conversation — is the same verdict: SESSION_REPLACED,
+   * the instance spent, the call's `rfc` kept on the error. Acted on by the
+   * class of the mark, never by which wire raised it. Nothing opens a new
+   * session: that is a new instance, the caller's to create. A mark from a
+   * previous session says nothing about the current one and is not acted on.
+   */
+  private throwWireSessionLost(
+    error: WireSessionLostError,
+    lease: Pick<RequestLease, 'generation'>,
+  ): void {
+    if (!this.lifecycle.isCurrent(lease)) return;
+    this.raiseSessionLost('the wire reports the session ended');
+    const verdict = sessionError(
+      ADT_SESSION_ERROR.SESSION_REPLACED,
+      "The RFC conversation that carried this connection's SAP session has ended; any lock held in it is gone. Create a new connection for a new session.",
+    );
+    throw error.rfc === undefined
+      ? verdict
+      : Object.assign(verdict, { rfc: error.rfc });
   }
 
   /**

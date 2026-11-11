@@ -32,6 +32,7 @@ export {
   type AuthRefusalMoment,
   AuthRefusedError,
   WireLogonError,
+  WireSessionLostError,
 } from './connection/authErrors.js';
 export { CloudHttpTransport } from './connection/CloudHttpTransport.js';
 // The recommended way to build a connection: the system and the wire stated,

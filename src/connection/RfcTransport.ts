@@ -62,7 +62,7 @@ import {
 } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { AuthOutcome, ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '../logger.js';
-import { WireLogonError } from './authErrors.js';
+import { WireLogonError, WireSessionLostError } from './authErrors.js';
 import type {
   IAdtEstablishContext,
   IAdtSessionContext,
@@ -679,7 +679,7 @@ export class RfcTransport implements IOnPremTransport {
           `The request asks for ${LANGUAGE_FIELD} ${other}, but the stateful RFC session is logged on in ${this.logonLanguage ?? 'a language neither the RFC conversation factory nor the provider states'}: a session cannot change its language, so the request was not sent.`,
         );
       }
-      return this.carry(request, this.conversation, generation, passport);
+      return this.carry(request, this.conversation, generation, passport, true);
     }
     return this.carryOnItsOwn(request, language, generation, passport);
   }
@@ -827,6 +827,18 @@ export class RfcTransport implements IOnPremTransport {
     }
   }
 
+  /**
+   * The stateful conversation is `conversation` no more: the library released
+   * it, so there is nothing left to close, and a close would only reject.
+   */
+  private dropSession(conversation: IRfcConversation): void {
+    if (this.conversation === conversation) {
+      this.conversation = null;
+      this.conversationId = '';
+      this.logonLanguage = undefined;
+    }
+  }
+
   /** The kept stateless conversation is `conversation` no more. */
   private dropStateless(conversation: IRfcConversation): void {
     if (this.stateless === conversation) {
@@ -949,6 +961,8 @@ export class RfcTransport implements IOnPremTransport {
     conversation: IRfcConversation,
     generation: number,
     passport: Buffer | undefined,
+    /** Whether `conversation` is the stateful one: the instance's session. */
+    carriesSession = false,
   ): Promise<IAdtTransportResponse> {
     const method = request.method.toUpperCase();
 
@@ -1057,10 +1071,23 @@ export class RfcTransport implements IOnPremTransport {
       // An RFC-level failure, not an answer: nothing came back to classify.
       const msg = message(e);
       this.logger?.error(`RFC call failed: ${msg}`);
-      throw rfcCallError(
+      const failure = rfcCallError(
         `RFC call to SADT_REST_RFC_ENDPOINT failed: ${msg}`,
         rfcErrorOf(e),
       );
+      // The library released the stateful conversation after the error
+      // (`alive` false), and it was not a close() of ours: the session it
+      // carried is gone, with every lock taken in it. Said, not cured — no
+      // other conversation is opened in its place.
+      if (
+        carriesSession &&
+        !conversation.alive &&
+        generation === this.generation
+      ) {
+        this.dropSession(conversation);
+        throw new WireSessionLostError(failure.message, failure.rfc);
+      }
+      throw failure;
     }
 
     const answer = record(raw.RESPONSE) ?? raw;
