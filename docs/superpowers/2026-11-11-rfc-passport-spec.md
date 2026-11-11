@@ -43,53 +43,65 @@ system), **Inference** (reasoned, not checked). Points left to the owner are mar
   (`authErrors.ts`) and the base acts on the class, never on the transport's kind (Code;
   CLAUDE.md).
 - `terminateDebugger` on the debugger's stateful session ends the RFC conversation with
-  `RFC_CLOSED` (reported Measured by the agents of the previous links; not re-run here).
+  `RFC_CLOSED`: `key` and `codeString` both `RFC_CLOSED`, group `4`, code `6` (Measured earlier
+  at debugger termination over RFC; not re-run here). The ADT strategies will read the typed
+  `codeString`.
 - `RfcTransport` holds two regular expressions: `statusFromExceptionXml` and
   `SECRET_HEADER_PATTERNS` (Code).
 
 ## 2. The `rfc` contract — what connection needs from `interfaces-adt-connection` 4.1.0
 
-Additive, types only, no logic (Code: the package holds types and constants only):
+Additive, types and constants only (Code: that package's goal, its worktree `rfc-error`). The
+names below are the ones decided for 4.1.0; the final ones are that package's spec's, and this
+spec follows them where they differ:
 
 ```ts
-/** What the SAP NW RFC SDK said about a failed RFC call, as fields. */
-export interface IAdtRfcError {
-  /** The SDK's error key. */
+/** The 34 `RFC_RC` names of `sapnwrfc.h`, closed. */
+export const RFC_RCS = [/* 'RFC_OK', …, 'RFC_CLOSED', … — 34 names */] as const;
+export type RfcReturnCode = (typeof RFC_RCS)[number];
+
+/** The SDK's error, as fields. */
+export interface IRfcErrorInfo {
   readonly key: string;
-  /** The SDK's error group (`RFC_ERROR_GROUP`), as its number. */
   readonly group: number;
-  /** The SDK's return code (`RFC_RC`), as its number. */
   readonly code: number;
-  /** The return code's name, e.g. `RFC_CLOSED`. */
-  readonly codeString: string;
+  readonly codeString: RfcReturnCode;
 }
 
-/** A thrown error that carries an RFC failure. */
-export interface IAdtRfcFailure {
-  readonly rfc: IAdtRfcError;
+/** What a connection's thrown error may carry. */
+export interface IAbapConnectionError {
+  readonly code?: string | undefined;
+  readonly rfc?: IRfcErrorInfo | undefined;
 }
 ```
 
-Both exported from the package index. Nothing else is needed: no constant list of codes (the
-connection does not decide by code — section 4), no guard function. If the parallel goal of that
-package names them otherwise, the connection follows its names; the fields and their types are
-what this spec needs.
+What the connection uses: `RFC_RCS` (a value — the one membership test of section 3),
+`RfcReturnCode`, `IRfcErrorInfo` (the type of `rfc`) and `IAbapConnectionError` (what both the
+wire's errors and the base's `SESSION_REPLACED` error conform to). Nothing else: no guard, no
+code-to-group table.
 
 ## 3. The SDK error, checked once
 
 - **Where.** In `RfcTransport.carry()`, in the `catch` of `conversation.call(…)`: the one place
   an SDK error enters (Code). One module-private function, `rfcErrorOf(thrown: unknown):
-  IAdtRfcError | undefined`.
+  IRfcErrorInfo | undefined`.
 - **The shape test.** `thrown` is a non-null object; `key` and `codeString` are own data
   properties holding strings; `group` and `code` own data properties holding integers
   (`Number.isInteger`). Read with `Object.getOwnPropertyDescriptor` (no getter runs), inside a
-  `try` (a Proxy trap that throws reads as no shape). `name` and `message` are not read. All
-  four present: a fresh frozen `{ key, group, code, codeString }`; any missing: `undefined`.
+  `try` (a Proxy trap that throws reads as no shape). `name` and `message` are not read.
+- **The return code is one of `RFC_RCS`.** `codeString` must be a member of the closed list
+  (`RFC_RCS.find((listed) => listed === codeString)`, plain comparison — the found member is
+  what is stored, so it is typed `RfcReturnCode` without a cast). One not listed: no `rfc` at
+  all — the error goes as today, its text only.
+- All four present and the code listed: a fresh frozen `{ key, group, code, codeString }`;
+  otherwise `undefined`.
 - **What is thrown.** Always an `Error` whose message is today's
   (`RFC call to SADT_REST_RFC_ENDPOINT failed: …`, unchanged) — with an own `rfc` property when
-  the shape test passed, without one otherwise. Top-level `code` is not set.
+  the shape test passed, without one otherwise. Top-level `code` is not set. The thrown value
+  conforms to `IAbapConnectionError`.
 - **No shape.** `nodeRfcError` (the closed-connection error), the passport's `TypeError`, the
-  passport-too-long error and anything else carry no `rfc`; thrown as today. Whether such a
+  passport-too-long error, an SDK error whose `codeString` is not in `RFC_RCS`, and anything
+  else carry no `rfc`; thrown as today. Whether such a
   failure ended the session is decided by section 4, not by the shape.
 - The `error`-level log line stays as today (Code); no field is parsed out of it.
 
@@ -104,7 +116,7 @@ what this spec needs.
 - **The wire marks it, the base decides.** The wire drops the dead conversation (`conversation`
   set to `null`, `conversationId` to `''`, without calling `close()` — there is nothing left to
   release and `close()` would reject) and throws `WireSessionLostError` (new, beside
-  `WireLogonError` in `authErrors.ts`, exported like it): an `Error` with `rfc?: IAdtRfcError`
+  `WireLogonError` in `authErrors.ts`, exported like it): an `Error` with `rfc?: IRfcErrorInfo`
   (from section 3) and the fixed message of the call's failure. It decides nothing else.
 - **The base.** `throwIfSessionDead(error, lease)` also recognises `error instanceof
   WireSessionLostError`: when the lease is current it calls
@@ -138,8 +150,9 @@ what this spec needs.
 ## 6. The passport header
 
 - **Found.** In `carry()`, over `request.headers`: every entry whose name, with ASCII `A–Z`
-  folded to lower case, is `sap-passport`. None: no passport. More than one entry: refused,
-  nothing sent ("The request names SAP-PASSPORT more than once; nothing was sent.").
+  folded to lower case, is `sap-passport`. None: no passport. More than one entry, in any case
+  and whatever their values (equal ones too): always refused before anything is sent ("The
+  request names SAP-PASSPORT more than once; nothing was sent.").
 - **Decoded with plain code.** The value is a string (the header type, Code); it must be
   non-empty, of even length, and every character one of `0–9`, `a–f`, `A–F` (a character test
   per position, no regex, no `Buffer.from(…, 'hex')` before the test — that call stops silently
@@ -161,7 +174,7 @@ what this spec needs.
   (goal; documented, section 8).
 - HTTP wires: untouched.
 
-## 7. The two regex rewrites, results kept
+## 7. The two regex rewrites, results kept — with one exception
 
 ### 7.1 `statusFromExceptionXml(body)`
 
@@ -170,7 +183,7 @@ Today: `/<exc:type[^>]*>([^<]+)<\/exc:type>/.exec(body)?.[1]?.trim()`, then
 occurrence `i` of `<exc:type` (from the left, `indexOf`), let `j` be the first `>` after
 `i + 9`; none: no match at all. The capture runs from `j + 1` to the first `<` after it, `k`;
 it matches when `k > j + 1` and `body.startsWith('</exc:type>', k)`; else try the next
-occurrence after `i`. First match wins, then `trim()` and the same lookup.
+occurrence after `i`. First match wins, then `trim()` and the lookup.
 
 Pinned inputs → status (each as a test row, and each also run against the old regex kept in the
 test file as the oracle — the rule is "no regex in production code", Code: goal):
@@ -190,11 +203,14 @@ test file as the oracle — the rule is "no regex in production code", Code: goa
 | no `<exc:type` | 500 |
 | `<exc:type` without `>` | 500 |
 
-The lookup is unchanged. **Open (owner)**: `EXCEPTION_STATUS[type]` is a plain-object lookup, so
-a `<exc:type>toString</exc:type>` (or `constructor`, …) yields an `Object.prototype` member
-whose `code` is `undefined`, and `carry()` then falls through to `200 OK` for an exception
-document (Code, by reading; not run). Keeping results exact keeps that; an own-key lookup would
-answer `500`.
+**The one exception to "same results": the lookup is by own keys only.** Today
+`EXCEPTION_STATUS[type]` is a plain-object lookup, so a `<exc:type>toString</exc:type>` (or
+`constructor`, `hasOwnProperty`, …) yields an `Object.prototype` member whose `code` is
+`undefined`, and `carry()` then falls through to `200 OK` for an exception document (Code, by
+reading; not run). The rewrite looks a type up only when it is an own key of `EXCEPTION_STATUS`
+(`Object.hasOwn`); any other type gives `500 Internal Server Error`, as an unknown type does
+today. Its own test rows, where the oracle is not applied: `<exc:type>toString</exc:type>`,
+`<exc:type>constructor</exc:type>` and `<exc:type>__proto__</exc:type>` → 500.
 
 ### 7.2 `SECRET_HEADER_PATTERNS`
 
@@ -252,11 +268,13 @@ once, the test seen red, then reverted.
 |---|---|---|
 | fields | an `RfcLibError`-shaped rejection reaches the caller with `rfc` equal to its four fields; an `AbapError`-shaped one too | drop `rfc`; read `key` from the message |
 | fields, shape | each field missing, of the wrong type, a getter, a throwing Proxy: no `rfc`, no throw from the check | drop each conjunct of the shape test, one at a time |
+| fields, closed code | a `codeString` not in `RFC_RCS` (`RFC_NOT_A_CODE`, `''`, `rfc_closed`): no `rfc`, the message as today | drop the membership test |
 | fields, top-level `code` | an `rfc` error has no own `code` | set `code` from `rfc.code` |
 | passport found | `sap-passport`, `SAP-PASSPORT`, `Sap-Passport` each reach `call` as the decoded `Buffer` in the third argument | compare names case-sensitively |
 | passport removed | no `HEADER_FIELDS` entry and no `logWire` line names it | keep it in `HEADER_FIELDS` |
 | no header, no passport | `call` receives exactly two arguments | always pass `{ passport: undefined }` |
-| passport refused | odd length, empty, a non-hex character at the first, a middle and the last position, two entries: rejected, `call` not invoked, the message names the header and holds no character of the value | drop each rule; quote the value |
+| passport refused | odd length, empty, a non-hex character at the first, a middle and the last position: rejected, `call` not invoked, the message names the header and holds no character of the value | drop each rule; quote the value |
+| passport twice | `SAP-PASSPORT` and `sap-passport`, with different and with equal values: rejected, `call` not invoked | refuse only differing values; take the first |
 | passport per call | a second request without the header after one with it carries none | keep the last passport on the wire |
 | session lost | stateful call rejects and leaves `alive` false → caller gets `ADT_SESSION_REPLACED` with `rfc`; the next request `ADT_NOT_CONNECTED`, no `call`, no new `open` | ignore `alive`; reopen in `send`; drop `rfc` in the base |
 | session lost, concurrent | a second stateful call meeting the closed-connection error is reported the same way, no `rfc` | decide on the code instead of `alive` |
@@ -267,6 +285,7 @@ once, the test seen red, then reverted.
 | base, no kind | a stub wire (not RFC) throwing `WireSessionLostError` spends the instance the same way | branch on `kind` |
 | stale lease | a `WireSessionLostError` from a previous session is rethrown, nothing spent | drop the lease check |
 | regex 7.1 | the table, and equality with the oracle | each step of the scan (wrong start, `>` search, empty capture, the closing tag) |
+| own-key lookup | `toString`, `constructor`, `__proto__` → 500 | look up without `Object.hasOwn` |
 | regex 7.2 | the names, and equality with the oracle | `toLowerCase()`; drop each substring |
 | no regex | a source test: no regex literal or `RegExp` in `src/connection/RfcTransport.ts` | add one back |
 | no timer | the existing timer counter covers the new code (Code: `packageTimers`) | — |
@@ -298,8 +317,9 @@ once, the test seen red, then reverted.
   4. Run (`POST /sap/bc/adt/oo/classrun/ZAC_SHR_DBG_PROBE`) with the `SAP-PASSPORT` header,
      not awaited. The listener answers a `DEBUGGEE_ID`.
   5. On the debugger's connection, stateful: attach, then `terminateDebugger`. Expect the
-     rejection to carry `code` `ADT_SESSION_REPLACED` and `rfc` with `RFC_CLOSED` (which field
-     holds it — **Open**, measured in the first run), then the next request on it
+     rejection to carry `code` `ADT_SESSION_REPLACED` and `rfc` with `key` `RFC_CLOSED` **and**
+     `codeString` `RFC_CLOSED` (both asserted; group `4`, code `6` — Measured earlier at
+     debugger termination over RFC), then the next request on it
      `ADT_NOT_CONNECTED`, and the factory's count unchanged after the error.
   6. The run answers `200` with its output (the debugger freed it).
 - **Not caught.** The same without the header: the listener's shorter hold ends empty and the
