@@ -630,6 +630,7 @@ describeWhere(
       const debuggerSide = countedDebugger();
       const ids = randomIds();
       let armed = false;
+      let cleanup: number[] = [];
       try {
         await listener.connect();
         const line = await probeLine(listener);
@@ -710,11 +711,16 @@ describeWhere(
         assert.strictEqual(output.status, 200, 'the run answered');
         assert.ok(output.body.length > 0, 'the run answered its output');
       } finally {
-        await cleanUp(listener, ids, armed);
+        cleanup = await cleanUp(listener, ids, armed);
         await checker.disconnect();
         await runner.disconnect();
         await debuggerSide.conn.disconnect();
       }
+      assert.deepStrictEqual(
+        cleanup,
+        [200, 200],
+        'listener and breakpoints removed',
+      );
     });
 
     it('a run without the passport is not caught', {
@@ -725,6 +731,7 @@ describeWhere(
       const runner = roleConnection();
       const ids = randomIds();
       let armed = false;
+      let cleanup: number[] = [];
       try {
         await listener.connect();
         const line = await probeLine(listener);
@@ -752,28 +759,32 @@ describeWhere(
         assert.strictEqual(output.status, 200, 'the run answered');
         assert.ok(output.body.length > 0, 'the run answered its output');
       } finally {
-        await cleanUp(listener, ids, armed);
+        cleanup = await cleanUp(listener, ids, armed);
         await checker.disconnect();
         await runner.disconnect();
       }
+      assert.deepStrictEqual(
+        cleanup,
+        [200, 200],
+        'listener and breakpoints removed',
+      );
     });
 
-    /** The listener deleted and the breakpoints cleared, then disconnected. */
+    /**
+     * The listener deleted and the breakpoints cleared, then disconnected:
+     * the two answers' statuses, none when nothing was armed. A test asserts
+     * them after its `finally`, so a failure of its own is never hidden.
+     */
     async function cleanUp(
       listener: AbapConnection & { disconnect(): Promise<void> },
       ids: Terminal,
       armed: boolean,
-    ): Promise<void> {
+    ): Promise<number[]> {
       try {
-        if (armed) {
-          const stopped = await stopListener(listener, ids);
-          const cleared = await clearBreakpoints(listener, ids);
-          if (stopped !== 200 || cleared !== 200) {
-            logger.warn(
-              `cleanup: deleting the listener answered ${stopped}, clearing the breakpoints ${cleared}`,
-            );
-          }
-        }
+        if (!armed) return [];
+        const stopped = await stopListener(listener, ids);
+        const cleared = await clearBreakpoints(listener, ids);
+        return [stopped, cleared];
       } finally {
         await listener.disconnect();
       }
