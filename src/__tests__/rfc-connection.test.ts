@@ -31,7 +31,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { after, before, describe, it, mock } from 'node:test';
+import { after, before, describe, it, mock, type TestContext } from 'node:test';
 import {
   BasicAuthProvider,
   SncLogonProvider,
@@ -43,11 +43,33 @@ import type {
   ISapRfcMessageServer,
 } from '@mcp-abap-adt/interfaces-auth-sap';
 import * as dotenv from 'dotenv';
+import type { AbapConnection } from '../connection/AbapConnection.js';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
-import { RfcTransport } from '../connection/RfcTransport.js';
+import { createConnection } from '../connection/createConnection.js';
+import {
+  type RfcConversationFactory,
+  RfcTransport,
+} from '../connection/RfcTransport.js';
 import { rfcConversationFrom } from '../connection/rfcConversation.js';
 import type { ILogger } from '../logger.js';
 import { messageOf } from './helpers/assertions.js';
+import {
+  armBreakpoint,
+  attach,
+  checkListener,
+  classUri,
+  clearBreakpoints,
+  debuggeePassportHex,
+  type ListenerAnswer,
+  lineOf,
+  listen,
+  randomIds,
+  request,
+  runClass,
+  stopListener,
+  type Terminal,
+  terminateDebugger,
+} from './helpers/liveDebugger.js';
 
 // Load env file — default to e19.env, override via SAP_ENV_FILE
 const envFile = process.env.SAP_ENV_FILE || 'e19.env';
@@ -240,9 +262,11 @@ function messageServerUnavailable(): string | null {
 /** What a block registers its tests and hooks with. */
 /** A test body, as node:test runs it. */
 type Body = () => Promise<void> | void;
+/** A test body, which may read its context (to skip at run time). */
+type TestBody = (context: TestContext) => Promise<void> | void;
 type Live = {
-  it(name: string, fn: Body): void;
-  it(name: string, options: { timeout?: number }, fn: Body): void;
+  it(name: string, fn: TestBody): void;
+  it(name: string, options: { timeout?: number }, fn: TestBody): void;
   before(fn: Body, options?: { timeout?: number }): void;
   after(fn: Body): void;
 };
@@ -480,5 +504,279 @@ describeWhere(
       });
       assert.strictEqual(response.status, 200);
     });
+  },
+);
+
+/**
+ * The passport and the session end, over RFC, against the shared debugger
+ * probe class: `ZAC_SHR_DBG_PROBE`, created and activated by the ADT clients'
+ * shared test setup (`shared_dependencies`), never changed or deleted here.
+ * Nothing is created, changed or deleted in the system; the breakpoints and
+ * the listener set here are removed, and every connection is disconnected, in
+ * a `finally`. No id, passport, lock handle or value of the env file is
+ * printed.
+ */
+describeWhere(
+  'the passport and the session end over RFC (integration)',
+  basicUnavailable(),
+  ({ it }) => {
+    const PROBE = 'ZAC_SHR_DBG_PROBE';
+    /** How long the server holds a listener expected to catch the run. */
+    const HOLD_CAUGHT = 30;
+    /** How long the server holds a listener expected to catch nothing. */
+    const HOLD_EMPTY = 10;
+
+    function roleConnection() {
+      const config = stated(applicationServer());
+      const { username, password } = stated(basicCredential());
+      return createConnection({
+        system: 'onprem',
+        transport: 'rfc',
+        config,
+        credential: new BasicAuthProvider(username, password),
+        logger,
+      });
+    }
+
+    /**
+     * The debugger's connection, over a factory that counts the conversations
+     * it opens: a new session after the end would be one more.
+     */
+    function countedDebugger() {
+      const config = stated(applicationServer());
+      const { username, password } = stated(basicCredential());
+      const base = rfcConversationFrom(config);
+      let opened = 0;
+      const counting: RfcConversationFactory = Object.assign(
+        (logon: Readonly<Record<string, string>>) => {
+          opened += 1;
+          return base(logon);
+        },
+        { language: base.language },
+      );
+      const conn = new AdtOnPremConnector(
+        config,
+        new BasicAuthProvider(username, password),
+        new RfcTransport(counting, logger),
+        logger,
+      );
+      return { conn, opened: () => opened };
+    }
+
+    /**
+     * The breakpoint line: the probe's line marked `"BP:loop`, read from its
+     * source. `undefined` when the class does not exist here.
+     */
+    async function probeLine(
+      conn: AbapConnection,
+    ): Promise<number | undefined> {
+      const source = await request(
+        conn,
+        'GET',
+        `${classUri(PROBE)}/source/main`,
+        { headers: { Accept: 'text/plain' } },
+      );
+      if (source.status === 404) return undefined;
+      assert.strictEqual(source.status, 200, 'reading the probe class');
+      const line = lineOf(source.body, '"BP:loop');
+      assert.notStrictEqual(line, undefined, 'the probe marks "BP:loop');
+      return line;
+    }
+
+    /**
+     * Resolve once the listener whose poll is `heard` stands at the system.
+     *
+     * Owner-approved test-only exception (2026-11-11) to "no polling", as in
+     * sap-rfc-lite's live suite: ADT offers no readiness event for a
+     * terminal-mode listener. Measured on premise: a run sent before the
+     * listener stands is not held and is not caught; a listener is registered
+     * only while its poll is held; a second listener of the same user answers
+     * 409 only when it arrives after the first. The one thing that says "a
+     * listener stands" is the check's 409, so the check is repeated — with no
+     * pause beyond its own round trip — until it answers 409. The listener's
+     * own hold bounds the loop: if its poll settles before a 409 is seen, this
+     * fails saying so.
+     */
+    async function listening(
+      checker: AbapConnection,
+      heard: Promise<ListenerAnswer>,
+    ): Promise<void> {
+      let settled = false;
+      heard.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      const asker = randomIds();
+      for (;;) {
+        if (settled) {
+          throw new Error(
+            "the listener's poll settled before the check answered 409 (a listener stands)",
+          );
+        }
+        if ((await checkListener(checker, asker)) === 'standing') return;
+      }
+    }
+
+    it('a run carrying the passport is caught; ending the debugger ends the session, and nothing opens a new one', {
+      timeout: 180_000,
+    }, async (context) => {
+      const listener = roleConnection();
+      const checker = roleConnection();
+      const runner = roleConnection();
+      const debuggerSide = countedDebugger();
+      const ids = randomIds();
+      let armed = false;
+      try {
+        await listener.connect();
+        const line = await probeLine(listener);
+        if (line === undefined) {
+          context.skip(
+            `${PROBE} does not exist here: the ADT clients' shared test setup creates it`,
+          );
+          return;
+        }
+        await checker.connect();
+        await runner.connect();
+        await debuggerSide.conn.connect();
+        debuggerSide.conn.setSessionType('stateful');
+
+        assert.strictEqual(
+          await armBreakpoint(listener, ids, PROBE, line),
+          200,
+          'arming the breakpoint',
+        );
+        armed = true;
+
+        const heard = listen(listener, ids, HOLD_CAUGHT);
+        await listening(checker, heard);
+        const run = runClass(runner, PROBE, {
+          'SAP-PASSPORT': debuggeePassportHex(ids),
+        });
+        const caught = await heard;
+        assert.ok(caught.caught, 'the listener caught the run');
+
+        assert.strictEqual(
+          await attach(debuggerSide.conn, caught.debuggeeId),
+          200,
+          'attached',
+        );
+        const openedBefore = debuggerSide.opened();
+
+        const ended = await terminateDebugger(debuggerSide.conn).then(
+          () =>
+            assert.fail('terminateDebugger was expected to end the session'),
+          (error: unknown) => error,
+        );
+        assert.ok(ended instanceof Error);
+        assert.strictEqual(
+          Object.getOwnPropertyDescriptor(ended, 'code')?.value,
+          'ADT_SESSION_REPLACED',
+        );
+        const rfc: unknown = Object.getOwnPropertyDescriptor(
+          ended,
+          'rfc',
+        )?.value;
+        assert.deepStrictEqual(rfc, {
+          key: 'RFC_CLOSED',
+          group: 4,
+          code: 6,
+          codeString: 'RFC_CLOSED',
+        });
+
+        const after = await request(
+          debuggerSide.conn,
+          'GET',
+          `${classUri(PROBE)}/source/main`,
+        ).then(
+          () =>
+            assert.fail('a request after the end was expected to be refused'),
+          (error: unknown) => error,
+        );
+        assert.strictEqual(
+          Object.getOwnPropertyDescriptor(after, 'code')?.value,
+          'ADT_NOT_CONNECTED',
+        );
+        assert.strictEqual(
+          debuggerSide.opened(),
+          openedBefore,
+          'no conversation opened after the end',
+        );
+
+        const output = await run;
+        assert.strictEqual(output.status, 200, 'the run answered');
+        assert.ok(output.body.length > 0, 'the run answered its output');
+      } finally {
+        await cleanUp(listener, ids, armed);
+        await checker.disconnect();
+        await runner.disconnect();
+        await debuggerSide.conn.disconnect();
+      }
+    });
+
+    it('a run without the passport is not caught', {
+      timeout: 120_000,
+    }, async (context) => {
+      const listener = roleConnection();
+      const checker = roleConnection();
+      const runner = roleConnection();
+      const ids = randomIds();
+      let armed = false;
+      try {
+        await listener.connect();
+        const line = await probeLine(listener);
+        if (line === undefined) {
+          context.skip(
+            `${PROBE} does not exist here: the ADT clients' shared test setup creates it`,
+          );
+          return;
+        }
+        await checker.connect();
+        await runner.connect();
+        assert.strictEqual(
+          await armBreakpoint(listener, ids, PROBE, line),
+          200,
+          'arming the breakpoint',
+        );
+        armed = true;
+
+        const heard = listen(listener, ids, HOLD_EMPTY);
+        await listening(checker, heard);
+        const run = runClass(runner, PROBE);
+
+        assert.deepStrictEqual(await heard, { caught: false });
+        const output = await run;
+        assert.strictEqual(output.status, 200, 'the run answered');
+        assert.ok(output.body.length > 0, 'the run answered its output');
+      } finally {
+        await cleanUp(listener, ids, armed);
+        await checker.disconnect();
+        await runner.disconnect();
+      }
+    });
+
+    /** The listener deleted and the breakpoints cleared, then disconnected. */
+    async function cleanUp(
+      listener: AbapConnection & { disconnect(): Promise<void> },
+      ids: Terminal,
+      armed: boolean,
+    ): Promise<void> {
+      try {
+        if (armed) {
+          const stopped = await stopListener(listener, ids);
+          const cleared = await clearBreakpoints(listener, ids);
+          if (stopped !== 200 || cleared !== 200) {
+            logger.warn(
+              `cleanup: deleting the listener answered ${stopped}, clearing the breakpoints ${cleared}`,
+            );
+          }
+        }
+      } finally {
+        await listener.disconnect();
+      }
+    }
   },
 );
