@@ -52,20 +52,21 @@ system), **Inference** (reasoned, not checked). Points left to the owner are mar
 ## 2. The `rfc` contract — what connection needs from `interfaces-adt-connection` 4.1.0
 
 Additive, types and constants only (Code: that package's goal, its worktree `rfc-error`). The
-names below are the ones decided for 4.1.0; the final ones are that package's spec's, and this
-spec follows them where they differ:
+names below are the final ones of that package's spec (`IAbapConnectionError`, `IRfcErrorInfo`,
+`RFC_RCS`, `RfcReturnCodeName`; `IAbapConnectionError` does not extend `Error` — a connection
+throws `Error & IAbapConnectionError`):
 
 ```ts
 /** The 34 `RFC_RC` names of `sapnwrfc.h`, closed. */
 export const RFC_RCS = [/* 'RFC_OK', …, 'RFC_CLOSED', … — 34 names */] as const;
-export type RfcReturnCode = (typeof RFC_RCS)[number];
+export type RfcReturnCodeName = (typeof RFC_RCS)[number];
 
 /** The SDK's error, as fields. */
 export interface IRfcErrorInfo {
   readonly key: string;
   readonly group: number;
   readonly code: number;
-  readonly codeString: RfcReturnCode;
+  readonly codeString: RfcReturnCodeName;
 }
 
 /** What a connection's thrown error may carry. */
@@ -76,7 +77,7 @@ export interface IAbapConnectionError {
 ```
 
 What the connection uses: `RFC_RCS` (a value — the one membership test of section 3),
-`RfcReturnCode`, `IRfcErrorInfo` (the type of `rfc`) and `IAbapConnectionError` (what both the
+`RfcReturnCodeName`, `IRfcErrorInfo` (the type of `rfc`) and `IAbapConnectionError` (what both the
 wire's errors and the base's `SESSION_REPLACED` error conform to). Nothing else: no guard, no
 code-to-group table.
 
@@ -91,7 +92,7 @@ code-to-group table.
   `try` (a Proxy trap that throws reads as no shape). `name` and `message` are not read.
 - **The return code is one of `RFC_RCS`.** `codeString` must be a member of the closed list
   (`RFC_RCS.find((listed) => listed === codeString)`, plain comparison — the found member is
-  what is stored, so it is typed `RfcReturnCode` without a cast). One not listed: no `rfc` at
+  what is stored, so it is typed `RfcReturnCodeName` without a cast). One not listed: no `rfc` at
   all — the error goes as today, its text only.
 - All four present and the code listed: a fresh frozen `{ key, group, code, codeString }`;
   otherwise `undefined`.
