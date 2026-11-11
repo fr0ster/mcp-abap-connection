@@ -223,17 +223,43 @@ function message(e: unknown): string {
  * (`SAP_SESSIONID_*`, `MYSAPSSO2`), an `x-csrf-token` or its own `X-Api-Key`
  * arrives here too. A log line advertised as safe to paste into an issue has
  * to be safe for the headers nobody here anticipated, so this matches by
- * pattern rather than by the list we happened to think of.
+ * part of the name rather than by the list we happened to think of.
+ *
+ * Plain string code, no regular expression: the name is folded to lower case
+ * in ASCII `A`–`Z` only (the former `/i` patterns, without the `u` flag, never
+ * folded a non-ASCII character to an ASCII letter — `toLowerCase()` would map
+ * the Kelvin sign to `k`), then searched for each part.
  */
-const SECRET_HEADER_PATTERNS = [
-  /authorization/i,
-  /cookie/i,
-  /token/i,
-  /secret/i,
-  /password/i,
-  /credential/i,
-  /api[-_]?key/i,
+const SECRET_HEADER_PARTS = [
+  'authorization',
+  'cookie',
+  'token',
+  'secret',
+  'password',
+  'credential',
+  'apikey',
+  'api-key',
+  'api_key',
 ];
+
+/** `text` with ASCII `A`–`Z` lowered, every other character as it is. */
+function asciiLowerCase(text: string): string {
+  let folded = '';
+  for (let i = 0; i < text.length; i += 1) {
+    const unit = text.charCodeAt(i);
+    folded +=
+      unit >= 0x41 && unit <= 0x5a
+        ? String.fromCharCode(unit + 0x20)
+        : text.charAt(i);
+  }
+  return folded;
+}
+
+/** Whether a header's value must not reach a log, by its name. */
+function isSecretHeader(name: string): boolean {
+  const folded = asciiLowerCase(name);
+  return SECRET_HEADER_PARTS.some((part) => folded.includes(part));
+}
 
 /**
  * The NAME is kept and only the VALUE goes — a redacted header still says it
@@ -243,9 +269,7 @@ function redactHeaders(
   fields: { NAME: string; VALUE: string }[],
 ): { NAME: string; VALUE: string }[] {
   return fields.map((field) =>
-    SECRET_HEADER_PATTERNS.some((pattern) => pattern.test(field.NAME))
-      ? { ...field, VALUE: '[redacted]' }
-      : field,
+    isSecretHeader(field.NAME) ? { ...field, VALUE: '[redacted]' } : field,
   );
 }
 
