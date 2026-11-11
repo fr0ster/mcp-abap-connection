@@ -709,6 +709,24 @@ written. The old session SAP already ended, and a session reported gone
 `ADT_SESSION_REPLACED` reaches the caller as before. Over RFC the
 conversation is the session and no answer can replace it.
 
+**Over RFC, an RFC error can end the session** (22.0.0). When an RFC error
+ends the stateful conversation — sap-rfc-lite releases it (`alive` is
+`false`) — the session it carried is gone with its locks. The request rejects
+`ADT_SESSION_REPLACED`, with the RFC call's fields as `rfc` (`key`, `group`,
+`code`, `codeString`), and the instance is spent as above: `connect()` and
+every request reject `ADT_NOT_CONNECTED`, nothing is sent, and no new
+conversation is opened. Before 22.0.0 the next request went on, silently, on a
+new session, its locks gone. Create a new connection for a new session. A
+non-stateful conversation an RFC error ends is not the instance's session: it
+is dropped as a failed reset drops it, the next call opens another, and the
+instance goes on. The wire says it with `WireSessionLostError`; the connection
+acts on that class, whichever wire throws it.
+
+**A caught stateful session stays caught.** Once an external debugger caught
+a call on the stateful RFC session, later calls on it are caught too, with or
+without a passport, until it ends. The connection does not reset it: that
+would drop its locks.
+
 ## Advanced Features
 
 ### Session ID Management
@@ -1099,6 +1117,19 @@ carries it; the wire never reads `config.username` or `config.password`.
   over RFC: the open fails, the provider is asked, and you get its refusal.
 - A failed RFC open is thrown as `WireLogonError` with the SDK's own error as
   `cause`, so a provider can read the SDK's `key` and message.
+- **A failed RFC call carries `rfc`** (22.0.0): `{ key, group, code,
+  codeString }` (`IRfcErrorInfo`, `codeString` one of `RFC_RCS`, both from
+  `@mcp-abap-adt/interfaces-adt-connection`), checked once where the wire
+  receives the SDK's error — own data properties only, nothing read out of a
+  message. The message is unchanged and the top-level `code` is not set. An
+  error the SDK did not name carries no `rfc`. On every conversation.
+- **The `SAP-PASSPORT` header is the RFC call's passport** (22.0.0). Its name
+  read without case, its value hex-decoded and handed to sap-rfc-lite as
+  `call(…, { passport })` for that call only, on whichever conversation carries
+  the request; it is not sent as a header field (`SADT_REST_RFC_ENDPOINT` reads
+  none). A value that is not hex, or the header named twice, is refused before
+  anything is sent, the value never quoted. No header: no passport, the call as
+  before.
 
 **`logWire` dumps the wire, and is off.** With it on, `RfcTransport` adds three
 debug lines per request — the header fields, the request body and the response
