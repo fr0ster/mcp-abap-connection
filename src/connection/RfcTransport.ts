@@ -198,14 +198,40 @@ const EXCEPTION_STATUS: Record<string, { code: number; text: string }> = {
   ExceptionConflict: { code: 409, text: 'Conflict' },
 };
 
-function statusFromExceptionXml(body: string): { code: number; text: string } {
-  const type = /<exc:type[^>]*>([^<]+)<\/exc:type>/.exec(body)?.[1]?.trim();
-  return (
-    (type ? EXCEPTION_STATUS[type] : undefined) ?? {
-      code: 500,
-      text: 'Internal Server Error',
+const TYPE_OPEN = '<exc:type';
+const TYPE_CLOSE = '</exc:type>';
+
+/**
+ * The text of the first `<exc:type …>TEXT</exc:type>` in `body`, by a linear
+ * scan: from each `<exc:type`, the first `>` after it opens the text, which
+ * runs to the next `<` and counts only when it is not empty and that `<`
+ * begins `</exc:type>`. Otherwise the next `<exc:type` is tried.
+ */
+function exceptionType(body: string): string | undefined {
+  let open = body.indexOf(TYPE_OPEN);
+  while (open >= 0) {
+    const tagEnd = body.indexOf('>', open + TYPE_OPEN.length);
+    if (tagEnd < 0) return undefined;
+    const textEnd = body.indexOf('<', tagEnd + 1);
+    if (textEnd > tagEnd + 1 && body.startsWith(TYPE_CLOSE, textEnd)) {
+      return body.slice(tagEnd + 1, textEnd);
     }
-  );
+    open = body.indexOf(TYPE_OPEN, open + 1);
+  }
+  return undefined;
+}
+
+/**
+ * The status an exception document stands for. A type is looked up only as an
+ * own key of `EXCEPTION_STATUS`: `toString`, `constructor` and the other
+ * members every object inherits name no status, and give 500 as an unknown
+ * type does.
+ */
+function statusFromExceptionXml(body: string): { code: number; text: string } {
+  const type = exceptionType(body)?.trim();
+  return type && Object.hasOwn(EXCEPTION_STATUS, type)
+    ? EXCEPTION_STATUS[type]
+    : { code: 500, text: 'Internal Server Error' };
 }
 
 function message(e: unknown): string {
