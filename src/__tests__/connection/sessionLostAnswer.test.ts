@@ -299,9 +299,12 @@ describe('unchanged: connect() and the cloud preflight', () => {
     await conn.disconnect();
   });
 
-  it('absorbs a preflight refused with a new SAP_SESSIONID, and connects', async () => {
+  it('absorbs a preflight refused with a new SAP_SESSIONID, takes nothing of it, and connects', async () => {
     stub.work(SESSIONS, [
-      { status: 500, headers: { 'set-cookie': `${COOKIE}=P1; Path=/` } },
+      {
+        status: 500,
+        headers: { 'set-cookie': 'SAP_SESSIONID_PRE_100=P1; Path=/' },
+      },
     ]);
     const conn = cloud();
 
@@ -309,6 +312,7 @@ describe('unchanged: connect() and the cloud preflight', () => {
 
     assert.strictEqual(conn.isConnected(), true);
     assert.ok(conn.sessionCookies()?.includes(`${COOKIE}=S1`));
+    assert.strictEqual(conn.sessionCookies()?.includes('P1'), false);
     await conn.disconnect();
   });
 });
