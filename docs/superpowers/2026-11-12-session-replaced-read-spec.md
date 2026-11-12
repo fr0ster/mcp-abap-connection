@@ -16,8 +16,8 @@ lean on:
   and `raiseSessionLost` (Code: `AbstractAbapConnection.ts`). It runs inside `observeResponse`,
   which is called for the success of every attempt (`sendObserved`), for the refusal of the first
   attempt (`recoverOnWire`), for the refusal of the resend after a credential renewal
-  (`answerCredentialFailure`) and, through the session context, for the connection's own exchanges
-  (CSRF fetch, logon, `connect()`); not for the refusal of the CSRF retry's resend (Code).
+  (`answerCredentialFailure`) and, through the session context, for the successful answers of the
+  connection's own exchanges (section 3.3); not for the refusal of the CSRF retry's resend (Code).
 - `raiseSessionLost` is synchronous: when it returns, admission is shut, the generation has moved,
   `isConnected()` is `false`; `clearSessionState` has emptied the jar, so `sessionCookies()` is
   `null` (Code: `SessionLifecycle.beginTeardown`, `HttpTransport.forgetSession`).
@@ -57,11 +57,14 @@ What follows:
 
 - The session-dead `400` page is SAP's answer to a `sap-contextid` it does not know, whatever else
   the request carries; it never set a `SAP_SESSIONID`, so it never shows a replacement (Measured).
-- A request without `sap-contextid` never got it (Measured). The connection sends `sap-contextid`
-  only on stateful requests (Code: `HttpTransport.dress`, `withoutContextCookie`). So a stateless
-  request of this connection does not receive that page (Inference from both).
+- In the measured cases, a request without `sap-contextid` never got it (Measured). The connection
+  sends `sap-contextid` only on stateful requests (Code: `HttpTransport.dress`,
+  `withoutContextCookie`). So, as far as the measured triggers go, a stateless request of this
+  connection does not receive that page (Inference from both; another trigger is not ruled out).
 - The #354 answer — a valid `200` with a new `SAP_SESSIONID` — is what a request without the context
-  cookie gets on a dead session, stateful header or not (Measured).
+  cookie and with the credential gets on a dead session, stateful header or not; without the
+  credential it is `401` (Measured). This connection sends the credential on every request (Code:
+  `authorizedFrom`).
 
 ## 3. The open questions of the goal, answered
 
@@ -78,9 +81,9 @@ What follows:
   lease (3.4). A consumer reads `sessionLost !== undefined`, typed, without parsing words.
 - **Attributable.** The mark is on the one object that answers the one request whose answer showed
   the replacement; other requests in flight do not get it (3.4).
-- **Before the caller has it.** The mark is set after the session is lost (`raiseSessionLost` and
-  the cleanup, synchronous) and before the answer settles, so a consumer reading `isConnected()` in
-  its continuation reads `false` (Code for the synchronous loss; unit-tested for the order).
+- **Before the caller has it.** The session is lost (`raiseSessionLost` and the cleanup,
+  synchronous) and the mark set before the answer settles, so a consumer reading `isConnected()` in
+  its continuation reads `false` (Code for the synchronous loss; unit-tested in the continuation).
 - Why not the next request's `NOT_CONNECTED`, `isConnected()` or a callback: the first two are not
   attributable to an answer (goal); a callback is a second channel a consumer must wire before the
   first request, and a forgotten one loses the fact. The mark travels with the answer (Inference).
@@ -114,12 +117,28 @@ request of this connection; it is the rule if another answer ever does.
 
 ### 3.3 The connection's own exchanges
 
-A replacement seen on an exchange that is not an attempt of the caller's request stays
-`ADT_SESSION_REPLACED`, as today: the CSRF fetch inside the CSRF retry, the logon, the CSRF fetch of
-`connect()` (and the resume of `createConnection({ session })`). There is no answer of the caller's
-to keep. For the CSRF retry, the mutation's request rejects with that `ADT_SESSION_REPLACED`, which
-outranks the first attempt's error (Code: `outranksOriginal`); nothing is resent, because the
-replacement was seen before the resend.
+Every exchange that is not an attempt of the caller's request keeps today's behaviour; there is no
+answer of the caller's to keep, and none of these policies changes (changing any would change the
+decision):
+
+- **Inside a request** (`leasedContext`, a current lease): the wire's upfront CSRF fetch before a
+  mutation, the CSRF fetch of the CSRF retry, the logon and fetch after a refused logon
+  (`ensureWireReady` in `answerCredentialFailure`). A successful answer that shows a replacement
+  goes through `observeResponse` without `keepAnswer` and throws `ADT_SESSION_REPLACED`, the request
+  rejecting with it; it outranks the first attempt's error in the CSRF retry (Code:
+  `outranksOriginal`). Nothing is resent: the replacement is seen before the resend. A refused
+  answer of these exchanges is not observed today and stays so (Code).
+- **`connect()`** (`establishAndCommit`): the identity is forgotten before the wire opens and again
+  before the session is established, so its own answers read `established`, never `replaced`
+  (Code: `forgetIdentity`).
+- **Cloud preflight** (`CloudHttpTransport`): its success is observed; a failure other than
+  `AuthRefusedError` is logged and absorbed, its headers not observed (Code).
+- **Resume** (`createConnection({ session })`): the identity is forgotten before the probe; an answer
+  naming another `SAP_SESSIONID`, or none, rejects `connect()` with SAP's answer as it is
+  (`notTheSession`), and a refused probe rejects with SAP's refusal; the instance is spent, nothing
+  logged off (Code: `resumeAndCommit`, `HttpTransport.resume`). Not `ADT_SESSION_REPLACED`.
+
+The tests of section 6 pin each of these as unchanged.
 
 ### 3.4 Requests in flight at the moment of loss
 
@@ -132,8 +151,9 @@ for.
 
 ### 3.5 The session-dead pages
 
-Section 2 answers it: the pages set no `SAP_SESSIONID`, so they are the session reported gone, never
-a replacement; `isDeadSessionResponse` (22.0.1) already reads them as `ADT_SESSION_REPLACED` for
+Section 2 answers it: the measured pages set no `SAP_SESSIONID`, so they are the session reported
+gone, not a replacement. An answer that holds a phrase and also changes the `SAP_SESSIONID` is still
+a replacement first for a stateless request (3.2), whatever produced it; `isDeadSessionResponse` (22.0.1) already reads them as `ADT_SESSION_REPLACED` for
 every request, and that stays (goal). Nothing changes for them here.
 
 ### 3.6 Cloud and legacy
@@ -212,9 +232,39 @@ Unit, through the public surface, a stub under the subject (`transport.client`, 
 - the header form of statefulness (`x-sap-adt-sessiontype: stateful` written by the caller): fails
   like the flag.
 
-Load-bearing: each half is broken on its own — stateless returns throw again; stateful returns the
-answer; the CSRF resend's refusal unobserved; the mark set before the loss — and the protecting
-tests go red.
+- loss before the answer: in the caller's first continuation `isConnected()` is `false` and
+  `sessionCookies()` `null`, and the stub has recorded the replacing session's `close` (the
+  mark and the cleanup are both synchronous before settlement, so their relative order is not
+  observable and is not a rule);
+- a `logoff` (`close`) that rejects or throws: the caller still gets the marked answer;
+- `disconnect()` after the loss settles on that logoff's write, `flushGoodbye()` on its close;
+- each exchange of 3.3 pinned as unchanged (the upfront fetch, the CSRF retry's fetch, the logon
+  after a refused logon, `connect()`, cloud preflight, resume), the resume one in
+  `sessionResume.test.ts`.
+
+**Load-bearing**, each rule broken on its own, the test that protects it named in the plan, red,
+reverted:
+
+| Break | Goes red |
+|---|---|
+| a stateless replacement throws `ADT_SESSION_REPLACED` again | the stateless rows of 3.2 |
+| a stateful replacement returns the answer | the stateful rows of 3.2 |
+| the CSRF resend's refusal left unobserved | its row |
+| a marked `401` goes to the credential (renew and resend) | the `401` row, send count |
+| a marked `403` starts the CSRF retry | the `403` row, send count |
+| `isSessionVerdict` ignores `sessionLost` (the mark replaced by `NOT_CONNECTED` or the first error) | the CSRF and credential resend rows |
+| the loss not raised for a kept answer (mark only) | the continuation's `isConnected()`, the next request's `NOT_CONNECTED` |
+| the replacing session's logoff not dispatched | the stub's `close` |
+| a logoff failure propagates | the failing-`close` case |
+| a stale-lease answer marked or acted on | the stale cases (`staleRequestFencing.test.ts` beside the new ones) |
+| a session-dead phrase on a stateless answer kept instead of `ADT_SESSION_REPLACED` | the phrase cases |
+| the caller's stateful header ignored | the header-form case |
+
+The existing protections stay and run unchanged: RFC session loss (`rfcSessionLost.test.ts`,
+`rfcDeadStateless.test.ts`), the spent instance and `disconnect()` timing (`disconnectWritten`,
+`sessionTeardown`, `goodbyeIsWaitable`), the pooled resend (`pooledResend`), transport parity
+(`legacyOnPremTransport`, `cloudSecuritySession`); a stateless request over RFC is tested to carry no
+mark (one rule: RFC answers never show a replacement).
 
 Live (onprem over HTTP, the existing env-file gate, skipped with its reason elsewhere): an instance
 connects, its session is logged off from outside with the cookies `sessionCookies()` returned
