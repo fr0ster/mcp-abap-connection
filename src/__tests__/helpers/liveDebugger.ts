@@ -143,16 +143,15 @@ export async function armBreakpoint(
   return answer.status;
 }
 
-/** Remove every external breakpoint under the terminal's key; the status. */
-export async function clearBreakpoints(
+/** Remove every external breakpoint under the terminal's key; the answer. */
+export function clearBreakpoints(
   conn: AbapConnection,
   ids: Terminal,
-): Promise<number> {
-  const answer = await request(conn, 'POST', `${DEBUGGER}/breakpoints`, {
+): Promise<Answer> {
+  return request(conn, 'POST', `${DEBUGGER}/breakpoints`, {
     headers: { 'Content-Type': 'application/xml', Accept: 'application/xml' },
     data: breakpointsBody(ids, '<syncScope mode="full"/>'),
   });
-  return answer.status;
 }
 
 /** What a listener's long poll answered. */
@@ -215,17 +214,12 @@ export async function checkListener(
   );
 }
 
-/** Release the listener; the status. */
-export async function stopListener(
+/** Release the listener; the answer. */
+export function stopListener(
   conn: AbapConnection,
   ids: Terminal,
-): Promise<number> {
-  const answer = await request(
-    conn,
-    'DELETE',
-    `${DEBUGGER}/listeners?${terminalQuery(ids)}`,
-  );
-  return answer.status;
+): Promise<Answer> {
+  return request(conn, 'DELETE', `${DEBUGGER}/listeners?${terminalQuery(ids)}`);
 }
 
 /** Attach to a caught debuggee in terminal mode; the status. */
@@ -261,4 +255,38 @@ export function runClass(
   return request(conn, 'POST', `/sap/bc/adt/oo/classrun/${className}`, {
     headers: { Accept: 'text/plain', ...headers },
   });
+}
+
+/** How a promise settled: its value, or what it rejected with. */
+export type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
+
+/**
+ * `work` with its rejection handled at once: a promise started now and
+ * awaited later rejects into a value here, never unhandled in between.
+ */
+export function settled<T>(work: Promise<T>): Promise<Settled<T>> {
+  return work.then(
+    (value): Settled<T> => ({ ok: true, value }),
+    (error: unknown): Settled<T> => ({ ok: false, error }),
+  );
+}
+
+/** A failure in words: its `code` when it has one, and its message. */
+export function failureWords(error: unknown): string {
+  if (!(error instanceof Error)) return 'a value that is not an Error';
+  const code = Object.getOwnPropertyDescriptor(error, 'code')?.value;
+  return typeof code === 'string' ? `${code}: ${error.message}` : error.message;
+}
+
+/**
+ * SAP's words in an answer's body: the text of its exception's `<message>`
+ * (plain search), else only the body's length — the body may carry the ids.
+ */
+export function sapWords(answer: Answer): string {
+  const open = answer.body.indexOf('<message');
+  const start = open < 0 ? -1 : answer.body.indexOf('>', open);
+  const end = start < 0 ? -1 : answer.body.indexOf('</message>', start);
+  return end < 0
+    ? `a body of ${answer.body.length} characters`
+    : answer.body.slice(start + 1, end);
 }

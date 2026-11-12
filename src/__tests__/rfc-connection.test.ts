@@ -54,18 +54,23 @@ import { rfcConversationFrom } from '../connection/rfcConversation.js';
 import type { ILogger } from '../logger.js';
 import { messageOf } from './helpers/assertions.js';
 import {
+  type Answer,
   armBreakpoint,
   attach,
   checkListener,
   classUri,
   clearBreakpoints,
   debuggeePassportHex,
+  failureWords,
   type ListenerAnswer,
   lineOf,
   listen,
   randomIds,
   request,
   runClass,
+  type Settled,
+  sapWords,
+  settled,
   stopListener,
   type Terminal,
   terminateDebugger,
@@ -630,7 +635,7 @@ describeWhere(
       const debuggerSide = countedDebugger();
       const ids = randomIds();
       let armed = false;
-      let cleanup: number[] = [];
+      let cleanup: string[] = [];
       try {
         await listener.connect();
         const line = await probeLine(listener);
@@ -654,9 +659,13 @@ describeWhere(
 
         const heard = listen(listener, ids, HOLD_CAUGHT);
         await listening(checker, heard);
-        const run = runClass(runner, PROBE, {
-          'SAP-PASSPORT': debuggeePassportHex(ids),
-        });
+        // Settled at once: a run that fails while the listener is awaited
+        // fails the test through the assertion below, never unhandled.
+        const run = settled(
+          runClass(runner, PROBE, {
+            'SAP-PASSPORT': debuggeePassportHex(ids),
+          }),
+        );
         const caught = await heard;
         assert.ok(caught.caught, 'the listener caught the run');
 
@@ -707,19 +716,18 @@ describeWhere(
           'no conversation opened after the end',
         );
 
-        const output = await run;
-        assert.strictEqual(output.status, 200, 'the run answered');
-        assert.ok(output.body.length > 0, 'the run answered its output');
+        assertRan(await run);
       } finally {
-        cleanup = await cleanUp(listener, ids, armed);
-        await checker.disconnect();
-        await runner.disconnect();
-        await debuggerSide.conn.disconnect();
+        cleanup = await cleanUp(listener, ids, armed, [
+          ['the checker', checker],
+          ['the runner', runner],
+          ['the debugger', debuggerSide.conn],
+        ]);
       }
       assert.deepStrictEqual(
         cleanup,
-        [200, 200],
-        'listener and breakpoints removed',
+        cleanedUp(['the checker', 'the runner', 'the debugger']),
+        'listener and breakpoints removed, every role disconnected',
       );
     });
 
@@ -731,7 +739,7 @@ describeWhere(
       const runner = roleConnection();
       const ids = randomIds();
       let armed = false;
-      let cleanup: number[] = [];
+      let cleanup: string[] = [];
       try {
         await listener.connect();
         const line = await probeLine(listener);
@@ -752,42 +760,90 @@ describeWhere(
 
         const heard = listen(listener, ids, HOLD_EMPTY);
         await listening(checker, heard);
-        const run = runClass(runner, PROBE);
+        const run = settled(runClass(runner, PROBE));
 
         assert.deepStrictEqual(await heard, { caught: false });
-        const output = await run;
-        assert.strictEqual(output.status, 200, 'the run answered');
-        assert.ok(output.body.length > 0, 'the run answered its output');
+        assertRan(await run);
       } finally {
-        cleanup = await cleanUp(listener, ids, armed);
-        await checker.disconnect();
-        await runner.disconnect();
+        cleanup = await cleanUp(listener, ids, armed, [
+          ['the checker', checker],
+          ['the runner', runner],
+        ]);
       }
       assert.deepStrictEqual(
         cleanup,
-        [200, 200],
-        'listener and breakpoints removed',
+        cleanedUp(['the checker', 'the runner']),
+        'listener and breakpoints removed, every role disconnected',
       );
     });
 
+    /** The class run answered 200 with its output; its failure, in words. */
+    function assertRan(ran: Settled<Answer>) {
+      if (!ran.ok) assert.fail(`the run failed: ${failureWords(ran.error)}`);
+      assert.strictEqual(ran.value.status, 200, 'the run answered');
+      assert.ok(ran.value.body.length > 0, 'the run answered its output');
+    }
+
+    /** One cleanup step's answer in words: `200`, a status with SAP's words, or a failure. */
+    async function step(name: string, work: Promise<Answer>): Promise<string> {
+      const ran = await settled(work);
+      if (!ran.ok) return `${name}: failed: ${failureWords(ran.error)}`;
+      return ran.value.status === 200
+        ? `${name}: 200`
+        : `${name}: ${ran.value.status}: ${sapWords(ran.value)}`;
+    }
+
+    /** One disconnect in words. */
+    async function disconnecting(
+      name: string,
+      conn: { disconnect(): Promise<void> },
+    ): Promise<string> {
+      const ran = await settled(conn.disconnect());
+      return ran.ok
+        ? `disconnecting ${name}: done`
+        : `disconnecting ${name}: failed: ${failureWords(ran.error)}`;
+    }
+
+    /** What `cleanUp` answers when every step succeeded. */
+    function cleanedUp(roles: string[]): string[] {
+      return [
+        'deleting the listener: 200',
+        'clearing the breakpoints: 200',
+        'disconnecting the listener: done',
+        ...roles.map((role) => `disconnecting ${role}: done`),
+      ];
+    }
+
     /**
-     * The listener deleted and the breakpoints cleared, then disconnected:
-     * the two answers' statuses, none when nothing was armed. A test asserts
-     * them after its `finally`, so a failure of its own is never hidden.
+     * The listener deleted and the breakpoints cleared (only when armed), then
+     * the listener and every other role disconnected: each step runs whatever
+     * an earlier one answered or threw, and each answer is kept in words. A
+     * test asserts them after its `finally`, so a failure of its own is never
+     * hidden, and a failed step shows SAP's words or its error's.
      */
     async function cleanUp(
       listener: AbapConnection & { disconnect(): Promise<void> },
       ids: Terminal,
       armed: boolean,
-    ): Promise<number[]> {
-      try {
-        if (!armed) return [];
-        const stopped = await stopListener(listener, ids);
-        const cleared = await clearBreakpoints(listener, ids);
-        return [stopped, cleared];
-      } finally {
-        await listener.disconnect();
+      roles: [string, { disconnect(): Promise<void> }][],
+    ): Promise<string[]> {
+      const answers: string[] = [];
+      if (armed) {
+        answers.push(
+          await step('deleting the listener', stopListener(listener, ids)),
+        );
+        answers.push(
+          await step(
+            'clearing the breakpoints',
+            clearBreakpoints(listener, ids),
+          ),
+        );
       }
+      answers.push(await disconnecting('the listener', listener));
+      for (const [name, conn] of roles) {
+        answers.push(await disconnecting(name, conn));
+      }
+      return answers;
     }
   },
 );
