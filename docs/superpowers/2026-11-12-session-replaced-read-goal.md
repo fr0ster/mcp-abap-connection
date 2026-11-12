@@ -120,9 +120,11 @@ measured on onprem; it is not shown for every system or release.
   **not** observed: its catch checks the session-dead text and precedence and may rethrow the
   first attempt's error, so a changed session cookie on that refusal goes unnoticed. The wire's own
   requests (the CSRF fetch, the logon) observe through the session context.
-- On a refusal the headers are observed before the session-dead text is checked, so an answer
-  carrying both a changed `SAP_SESSIONID` and "session not found" is a replacement first
-  (`recoverOnWire`).
+- On the paths that observe a refusal (the first attempt in `recoverOnWire`, the resend after a
+  credential renewal in `answerCredentialFailure`) the headers are observed before the session-dead
+  text is checked, so an answer carrying both a changed `SAP_SESSIONID` and "session not found" is
+  a replacement first. On the CSRF retry's resend the headers are not observed: such an answer
+  takes the session-dead path, and the replacing session's logoff is not dispatched.
 - The replacing session's logoff is dispatched without waiting (`dispatchGoodbye`): a `close()`
   that fails is logged and absorbed, and its write waiter settles when the close is over, written
   or not.
