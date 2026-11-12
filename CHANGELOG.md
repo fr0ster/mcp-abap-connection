@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [22.0.0] - 2026-11-12
+
+Over RFC, a request carries its passport and a failure names its error by fields, and an RFC
+error that ends the stateful conversation ends the instance's session: the connection does not
+open a new one on its own. Breaking for code that went on with an instance after such an error,
+and for code that read the passport from the endpoint's header fields. See
+[docs/MIGRATION-22.0.md](docs/MIGRATION-22.0.md).
+
+### Changed — breaking
+
+- **An RFC error that ends the stateful conversation is the session lost.** When sap-rfc-lite
+  releases the stateful conversation after a failed call (`alive` false, and not a close of
+  ours), the request rejects `ADT_SESSION_REPLACED` with the call's `rfc`, the instance is
+  spent, and every later request and `connect()` reject `ADT_NOT_CONNECTED` with nothing sent.
+  Nothing opens a new session: with sap-rfc-lite 0.3.x the next request went on, silently, on a
+  new one, its locks gone. A new session is a new connection.
+- **The `SAP-PASSPORT` header is no longer a header field over RFC.** It becomes the RFC call's
+  passport (below); `SADT_REST_RFC_ENDPOINT` never read it as a field.
+- **`@mcp-abap-adt/sap-rfc-lite` ^0.4.0** (optional, as before), whose minor is itself breaking;
+  **`@mcp-abap-adt/interfaces-adt-connection` ^4.1.0**.
+
+### Added
+
+- **A failed RFC call carries `rfc: { key, group, code, codeString }`** (`IRfcErrorInfo`;
+  `codeString` one of `RFC_RCS`), checked once where the wire receives the SDK's error: own
+  data properties only, no getter run, nothing read out of a message. `rfc` is carried on every
+  conversation, stateful or not. The message is the call's (`RFC call to SADT_REST_RFC_ENDPOINT
+  failed: …`, ending in fixed words when the thrown value cannot be described) and the top-level
+  `code` is not set — except when the error ended the stateful conversation: then the message is
+  the session-lost one and `code` is `ADT_SESSION_REPLACED` (above). Neither describing the
+  thrown value nor a logger that throws — the wire's or the connection's — can replace that
+  verdict or the call's `rfc`.
+- **The passport over RFC.** A request's `SAP-PASSPORT` header (name read without case) is
+  hex-decoded and handed to sap-rfc-lite as the call's own passport, for that call only, so a
+  program started over RFC is caught by a terminal-mode external debugger listening for the
+  passport's ids. A value that is not hex, or the header named twice, is refused before
+  anything is sent, the value never quoted. No header: no passport. `IRfcConversation.call`
+  takes an optional third parameter, `{ passport? }`.
+- **`WireSessionLostError`**, exported beside `WireLogonError`: a wire's mark that the session
+  it carries has ended. The connection acts on the class, never on the wire's kind.
+
+### Changed
+
+- **A non-stateful RFC conversation an RFC error ended is dropped**, not reset or closed (both
+  would reject); the next call opens another, and the instance goes on.
+- **An ADT exception type that is not an own key of the status table** (`toString`,
+  `constructor`, `__proto__`) reads as `500`; it fell through to `200 OK` before.
+- **No regular expression in the RFC wire:** the exception type and the header names redacted
+  in the wire log are read by plain code, with the same results; the exception type in one
+  linear scan.
+
 ## [21.0.0] - 2026-11-11
 
 The CSRF token fetch asks once. Breaking for code that reads `CSRF_CONFIG.RETRY_COUNT` /
@@ -2907,7 +2958,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v21.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.0...HEAD
+[22.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v21.0.0...v22.0.0
 [21.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.1.0...v21.0.0
 [20.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.0.0...v20.1.0
 [20.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v19.1.0...v20.0.0

@@ -55,9 +55,14 @@
 
 import { randomUUID } from 'node:crypto';
 import { authError } from '@mcp-abap-adt/auth-errors';
+import {
+  type IAbapConnectionError,
+  type IRfcErrorInfo,
+  RFC_RCS,
+} from '@mcp-abap-adt/interfaces-adt-connection';
 import type { AuthOutcome, ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '../logger.js';
-import { WireLogonError } from './authErrors.js';
+import { WireLogonError, WireSessionLostError } from './authErrors.js';
 import type {
   IAdtEstablishContext,
   IAdtSessionContext,
@@ -81,9 +86,16 @@ function record(value: unknown): Record<string, unknown> | undefined {
 export interface IRfcConversation {
   open(): Promise<void>;
   close(): Promise<void>;
+  /**
+   * `options.passport`, when given, is the SAP passport sent with this call
+   * only (`@mcp-abap-adt/sap-rfc-lite` >= 0.4.0). A conversation written for
+   * two arguments still conforms: it is never handed a third unless a request
+   * carried a passport.
+   */
   call(
     fm: string,
     params: Record<string, unknown>,
+    options?: { passport?: Buffer | undefined },
   ): Promise<Record<string, unknown>>;
   readonly alive: boolean;
   /**
@@ -198,20 +210,122 @@ const EXCEPTION_STATUS: Record<string, { code: number; text: string }> = {
   ExceptionConflict: { code: 409, text: 'Conflict' },
 };
 
-function statusFromExceptionXml(body: string): { code: number; text: string } {
-  const type = /<exc:type[^>]*>([^<]+)<\/exc:type>/.exec(body)?.[1]?.trim();
-  return (
-    (type ? EXCEPTION_STATUS[type] : undefined) ?? {
-      code: 500,
-      text: 'Internal Server Error',
+const TYPE_OPEN = '<exc:type';
+const TYPE_CLOSE = '</exc:type>';
+
+/**
+ * The text of the first `<exc:type …>TEXT</exc:type>` in `body`: from a
+ * `<exc:type`, the first `>` after it opens the text, which runs to the next
+ * `<` and counts only when it is not empty and that `<` begins `</exc:type>`.
+ *
+ * Linear: every search starts where the previous one ended, so the body is
+ * read once, left to right. A failed candidate need not be followed by the next
+ * `<exc:type` after it: one that begins before its `>` holds no `>` of its own
+ * in its first nine characters, so it meets the same `>` and the same `<` and
+ * fails the same way; and none begins between that `>` and the `<` that ended
+ * the text, since a candidate begins with `<`. The next candidate is searched
+ * from that `<`. With no `<` after the `>`, no candidate is left.
+ */
+function exceptionType(body: string): string | undefined {
+  let open = body.indexOf(TYPE_OPEN);
+  while (open >= 0) {
+    const tagEnd = body.indexOf('>', open + TYPE_OPEN.length);
+    if (tagEnd < 0) return undefined;
+    const textEnd = body.indexOf('<', tagEnd + 1);
+    if (textEnd < 0) return undefined;
+    if (textEnd > tagEnd + 1 && body.startsWith(TYPE_CLOSE, textEnd)) {
+      return body.slice(tagEnd + 1, textEnd);
     }
-  );
+    open = body.indexOf(TYPE_OPEN, textEnd);
+  }
+  return undefined;
 }
 
+/**
+ * The status an exception document stands for. A type is looked up only as an
+ * own key of `EXCEPTION_STATUS`: `toString`, `constructor` and the other
+ * members every object inherits name no status, and give 500 as an unknown
+ * type does.
+ */
+function statusFromExceptionXml(body: string): { code: number; text: string } {
+  const type = exceptionType(body)?.trim();
+  return type && Object.hasOwn(EXCEPTION_STATUS, type)
+    ? EXCEPTION_STATUS[type]
+    : { code: 500, text: 'Internal Server Error' };
+}
+
+/** An own data property of `source`, read without running a getter. */
+function ownData(source: object, name: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(source, name);
+  return descriptor !== undefined && 'value' in descriptor
+    ? descriptor.value
+    : undefined;
+}
+
+function isInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value);
+}
+
+/**
+ * The SDK's error as fields, or `undefined` when `thrown` is not that shape.
+ *
+ * The one place an SDK error enters, so the one place it is checked: `key` and
+ * `codeString` own data properties holding strings, `group` and `code` own
+ * data properties holding integers, and `codeString` one of the closed list
+ * `RFC_RCS`. No getter runs, and an object whose traps throw reads as no
+ * shape. `name` and `message` are not read, and nothing is read out of a
+ * message.
+ */
+function rfcErrorOf(thrown: unknown): IRfcErrorInfo | undefined {
+  if (typeof thrown !== 'object' || thrown === null) return undefined;
+  try {
+    const key = ownData(thrown, 'key');
+    const group = ownData(thrown, 'group');
+    const code = ownData(thrown, 'code');
+    const codeString = ownData(thrown, 'codeString');
+    if (typeof key !== 'string' || !isInteger(group) || !isInteger(code)) {
+      return undefined;
+    }
+    // Compared with each listed name, so only a string can match: this is
+    // the check of `codeString`, and what is stored is the listed member.
+    const listed = RFC_RCS.find((name) => name === codeString);
+    if (listed === undefined) return undefined;
+    return Object.freeze({ key, group, code, codeString: listed });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What a failed call throws: an `Error` with today's words, and the SDK's
+ * fields as `rfc` when the SDK named the failure. The top-level `code` is not
+ * set: `rfc` does not change what it means.
+ */
+function rfcCallError(
+  text: string,
+  rfc: IRfcErrorInfo | undefined,
+): Error & IAbapConnectionError {
+  const error = new Error(text);
+  return rfc === undefined ? error : Object.assign(error, { rfc });
+}
+
+/** Words a value is described by when describing it throws. */
+const UNDESCRIBABLE = 'the failure could not be described';
+
+/**
+ * A thrown value in words, for a message and a log line. It never throws:
+ * `instanceof` runs a Proxy's trap, `message` may be a getter, and
+ * `JSON.stringify` runs every enumerable getter and `toJSON` — any of which
+ * may throw. Then the words are fixed, and nothing the throw said is kept.
+ */
 function message(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (e && typeof e === 'object') return JSON.stringify(e);
-  return String(e);
+  try {
+    if (e instanceof Error) return String(e.message);
+    if (e && typeof e === 'object') return String(JSON.stringify(e));
+    return String(e);
+  } catch {
+    return UNDESCRIBABLE;
+  }
 }
 
 /**
@@ -223,17 +337,103 @@ function message(e: unknown): string {
  * (`SAP_SESSIONID_*`, `MYSAPSSO2`), an `x-csrf-token` or its own `X-Api-Key`
  * arrives here too. A log line advertised as safe to paste into an issue has
  * to be safe for the headers nobody here anticipated, so this matches by
- * pattern rather than by the list we happened to think of.
+ * part of the name rather than by the list we happened to think of.
+ *
+ * Plain string code, no regular expression: the name is folded to lower case
+ * in ASCII `A`–`Z` only (the former `/i` patterns, without the `u` flag, never
+ * folded a non-ASCII character to an ASCII letter — `toLowerCase()` would map
+ * the Kelvin sign to `k`), then searched for each part.
  */
-const SECRET_HEADER_PATTERNS = [
-  /authorization/i,
-  /cookie/i,
-  /token/i,
-  /secret/i,
-  /password/i,
-  /credential/i,
-  /api[-_]?key/i,
+const SECRET_HEADER_PARTS = [
+  'authorization',
+  'cookie',
+  'token',
+  'secret',
+  'password',
+  'credential',
+  'apikey',
+  'api-key',
+  'api_key',
 ];
+
+/** `text` with ASCII `A`–`Z` lowered, every other character as it is. */
+function asciiLowerCase(text: string): string {
+  let folded = '';
+  for (let i = 0; i < text.length; i += 1) {
+    const unit = text.charCodeAt(i);
+    folded +=
+      unit >= 0x41 && unit <= 0x5a
+        ? String.fromCharCode(unit + 0x20)
+        : text.charAt(i);
+  }
+  return folded;
+}
+
+/** Whether a header's value must not reach a log, by its name. */
+function isSecretHeader(name: string): boolean {
+  const folded = asciiLowerCase(name);
+  return SECRET_HEADER_PARTS.some((part) => folded.includes(part));
+}
+
+/**
+ * The header an HTTP request carries the SAP passport in. Over RFC it is not a
+ * header field: `SADT_REST_RFC_ENDPOINT` does not read one there, so the
+ * passport goes to the SDK as the call's own.
+ */
+const PASSPORT_HEADER = 'sap-passport';
+
+function isPassportHeader(name: string): boolean {
+  return asciiLowerCase(name) === PASSPORT_HEADER;
+}
+
+/** `0`–`9`, `A`–`F`, `a`–`f`. */
+function isHexDigit(unit: number): boolean {
+  return (
+    (unit >= 0x30 && unit <= 0x39) ||
+    (unit >= 0x41 && unit <= 0x46) ||
+    (unit >= 0x61 && unit <= 0x66)
+  );
+}
+
+/** Non-empty, of even length, and every character a hex digit. */
+function isHex(value: string): boolean {
+  if (value.length === 0 || value.length % 2 !== 0) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    if (!isHexDigit(value.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+/**
+ * The passport a request carries in `SAP-PASSPORT` (its name read without
+ * case), decoded; `undefined` when it carries none. Refused, before anything
+ * is sent, when the header is named more than once or its value is not hex —
+ * the header named, its value never quoted. The passport's structure is the
+ * SDK's to check.
+ */
+function passportOf(
+  headers: Readonly<Record<string, string>> | undefined,
+): Buffer | undefined {
+  let value: string | undefined;
+  for (const [name, each] of Object.entries(headers ?? {})) {
+    if (!isPassportHeader(name)) continue;
+    if (value !== undefined) {
+      throw new Error(
+        'The request names SAP-PASSPORT more than once; nothing was sent.',
+      );
+    }
+    value = each;
+  }
+  if (value === undefined) return undefined;
+  if (!isHex(value)) {
+    throw new Error(
+      'The SAP-PASSPORT header is not a passport in hex; nothing was sent.',
+    );
+  }
+  // Only after the test: `Buffer.from(…, 'hex')` stops silently at the first
+  // pair that is not hex.
+  return Buffer.from(value, 'hex');
+}
 
 /**
  * The NAME is kept and only the VALUE goes — a redacted header still says it
@@ -243,9 +443,7 @@ function redactHeaders(
   fields: { NAME: string; VALUE: string }[],
 ): { NAME: string; VALUE: string }[] {
   return fields.map((field) =>
-    SECRET_HEADER_PATTERNS.some((pattern) => pattern.test(field.NAME))
-      ? { ...field, VALUE: '[redacted]' }
-      : field,
+    isSecretHeader(field.NAME) ? { ...field, VALUE: '[redacted]' } : field,
   );
 }
 
@@ -493,6 +691,7 @@ export class RfcTransport implements IOnPremTransport {
     // Taken once, here: every await below compares against it, and a call
     // that finds the wire closed since it began sends nothing.
     const generation = this.generation;
+    const passport = passportOf(request.headers);
     const language = requestedLanguage(request);
     if (isStatefulRequest(request)) {
       const other = otherLanguage(language, this.logonLanguage);
@@ -501,9 +700,9 @@ export class RfcTransport implements IOnPremTransport {
           `The request asks for ${LANGUAGE_FIELD} ${other}, but the stateful RFC session is logged on in ${this.logonLanguage ?? 'a language neither the RFC conversation factory nor the provider states'}: a session cannot change its language, so the request was not sent.`,
         );
       }
-      return this.carry(request, this.conversation, generation);
+      return this.carry(request, this.conversation, generation, passport, true);
     }
-    return this.carryOnItsOwn(request, language, generation);
+    return this.carryOnItsOwn(request, language, generation, passport);
   }
 
   /**
@@ -528,14 +727,16 @@ export class RfcTransport implements IOnPremTransport {
     request: IAdtTransportRequest,
     language: string | undefined,
     generation: number,
+    passport: Buffer | undefined,
   ): Promise<IAdtTransportResponse> {
     if (this.canReset !== false && !this.statelessBusy) {
-      return this.carryOnKept(request, language, generation);
+      return this.carryOnKept(request, language, generation, passport);
     }
     return this.carryOnThrowaway(
       request,
       inLanguage(await this.logonParameters(), language),
       generation,
+      passport,
     );
   }
 
@@ -543,6 +744,7 @@ export class RfcTransport implements IOnPremTransport {
     request: IAdtTransportRequest,
     language: string | undefined,
     generation: number,
+    passport: Buffer | undefined,
   ): Promise<IAdtTransportResponse> {
     this.statelessBusy = true;
     try {
@@ -558,6 +760,7 @@ export class RfcTransport implements IOnPremTransport {
             request,
             inLanguage(parameters, language),
             generation,
+            passport,
           );
         }
         const opened = await this.openOwn(parameters, generation);
@@ -575,9 +778,9 @@ export class RfcTransport implements IOnPremTransport {
           // and every later call opens its own.
           this.canReset = false;
           try {
-            return await this.carry(request, opened, generation);
+            return await this.carry(request, opened, generation, passport);
           } finally {
-            await this.closeQuietly(opened);
+            await this.closeUnlessReleased(opened);
           }
         }
         this.canReset = true;
@@ -594,23 +797,31 @@ export class RfcTransport implements IOnPremTransport {
           request,
           inLanguage(await this.logonParameters(), language),
           generation,
+          passport,
         );
       }
       try {
-        return await this.carry(request, kept, generation);
+        return await this.carry(request, kept, generation, passport);
       } finally {
-        try {
-          await kept.resetServerContext?.();
-        } catch (e) {
-          // A context that could not be reset must not serve the next call.
-          this.logQuietly(
-            () => `RFC reset failed, dropping the conversation: ${message(e)}`,
-          );
-          if (this.stateless === kept) {
-            this.stateless = null;
-            this.statelessLanguage = undefined;
+        if (!kept.alive) {
+          // An RFC error ended it, and the library released it: nothing is
+          // left to reset or close, and either would reject. It carried no
+          // session of this instance — a reset clears it after every call —
+          // so it is replaced as a failed reset replaces it: dropped, and the
+          // next call opens another.
+          this.dropStateless(kept);
+        } else {
+          try {
+            await kept.resetServerContext?.();
+          } catch (e) {
+            // A context that could not be reset must not serve the next call.
+            this.logQuietly(
+              () =>
+                `RFC reset failed, dropping the conversation: ${message(e)}`,
+            );
+            this.dropStateless(kept);
+            await this.closeQuietly(kept);
           }
-          await this.closeQuietly(kept);
         }
       }
     } finally {
@@ -626,14 +837,45 @@ export class RfcTransport implements IOnPremTransport {
     request: IAdtTransportRequest,
     parameters: Readonly<Record<string, string>>,
     generation: number,
+    passport: Buffer | undefined,
   ): Promise<IAdtTransportResponse> {
     const own = await this.openOwn(parameters, generation);
     try {
       this.logger?.debug('RFC conversation opened for one stateless call');
-      return await this.carry(request, own, generation);
+      return await this.carry(request, own, generation, passport);
     } finally {
-      await this.closeQuietly(own);
+      await this.closeUnlessReleased(own);
     }
+  }
+
+  /**
+   * The stateful conversation is `conversation` no more: the library released
+   * it, so there is nothing left to close, and a close would only reject.
+   */
+  private dropSession(conversation: IRfcConversation): void {
+    if (this.conversation === conversation) {
+      this.conversation = null;
+      this.conversationId = '';
+      this.logonLanguage = undefined;
+    }
+  }
+
+  /** The kept stateless conversation is `conversation` no more. */
+  private dropStateless(conversation: IRfcConversation): void {
+    if (this.stateless === conversation) {
+      this.stateless = null;
+      this.statelessLanguage = undefined;
+    }
+  }
+
+  /**
+   * A conversation used for one call, closed — unless an RFC error ended it:
+   * the library has released it, and a close would only reject.
+   */
+  private async closeUnlessReleased(
+    conversation: IRfcConversation,
+  ): Promise<void> {
+    if (conversation.alive) await this.closeQuietly(conversation);
   }
 
   /**
@@ -739,6 +981,9 @@ export class RfcTransport implements IOnPremTransport {
     request: IAdtTransportRequest,
     conversation: IRfcConversation,
     generation: number,
+    passport: Buffer | undefined,
+    /** Whether `conversation` is the stateful one: the instance's session. */
+    carriesSession = false,
   ): Promise<IAdtTransportResponse> {
     const method = request.method.toUpperCase();
 
@@ -754,9 +999,11 @@ export class RfcTransport implements IOnPremTransport {
       ).toString();
       uri += (uri.includes('?') ? '&' : '?') + serialised;
     }
-    const headerFields = Object.entries(request.headers ?? {}).map(
-      ([NAME, VALUE]) => ({ NAME, VALUE: String(VALUE) }),
-    );
+    // The passport is not a header field over RFC: it goes to the SDK as the
+    // call's own (`passport`, read in `send()`).
+    const headerFields = Object.entries(request.headers ?? {})
+      .filter(([NAME]) => !isPassportHeader(NAME))
+      .map(([NAME, VALUE]) => ({ NAME, VALUE: String(VALUE) }));
 
     // ADT refuses a request with no Accept — `400 ExceptionResourceBadRequest:
     // Accept header missing`, measured on E19. Over HTTP axios supplies the
@@ -822,7 +1069,7 @@ export class RfcTransport implements IOnPremTransport {
     }
     let raw: Record<string, unknown>;
     try {
-      raw = await conversation.call('SADT_REST_RFC_ENDPOINT', {
+      const params = {
         REQUEST: {
           REQUEST_LINE: {
             METHOD: method,
@@ -832,12 +1079,37 @@ export class RfcTransport implements IOnPremTransport {
           HEADER_FIELDS: headerFields,
           MESSAGE_BODY: body ? Buffer.from(body, 'utf-8') : Buffer.alloc(0),
         },
-      });
+      };
+      // The passport, for this call only; without one, the call as it always
+      // was — two arguments, so a conversation written for two still works.
+      raw =
+        passport === undefined
+          ? await conversation.call('SADT_REST_RFC_ENDPOINT', params)
+          : await conversation.call('SADT_REST_RFC_ENDPOINT', params, {
+              passport,
+            });
     } catch (e) {
       // An RFC-level failure, not an answer: nothing came back to classify.
+      // The verdict comes first — the SDK's fields, read once, and whether the
+      // session survived — so nothing that describes the failure afterwards
+      // (formatting the thrown value, a logger) can stand in for it.
+      const rfc = rfcErrorOf(e);
+      // The library released the stateful conversation after the error
+      // (`alive` false), and it was not a close() of ours: the session it
+      // carried is gone, with every lock taken in it. Said, not cured — no
+      // other conversation is opened in its place.
+      const lost =
+        carriesSession && !conversation.alive && generation === this.generation;
+      if (lost) this.dropSession(conversation);
       const msg = message(e);
-      this.logger?.error(`RFC call failed: ${msg}`);
-      throw new Error(`RFC call to SADT_REST_RFC_ENDPOINT failed: ${msg}`);
+      const text = `RFC call to SADT_REST_RFC_ENDPOINT failed: ${msg}`;
+      try {
+        this.logger?.error(`RFC call failed: ${msg}`);
+      } catch {
+        // A broken logger must not replace the call's failure.
+      }
+      if (lost) throw new WireSessionLostError(text, rfc);
+      throw rfcCallError(text, rfc);
     }
 
     const answer = record(raw.RESPONSE) ?? raw;

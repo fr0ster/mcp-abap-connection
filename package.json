@@ -1,6 +1,6 @@
 {
   "name": "@mcp-abap-adt/connection",
-  "version": "21.0.0",
+  "version": "22.0.0",
   "description": "ABAP connection layer for MCP ABAP ADT server",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -52,7 +52,7 @@
   },
   "dependencies": {
     "@mcp-abap-adt/auth-errors": "^2.2.1",
-    "@mcp-abap-adt/interfaces-adt-connection": "^4.0.0",
+    "@mcp-abap-adt/interfaces-adt-connection": "^4.1.0",
     "@mcp-abap-adt/interfaces-auth": "^7.5.0",
     "@mcp-abap-adt/interfaces-auth-sap": "^4.0.0",
     "@mcp-abap-adt/interfaces-network": "^2.0.1",
@@ -60,7 +60,7 @@
     "axios": "^1.16.0"
   },
   "optionalDependencies": {
-    "@mcp-abap-adt/sap-rfc-lite": "^0.3.2"
+    "@mcp-abap-adt/sap-rfc-lite": "^0.4.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.14",

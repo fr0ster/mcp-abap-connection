@@ -162,6 +162,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 22.0.0](./docs/MIGRATION-22.0.md)** - over RFC: a connection-ending RFC error on the stateful conversation is `ADT_SESSION_REPLACED` and spends the instance (no silent reconnect); a failed RFC call carries `rfc: { key, group, code, codeString }`; the `SAP-PASSPORT` header becomes the RFC call's passport; `@mcp-abap-adt/sap-rfc-lite` ^0.4.0
 - 🚚 **[Migration to 21.0.0](./docs/MIGRATION-21.0.md)** - the CSRF token fetch asks once: no retry, no delay; `CSRF_CONFIG.RETRY_COUNT` / `RETRY_DELAY`, the establish context's `retries` / `retryDelayMs` / `isFatal`, `fetchCsrfToken`'s retry parameters and `endsTheExchange` are removed
 - 🚚 **[Migration to 20.0.0](./docs/MIGRATION-20.0.md)** - an RFC config is an `ISapRfcConfig` that states its address (`ashost` + `sysnr`, or `mshost` + `msserv` / `sysid` + `group`), `client` and `language`: no URL, no defaults, no `SAP_SYSNR`; `getBaseUrl()` may answer `undefined`; hand-built HTTP transports take `baseUrl`; `IAdtSessionContext` has no `baseUrl`
 - 🚚 **[Migration to 19.0.0](./docs/MIGRATION-19.0.md)** - `@mcp-abap-adt/sap-rfc-lite` ^0.3.2: no compile on install; prebuilt RFC bindings for linux-x64, win32-x64, darwin-arm64; elsewhere build sap-rfc-lite's binding from its repository; the API is unchanged
@@ -501,7 +502,7 @@ package state from causing PAK/058 on later writes or SADT_RESOURCE/007 on a
 read after create. Concurrent calls use a separate conversation. See
 [RFC conversation isolation](./docs/STATEFUL_SESSION_GUIDE.md#rfc-conversation-isolation-932-and-933).
 
-Needs `npm install @mcp-abap-adt/sap-rfc-lite` (0.3.2 or newer: it installs with no install
+Needs `npm install @mcp-abap-adt/sap-rfc-lite` (0.4.0 or newer: it installs with no install
 script and carries prebuilt bindings for linux-x64 glibc, win32-x64 and darwin-arm64; elsewhere,
 build one from its repository) and the SAP NetWeaver RFC library at run time: on Windows, the
 64-bit `sapnwrfc.dll` SAP GUI installs into `System32` is enough; otherwise the SAP NW RFC SDK, its
@@ -540,6 +541,77 @@ await connection.connect();
 // Everything above the wire is the same: makeAdtRequest, setSessionType,
 // disconnect. What differs is where the session lives — see below.
 ```
+
+**The passport travels as the call's own** (22.0.0). A request that carries a
+`SAP-PASSPORT` header (its name read without case) is sent over RFC with that
+passport as the RFC call's passport, for that call only — so an ABAP program
+started over RFC is caught by an external debugger listening in terminal mode
+for the passport's ids, as it is over HTTP. `SADT_REST_RFC_ENDPOINT` reads no
+passport from a header field, so the header is not sent as one. Its value must
+be the passport in hex (non-empty, even length, `0`–`9` / `a`–`f` / `A`–`F`);
+anything else, or the header named twice, is refused before anything is sent,
+the header named and its value never quoted. The passport's structure is
+sap-rfc-lite's to check. A request without the header carries no passport, as
+before: the wire invents, derives and keeps none. Over HTTP the header goes as
+it always went.
+
+**A caught session stays caught.** sap-rfc-lite does not reset a stateful
+session: once a listener has caught a call on it, later calls on the same
+session are caught too, with or without a passport, until the session ends.
+The connection does not reset it either — that would drop its locks. A run
+meant to be caught belongs on a non-stateful request (the kept conversation is
+reset after every call), or on a connection of its own.
+
+**A failed RFC call names its error by fields** (22.0.0). When the SDK
+reports the failure, the `Error` the caller receives carries it as
+`rfc: { key, group, code, codeString }` (`IRfcErrorInfo`, typed by
+`IAbapConnectionError` in `@mcp-abap-adt/interfaces-adt-connection`;
+`codeString` is one of `RFC_RCS`). Read the failure from those, never from the
+message: a call's failure says `RFC call to SADT_REST_RFC_ENDPOINT failed: …`
+and sets no top-level `code`; when the error ended the stateful conversation,
+the message is the session-lost one and `code` is `ADT_SESSION_REPLACED`
+(below). `rfc` is carried either way, on every conversation. An error the SDK
+did not name — the closed-connection error, a refused passport — carries no
+`rfc`.
+
+```typescript
+import type { RfcReturnCodeName } from "@mcp-abap-adt/interfaces-adt-connection";
+
+/** The RFC return code a caught value names in `rfc`, or undefined. */
+function rfcCodeOf(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("rfc" in error)) {
+    return undefined;
+  }
+  const { rfc } = error;
+  return typeof rfc === "object" && rfc !== null && "codeString" in rfc &&
+    typeof rfc.codeString === "string"
+    ? rfc.codeString
+    : undefined;
+}
+
+try {
+  await connection.makeAdtRequest({ url: "/sap/bc/adt/discovery", method: "GET", timeout: 0 });
+} catch (error) {
+  const closed: RfcReturnCodeName = "RFC_CLOSED";
+  if (rfcCodeOf(error) === closed) {
+    // the other side closed the conversation
+  }
+}
+```
+
+**An RFC error that ends the session ends the instance** (22.0.0). When an RFC
+error ends the stateful conversation — the one that carries the instance's
+session and its locks (sap-rfc-lite releases it: `alive` is `false`) — the
+request rejects with `code` `ADT_SESSION_REPLACED` and the call's `rfc`; the
+instance is spent, and every later request and `connect()` reject
+`ADT_NOT_CONNECTED` with nothing sent. The connection does not open a new
+session on its own: a lock held in the old one is gone and is never presented
+as still held. A new session is a new connection, which only you create.
+(`terminateDebugger` on the debugger's stateful session ends it this way:
+`RFC_CLOSED`.) A non-stateful conversation an RFC error ends carries no session
+of the instance: it is replaced as a reset replaces it, and the request's error
+still carries its `rfc`. A wire of your own says the same with
+`WireSessionLostError`, exported beside `WireLogonError`.
 
 **Where to look for it.** An HTTP session is an ICF session and appears in
 **SM05**. An RFC conversation is a gateway client: it appears in **SMGW → Logged

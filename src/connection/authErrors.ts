@@ -4,6 +4,10 @@
  */
 
 import { authError, classifyOutcome } from '@mcp-abap-adt/auth-errors';
+import type {
+  IAbapConnectionError,
+  IRfcErrorInfo,
+} from '@mcp-abap-adt/interfaces-adt-connection';
 import type { AuthOutcome, IAuthRefusal } from '@mcp-abap-adt/interfaces-auth';
 
 /** When in the connection's life the credential refused. */
@@ -71,6 +75,28 @@ export class WireLogonError extends Error {
     this.name = 'WireLogonError';
     this.cause = cause;
     this.status = status;
+  }
+}
+
+/**
+ * A wire's mark: the session this wire carries has ended under it — over RFC,
+ * an RFC error ended the stateful conversation, and the locks taken in it
+ * with it. It decides nothing: the connection reports the session lost and
+ * the instance is spent; nothing opens a new session in its place.
+ *
+ * Exported so a consumer's own wire can say the same thing. `rfc` is the
+ * failed call's fields when the SDK named the failure.
+ */
+export class WireSessionLostError
+  extends Error
+  implements IAbapConnectionError
+{
+  readonly rfc?: IRfcErrorInfo | undefined;
+
+  constructor(message: string, rfc?: IRfcErrorInfo) {
+    super(message);
+    this.name = 'WireSessionLostError';
+    this.rfc = rfc;
   }
 }
 

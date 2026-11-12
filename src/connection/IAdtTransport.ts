@@ -174,6 +174,12 @@ export interface IAdtTransport {
    * on the error — that is the shape the request path classifies against, and
    * a transport that resolved instead would turn a 401 into a success with a
    * logon page in the body.
+   *
+   * A wire that loses the session it carries — `RfcTransport` when an RFC
+   * error ends the stateful conversation — throws `WireSessionLostError`, and
+   * decides nothing else: the connection reports the session lost and the
+   * instance is spent. It opens no other session in its place. The HTTP wires
+   * never throw it: SAP says so in an answer there.
    */
   send(request: IAdtTransportRequest): Promise<IAdtTransportResponse>;
 
