@@ -1591,27 +1591,28 @@ abstract class AbstractAbapConnection
    * SAP's refusal of a stateless request whose answer showed the session
    * replaced, as the caller gets it: the refusal itself, marked `sessionLost`.
    * The wire's error is its own object, made for this attempt, so the mark is
-   * set on it. One that cannot take it (not extensible) is reported as a
-   * replacement always was.
+   * set on it. One that cannot take it — frozen, sealed, or holding its own
+   * fixed `sessionLost` — is answered by an object on top of it: every field of
+   * the refusal read through to it, its class kept, the mark its own.
    */
   private markedLost(error: unknown): unknown {
-    if (
-      typeof error === 'object' &&
-      error !== null &&
-      Object.isExtensible(error)
-    ) {
-      Object.defineProperty(error, 'sessionLost', {
-        value: ADT_SESSION_ERROR.SESSION_REPLACED,
-        enumerable: true,
-        configurable: true,
-        writable: false,
-      });
-      return error;
+    // A refusal is an object: `refusalOf` found its `response` on it.
+    if (typeof error !== 'object' || error === null) return error;
+    const mark: PropertyDescriptor = {
+      value: ADT_SESSION_ERROR.SESSION_REPLACED,
+      enumerable: true,
+      configurable: true,
+      writable: false,
+    };
+    if (Object.isExtensible(error)) {
+      try {
+        Object.defineProperty(error, 'sessionLost', mark);
+        return error;
+      } catch {
+        // An own `sessionLost` that cannot be redefined: marked from above.
+      }
     }
-    return sessionError(
-      ADT_SESSION_ERROR.SESSION_REPLACED,
-      'The SAP session this connection was using is gone; the answer that showed it could not be returned.',
-    );
+    return Object.create(error, { sessionLost: mark });
   }
 
   /**

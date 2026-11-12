@@ -689,6 +689,57 @@ describe('a refusal that shows the replacement, on the first attempt', () => {
   }
 });
 
+describe('a refusal that cannot take the mark itself', () => {
+  /** SAP's 404 with the replacing cookie, as a wire that hands out a fixed error throws it. */
+  function refusal(): Error {
+    return Object.assign(new Error('Request failed with status code 404'), {
+      code: 'ERR_BAD_REQUEST',
+      response: {
+        status: 404,
+        statusText: 'Not Found',
+        headers: { 'set-cookie': [REPLACING] },
+        data: 'not here',
+      },
+    });
+  }
+
+  const shapes: { name: string; make: () => Error }[] = [
+    { name: 'frozen', make: () => Object.freeze(refusal()) },
+    { name: 'sealed', make: () => Object.seal(refusal()) },
+    {
+      name: 'holding its own fixed sessionLost',
+      make: () =>
+        Object.defineProperty(refusal(), 'sessionLost', {
+          value: undefined,
+          configurable: false,
+          writable: false,
+        }),
+    },
+  ];
+
+  for (const shape of shapes) {
+    it(`${shape.name}: still rejects as that refusal, marked, and the session is lost`, async () => {
+      const { conn, transport } = await connected();
+      const original = shape.make();
+      mock.method(transport, 'send', async () => {
+        throw original;
+      });
+
+      const { error } = await settle(get(conn));
+
+      assert.ok(error instanceof Error);
+      assert.strictEqual(Object.getPrototypeOf(error), original);
+      assertMatchObject(error, {
+        code: 'ERR_BAD_REQUEST',
+        message: 'Request failed with status code 404',
+        response: { status: 404, data: 'not here' },
+      });
+      assert.strictEqual(markOf(error), REPLACED);
+      assert.strictEqual(conn.isConnected(), false);
+    });
+  }
+});
+
 describe('a refusal that shows the replacement, on a resend', () => {
   const resends: {
     name: string;
