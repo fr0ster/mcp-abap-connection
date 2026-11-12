@@ -142,8 +142,10 @@ cannot move them:
    `keepAnswer`; `sendObserved` sets `sessionLost` on the response it returns.
 3. Breaks, each applied to every row of item 1 on its own: throw again for a kept answer (that
    stateless row red); keep the stateful one (that stateful row red); read statefulness from
-   `sessionMode` instead of `isStatefulRequest` (the header form red). Then the B3 breaks that need
-   the mark: mark an unchanged and an established answer, mark a stale success.
+   `sessionMode` instead of `isStatefulRequest` (the header form red); send the caller's request once
+   more after the replacement-bearing answer while still returning that answer (the row's send
+   count red, its result unchanged). Then the B3 breaks that need the mark: mark an unchanged and an
+   established answer, mark a stale success.
 
 ### B5. The loss before the answer (spec 3.1)
 
@@ -170,8 +172,9 @@ cannot move them:
 3. Breaks: a marked `403` starts the CSRF retry (send count red); a marked `401` reaches the
    provider (red); the phrase checked before the replacement (the both-at-once case red);
    `isSessionVerdict` ignoring `sessionLost`; and, on each row of item 1 on its own, the stateless
-   refusal turned into `ADT_SESSION_REPLACED` (that row red) and the stateful twin kept (its row
-   red).
+   refusal turned into `ADT_SESSION_REPLACED` (that row red), the stateful twin kept (its row red),
+   and the caller's request sent once more after the refusal while still rejecting it (the row's
+   send count red, its result unchanged).
 
 ### B7. The resends (spec 3.2)
 
@@ -185,8 +188,9 @@ cannot move them:
    `throwIfSessionDead`; `answerCredentialFailure` observes with `keepAnswer`.
 3. Breaks: leave the CSRF resend's refusal unobserved; rethrow the first attempt's error over a
    marked one (`outranksOriginal` without the mark); `staleVerdict` replacing a marked error; and,
-   on each row on its own, the stateless refusal turned into `ADT_SESSION_REPLACED` and the stateful
-   twin kept.
+   on each row on its own, the stateless refusal turned into `ADT_SESSION_REPLACED`, the stateful
+   twin kept, and the caller's request sent once more after the replacement-bearing refusal while
+   still rejecting that refusal (the row's send count red, its result unchanged).
 
 ### B8. Attribution (spec 3.1, 3.4)
 
