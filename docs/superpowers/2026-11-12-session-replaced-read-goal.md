@@ -12,8 +12,9 @@ today after a replacement, so whatever the consumer held against the old session
 as still held, and a new session is a new instance the consumer creates. Nothing is sent twice to
 get there: the answer returned is the one already received.
 
-A stateful request (in this stack the `LOCK` and the `UNLOCK`; any request the connection's
-stateful verdict names) whose answer shows the session replaced keeps failing loudly, with
+A stateless request holds no lock and no lock state: locks live only in the stateful requests, in
+this stack the `LOCK` and the `UNLOCK`. A stateful request (any request the connection's stateful
+verdict names) whose answer shows the session replaced keeps failing loudly, with
 `ADT_SESSION_REPLACED`, as today.
 
 ## Invariants
@@ -24,9 +25,8 @@ stateful verdict names) whose answer shows the session replaced keeps failing lo
   wire already makes (a pooled socket that carried no byte of an answer) is unchanged.
 - **Stateless means what the wire already means by it.** A request is stateful exactly when the
   connection's existing verdict says so (`isStatefulRequest`: marked `stateful`, or carrying
-  `x-sap-adt-sessiontype: stateful`); every other request is stateless. The connection does not
-  guess which stateless request is a read and which a write under a lock: it cannot tell them
-  apart, and it does not try.
+  `x-sap-adt-sessiontype: stateful`); every other request is stateless. A stateless request holds
+  no lock and no lock state; a lock is taken and released only by stateful requests.
 - **Stateful keeps failing.** A stateful request whose answer shows the session replaced rejects
   with `ADT_SESSION_REPLACED`, its answer not handed back, exactly as today.
 - **The answer is SAP's, as it is.** What the stateless request returns is the answer that showed
@@ -51,10 +51,6 @@ stateful verdict names) whose answer shows the session replaced keeps failing lo
     returned success and for a rejected refusal alike, and attributable to that request when
     several are in flight. How it is said is a question for the spec; a log line alone does not
     count, nor does a later `isConnected()` or the next request's `NOT_CONNECTED` alone.
-- **The connection hides no lost lock.** The connection adds nothing that could turn a refusal into
-  success after a replacement — no resend with a fresh CSRF token, no adopted session. Whether SAP
-  itself ever answers success to a stateless write under a lost lock is SAP's; the measurements
-  below found only refusals. Suppressing a success SAP gave is not part of this goal.
 - **Every wire, one rule.** The rule is decided in the connection, from the classification the
   connection already makes, never from which wire carries the request. Over RFC no answer replaces
   the session, and an RFC error that ends the stateful conversation stays `ADT_SESSION_REPLACED`.
@@ -77,24 +73,19 @@ stateful verdict names) whose answer shows the session replaced keeps failing lo
 
 ## What there is today
 
-**Measured** on onprem over HTTP, with raw requests:
+**Measured** on onprem over HTTP, with raw requests — background facts about what SAP answers:
 
-- A stateless write carrying the lock handle of a logged-off session is refused `423`
-  `ExceptionResourceInvalidLockHandle` in every variant tried: sent from a fresh session; sent from
-  a session SAP re-created on the old cookies; sent while another session holds a new lock on the
-  object. The source is unchanged after each. The logoff itself releases the lock.
 - On a dead `SAP_SESSIONID`, a stateless GET answers `200` with a valid body and a new session
   cookie — the #354 case.
-- On a dead `SAP_SESSIONID`, a write with the old CSRF token gets `403` "CSRF token validation
-  failed", also with a new session cookie, before the lock is checked; with a fresh CSRF token it
-  gets `423`.
+- The logoff of a session releases the locks taken in it. A request carrying the lock handle of a
+  session that is gone is refused `423` `ExceptionResourceInvalidLockHandle` in every variant
+  tried (sent from a fresh session; from a session SAP re-created on the old cookies; while another
+  session holds a new lock on the object), and the object is unchanged.
+- On a dead `SAP_SESSIONID`, a mutation with the old CSRF token gets `403` "CSRF token validation
+  failed", also with a new session cookie; with a fresh CSRF token, such a request carrying a gone
+  session's lock handle gets `423`.
 - A request that still sends the old stateful `sap-contextid` cookie gets `400` with an HTML
   "Session no longer exists" page, not an ADT exception, and SAP sets new context cookies.
-
-**Inference** from the above: after a replacement, a write under a lost lock never succeeds
-silently — it is `403` or `423` — so returning the received answer of a stateless request cannot
-hide a lost lock, as long as nothing resends it with a fresh CSRF token. This rests on the variants
-measured on onprem; it is not shown for every system or release.
 
 **Code** (`src/connection/AbstractAbapConnection.ts`, `src/connection/HttpTransport.ts`,
 `src/session/SessionLifecycle.ts`):
@@ -184,5 +175,4 @@ measured on onprem; it is not shown for every system or release.
 - Opening a new session on the same instance: a new session is a new instance, the consumer's.
 - What the server or the ADT clients do with the loss (reconnecting, the error text in
   `@mcp-abap-adt/adt-clients`): the next links of the chain.
-- Telling a read from a write under a lock: the connection cannot, and does not need to.
 - RFC: no answer replaces its session.
