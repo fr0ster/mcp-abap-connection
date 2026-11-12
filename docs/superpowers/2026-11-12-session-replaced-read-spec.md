@@ -317,8 +317,10 @@ request now reads `sessionLost` on the answer or the refusal. CHANGELOG entry.
 - A `sap-contextid` the server no longer knows gets the session-dead `400` even on a live session
   (section 2, the "one never issued" row), and 22.0.1 reads that as the session lost. A stateful
   request that carries a context id SAP has dropped while the `SAP_SESSIONID` lives would therefore
-  spend a live instance. Whether SAP drops a context while its session lives (after an `UNLOCK`,
-  say) is not measured (**Open**, reported for the owner; not decided here).
+  spend a live instance. Decided: no handling for a context dropped while its session lives. SAP
+  does not end a stateful context other than by the session's timeout, and that is the session lost,
+  already covered (sections 3.2–3.5); keeping the context valid otherwise is the consumer's
+  responsibility.
 
   Measured on onprem over HTTP, one live session, an own class in `$TMP` (created, then deleted
   under a lock), the credential on every request:
