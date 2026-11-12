@@ -135,9 +135,11 @@ decision):
   (Code: `forgetIdentity`).
 - **Cloud preflight** (`CloudHttpTransport`): its success is observed; a failure other than
   `AuthRefusedError` is logged and absorbed, its headers not observed (Code).
-- **Resume** (`createConnection({ session })`): the identity is forgotten before the probe; an answer
-  naming another `SAP_SESSIONID`, or none, rejects `connect()` with SAP's answer as it is
-  (`notTheSession`), and a refused probe rejects with SAP's refusal; the instance is spent, nothing
+- **Resume** (`createConnection({ session })`): the identity is forgotten before the probe; the
+  probe's answer is folded into the seeded jar, and when the jar's fingerprint then differs from the
+  handed one — a `SAP_SESSIONID` changed, or deleted by the answer — `connect()` rejects with SAP's
+  answer as it is (`notTheSession`); an answer that sets no `SAP_SESSIONID` leaves the handed one,
+  and with a CSRF token the resume succeeds; and a refused probe rejects with SAP's refusal; the instance is spent, nothing
   logged off (Code: `resumeAndCommit`, `HttpTransport.resume`). Not `ADT_SESSION_REPLACED`.
 
 The tests of section 6 pin each of these as unchanged.
@@ -292,7 +294,9 @@ with the new `SAP_SESSIONID`). No object, no lock.
 
 ## 7. Docs
 
-README and `docs/USAGE.md` "When the session is lost": a stateless request whose answer shows the
+README, `docs/USAGE.md` "When the session is lost" and `docs/STATEFUL_SESSION_GUIDE.md` (its
+statements that a replaced session fails a request with `SESSION_REPLACED`), after an audit of
+every current guide in `docs/` and the README for the same statement: a stateless request whose answer shows the
 session replaced keeps SAP's answer, marked `sessionLost`; the instance is spent; a stateful request
 still rejects `ADT_SESSION_REPLACED`; what a consumer does next (read `sessionLost`, create a new
 instance). `docs/MIGRATION-23.0.md`: a consumer that caught `ADT_SESSION_REPLACED` from a stateless
