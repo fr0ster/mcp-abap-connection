@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [23.0.0] - 2026-11-12
+
+A stateless request keeps its answer when the SAP session was replaced
+(fr0ster/mcp-abap-adt#354). Breaking for code that learned of the loss from the
+`ADT_SESSION_REPLACED` rejection of a stateless request. See
+[docs/MIGRATION-23.0.md](docs/MIGRATION-23.0.md).
+
+### Changed — breaking
+
+- **A stateless request whose answer shows the session replaced gets that
+  answer.** A success resolves, a refusal rejects as itself; either carries
+  `sessionLost: 'ADT_SESSION_REPLACED'`. The session is lost before the answer
+  reaches the caller (the instance spent, the replacing session logged off), and
+  nothing is sent again: no CSRF retry and no credential renewal start from it.
+  A stateful request, the connection's own exchanges inside a request (a CSRF
+  fetch, a logon) and an answer saying the session no longer exists that shows
+  no replacement keep rejecting `ADT_SESSION_REPLACED`; `connect()` and a resumed
+  session behave as in 22.x. A refusal that cannot take the mark (frozen,
+  sealed) is answered by an object on top of it that reads through to it.
+
+### Added
+
+- `sessionLost` on the resolved response and on the rejected refusal, typed by
+  `@mcp-abap-adt/interfaces-adt-connection` 4.2.0 (`AdtSessionLoss`).
+
+### Fixed
+
+- **The CSRF retry's refused resend is observed.** Its answer used to be dropped
+  for the first attempt's `403` without being read, so a replacement on it went
+  unnoticed.
+- **A refusal whose body is absent or does not serialise is read like any
+  other.** Its log preview threw (`JSON.stringify(undefined).slice`, a circular
+  body) before the answer was observed, so the caller got a `TypeError` and a
+  replacement on it went unnoticed; the preview is now empty instead.
+- **A logger that throws on the success line no longer takes the answer.** The
+  `REQUEST_SUCCESS` debug line is written as the failure lines are, its throw
+  dropped.
+
+### Dependencies
+
+- `@mcp-abap-adt/interfaces-adt-connection` `^4.2.0`.
+
 ## [22.0.1] - 2026-11-12
 
 ### Fixed
@@ -2968,7 +3010,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v23.0.0...HEAD
+[23.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.1...v23.0.0
 [22.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.0...v22.0.1
 [22.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v21.0.0...v22.0.0
 [21.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.1.0...v21.0.0

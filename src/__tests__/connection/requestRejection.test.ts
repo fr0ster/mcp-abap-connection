@@ -487,7 +487,10 @@ describe('many requests, and a critical section', () => {
     assert.strictEqual(stub.sentTo(DISCOVERY).length, 1);
   });
 
-  it('inside a critical section, a resend that finds the session replaced says SESSION_REPLACED', async () => {
+  // A critical section changes the request's deadline, not its session type:
+  // the PUT is stateless, so the resend's refusal that showed the replacement
+  // is the caller's answer, marked (fr0ster/mcp-abap-adt#354).
+  it('inside a critical section, a stateless resend that finds the session replaced rejects its own refusal, marked', async () => {
     const { conn } = await connected();
     stub.work(WORK, [
       401,
@@ -506,7 +509,10 @@ describe('many requests, and a critical section', () => {
       conn.endCriticalSection();
     }
 
-    assert.strictEqual(codeOf(error), ADT_SESSION_ERROR.SESSION_REPLACED);
+    assertMatchObject(error, {
+      response: { status: 403 },
+      sessionLost: ADT_SESSION_ERROR.SESSION_REPLACED,
+    });
     assert.strictEqual(conn.isConnected(), false);
   });
 

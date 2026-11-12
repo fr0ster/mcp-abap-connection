@@ -219,7 +219,8 @@ What `connect()` does then:
    unchanged: the session is this instance's. A stateful request reaches the
    ABAP context `sap-contextid` names (an `UNLOCK` lands in the old context);
    later requests carry the credential as usual; a session lost later is
-   reported as for any instance (`ADT_SESSION_REPLACED`); `disconnect()` logs it
+   reported as for any instance (`ADT_SESSION_REPLACED`, or `sessionLost` on a
+   stateless answer); `disconnect()` logs it
    off as for any instance.
 4. **Gone** — a `401`, a redirect (a `3xx` is not the session answering; it is
    not followed, so its target is never asked and nothing it sets is taken), or
@@ -512,7 +513,17 @@ side instead of a condition that silently stops matching. The codes live in
 `@mcp-abap-adt/interfaces-adt-connection` — import them from there, not from this package:
 
 ```typescript
-import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
+import {
+  ADT_SESSION_ERROR,
+  type IAbapConnectionError,
+} from '@mcp-abap-adt/interfaces-adt-connection';
+
+// A caught value comes from outside the type system: your own check narrows it.
+function isConnectionError(
+  value: unknown,
+): value is Error & IAbapConnectionError {
+  return value instanceof Error;
+}
 
 const options = {
   method: 'GET',
@@ -521,11 +532,23 @@ const options = {
 };
 
 try {
-  await connection.makeAdtRequest(options);
+  const response = await connection.makeAdtRequest(options);
+  if (response.sessionLost === ADT_SESSION_ERROR.SESSION_REPLACED) {
+    // A stateless request: SAP's answer is valid and here, and the SAP session
+    // is gone with it (since 23.0.0). The instance is spent: the next request
+    // needs a new connection.
+  }
 } catch (error) {
-  if ((error as { code?: string }).code === ADT_SESSION_ERROR.SESSION_REPLACED) {
-    // The SAP session was replaced under us. Anything locked over the old one
-    // is orphaned: re-connect, then re-acquire the lock.
+  // Narrow the caught value with your own check, then read it by
+  // IAbapConnectionError — never by its message.
+  if (isConnectionError(error)) {
+    if (error.code === ADT_SESSION_ERROR.SESSION_REPLACED) {
+      // A stateful request (LOCK, UNLOCK): the session was replaced. Anything
+      // locked over the old one is orphaned: re-connect, then re-acquire.
+    } else if (error.sessionLost === ADT_SESSION_ERROR.SESSION_REPLACED) {
+      // A stateless request refused by SAP, its refusal as it came, and the
+      // session gone with it.
+    }
   }
 }
 ```
@@ -673,13 +696,34 @@ none over HTTP, and the RFC wire reads it not at all.
 Two different things can cost you the session, and they do not behave alike.
 
 **The session was replaced** — a session cookie (`SAP_SESSIONID`) that changed
-underneath you. The request rejects with `ADT_SESSION_REPLACED`: a lock handle
-you are carrying is now dead, which is the one thing you cannot work out for
-yourself.
+underneath you, the usual cause an idle timeout. What the request gets depends
+on whether it is stateful (since 23.0.0):
+
+- **a stateful request** (`LOCK`, `UNLOCK`, anything the connection's session
+  mode or the caller's `x-sap-adt-sessiontype: stateful` header marks stateful)
+  rejects with `ADT_SESSION_REPLACED`: a lock handle you are carrying is now
+  dead, which is the one thing you cannot work out for yourself;
+- **a stateless request** holds no lock and no lock state, so the answer SAP
+  gave it is valid and is returned as it came — a success resolves, a refusal
+  rejects as itself — with `sessionLost: 'ADT_SESSION_REPLACED'` on that
+  response or on that error (`IAdtWireResponse`, `IAbapConnectionError`,
+  `@mcp-abap-adt/interfaces-adt-connection` ^4.2.0). Only the request whose own
+  answer showed the replacement carries it. Nothing is sent again for it: no
+  CSRF retry, no credential renewal. The session is lost before the answer
+  reaches you.
+
+The connection's own exchanges inside a request (a CSRF fetch, a logon) have no
+answer of yours to keep: a replacement seen on one is `ADT_SESSION_REPLACED`.
+`connect()` forgets the identity between its own requests, so what it sets up
+is never read as a replacement.
+A resumed session (`createConnection({ …, session })`) whose answer names another
+`SAP_SESSIONID` rejects `connect()` with SAP's answer, as before.
 
 **The server says the session is gone** — an answer meaning the session it was
 given no longer exists. This is **always** fatal, window or not: the connection
-raises `ADT_SESSION_REPLACED` and stops being usable. Unlike a replacement,
+raises `ADT_SESSION_REPLACED` and stops being usable — stateless or not, unless
+the same answer also changed the `SAP_SESSIONID`: a stateless refusal that does
+both is a replacement first, that refusal, marked. Unlike a replacement,
 nothing here suggests a working session to continue on — the one we had is
 confirmed dead, and re-establishing silently is what let the old connector
 carry on over a session the caller never opened.
@@ -691,7 +735,8 @@ an answer on a dead pooled socket — see "Kept-alive connections, and the one
 resend" under the transports; it never resends a request the server answered.)
 
 **A lost session spends the instance** (since 16.0.0), as `disconnect()` does.
-After either of these, `connect()` and every request on the instance reject
+After either of these — a stateless answer marked `sessionLost` included —
+`connect()` and every request on the instance reject
 `ADT_SESSION_ERROR.NOT_CONNECTED`, and a new session is a new connection.
 `disconnect()` is still owed once. It sends the logoff only if the instance
 still holds a live `SAP_SESSIONID`, and after a loss the connection has
@@ -706,7 +751,9 @@ timeout. `disconnect()` waits for that logoff's write, `flushGoodbye()` for
 its answer; a `connect()` that found its session replaced rejects once it is
 written. The old session SAP already ended, and a session reported gone
 (`400 "Session not found"`) brought no new one: nothing is sent for either.
-`ADT_SESSION_REPLACED` reaches the caller as before. Over RFC the
+What reaches the caller is the replacement's answer above: `ADT_SESSION_REPLACED`
+for a stateful request, SAP's answer marked `sessionLost` for a stateless one.
+Over RFC the
 conversation is the session and no answer can replace it.
 
 **Over RFC, an RFC error can end the session** (22.0.0). When an RFC error
@@ -1278,8 +1325,9 @@ dropped, established anew — before the resend.
 the session's cookies to open another and retry there. A mutation that meets a
 401 with a CSRF token cached is put to the provider like any other 401; on Ok it
 is resent on the same session with the same token, inside a critical section or
-not, and if SAP did replace the session the request fails with
-`SESSION_REPLACED`. Before 16.0.0, outside a critical section, that mutation
+not, and if SAP did replace the session the instance is spent: a stateful
+request fails with `ADT_SESSION_REPLACED`, a stateless one gets the resend's
+answer marked `sessionLost` (since 23.0.0). Before 16.0.0, outside a critical section, that mutation
 discarded the session and retried in a new one on the same instance, a GET
 401 on a wire with no cookies fetched a token to open one, and a GET 401 with
 cookies held was resent once before the provider was asked; all three are

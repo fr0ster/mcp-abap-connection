@@ -34,6 +34,7 @@ import {
   type IAdtTransportRequest,
   refusalOf,
 } from './IAdtTransport.js';
+import { isStatefulRequest } from './statefulRequest.js';
 
 /**
  * Declares the capabilities explicitly rather than satisfying them by accident.
@@ -75,6 +76,38 @@ function hasHeader(headers: Record<string, string>, name: string): boolean {
  * wire's session token and the request's content negotiation.
  */
 const OUTRANK_THE_CREDENTIAL = ['x-csrf-token', 'content-type', 'accept'];
+
+/**
+ * What observing an answer decided: `'kept'` — the session is as it was, or the
+ * answer's effects are fenced; `'lost'` — the answer showed the session
+ * replaced, the session is lost, and the answer is the caller's.
+ */
+type SessionObservation = 'kept' | 'lost';
+
+/**
+ * The first 200 characters of a refusal's body, for a log line. The body is
+ * the wire's, from outside the type system: an absent one, or one that will
+ * not serialise (circular, a throwing `toJSON`), is no preview — never a throw
+ * that would stand in for the refusal and skip what the answer means.
+ */
+function dataPreview(data: unknown): string | undefined {
+  if (typeof data === 'string') return data.slice(0, 200);
+  try {
+    return JSON.stringify(data)?.slice(0, 200);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a thrown value is a refusal this connection marked `sessionLost`. */
+function carriesSessionLost(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'sessionLost' in error &&
+    error.sessionLost === ADT_SESSION_ERROR.SESSION_REPLACED
+  );
+}
 
 const DEAD_SESSION_PHRASES = [
   'session not found',
@@ -1114,7 +1147,8 @@ abstract class AbstractAbapConnection
     return (
       code === ADT_SESSION_ERROR.SESSION_REPLACED ||
       code === ADT_SESSION_ERROR.NOT_CONNECTED ||
-      code === ADT_SESSION_ERROR.RELEASE_PENDING
+      code === ADT_SESSION_ERROR.RELEASE_PENDING ||
+      carriesSessionLost(error)
     );
   }
 
@@ -1130,7 +1164,14 @@ abstract class AbstractAbapConnection
   protected observeResponse(
     headers?: Record<string, unknown>,
     generation?: number,
-  ): void {
+    /**
+     * The answer is an attempt of a stateless caller's request: a replacement
+     * it shows loses the session as always, and the answer is then the
+     * caller's — `'lost'` is returned instead of the throw. Not given for the
+     * connection's own exchanges and for stateful requests.
+     */
+    keepAnswer = false,
+  ): SessionObservation {
     // Fenced by SESSION GENERATION, not by the teardown epoch. Only a
     // caller-initiated teardown moves the epoch — a recovery deliberately does
     // not — so after a session loss and a successful recovery, a request from
@@ -1147,13 +1188,14 @@ abstract class AbstractAbapConnection
       this.logger?.debug(
         'Ignoring a response from a previous session: its effects are fenced',
       );
-      return;
+      return 'kept';
     }
     // The wire folds the response into its own state; what the change MEANS
     // is decided here, because it is a question about the session's lifetime.
     this.transport.ingest(headers);
-    this.applyIdentityPolicy(
+    return this.applyIdentityPolicy(
       this.lifecycle.observe(this.transport.sessionFingerprint()),
+      keepAnswer,
     );
   }
 
@@ -1175,8 +1217,9 @@ abstract class AbstractAbapConnection
    */
   private applyIdentityPolicy(
     classification: 'unchanged' | 'established' | 'replaced',
-  ): void {
-    if (classification !== 'replaced') return;
+    keepAnswer: boolean,
+  ): SessionObservation {
+    if (classification !== 'replaced') return 'kept';
 
     // The answer that replaced the session brought a session of its own,
     // which SAP opened and which nothing here will ever use: it is logged off
@@ -1196,6 +1239,11 @@ abstract class AbstractAbapConnection
     this.endSession(this.sessionContext());
     this.clearSessionState();
     this.raiseSessionLost('the session cookie changed under us');
+    // A stateless request's answer is SAP's, and valid: it is returned, marked,
+    // the session already lost (fr0ster/mcp-abap-adt#354). Nothing is sent
+    // again for it. A stateful request — the one a lock is taken and released
+    // in — and the connection's own exchanges keep failing loudly.
+    if (keepAnswer) return 'lost';
     throw sessionError(
       ADT_SESSION_ERROR.SESSION_REPLACED,
       'The SAP session this connection was using is gone and the requests are now on a different one; anything held against the old session — a lock and any write under it — is dead. ' +
@@ -1491,12 +1539,17 @@ abstract class AbstractAbapConnection
     try {
       const response = await this.sendObserved<T, D>(requestConfig, lease);
 
-      this.logger?.debug(`Request succeeded with status ${response.status}`, {
-        type: 'REQUEST_SUCCESS',
-        status: response.status,
-        url: requestUrl,
-        method: normalizedMethod,
-      });
+      // The answer outranks the logger's word on it: a logger that throws
+      // must not take a received answer — one marked `sessionLost` above all,
+      // whose session is already gone — from the caller.
+      this.logQuietly(() =>
+        this.logger?.debug(`Request succeeded with status ${response.status}`, {
+          type: 'REQUEST_SUCCESS',
+          status: response.status,
+          url: requestUrl,
+          method: normalizedMethod,
+        }),
+      );
 
       return response;
     } catch (error) {
@@ -1541,11 +1594,45 @@ abstract class AbstractAbapConnection
       );
     }
     const response = await this.transport.send(requestConfig);
-    this.observeResponse(
+    const observed = this.observeResponse(
       response.headers as Record<string, unknown>,
       lease.generation,
+      !isStatefulRequest(requestConfig),
     );
-    return response as unknown as IAdtWireResponse<T, D>;
+    const answer = response as unknown as IAdtWireResponse<T, D>;
+    // The answer itself says the session is gone: a field, on the one object
+    // that answers this request, never a word.
+    return observed === 'lost'
+      ? { ...answer, sessionLost: ADT_SESSION_ERROR.SESSION_REPLACED }
+      : answer;
+  }
+
+  /**
+   * SAP's refusal of a stateless request whose answer showed the session
+   * replaced, as the caller gets it: the refusal itself, marked `sessionLost`.
+   * The wire's error is its own object, made for this attempt, so the mark is
+   * set on it. One that cannot take it — frozen, sealed, or holding its own
+   * fixed `sessionLost` — is answered by an object on top of it: every field of
+   * the refusal read through to it, its class kept, the mark its own.
+   */
+  private markedLost(error: unknown): unknown {
+    // A refusal is an object: `refusalOf` found its `response` on it.
+    if (typeof error !== 'object' || error === null) return error;
+    const mark: PropertyDescriptor = {
+      value: ADT_SESSION_ERROR.SESSION_REPLACED,
+      enumerable: true,
+      configurable: true,
+      writable: false,
+    };
+    if (Object.isExtensible(error)) {
+      try {
+        Object.defineProperty(error, 'sessionLost', mark);
+        return error;
+      } catch {
+        // An own `sessionLost` that cannot be redefined: marked from above.
+      }
+    }
+    return Object.create(error, { sessionLost: mark });
   }
 
   /**
@@ -1641,17 +1728,18 @@ abstract class AbstractAbapConnection
 
     const refusal = refusalOf(error);
     if (refusal) {
-      errorDetails.data =
-        typeof refusal.data === 'string'
-          ? refusal.data.slice(0, 200)
-          : JSON.stringify(refusal.data).slice(0, 200);
+      errorDetails.data = dataPreview(refusal.data);
 
       // Every wire's refusal, not only axios's. A response the connection
-      // never observed is a session replacement it never noticed.
-      this.observeResponse(
+      // never observed is a session replacement it never noticed. A stateless
+      // request's refusal that showed one is the caller's answer: no recovery
+      // starts from it — no CSRF retry, no credential renewal.
+      const observed = this.observeResponse(
         refusal.headers as Record<string, unknown> | undefined,
         lease.generation,
+        !isStatefulRequest(requestConfig),
       );
+      if (observed === 'lost') throw this.markedLost(error);
     }
 
     this.throwIfSessionDead(error, lease);
@@ -1718,6 +1806,17 @@ abstract class AbstractAbapConnection
         if (!this.lifecycle.isCurrent(lease)) {
           throw this.staleVerdict(retryError);
         }
+        // The resend's refusal is observed like the first attempt's: a
+        // replacement it shows is its own answer, not the first attempt's 403.
+        const retryRefusal = refusalOf(retryError);
+        if (retryRefusal) {
+          const observed = this.observeResponse(
+            retryRefusal.headers as Record<string, unknown> | undefined,
+            lease.generation,
+            !isStatefulRequest(requestConfig),
+          );
+          if (observed === 'lost') throw this.markedLost(retryError);
+        }
         this.throwIfSessionDead(retryError, lease);
         // A session verdict outranks the error that started the retry: the
         // caller can retry a 403 itself, but it cannot discover that its lock
@@ -1761,6 +1860,9 @@ abstract class AbstractAbapConnection
     lease: Pick<RequestLease, 'generation'>,
     renewal: CredentialRenewal,
   ): Promise<IAdtWireResponse<T, D>> {
+    // A session verdict is already the caller's answer — a stateless
+    // request's refusal marked `sessionLost` above all: no provider is asked.
+    if (this.isSessionVerdict(failure)) throw failure;
     // A resend inside the wire's recovery that met a dead session.
     this.throwIfSessionDead(failure, lease);
     const rejection = this.credentialRejection(failure);
@@ -1799,10 +1901,12 @@ abstract class AbstractAbapConnection
       // SAP replaced in between is SESSION_REPLACED, not a bare status.
       const refusal = refusalOf(again);
       if (refusal) {
-        this.observeResponse(
+        const observed = this.observeResponse(
           refusal.headers as Record<string, unknown> | undefined,
           lease.generation,
+          !isStatefulRequest(requestConfig),
         );
+        if (observed === 'lost') throw this.markedLost(again);
       }
       this.throwIfSessionDead(again, lease);
       const secondRejection = this.credentialRejection(again);
