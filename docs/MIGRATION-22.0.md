@@ -16,7 +16,11 @@
 - **A failed RFC call carries `rfc`.** When the SDK names the failure, the
   error carries `rfc: { key, group, code, codeString }` (`IRfcErrorInfo` from
   `@mcp-abap-adt/interfaces-adt-connection` 4.1; `codeString` is one of
-  `RFC_RCS`). The message is unchanged; the top-level `code` keeps its meaning.
+  `RFC_RCS`), on every conversation, stateful or not. The top-level `code`
+  keeps its meaning: unset on a call's failure, whose message is the call's
+  (`RFC call to SADT_REST_RFC_ENDPOINT failed: …`); when the error ended the
+  stateful conversation, the message is the session-lost one and `code` is
+  `ADT_SESSION_REPLACED` (above).
 - **The `SAP-PASSPORT` header becomes the RFC call's passport.** Over RFC the
   header is hex-decoded and handed to sap-rfc-lite for that call only; it is no
   longer sent to `SADT_REST_RFC_ENDPOINT` as a header field (which never read

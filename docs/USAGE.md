@@ -1121,8 +1121,14 @@ carries it; the wire never reads `config.username` or `config.password`.
   codeString }` (`IRfcErrorInfo`, `codeString` one of `RFC_RCS`, both from
   `@mcp-abap-adt/interfaces-adt-connection`), checked once where the wire
   receives the SDK's error — own data properties only, nothing read out of a
-  message. The message is unchanged and the top-level `code` is not set. An
-  error the SDK did not name carries no `rfc`. On every conversation.
+  message. An error the SDK did not name carries no `rfc`. `rfc` is carried on
+  every conversation, stateful or not. The message is the call's
+  (`RFC call to SADT_REST_RFC_ENDPOINT failed: …`, ending in fixed words when
+  the thrown value cannot be described) and the top-level `code` is not set —
+  except when the error ended the stateful conversation: then the message is
+  the session-lost one ("The RFC conversation that carried this connection's
+  SAP session has ended; …") and `code` is `ADT_SESSION_REPLACED`, the instance
+  spent (README, "RFC").
 - **The `SAP-PASSPORT` header is the RFC call's passport** (22.0.0). Its name
   read without case, its value hex-decoded and handed to sap-rfc-lite as
   `call(…, { passport })` for that call only, on whichever conversation carries

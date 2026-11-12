@@ -32,8 +32,12 @@ and for code that read the passport from the endpoint's header fields. See
 
 - **A failed RFC call carries `rfc: { key, group, code, codeString }`** (`IRfcErrorInfo`;
   `codeString` one of `RFC_RCS`), checked once where the wire receives the SDK's error: own
-  data properties only, no getter run, nothing read out of a message. The message is unchanged
-  and the top-level `code` is not set. On every conversation.
+  data properties only, no getter run, nothing read out of a message. `rfc` is carried on every
+  conversation, stateful or not. The message is the call's (`RFC call to SADT_REST_RFC_ENDPOINT
+  failed: …`, ending in fixed words when the thrown value cannot be described) and the top-level
+  `code` is not set — except when the error ended the stateful conversation: then the message is
+  the session-lost one and `code` is `ADT_SESSION_REPLACED` (above). Neither describing the
+  thrown value nor a logger that throws can replace that verdict.
 - **The passport over RFC.** A request's `SAP-PASSPORT` header (name read without case) is
   hex-decoded and handed to sap-rfc-lite as the call's own passport, for that call only, so a
   program started over RFC is caught by a terminal-mode external debugger listening for the

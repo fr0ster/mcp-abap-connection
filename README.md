@@ -567,9 +567,12 @@ reports the failure, the `Error` the caller receives carries it as
 `rfc: { key, group, code, codeString }` (`IRfcErrorInfo`, typed by
 `IAbapConnectionError` in `@mcp-abap-adt/interfaces-adt-connection`;
 `codeString` is one of `RFC_RCS`). Read the failure from those, never from the
-message, which is unchanged (`RFC call to SADT_REST_RFC_ENDPOINT failed: …`).
-The top-level `code` keeps its meaning. An error the SDK did not name — the
-closed-connection error, a refused passport — carries no `rfc`.
+message: a call's failure says `RFC call to SADT_REST_RFC_ENDPOINT failed: …`
+and sets no top-level `code`; when the error ended the stateful conversation,
+the message is the session-lost one and `code` is `ADT_SESSION_REPLACED`
+(below). `rfc` is carried either way, on every conversation. An error the SDK
+did not name — the closed-connection error, a refused passport — carries no
+`rfc`.
 
 ```typescript
 import type { RfcReturnCodeName } from "@mcp-abap-adt/interfaces-adt-connection";
