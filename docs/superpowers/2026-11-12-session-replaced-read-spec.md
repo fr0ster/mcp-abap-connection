@@ -319,3 +319,22 @@ request now reads `sessionLost` on the answer or the refusal. CHANGELOG entry.
   request that carries a context id SAP has dropped while the `SAP_SESSIONID` lives would therefore
   spend a live instance. Whether SAP drops a context while its session lives (after an `UNLOCK`,
   say) is not measured (**Open**, reported for the owner; not decided here).
+
+  Measured on onprem over HTTP, one live session, an own class in `$TMP` (created, then deleted
+  under a lock), the credential on every request:
+
+  | Step | Stateful | `sap-contextid` sent | Answer | `sap-contextid` in the answer | `SAP_SESSIONID` |
+  |---|---|---|---|---|---|
+  | first `LOCK` | yes | none | `200` | set | unchanged |
+  | `UNLOCK` | yes | the one the `LOCK` set | `200` | none set, none cleared | unchanged |
+  | (a) `LOCK` right after the `UNLOCK`, then `UNLOCK` | yes | the same | `200`, `200` | none | unchanged |
+  | (b) a stateless `GET` of the class | no | none | `200` | none | unchanged |
+  | (b) then `LOCK`, `UNLOCK` | yes | the same | `200`, `200` | none | unchanged |
+  | (c) 45 s idle, then `LOCK`, `UNLOCK` | yes | the same | `200`, `200` | none | unchanged |
+
+  No answer carried a session-dead phrase. The same sequence through the connection 22.0.1
+  (`createConnection`, `setSessionType('stateful')` for `LOCK` and `UNLOCK`): every step `200`, the
+  jar's `sap-contextid` kept unchanged throughout, `isConnected()` `true` after each step,
+  `disconnect()` resolved. In these cases the context outlived its `UNLOCK`, the stateless request
+  between and a 45 s idle, and 22.0.1 did not spend the live instance. A longer idle, below the
+  session's own timeout, is not measured.
