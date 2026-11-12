@@ -162,6 +162,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 24.0.0](./docs/MIGRATION-24.0.md)** - on `@mcp-abap-adt/interfaces-adt-connection` ^5.0.0: `IAbapConnection` / `AbapConnection`'s `makeAdtRequest` takes no type argument; drop it and narrow `data` from `unknown`; the connectors are unchanged
 - 🚚 **[Migration to 23.0.0](./docs/MIGRATION-23.0.md)** - a stateless request whose answer shows the SAP session replaced keeps that answer, marked `sessionLost`, and the instance is spent; a stateful request still rejects `ADT_SESSION_REPLACED`; nothing is resent; `@mcp-abap-adt/interfaces-adt-connection` ^4.2.0
 - 🚚 **[Migration to 22.0.0](./docs/MIGRATION-22.0.md)** - over RFC: a connection-ending RFC error on the stateful conversation is `ADT_SESSION_REPLACED` and spends the instance (no silent reconnect); a failed RFC call carries `rfc: { key, group, code, codeString }`; the `SAP-PASSPORT` header becomes the RFC call's passport; `@mcp-abap-adt/sap-rfc-lite` ^0.4.0
 - 🚚 **[Migration to 21.0.0](./docs/MIGRATION-21.0.md)** - the CSRF token fetch asks once: no retry, no delay; `CSRF_CONFIG.RETRY_COUNT` / `RETRY_DELAY`, the establish context's `retries` / `retryDelayMs` / `isFatal`, `fetchCsrfToken`'s retry parameters and `endsTheExchange` are removed
@@ -924,10 +925,9 @@ import type { IAdtWireResponse } from '@mcp-abap-adt/interfaces-adt-connection';
 // The shared contract (IAbapConnection), what every connection provides:
 interface AbapConnection {
   connect(): Promise<void>; // REQUIRED before any request; rejects on failure
-  // An answer whose type is not named is `unknown` (interfaces-adt-connection 2).
-  makeAdtRequest<T = unknown, D = unknown>(
-    options: AbapRequestOptions,
-  ): Promise<IAdtWireResponse<T, D>>;
+  // The answer's `data` is `unknown`; the caller names no type for it
+  // (interfaces-adt-connection 5).
+  makeAdtRequest(options: AbapRequestOptions): Promise<IAdtWireResponse>;
   getBaseUrl(): Promise<string | undefined>; // undefined over RFC: no HTTP origin
   setSessionType(type: "stateless" | "stateful"): void; // Switch session type
   getSessionId(): string | null; // Client-side conversation id
