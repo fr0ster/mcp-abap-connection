@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [22.0.1] - 2026-11-12
+
 ### Fixed
 
-- **Patch: recognize SAP ICM session-expired HTTP 400 responses (#355).**
+- **Recognize SAP ICM session-expired HTTP 400 responses (fr0ster/mcp-abap-adt#355).**
   `Session Timed Out or Not Found` and `Session no longer exists` now follow the
   existing `Session not found` lifecycle, case-insensitively: the session is lost
   and the caller receives `ADT_SESSION_REPLACED`, including at LOCK. No automatic
@@ -2966,7 +2968,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.1...HEAD
+[22.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.0...v22.0.1
 [22.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v21.0.0...v22.0.0
 [21.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.1.0...v21.0.0
 [20.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.0.0...v20.1.0
