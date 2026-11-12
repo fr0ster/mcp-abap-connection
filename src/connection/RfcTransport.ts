@@ -214,10 +214,17 @@ const TYPE_OPEN = '<exc:type';
 const TYPE_CLOSE = '</exc:type>';
 
 /**
- * The text of the first `<exc:type …>TEXT</exc:type>` in `body`, by a linear
- * scan: from each `<exc:type`, the first `>` after it opens the text, which
- * runs to the next `<` and counts only when it is not empty and that `<`
- * begins `</exc:type>`. Otherwise the next `<exc:type` is tried.
+ * The text of the first `<exc:type …>TEXT</exc:type>` in `body`: from a
+ * `<exc:type`, the first `>` after it opens the text, which runs to the next
+ * `<` and counts only when it is not empty and that `<` begins `</exc:type>`.
+ *
+ * Linear: every search starts where the previous one ended, so the body is
+ * read once, left to right. A failed candidate need not be followed by the next
+ * `<exc:type` after it: one that begins before its `>` holds no `>` of its own
+ * in its first nine characters, so it meets the same `>` and the same `<` and
+ * fails the same way; and none begins between that `>` and the `<` that ended
+ * the text, since a candidate begins with `<`. The next candidate is searched
+ * from that `<`. With no `<` after the `>`, no candidate is left.
  */
 function exceptionType(body: string): string | undefined {
   let open = body.indexOf(TYPE_OPEN);
@@ -225,10 +232,11 @@ function exceptionType(body: string): string | undefined {
     const tagEnd = body.indexOf('>', open + TYPE_OPEN.length);
     if (tagEnd < 0) return undefined;
     const textEnd = body.indexOf('<', tagEnd + 1);
+    if (textEnd < 0) return undefined;
     if (textEnd > tagEnd + 1 && body.startsWith(TYPE_CLOSE, textEnd)) {
       return body.slice(tagEnd + 1, textEnd);
     }
-    open = body.indexOf(TYPE_OPEN, open + 1);
+    open = body.indexOf(TYPE_OPEN, textEnd);
   }
   return undefined;
 }

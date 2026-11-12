@@ -72,6 +72,23 @@ const ROWS: ReadonlyArray<readonly [string, string, number]> = [
     '</exc:type>ExceptionBadRequest</exc:type>',
     500,
   ],
+  // Candidates the scan passes over: one inside another's opening tag shares
+  // its `>`, and the next one tried starts where the failed text ended.
+  [
+    'an exc:type inside an opening tag',
+    '<exc:type <exc:type>ExceptionBadRequest</exc:type>',
+    400,
+  ],
+  [
+    'an exc:type where a type text ended',
+    '<exc:type>a<exc:type>ExceptionConflict</exc:type>',
+    409,
+  ],
+  [
+    'a failed candidate, then text, then a real one',
+    '<exc:type>a<b><exc:type>ExceptionResourceLocked</exc:type>',
+    423,
+  ],
 ];
 
 function conversationAnswering(body: string): IRfcConversation {
@@ -126,6 +143,18 @@ describe('the status of an ADT exception document over RFC, read without a regex
       );
     });
   }
+});
+
+describe('the exception scan is linear', () => {
+  // Every candidate here fails the same way: each `<exc:type` shares the one
+  // `>` at the end, and no `<` follows it. A scan that searched again from
+  // each candidate read the rest of the body each time — Θ(n²) on this body.
+  // No oracle (the former expression was quadratic on it too) and no clock:
+  // the case only has to finish, which it does at once in a linear scan.
+  it('many unclosed exc:type tags sharing one > → 500', async () => {
+    const body = `${MARKER}${'<exc:type'.repeat(200_000)}>x`;
+    assert.strictEqual(await statusFor(body), 500);
+  });
 });
 
 describe('the RFC wire holds no regular expression', () => {
