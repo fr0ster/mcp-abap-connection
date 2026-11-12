@@ -28,8 +28,8 @@ in the PR description, not done here.
 - Only npm scripts run (`npm run test:ci -- <name>` for one file in this repository); never `npx`,
   `npm exec` or `node_modules/.bin`.
 - **`npm test` here can go live.** Before every `npm test` / `npm run test:ci` in this repository,
-  neither the worktree root nor the main checkout's root holds a `*.env` file that a live suite
-  reads, and `SAP_ENV_FILE` is unset — checked, not assumed — so every live block skips with its
+  neither the worktree root nor the main checkout's root holds any `*.env` file, and `SAP_ENV_FILE`
+  is unset — checked, not assumed — so every live block skips with its
   reason. A live run happens only in step 9, on the owner's go.
 - Dependencies come from the registry only: no `file:`, `link:`, `npm link` or workspace link to
   another repository; after every install the lockfile is checked for `"link": true` and for any
@@ -73,6 +73,9 @@ in the PR description, not done here.
    consumes it).
 4. After approval and green CI: merge, tag `interfaces-adt-connection-v4.2.0`; the npm publish is
    the owner's.
+5. After the publish: a clean install of `@mcp-abap-adt/interfaces-adt-connection@4.2.0` from the
+   registry in an empty temporary directory outside every repository, its `dist/index.d.ts` naming
+   `AdtSessionLoss` and the two `sessionLost` fields; the directory removed afterwards.
 
 ## Part B — connection 23.0.0
 
@@ -107,22 +110,37 @@ cannot move them:
    not `ADT_SESSION_REPLACED`; an answer setting none with a token resumes (`sessionResume`).
 5. A session-dead `400` with each of the three phrases, stateless and stateful alike:
    `ADT_SESSION_REPLACED`, no logoff dispatched.
-6. Breaks, each watched red: keep the answer of an inside-request exchange; drop `forgetIdentity`
-   between open and establishment; observe the preflight's refusal; resume rejecting
-   `ADT_SESSION_REPLACED`; skip one phrase.
+6. Answers that show no replacement, stateless and stateful: an unchanged `SAP_SESSIONID` and a newly
+   established one — the answer as today, no `sessionLost` property, the instance connected.
+7. Stale leases (`staleRequestFencing` beside new cases): a success answered after the session
+   moved is returned unobserved, without `sessionLost`, nothing acted on (no logoff, no second
+   loss); a refused stale request gets its error or `ADT_NOT_CONNECTED` as today.
+8. RFC: a stateless and a stateful request over `RfcTransport` (stand-in conversation) carry no
+   `sessionLost`; `rfcSessionLost` and `rfcDeadStateless` green.
+9. Breaks, each watched red, each against the test named: keep the answer of an inside-request
+   exchange (item 1); drop `forgetIdentity` between open and establishment (item 2); observe the
+   preflight's refusal (item 3); resume rejecting `ADT_SESSION_REPLACED` (item 4); a stateless
+   session-dead refusal kept instead of `ADT_SESSION_REPLACED`, and each phrase dropped in turn
+   (item 5); mark an unchanged answer, and an established one (item 6); act on a stale success —
+   mark it, raise the loss, dispatch a logoff (item 7). Breaks that need code which does not exist
+   yet (the mark) are applied after B4 and listed again there.
 
 ### B4. The decision point (spec 5, first bullet)
 
-1. Tests (`transport.client` stubbed under the connection, `OnPremHttpTransport`): a stateless `GET`
-   whose `200` carries a changed `SAP_SESSIONID` resolves that answer with `sessionLost`
-   `ADT_SESSION_REPLACED`; the same request stateful by the flag and by the caller's
-   `x-sap-adt-sessiontype: stateful` header rejects `ADT_SESSION_REPLACED`. Red on today's code
-   for the stateless case.
+1. Tests (`transport.client` stubbed under the connection, `OnPremHttpTransport`), written before
+   the change, for the success of every attempt the change touches: the first attempt, the CSRF
+   retry's resend and the resend after a credential renewal, each answering `200` with a changed
+   `SAP_SESSIONID`: a stateless request resolves that answer (its body and status as sent) with
+   `sessionLost` `ADT_SESSION_REPLACED`; its stateful twin, by the flag and by the caller's
+   `x-sap-adt-sessiontype: stateful` header, rejects `ADT_SESSION_REPLACED`. The stateless cases
+   are red on today's code.
 2. Change: `observeResponse` / `applyIdentityPolicy` take `keepAnswer`; on `replaced` the cleanup as
    today, then throw when not kept, a typed `'lost'` when kept; the session context passes no
    `keepAnswer`; `sendObserved` sets `sessionLost` on the response it returns.
-3. Breaks: throw again for a kept answer; keep the stateful one; read statefulness from
-   `sessionMode` instead of `isStatefulRequest` (the header form red).
+3. Breaks, each applied to every row of item 1 on its own: throw again for a kept answer (that
+   stateless row red); keep the stateful one (that stateful row red); read statefulness from
+   `sessionMode` instead of `isStatefulRequest` (the header form red). Then the B3 breaks that need
+   the mark: mark an unchanged and an established answer, mark a stale success.
 
 ### B5. The loss before the answer (spec 3.1)
 
@@ -148,31 +166,32 @@ cannot move them:
    first.
 3. Breaks: a marked `403` starts the CSRF retry (send count red); a marked `401` reaches the
    provider (red); the phrase checked before the replacement (the both-at-once case red);
-   `isSessionVerdict` ignoring `sessionLost`.
+   `isSessionVerdict` ignoring `sessionLost`; and, on each row of item 1 on its own, the stateless
+   refusal turned into `ADT_SESSION_REPLACED` (that row red) and the stateful twin kept (its row
+   red).
 
 ### B7. The resends (spec 3.2)
 
-1. Tests: the CSRF retry's resend answering a success and a refusal with a changed
-   `SAP_SESSIONID`: resolves marked / rejects that refusal marked, not the first attempt's `403`;
-   the resend after a credential renewal the same; their stateful twins `ADT_SESSION_REPLACED`.
-   The CSRF-resend refusal case is red on today's code (its refusal is not observed).
+1. Tests: the CSRF retry's resend and the resend after a credential renewal, each answering a
+   refusal with a changed `SAP_SESSIONID`: rejects that refusal marked, not the first attempt's
+   error; their stateful twins `ADT_SESSION_REPLACED`. (Their successes were covered in B4.) The
+   CSRF-resend refusal case is red on today's code (its refusal is not observed).
 2. Change: the CSRF retry's catch observes the refusal with `keepAnswer` before
    `throwIfSessionDead`; `answerCredentialFailure` observes with `keepAnswer`.
 3. Breaks: leave the CSRF resend's refusal unobserved; rethrow the first attempt's error over a
-   marked one (`outranksOriginal` without the mark); `staleVerdict` replacing a marked error.
+   marked one (`outranksOriginal` without the mark); `staleVerdict` replacing a marked error; and,
+   on each row on its own, the stateless refusal turned into `ADT_SESSION_REPLACED` and the stateful
+   twin kept.
 
-### B8. Attribution and stale leases (spec 3.4)
+### B8. Attribution (spec 3.1, 3.4)
 
 1. Tests: two stateless requests in flight, the first one's answer showing the replacement: only
-   that answer marked; the other, answered after the loss, unmarked and not acted on; a refused
-   stale request gets its error or `ADT_NOT_CONNECTED` as today (`staleRequestFencing` beside the
-   new case); an answer with an unchanged or newly established `SAP_SESSIONID`: unmarked; a mark
-   never appears on another request's object.
-2. Breaks: mark a stale-lease answer; mark on `established`; share the mark through the
-   connection instead of the answer object.
-3. RFC: a stateless and a stateful request over `RfcTransport` (stand-in conversation) carry no mark;
-   the RFC session-lost suites (`rfcSessionLost`, `rfcDeadStateless`) stay green.
-4. The timer counter (`packageTimers`) and the no-deadline tests stay green.
+   that answer marked; the other, answered after the loss, unmarked and not acted on; a mark never
+   appears on another request's object.
+2. Breaks: share the mark through the connection instead of the answer object (the second request
+   marked — red); mark the stale one (red).
+3. The timer counter (`packageTimers`) and the no-deadline tests stay green; the B3 tests stay
+   green unchanged.
 
 ### B9. The live suite and the live run (spec 6, "Proved live")
 
@@ -181,9 +200,11 @@ cannot move them:
    `rfc-connection.test.ts` (`SAP_ENV_FILE`, else the repository-root env file it reads), skipped
    with its reason in the block's title when the file is absent; no object, no lock:
    - instance one connects; its session is logged off from outside with the cookies
-     `sessionCookies()` returned, without `sap-contextid`; a stateless `GET` resolves `200` with
-     `sessionLost`; `isConnected()` false; the next request `ADT_NOT_CONNECTED`; `disconnect()`
-     resolves;
+     `sessionCookies()` returned, without `sap-contextid`; a stateless `GET` of the discovery
+     document resolves `200` with `sessionLost` and the body SAP sent (an ADT service document:
+     its content type and its `app:service` root read by plain search); `isConnected()` false; the
+     next request `ADT_NOT_CONNECTED`, the recording `httpClient` showing no request sent for it;
+     `disconnect()` resolves;
    - instance two, the same, with `setSessionType('stateful')` for the `GET`: rejects
      `ADT_SESSION_REPLACED`;
    - the replacing session's logoff is seen leaving through a consumer `httpClient` that records
@@ -200,8 +221,9 @@ cannot move them:
 
 ### B10. Docs (spec 7)
 
-1. Audit: every statement in `README.md`, `docs/USAGE.md`, `docs/STATEFUL_SESSION_GUIDE.md` and the
-   other current guides of `docs/` saying that a replaced session fails a request with
+1. Audit: every statement in `README.md`, `docs/USAGE.md`, `docs/STATEFUL_SESSION_GUIDE.md`, the
+   other current guides of `docs/`, and the usage examples (`examples/README.md` and
+   `examples/*.js`) saying that a replaced session fails a request with
    `ADT_SESSION_REPLACED` — listed in the PR, each rewritten.
 2. README and `docs/USAGE.md` "When the session is lost": the stateless request keeps SAP's answer
    marked `sessionLost`, success or refusal; the instance is spent; a stateful request still rejects
@@ -234,4 +256,8 @@ cannot move them:
 1. Mark #103 ready for review after B1–B12; the description states the chain (interfaces 4.2.0
    published first), the live run's result and what the next links owe.
 2. Review cycles stay in this PR. After the final approval and green CI, the controller merges and
-   tags `v23.0.0`; the npm publish is the owner's. Then the server's bump in #346.
+   tags `v23.0.0`; the npm publish is the owner's.
+3. After the publish: a clean install of `@mcp-abap-adt/connection@23.0.0` from the registry in an
+   empty temporary directory outside every repository; the lockfile there resolves
+   `interfaces-adt-connection` 4.2.x from the registry with no link; `require` of the package
+   loads; the directory removed afterwards. Then the server's bump in #346.
