@@ -1539,12 +1539,17 @@ abstract class AbstractAbapConnection
     try {
       const response = await this.sendObserved<T, D>(requestConfig, lease);
 
-      this.logger?.debug(`Request succeeded with status ${response.status}`, {
-        type: 'REQUEST_SUCCESS',
-        status: response.status,
-        url: requestUrl,
-        method: normalizedMethod,
-      });
+      // The answer outranks the logger's word on it: a logger that throws
+      // must not take a received answer — one marked `sessionLost` above all,
+      // whose session is already gone — from the caller.
+      this.logQuietly(() =>
+        this.logger?.debug(`Request succeeded with status ${response.status}`, {
+          type: 'REQUEST_SUCCESS',
+          status: response.status,
+          url: requestUrl,
+          method: normalizedMethod,
+        }),
+      );
 
       return response;
     } catch (error) {

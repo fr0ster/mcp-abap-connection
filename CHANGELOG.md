@@ -41,6 +41,9 @@ A stateless request keeps its answer when the SAP session was replaced
   other.** Its log preview threw (`JSON.stringify(undefined).slice`, a circular
   body) before the answer was observed, so the caller got a `TypeError` and a
   replacement on it went unnoticed; the preview is now empty instead.
+- **A logger that throws on the success line no longer takes the answer.** The
+  `REQUEST_SUCCESS` debug line is written as the failure lines are, its throw
+  dropped.
 
 ### Dependencies
 

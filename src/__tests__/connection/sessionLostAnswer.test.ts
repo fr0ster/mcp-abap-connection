@@ -28,6 +28,7 @@ import { AdtCloudConnector } from '../../connection/AdtCloudConnector.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
 import { RfcTransport } from '../../connection/RfcTransport.js';
+import type { ILogger } from '../../logger.js';
 import { assertMatchObject } from '../helpers/assertions.js';
 import { cloudHttpTransport } from '../helpers/onPrem.js';
 import { standInFactory } from '../helpers/rfcStandIn.js';
@@ -772,6 +773,41 @@ describe('a refusal whose body does not serialise', () => {
       assert.strictEqual(conn.isConnected(), false);
     });
   }
+});
+
+describe('a logger that throws on the success line', () => {
+  it('does not take the marked answer from the caller', async () => {
+    const throwing: ILogger = {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: (message: string) => {
+        if (message.startsWith('Request succeeded')) {
+          throw new Error('the logger failed');
+        }
+      },
+    };
+    const transport = new OnPremHttpTransport(() => ({}), null, {
+      client: '100',
+      baseUrl: stub.baseUrl,
+    });
+    const conn = new AdtOnPremConnector(
+      config(),
+      stubProvider(),
+      transport,
+      throwing,
+    );
+    await conn.connect();
+    stub.work(WORK, [
+      { status: 200, body: 'payload', headers: { 'set-cookie': REPLACING } },
+    ]);
+
+    const response = await get(conn);
+
+    assert.strictEqual(response.data, 'payload');
+    assert.strictEqual(response.sessionLost, REPLACED);
+    assert.strictEqual(conn.isConnected(), false);
+  });
 });
 
 describe('a refusal that shows the replacement, on a resend', () => {
