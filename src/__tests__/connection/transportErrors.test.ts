@@ -16,6 +16,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
+import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { SapConfig } from '../../config/sapConfig.js';
 import { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import { RfcTransport } from '../../connection/RfcTransport.js';
@@ -29,10 +30,18 @@ const config: SapConfig = {
 };
 
 /** A conversation that answers, then answers "session not found" once open. */
-function conversation() {
+function conversation(
+  body = 'Session not found',
+  status = 400,
+  statusText = 'Bad Request',
+) {
   let dead = false;
   let closed = true;
+  let refusals = 0;
   return {
+    get refusals() {
+      return refusals;
+    },
     die: () => {
       dead = true;
     },
@@ -48,22 +57,27 @@ function conversation() {
     close: async () => {
       closed = true;
     },
-    call: async () => ({
-      RESPONSE: dead
-        ? {
-            STATUS_LINE: {
-              STATUS_CODE: 400,
-              REASON_PHRASE: 'Session not found',
+    call: async () => {
+      if (dead) refusals++;
+      return {
+        RESPONSE: dead
+          ? {
+              STATUS_LINE: {
+                STATUS_CODE: status,
+                REASON_PHRASE: statusText,
+              },
+              HEADER_FIELDS: [{ NAME: 'content-type', VALUE: 'text/plain' }],
+              MESSAGE_BODY: Buffer.from(body, 'utf-8'),
+            }
+          : {
+              STATUS_LINE: { STATUS_CODE: 200, REASON_PHRASE: 'OK' },
+              HEADER_FIELDS: [
+                { NAME: 'content-type', VALUE: 'application/xml' },
+              ],
+              MESSAGE_BODY: Buffer.from('<service/>', 'utf-8'),
             },
-            HEADER_FIELDS: [{ NAME: 'content-type', VALUE: 'text/plain' }],
-            MESSAGE_BODY: Buffer.from('Session not found', 'utf-8'),
-          }
-        : {
-            STATUS_LINE: { STATUS_CODE: 200, REASON_PHRASE: 'OK' },
-            HEADER_FIELDS: [{ NAME: 'content-type', VALUE: 'application/xml' }],
-            MESSAGE_BODY: Buffer.from('<service/>', 'utf-8'),
-          },
-    }),
+      };
+    },
   };
 }
 
@@ -71,7 +85,7 @@ function overRfc(wire: ReturnType<typeof conversation>) {
   return new AdtOnPremConnector(
     config,
     new BasicAuthProvider('u', 'p'),
-    new RfcTransport(() => wire as never, null),
+    new RfcTransport(() => wire, null),
     null,
     undefined,
   );
@@ -99,4 +113,86 @@ describe('a refusal that is not an AxiosError', () => {
     // session that does not exist.
     assert.strictEqual(conn.isConnected(), false);
   });
+});
+
+describe('dead-session refusal phrases', () => {
+  const icmBody =
+    '400 Session Timed Out or Not Found\r\nSession no longer exists';
+
+  for (const body of [
+    icmBody,
+    'SESSION TIMED OUT OR NOT FOUND',
+    'SeSsIoN No LoNgEr ExIsTs',
+    'SESSION NOT FOUND',
+  ]) {
+    it(`diagnoses a dead session from ${JSON.stringify(body)}`, async () => {
+      const wire = conversation(body);
+      const conn = overRfc(wire);
+      await conn.connect();
+      wire.die();
+
+      await assert.rejects(
+        conn.makeAdtRequest({
+          url: '/sap/bc/adt/oo/classes/ZCL_X',
+          method: 'GET',
+          timeout: 0,
+        }),
+        { code: ADT_SESSION_ERROR.SESSION_REPLACED },
+      );
+      assert.strictEqual(conn.isConnected(), false);
+      assert.strictEqual(wire.refusals, 1);
+    });
+  }
+
+  it('diagnoses an ICM refusal at LOCK without retrying it', async () => {
+    const wire = conversation(icmBody);
+    const conn = overRfc(wire);
+    await conn.connect();
+    wire.die();
+
+    await assert.rejects(
+      conn.makeAdtRequest({
+        url: '/sap/bc/adt/oo/classes/ZCL_X?_action=LOCK&accessMode=MODIFY',
+        method: 'POST',
+        timeout: 0,
+        headers: { 'x-sap-adt-sessiontype': 'stateful' },
+      }),
+      {
+        code: ADT_SESSION_ERROR.SESSION_REPLACED,
+        message:
+          'The SAP session no longer exists; any lock handle from it is dead',
+      },
+    );
+    assert.strictEqual(conn.isConnected(), false);
+    assert.strictEqual(wire.refusals, 1);
+  });
+
+  for (const refusal of [
+    { body: 'Invalid lock request', status: 400, statusText: 'Bad Request' },
+    { body: icmBody, status: 500, statusText: 'Internal Server Error' },
+  ]) {
+    it(`preserves a non-session refusal: ${refusal.status} ${refusal.body}`, async () => {
+      const wire = conversation(
+        refusal.body,
+        refusal.status,
+        refusal.statusText,
+      );
+      const conn = overRfc(wire);
+      await conn.connect();
+      wire.die();
+
+      await assert.rejects(
+        conn.makeAdtRequest({
+          url: '/sap/bc/adt/oo/classes/ZCL_X',
+          method: 'GET',
+          timeout: 0,
+        }),
+        {
+          message: `Request failed with status ${refusal.status}: GET /sap/bc/adt/oo/classes/ZCL_X`,
+        },
+      );
+      assert.strictEqual(conn.isConnected(), true);
+      assert.strictEqual(wire.refusals, 1);
+    });
+  }
 });
