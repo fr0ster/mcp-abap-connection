@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [23.0.0] - 2026-11-12
+
+A stateless request keeps its answer when the SAP session was replaced
+(fr0ster/mcp-abap-adt#354). Breaking for code that learned of the loss from the
+`ADT_SESSION_REPLACED` rejection of a stateless request. See
+[docs/MIGRATION-23.0.md](docs/MIGRATION-23.0.md).
+
+### Changed — breaking
+
+- **A stateless request whose answer shows the session replaced gets that
+  answer.** A success resolves, a refusal rejects as itself; either carries
+  `sessionLost: 'ADT_SESSION_REPLACED'`. The session is lost before the answer
+  reaches the caller (the instance spent, the replacing session logged off), and
+  nothing is sent again: no CSRF retry and no credential renewal start from it.
+  A stateful request, the connection's own exchanges and an answer saying the
+  session no longer exists keep rejecting `ADT_SESSION_REPLACED`.
+
+### Added
+
+- `sessionLost` on the resolved response and on the rejected refusal, typed by
+  `@mcp-abap-adt/interfaces-adt-connection` 4.2.0 (`AdtSessionLoss`).
+
+### Fixed
+
+- **The CSRF retry's refused resend is observed.** Its answer used to be dropped
+  for the first attempt's `403` without being read, so a replacement on it went
+  unnoticed.
+
+### Dependencies
+
+- `@mcp-abap-adt/interfaces-adt-connection` `^4.2.0`.
+
 ## [22.0.1] - 2026-11-12
 
 ### Fixed
@@ -2968,7 +3000,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v23.0.0...HEAD
+[23.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.1...v23.0.0
 [22.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.0...v22.0.1
 [22.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v21.0.0...v22.0.0
 [21.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v20.1.0...v21.0.0

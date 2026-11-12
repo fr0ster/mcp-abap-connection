@@ -15,6 +15,7 @@ mcp-abap-connection/
 │   ├── INSTALLATION.md             # Setup and installation guide
 │   ├── USAGE.md                    # API documentation and examples
 │   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── MIGRATION-23.0.md           # a stateless request keeps its answer when the session was replaced: sessionLost
 │   ├── MIGRATION-22.0.md           # RFC: the session lost after a connection-ending error; rfc fields; the passport
 │   ├── MIGRATION-21.0.md           # the CSRF token fetch asks once: no retry, no delay
 │   ├── MIGRATION-20.0.md           # an RFC config states its address, client and language; no URL over RFC

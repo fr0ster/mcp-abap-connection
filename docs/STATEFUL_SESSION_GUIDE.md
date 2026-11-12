@@ -178,7 +178,9 @@ same session; after a rejection at `'logon'` the wire logs on again before the r
 **No 401 opens a new session, and the lock in the session is kept:** a mutation
 (POST / PUT / DELETE) refused with a 401 while a CSRF token is cached goes to the provider and is
 resent on the same session with the same token, inside a critical section or not, and if SAP did
-replace the session the request fails with `SESSION_REPLACED` instead of carrying on in a new one.
+replace the session the instance is spent instead of carrying on in a new one: a stateful request
+fails with `ADT_SESSION_REPLACED`, a stateless one (the mutation is) gets the resend's answer as SAP
+gave it, marked `sessionLost` (since 23.0.0).
 Before 16.0.0, outside a critical section, that mutation discarded the session and retried in a
 new one on the same instance; that recovery is gone. One instance is one session: if you want a
 new session after a 401, create a new connection.
@@ -223,8 +225,9 @@ a substitute: a repeat call does not wait either.
 - A workflow cannot be resumed by restoring HTTP state into this package: the
   methods that once did that were removed in 0.2.0. Establish a session with
   `connect()` and take the locks again — a lock handle from a previous session
-  is dead, and the connection will say so with `ADT_SESSION_REPLACED` rather
-  than let you use it.
+  is dead. A stateful request (`LOCK`, `UNLOCK`) on a replaced session rejects
+  `ADT_SESSION_REPLACED`; a stateless one returns SAP's answer marked
+  `sessionLost` (since 23.0.0), and the instance is spent either way.
 
 ---
 
@@ -240,8 +243,9 @@ The link to the ABAP session is not guaranteed, and that is the whole problem:
 
 Both are reported, neither is worked around. `connect()` fails with the reason
 when no session was opened; a session lost afterwards surfaces as
-`ADT_SESSION_REPLACED` rather than a request quietly continuing somewhere it
-does not belong. What to do about either — wait, retry, create a new connection, release
+`ADT_SESSION_REPLACED` on a stateful request, and as `sessionLost` on the answer
+of a stateless one (since 23.0.0), rather than a request quietly continuing
+somewhere it does not belong. What to do about either — wait, retry, create a new connection, release
 sessions the user still holds, carry on read-only — is the caller's decision,
 made with the cookies and the answers in hand.
 
@@ -349,7 +353,8 @@ close, belongs to whoever passes them around.
 The server never tells the client how long it has: the session cookie carries no
 expiry and no response header mentions one. The only honest signals are the ones
 you get by asking — `getSessionIdentity()` for which session you are in, and
-`ADT_SESSION_REPLACED` when the one you were in is gone.
+`ADT_SESSION_REPLACED` (a stateful request) or `sessionLost` (on a stateless
+answer) when the one you were in is gone.
 
 ## Troubleshooting
 

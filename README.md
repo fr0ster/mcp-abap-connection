@@ -162,6 +162,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 23.0.0](./docs/MIGRATION-23.0.md)** - a stateless request whose answer shows the SAP session replaced keeps that answer, marked `sessionLost`, and the instance is spent; a stateful request still rejects `ADT_SESSION_REPLACED`; nothing is resent; `@mcp-abap-adt/interfaces-adt-connection` ^4.2.0
 - 🚚 **[Migration to 22.0.0](./docs/MIGRATION-22.0.md)** - over RFC: a connection-ending RFC error on the stateful conversation is `ADT_SESSION_REPLACED` and spends the instance (no silent reconnect); a failed RFC call carries `rfc: { key, group, code, codeString }`; the `SAP-PASSPORT` header becomes the RFC call's passport; `@mcp-abap-adt/sap-rfc-lite` ^0.4.0
 - 🚚 **[Migration to 21.0.0](./docs/MIGRATION-21.0.md)** - the CSRF token fetch asks once: no retry, no delay; `CSRF_CONFIG.RETRY_COUNT` / `RETRY_DELAY`, the establish context's `retries` / `retryDelayMs` / `isFatal`, `fetchCsrfToken`'s retry parameters and `endsTheExchange` are removed
 - 🚚 **[Migration to 20.0.0](./docs/MIGRATION-20.0.md)** - an RFC config is an `ISapRfcConfig` that states its address (`ashost` + `sysnr`, or `mshost` + `msserv` / `sysid` + `group`), `client` and `language`: no URL, no defaults, no `SAP_SYSNR`; `getBaseUrl()` may answer `undefined`; hand-built HTTP transports take `baseUrl`; `IAdtSessionContext` has no `baseUrl`
@@ -706,8 +707,9 @@ await connection.connect();
 // as the attempt it repeats, so stale-request fencing applies. After a rejection
 // at 'request' it goes out on the same session; after one at 'logon' the wire
 // logs on again first. No 401 opens a new session: the resend stays in this
-// one, or fails with SESSION_REPLACED if SAP replaced it. For a new session,
-// create a new connection.
+// one. If SAP replaced it, a stateful request fails with ADT_SESSION_REPLACED
+// and a stateless one gets SAP's answer marked `sessionLost`; the instance is
+// spent either way. For a new session, create a new connection.
 const response = await connection.makeAdtRequest({
   method: "GET",
   url: "/sap/bc/adt/programs/programs/your-program",
@@ -845,6 +847,13 @@ connection.setSessionType("stateful");
 connection.setSessionType("stateless");
 
 ```
+
+**When SAP replaced the session** (an idle timeout, usually): a stateful
+request rejects `ADT_SESSION_REPLACED`; a stateless one gets SAP's answer as it
+came — a success resolves, a refusal rejects as itself — marked
+`sessionLost: 'ADT_SESSION_REPLACED'` (since 23.0.0). Either way the instance
+is spent and nothing is sent again: create a new connection. See
+[When the session is lost](./docs/USAGE.md#when-the-session-is-lost).
 
 ### Custom Logger
 
