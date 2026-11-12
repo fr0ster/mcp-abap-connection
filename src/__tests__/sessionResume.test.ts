@@ -361,6 +361,43 @@ describe('an instance on a session that is gone', () => {
     );
   });
 
+  it('rejects an answer that deletes the session, with that answer — not ADT_SESSION_REPLACED', async () => {
+    const { cookies } = await openedSession();
+    stub.discovery.push({
+      status: 200,
+      headers: {
+        'set-cookie': [
+          `${COOKIE}=-; expires=Tue, 01-Jan-1980 00:00:01 GMT; path=/`,
+        ],
+      },
+    });
+
+    const conn = onPremHttp(cookies);
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, { response: { status: 200 } });
+      assert.notStrictEqual(
+        Object.getOwnPropertyDescriptor(e, 'code')?.value,
+        ADT_SESSION_ERROR.SESSION_REPLACED,
+      );
+      return true;
+    });
+    await assert.rejects(conn.connect(), (e: unknown) => {
+      assertMatchObject(e, { code: ADT_SESSION_ERROR.NOT_CONNECTED });
+      return true;
+    });
+  });
+
+  it('resumes on an answer that sets no SAP_SESSIONID and carries a token', async () => {
+    const { cookies } = await openedSession();
+    stub.discovery.push({ status: 200, headers: { 'set-cookie': [] } });
+
+    const conn = onPremHttp(cookies);
+    await conn.connect();
+
+    assert.strictEqual(conn.isConnected(), true);
+    assert.ok(conn.sessionCookies()?.includes(`${COOKIE}=S1`));
+  });
+
   it('follows no redirect: rejects with the 302 as SAP gave it, the target never asked', async () => {
     const { cookies } = await openedSession();
     stub.discovery.push({
