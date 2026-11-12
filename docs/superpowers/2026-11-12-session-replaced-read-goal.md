@@ -55,7 +55,8 @@ verdict names) whose answer shows the session replaced keeps failing loudly, wit
   connection already makes, never from which wire carries the request. Over RFC no answer replaces
   the session, and an RFC error that ends the stateful conversation stays `ADT_SESSION_REPLACED`.
 - **Session reported gone is unchanged.** An answer saying the session no longer exists (today: a
-  `400` matching "session not found") that does not show a replacement stays
+  `400` whose status text or string body holds, without case, "session not found", "Session Timed
+  Out or Not Found" or "Session no longer exists") that does not show a replacement stays
   `ADT_SESSION_REPLACED` for every request. A stateless request whose answer both shows a
   replacement and says the session is gone is a replacement first, as it is seen today: its
   refusal is the caller's, with the loss told as for any replacement.
@@ -87,7 +88,7 @@ verdict names) whose answer shows the session replaced keeps failing loudly, wit
 - A request that still sends the old stateful `sap-contextid` cookie gets `400` with an HTML
   "Session no longer exists" page, not an ADT exception, and SAP sets new context cookies.
 
-**Code** (`src/connection/AbstractAbapConnection.ts`, `src/connection/HttpTransport.ts`,
+**Code** at 22.0.1 (`src/connection/AbstractAbapConnection.ts`, `src/connection/HttpTransport.ts`,
 `src/session/SessionLifecycle.ts`):
 
 - An answer goes through `observeResponse`, which folds its headers into the wire (`ingest`) and
@@ -113,15 +114,19 @@ verdict names) whose answer shows the session replaced keeps failing loudly, wit
   requests (the CSRF fetch, the logon) observe through the session context.
 - On the paths that observe a refusal (the first attempt in `recoverOnWire`, the resend after a
   credential renewal in `answerCredentialFailure`) the headers are observed before the session-dead
-  text is checked, so an answer carrying both a changed `SAP_SESSIONID` and "session not found" is
-  a replacement first. On the CSRF retry's resend the headers are not observed: such an answer
+  text is checked, so an answer carrying both a changed `SAP_SESSIONID` and one of the session-dead
+  phrases is a replacement first. On the CSRF retry's resend the headers are not observed: such an answer
   takes the session-dead path, and the replacing session's logoff is not dispatched.
 - The replacing session's logoff is dispatched without waiting (`dispatchGoodbye`): a `close()`
   that fails is logged and absorbed, and its write waiter settles when the close is over, written
   or not.
 - `throwIfSessionDead` raises the session lost and throws `ADT_SESSION_REPLACED` for a
-  `WireSessionLostError` (RFC) and for a `400` whose status text or string body contains "session
-  not found" (lower-cased match).
+  `WireSessionLostError` (RFC) and for a `400` whose status text or string body contains, compared
+  lower-cased, one of the three phrases of `DEAD_SESSION_PHRASES` (`isDeadSessionResponse`):
+  "session not found", "session timed out or not found" (SAP ICM's session-expired page) and
+  "session no longer exists". Any other status is not read for them. It applies to every request,
+  stateful ones (`LOCK`, `UNLOCK`) included; the instance is spent and no logoff is dispatched, as
+  the old session is SAP's to have ended.
 - The connection sets `request.stateful` from its session mode (`setSessionType('stateful')`);
   every wire reads statefulness through one predicate, `isStatefulRequest`: that flag, or the
   header `x-sap-adt-sessiontype: stateful` (name and value without case) a caller wrote itself. The
@@ -134,18 +139,16 @@ verdict names) whose answer shows the session replaced keeps failing loudly, wit
   `UNLOCK`) carry it. The jar keeps the cookie after a `LOCK` for the stateful requests that
   follow; the logoff never carries it (`logoffCookies`). `LegacyOnPremHttpTransport` and the cloud
   wire go through the same `dress`.
-- **A `400` "Session no longer exists" today:** it does not match `isDeadSessionResponse` ("session
-  not found" only). On a path that observes the refusal (the first attempt, the resend after a
-  credential renewal) its cookies are folded in: a new `sap-contextid` replaces the jar's, which is
-  not part of the fingerprint. If the answer also changes the value of the tracked `SAP_SESSIONID`,
-  it is a replacement and the request rejects `ADT_SESSION_REPLACED`; otherwise the `400` reaches
-  the caller as SAP's refusal and the instance stays connected, now holding the new context cookie.
-  On the CSRF retry's resend the refusal is not observed, and the first attempt's error may reach
-  the caller instead.
-  Which of the two happens depends on what that answer sets, which the measurement above does not
-  say. Since the connection sends `sap-contextid` only on stateful requests, the measured trigger
-  (the old context cookie sent) arises only from a stateful request; whether SAP sends the same
-  page for anything else is not known.
+- **A `400` "Session no longer exists" today:** it matches `isDeadSessionResponse`, so it rejects
+  `ADT_SESSION_REPLACED` and spends the instance on every path. On a path that observes the refusal
+  (the first attempt, the resend after a credential renewal) its cookies are folded in first: if
+  the answer also changes the value of the tracked `SAP_SESSIONID`, it is a replacement (the
+  replacing session's logoff dispatched); otherwise it is the session reported gone (no logoff). A
+  new `sap-contextid` alone is not part of the fingerprint. On the CSRF retry's resend the refusal
+  is not observed: it is the session reported gone. Whether that answer sets a new `SAP_SESSIONID`
+  the measurement above does not say. Since the connection sends `sap-contextid` only on stateful
+  requests, the measured trigger (the old context cookie sent) arises only from a stateful
+  request; whether SAP sends the same page for anything else is not known.
 
 ## Open questions for the spec
 
@@ -156,10 +159,11 @@ verdict names) whose answer shows the session replaced keeps failing loudly, wit
 - **The connection's own exchanges.** A replacement seen on the CSRF fetch of a mutation's retry,
   on a logon or on `connect()`: those carry no answer of the caller's to keep. Do they stay
   `ADT_SESSION_REPLACED`, and does the mutation's request then reject with it?
-- **The `400` "Session no longer exists" page.** Should a stateful request that gets it be read as
-  the session reported gone (`ADT_SESSION_REPLACED`), like "session not found"? Measure whether that
-  answer sets a new `SAP_SESSIONID`, and whether the "session not found" text still occurs on onprem
-  at all.
+- **The session-dead pages and a new `SAP_SESSIONID`.** Do SAP's session-dead `400` answers ("Session
+  no longer exists", "Session Timed Out or Not Found") set a new `SAP_SESSIONID`, and can a stateless
+  request receive one? That decides whether such an answer is a replacement (its refusal the
+  caller's, the replacing session logged off) or only the session reported gone; it is measured
+  before the spec fixes the tests.
 - **Requests in flight at the moment of loss.** Another request on the same instance whose answer
   arrives after the loss has a stale lease: today a success is returned unobserved, a refusal's
   recovery is fenced and the error rethrown or replaced by `NOT_CONNECTED`, and the wire's own
