@@ -1070,15 +1070,29 @@ abstract class AbstractAbapConnection
    * wait for the very request that raised it.
    */
   protected raiseSessionLost(reason: string): void {
-    this.logger?.warn(`Session lost: ${reason}`);
     // The instance's one session is gone: it is spent, as after disconnect().
-    // Nothing else is decided here — the caller is told, and decides.
+    // Nothing else is decided here — the caller is told, and decides. The
+    // verdict first, then the word: a logger that throws cannot undo it.
     this.spent = true;
     this.lifecycle.beginTeardown({ origin: 'internal', sessionLost: true });
     void this.lifecycle.transition('cleanup', async () => {
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
+    this.logQuietly(() => this.logger?.warn(`Session lost: ${reason}`));
+  }
+
+  /**
+   * A log line on a failure path: a logger that throws must not replace the
+   * failure being reported — a session verdict, the wire's error with its
+   * `rfc` — so its throw is dropped. There is nowhere left to say so.
+   */
+  private logQuietly(write: () => void): void {
+    try {
+      write();
+    } catch {
+      // The failure being reported outranks the logger's.
+    }
   }
 
   /**
@@ -1595,8 +1609,10 @@ abstract class AbstractAbapConnection
     //
     // A stale request gets its error back and nothing else happens.
     if (!this.lifecycle.isCurrent(lease)) {
-      this.logger?.debug(
-        'A request from a previous session failed; its recovery is fenced',
+      this.logQuietly(() =>
+        this.logger?.debug(
+          'A request from a previous session failed; its recovery is fenced',
+        ),
       );
       throw error;
     }
@@ -1639,18 +1655,24 @@ abstract class AbstractAbapConnection
     const networkError = isNetworkError(error);
 
     if (networkError) {
-      this.logger?.error(
-        `Network error - cannot connect to SAP system: ${errorDetails.message}`,
-        errorDetails,
+      this.logQuietly(() =>
+        this.logger?.error(
+          `Network error - cannot connect to SAP system: ${errorDetails.message}`,
+          errorDetails,
+        ),
       );
       throw error;
     }
 
     // Log 404 as debug (common for existence checks), other errors as error
     if (errorDetails.status === 404) {
-      this.logger?.debug(errorDetails.message, errorDetails);
+      this.logQuietly(() =>
+        this.logger?.debug(errorDetails.message, errorDetails),
+      );
     } else {
-      this.logger?.error(errorDetails.message, errorDetails);
+      this.logQuietly(() =>
+        this.logger?.error(errorDetails.message, errorDetails),
+      );
     }
 
     // No session is discarded and reopened on this instance to retry a
@@ -1698,12 +1720,14 @@ abstract class AbstractAbapConnection
         if (this.outranksOriginal(retryError)) {
           throw retryError;
         }
-        this.logger?.debug(
-          `CSRF retry failed; rethrowing original error: ${
-            retryError instanceof Error
-              ? retryError.message
-              : String(retryError)
-          }`,
+        this.logQuietly(() =>
+          this.logger?.debug(
+            `CSRF retry failed; rethrowing original error: ${
+              retryError instanceof Error
+                ? retryError.message
+                : String(retryError)
+            }`,
+          ),
         );
         throw error;
       }

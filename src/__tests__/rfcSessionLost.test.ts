@@ -331,6 +331,85 @@ describe('the connection, when the wire reports the session lost', () => {
     await conn.disconnect();
   });
 
+  /** A connection logger whose `level` throws. */
+  function throwingAt(level: 'warn' | 'error'): ILogger {
+    const quiet = () => {};
+    const loud = () => {
+      throw new Error(`the logger’s ${level}`);
+    };
+    return {
+      info: quiet,
+      debug: quiet,
+      warn: level === 'warn' ? loud : quiet,
+      error: level === 'error' ? loud : quiet,
+    };
+  }
+
+  it('a connection logger whose warn throws does not bypass the session lost', async () => {
+    const { factory, made } = standInFactory([[dies()]], true);
+    const conn = new AdtOnPremConnector(
+      config,
+      new BasicAuthProvider('USER', 'PASS'),
+      new RfcTransport(factory),
+      throwingAt('warn'),
+    );
+    await conn.connect();
+    conn.setSessionType('stateful');
+
+    const error = await rejection(
+      conn.makeAdtRequest({
+        url: stateful.url,
+        method: 'POST',
+        timeout: 30000,
+      }),
+    );
+    assert.strictEqual(own(error, 'code'), ADT_SESSION_ERROR.SESSION_REPLACED);
+    assert.deepStrictEqual(own(error, 'rfc'), RFC_CLOSED_FIELDS);
+    assert.strictEqual(error.message, LOST_WORDS);
+    const next = await rejection(
+      conn.makeAdtRequest({
+        url: stateful.url,
+        method: 'POST',
+        timeout: 30000,
+      }),
+    );
+    assert.strictEqual(own(next, 'code'), ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(nth(made, 0).calls, 1);
+    await conn.disconnect();
+  });
+
+  it('a connection logger whose error throws does not replace the call’s rfc', async () => {
+    const { factory } = standInFactory([[fails(abapExceptionError())]], true);
+    const conn = new AdtOnPremConnector(
+      config,
+      new BasicAuthProvider('USER', 'PASS'),
+      new RfcTransport(factory),
+      throwingAt('error'),
+    );
+    await conn.connect();
+    conn.setSessionType('stateful');
+    try {
+      const error = await rejection(
+        conn.makeAdtRequest({
+          url: stateful.url,
+          method: 'POST',
+          timeout: 30000,
+        }),
+      );
+      assert.ok(
+        error.message.startsWith('RFC call to SADT_REST_RFC_ENDPOINT failed: '),
+      );
+      assert.deepStrictEqual(own(error, 'rfc'), {
+        key: 'NOT_FOUND',
+        group: 5,
+        code: 5,
+        codeString: 'RFC_ABAP_EXCEPTION',
+      });
+    } finally {
+      await conn.disconnect();
+    }
+  });
+
   it('a stateful failure that leaves the conversation alive does not spend the instance', async () => {
     const { factory } = standInFactory([[fails(abapExceptionError())]], true);
     const conn = new AdtOnPremConnector(
