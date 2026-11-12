@@ -123,11 +123,13 @@ decision):
 
 - **Inside a request** (`leasedContext`, a current lease): the wire's upfront CSRF fetch before a
   mutation, the CSRF fetch of the CSRF retry, the logon and fetch after a refused logon
-  (`ensureWireReady` in `answerCredentialFailure`). A successful answer that shows a replacement
-  goes through `observeResponse` without `keepAnswer` and throws `ADT_SESSION_REPLACED`, the request
-  rejecting with it; it outranks the first attempt's error in the CSRF retry (Code:
-  `outranksOriginal`). Nothing is resent: the replacement is seen before the resend. A refused
-  answer of these exchanges is not observed today and stays so (Code).
+  (`ensureWireReady` in `answerCredentialFailure`). Their answers, success and refusal alike, are
+  handed up through the context's `observe` before anything else is read (Code:
+  `HttpTransport.establish`, the refusal's headers before a `401` becomes `WireLogonError`). One that
+  shows a replacement goes through `observeResponse` without `keepAnswer` and throws
+  `ADT_SESSION_REPLACED`, the request rejecting with it; it outranks the first attempt's error in the
+  CSRF retry (Code: `outranksOriginal`). Nothing is resent: the replacement is seen before the
+  resend.
 - **`connect()`** (`establishAndCommit`): the identity is forgotten before the wire opens and again
   before the session is established, so its own answers read `established`, never `replaced`
   (Code: `forgetIdentity`).
@@ -225,7 +227,16 @@ Unit, through the public surface, a stub under the subject (`transport.client`, 
 - in the answer's continuation: `isConnected()` false, `sessionCookies()` null; the next request
   `NOT_CONNECTED` with nothing sent; `disconnect()` settles once; the stub's `close` was called for
   the replacing session;
-- the connection's own exchanges (CSRF fetch in the retry, `connect()`): `ADT_SESSION_REPLACED`;
+- the exchanges inside a request (the upfront fetch, the CSRF retry's fetch, the logon after a
+  refused logon), each with a success and with a refusal showing a replacement:
+  `ADT_SESSION_REPLACED`, the instance spent, nothing resent;
+- `connect()` with answers carrying a new `SAP_SESSIONID` on the open and on the establishment:
+  connected, no replacement (the identity forgotten in between);
+- cloud preflight refused with a new `SAP_SESSIONID`: absorbed, not observed, as today;
+- resume answered by another `SAP_SESSIONID`: `connect()` rejects with SAP's answer, not
+  `ADT_SESSION_REPLACED`, the instance spent;
+- two stateless requests in flight, the first one's answer showing the replacement: only that answer
+  is marked; the other, answered after the loss, is not marked (its lease is stale);
 - unmarked: an answer with an unchanged or newly established `SAP_SESSIONID`, a stale-lease answer;
 - a session-dead `400` (each phrase): `ADT_SESSION_REPLACED` for stateless and stateful alike;
 - a stateless answer with both a new `SAP_SESSIONID` and a phrase: the refusal, marked;
@@ -238,9 +249,7 @@ Unit, through the public surface, a stub under the subject (`transport.client`, 
   observable and is not a rule);
 - a `logoff` (`close`) that rejects or throws: the caller still gets the marked answer;
 - `disconnect()` after the loss settles on that logoff's write, `flushGoodbye()` on its close;
-- each exchange of 3.3 pinned as unchanged (the upfront fetch, the CSRF retry's fetch, the logon
-  after a refused logon, `connect()`, cloud preflight, resume), the resume one in
-  `sessionResume.test.ts`.
+- the resume case beside the existing ones in `sessionResume.test.ts`.
 
 **Load-bearing**, each rule broken on its own, the test that protects it named in the plan, red,
 reverted:
@@ -259,6 +268,13 @@ reverted:
 | a stale-lease answer marked or acted on | the stale cases (`staleRequestFencing.test.ts` beside the new ones) |
 | a session-dead phrase on a stateless answer kept instead of `ADT_SESSION_REPLACED` | the phrase cases |
 | the caller's stateful header ignored | the header-form case |
+| an unchanged or newly established `SAP_SESSIONID` marked | the unmarked cases |
+| the mark set on another request's answer, or on an answer with a stale lease | the two-in-flight case |
+| a phrase checked before the replacement on a stateless answer (precedence lost) | the both-at-once case |
+| an exchange inside a request kept instead of `ADT_SESSION_REPLACED` (success or refusal) | each of those cases |
+| `connect()`'s identity not forgotten between open and establishment | the `connect()` case |
+| cloud preflight's refusal observed | the preflight case |
+| resume rejecting `ADT_SESSION_REPLACED` | the resume case |
 
 The existing protections stay and run unchanged: RFC session loss (`rfcSessionLost.test.ts`,
 `rfcDeadStateless.test.ts`), the spent instance and `disconnect()` timing (`disconnectWritten`,
