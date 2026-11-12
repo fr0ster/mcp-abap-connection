@@ -301,10 +301,23 @@ function rfcCallError(
   return rfc === undefined ? error : Object.assign(error, { rfc });
 }
 
+/** Words a value is described by when describing it throws. */
+const UNDESCRIBABLE = 'the failure could not be described';
+
+/**
+ * A thrown value in words, for a message and a log line. It never throws:
+ * `instanceof` runs a Proxy's trap, `message` may be a getter, and
+ * `JSON.stringify` runs every enumerable getter and `toJSON` — any of which
+ * may throw. Then the words are fixed, and nothing the throw said is kept.
+ */
 function message(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (e && typeof e === 'object') return JSON.stringify(e);
-  return String(e);
+  try {
+    if (e instanceof Error) return String(e.message);
+    if (e && typeof e === 'object') return String(JSON.stringify(e));
+    return String(e);
+  } catch {
+    return UNDESCRIBABLE;
+  }
 }
 
 /**
@@ -1069,25 +1082,26 @@ export class RfcTransport implements IOnPremTransport {
             });
     } catch (e) {
       // An RFC-level failure, not an answer: nothing came back to classify.
-      const msg = message(e);
-      this.logger?.error(`RFC call failed: ${msg}`);
-      const failure = rfcCallError(
-        `RFC call to SADT_REST_RFC_ENDPOINT failed: ${msg}`,
-        rfcErrorOf(e),
-      );
+      // The verdict comes first — the SDK's fields, read once, and whether the
+      // session survived — so nothing that describes the failure afterwards
+      // (formatting the thrown value, a logger) can stand in for it.
+      const rfc = rfcErrorOf(e);
       // The library released the stateful conversation after the error
       // (`alive` false), and it was not a close() of ours: the session it
       // carried is gone, with every lock taken in it. Said, not cured — no
       // other conversation is opened in its place.
-      if (
-        carriesSession &&
-        !conversation.alive &&
-        generation === this.generation
-      ) {
-        this.dropSession(conversation);
-        throw new WireSessionLostError(failure.message, failure.rfc);
+      const lost =
+        carriesSession && !conversation.alive && generation === this.generation;
+      if (lost) this.dropSession(conversation);
+      const msg = message(e);
+      const text = `RFC call to SADT_REST_RFC_ENDPOINT failed: ${msg}`;
+      try {
+        this.logger?.error(`RFC call failed: ${msg}`);
+      } catch {
+        // A broken logger must not replace the call's failure.
       }
-      throw failure;
+      if (lost) throw new WireSessionLostError(text, rfc);
+      throw rfcCallError(text, rfc);
     }
 
     const answer = record(raw.RESPONSE) ?? raw;

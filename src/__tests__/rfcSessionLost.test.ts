@@ -104,6 +104,90 @@ describe('the RFC wire, when the stateful conversation dies', () => {
     assert.strictEqual(nth(made, 0).closes, 0);
   });
 
+  it('a thrown value whose formatting throws does not bypass the verdict', async () => {
+    // JSON.stringify runs an enumerable getter; this one throws.
+    const hostile: Record<string, unknown> = {
+      ...rfcClosedError(),
+      get detail(): string {
+        throw new Error('the getter’s own words');
+      },
+    };
+    const { factory, made } = standInFactory([[dies(hostile)]], true);
+    const transport = new RfcTransport(factory);
+    await transport.open();
+
+    const error = await rejection(transport.send(stateful));
+
+    assert.ok(error instanceof WireSessionLostError);
+    assert.deepStrictEqual(error.rfc, RFC_CLOSED_FIELDS);
+    assert.strictEqual(
+      error.message,
+      'RFC call to SADT_REST_RFC_ENDPOINT failed: the failure could not be described',
+    );
+    assert.ok(!error.message.includes('getter'));
+    assert.strictEqual(transport.sessionEstablished(), false);
+    assert.strictEqual(nth(made, 0).closes, 0);
+  });
+
+  it('a logger that throws does not bypass the verdict', async () => {
+    const { factory } = standInFactory([[dies()]], true);
+    const throwing: ILogger = {
+      info: () => {},
+      warn: () => {},
+      debug: () => {},
+      error: () => {
+        throw new Error('the logger’s own words');
+      },
+    };
+    const transport = new RfcTransport(factory, throwing);
+    await transport.open();
+
+    const error = await rejection(transport.send(stateful));
+
+    assert.ok(error instanceof WireSessionLostError);
+    assert.deepStrictEqual(error.rfc, RFC_CLOSED_FIELDS);
+    assert.ok(!error.message.includes('logger'));
+    assert.strictEqual(transport.sessionEstablished(), false);
+  });
+
+  it('through the connection, a hostile thrown value is still the session lost', async () => {
+    const hostile: Record<string, unknown> = {
+      ...rfcClosedError(),
+      get detail(): string {
+        throw new Error('the getter’s own words');
+      },
+    };
+    const { factory, made } = standInFactory([[dies(hostile)]], true);
+    const conn = new AdtOnPremConnector(
+      config,
+      new BasicAuthProvider('USER', 'PASS'),
+      new RfcTransport(factory),
+      null,
+    );
+    await conn.connect();
+    conn.setSessionType('stateful');
+
+    const error = await rejection(
+      conn.makeAdtRequest({
+        url: stateful.url,
+        method: 'POST',
+        timeout: 30000,
+      }),
+    );
+    assert.strictEqual(own(error, 'code'), ADT_SESSION_ERROR.SESSION_REPLACED);
+    assert.deepStrictEqual(own(error, 'rfc'), RFC_CLOSED_FIELDS);
+    const next = await rejection(
+      conn.makeAdtRequest({
+        url: stateful.url,
+        method: 'POST',
+        timeout: 30000,
+      }),
+    );
+    assert.strictEqual(own(next, 'code'), ADT_SESSION_ERROR.NOT_CONNECTED);
+    assert.strictEqual(nth(made, 0).calls, 1);
+    await conn.disconnect();
+  });
+
   it('a failure that leaves it alive is the call’s error, not a lost session', async () => {
     const { factory, made } = standInFactory(
       [[fails(abapExceptionError())]],
