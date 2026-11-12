@@ -74,8 +74,9 @@ in the PR description, not done here.
 4. After approval and green CI: merge, tag `interfaces-adt-connection-v4.2.0`; the npm publish is
    the owner's.
 5. After the publish: a clean install of `@mcp-abap-adt/interfaces-adt-connection@4.2.0` from the
-   registry in an empty temporary directory outside every repository, its `dist/index.d.ts` naming
-   `AdtSessionLoss` and the two `sessionLost` fields; the directory removed afterwards.
+   registry in an empty temporary directory outside every repository: its `dist/index.d.ts`
+   exporting `AdtSessionLoss`, `dist/IAbapConnection.d.ts` and `dist/IAbapConnectionError.d.ts`
+   declaring the two `sessionLost` fields; the directory removed afterwards.
 
 ## Part B — connection 23.0.0
 
@@ -132,8 +133,10 @@ cannot move them:
    retry's resend and the resend after a credential renewal, each answering `200` with a changed
    `SAP_SESSIONID`: a stateless request resolves that answer (its body and status as sent) with
    `sessionLost` `ADT_SESSION_REPLACED`; its stateful twin, by the flag and by the caller's
-   `x-sap-adt-sessiontype: stateful` header, rejects `ADT_SESSION_REPLACED`. The stateless cases
-   are red on today's code.
+   `x-sap-adt-sessiontype: stateful` header, rejects `ADT_SESSION_REPLACED`. Every row, stateless
+   and stateful, counts the stub's sends: the recovery sends that precede the replacement-bearing
+   answer (the CSRF fetch, the logon) as today, no send of the caller's request after it, and the
+   replacing session's logoff counted apart. The stateless cases are red on today's code.
 2. Change: `observeResponse` / `applyIdentityPolicy` take `keepAnswer`; on `replaced` the cleanup as
    today, then throw when not kept, a typed `'lost'` when kept; the session context passes no
    `keepAnswer`; `sendObserved` sets `sessionLost` on the response it returns.
@@ -174,7 +177,9 @@ cannot move them:
 
 1. Tests: the CSRF retry's resend and the resend after a credential renewal, each answering a
    refusal with a changed `SAP_SESSIONID`: rejects that refusal marked, not the first attempt's
-   error; their stateful twins `ADT_SESSION_REPLACED`. (Their successes were covered in B4.) The
+   error; their stateful twins `ADT_SESSION_REPLACED`; every row counts the sends as in B4 (no send
+   of the caller's request after the replacement-bearing answer, the logoff apart). (Their
+   successes were covered in B4.) The
    CSRF-resend refusal case is red on today's code (its refusal is not observed).
 2. Change: the CSRF retry's catch observes the refusal with `keepAnswer` before
    `throwIfSessionDead`; `answerCredentialFailure` observes with `keepAnswer`.
