@@ -183,6 +183,17 @@ describe('a rejection that is not the SDK error shape carries no rfc', () => {
     await assertNoRfc(rejection);
   });
 
+  for (const field of ['key', 'group', 'code', 'codeString']) {
+    it(`${field} inherited, the other three own and valid`, async () => {
+      const { [field]: value, ...rest } = rfcLibError();
+      const rejection: object = Object.assign(
+        Object.create({ [field]: value }),
+        rest,
+      );
+      await assertNoRfc(rejection);
+    });
+  }
+
   it('a Proxy whose traps throw reads as no shape, and the check throws nothing', async () => {
     const hostile = new Proxy(
       {},
