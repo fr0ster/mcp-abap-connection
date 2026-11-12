@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Patch: recognize SAP ICM session-expired HTTP 400 responses (#355).**
+  `Session Timed Out or Not Found` and `Session no longer exists` now follow the
+  existing `Session not found` lifecycle, case-insensitively: the session is lost
+  and the caller receives `ADT_SESSION_REPLACED`, including at LOCK. No automatic
+  retry or session reopening is added; unrelated HTTP 400 responses are unchanged.
+
 ## [22.0.0] - 2026-11-12
 
 Over RFC, a request carries its passport and a failure names its error by fields, and an RFC
