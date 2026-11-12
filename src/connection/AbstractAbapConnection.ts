@@ -76,6 +76,12 @@ function hasHeader(headers: Record<string, string>, name: string): boolean {
  */
 const OUTRANK_THE_CREDENTIAL = ['x-csrf-token', 'content-type', 'accept'];
 
+const DEAD_SESSION_PHRASES = [
+  'session not found',
+  'session timed out or not found',
+  'session no longer exists',
+];
+
 /** A request's one credential retry (H5), spent by the first refusal it meets. */
 interface CredentialRenewal {
   spent: boolean;
@@ -1204,8 +1210,8 @@ abstract class AbstractAbapConnection
    * One on-prem system answered HTTP 400 with "Session not found", answered in ~60 ms
    * with the cookie present — which is why identity comparison cannot see this:
    * the cookie, and therefore the fingerprint, is completely unchanged. The
-   * exact match is landscape-specific and is one of the live probes this design
-   * still owes.
+   * wording varies by landscape; SAP ICM also reports a timed-out or missing
+   * session with the phrases below.
    */
   private isDeadSessionResponse(error: unknown): boolean {
     const refusal = refusalOf(error);
@@ -1218,7 +1224,7 @@ abstract class AbstractAbapConnection
     ]
       .join(' ')
       .toLowerCase();
-    return text.includes('session not found');
+    return DEAD_SESSION_PHRASES.some((phrase) => text.includes(phrase));
   }
 
   /** Drops everything that described the session. Not a lifecycle transition. */
