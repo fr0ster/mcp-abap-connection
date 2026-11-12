@@ -112,8 +112,8 @@ verdict names) whose answer shows the session replaced keeps failing loudly, wit
   **not** observed: its catch checks the session-dead text and precedence and may rethrow the
   first attempt's error, so a changed session cookie on that refusal goes unnoticed. The wire's own
   requests (the CSRF fetch, the logon) observe through the session context.
-- On the paths that observe a refusal (the first attempt in `recoverOnWire`, the resend after a
-  credential renewal in `answerCredentialFailure`) the headers are observed before the session-dead
+- While the request's lease is current, on the paths that observe a refusal (the first attempt in
+  `recoverOnWire`, the resend after a credential renewal in `answerCredentialFailure`) the headers are observed before the session-dead
   text is checked, so an answer carrying both a changed `SAP_SESSIONID` and one of the session-dead
   phrases is a replacement first. On the CSRF retry's resend the headers are not observed: such an answer
   takes the session-dead path, and the replacing session's logoff is not dispatched.
@@ -124,7 +124,8 @@ verdict names) whose answer shows the session replaced keeps failing loudly, wit
   `WireSessionLostError` (RFC) and for a `400` whose status text or string body contains, compared
   lower-cased, one of the three phrases of `DEAD_SESSION_PHRASES` (`isDeadSessionResponse`):
   "session not found", "session timed out or not found" (SAP ICM's session-expired page) and
-  "session no longer exists". Any other status is not read for them. It applies to every request,
+  "session no longer exists". Any other status is not read for them; an answer to a request whose
+  lease is stale is not acted on. It applies to every request,
   stateful ones (`LOCK`, `UNLOCK`) included; the instance is spent and no logoff is dispatched, as
   the old session is SAP's to have ended.
 - The connection sets `request.stateful` from its session mode (`setSessionType('stateful')`);
@@ -139,8 +140,10 @@ verdict names) whose answer shows the session replaced keeps failing loudly, wit
   `UNLOCK`) carry it. The jar keeps the cookie after a `LOCK` for the stateful requests that
   follow; the logoff never carries it (`logoffCookies`). `LegacyOnPremHttpTransport` and the cloud
   wire go through the same `dress`.
-- **A `400` "Session no longer exists" today:** it matches `isDeadSessionResponse`, so it rejects
-  `ADT_SESSION_REPLACED` and spends the instance on every path. On a path that observes the refusal
+- **A `400` "Session no longer exists" today:** it matches `isDeadSessionResponse`, so, while the
+  request's lease is current, it rejects `ADT_SESSION_REPLACED` and spends the instance on every
+  path; a request whose lease is stale gets its own error back, or `NOT_CONNECTED`, and nothing is
+  acted on (`recoverOnWire`, `throwIfSessionDead`). On a path that observes the refusal
   (the first attempt, the resend after a credential renewal) its cookies are folded in first: if
   the answer also changes the value of the tracked `SAP_SESSIONID`, it is a replacement (the
   replacing session's logoff dispatched); otherwise it is the session reported gone (no logoff). A
