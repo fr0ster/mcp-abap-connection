@@ -87,6 +87,21 @@ verdict names) whose answer shows the session replaced keeps failing loudly, wit
   session's lock handle gets `423`.
 - A request that still sends the old stateful `sap-contextid` cookie gets `400` with an HTML
   "Session no longer exists" page, not an ADT exception, and SAP sets new context cookies.
+- That `400` page (`text/html`) holds both "Session Timed Out or Not Found" and "Session no
+  longer exists", and sets `sap-contextid` cookies but no `SAP_SESSIONID`. It came back for every
+  request that carried a `sap-contextid` the server no longer knew: on a logged-off session, with or
+  without `x-sap-adt-sessiontype: stateful`, with or without the credential, and with the context
+  cookie alone (no `SAP_SESSIONID`); and on a live session carrying a context id it never issued.
+  "session not found" was not seen.
+- On a logged-off session, a request without `sap-contextid` never got that page: with the
+  credential it answered `200` with a new `SAP_SESSIONID`, with or without the stateful header (the
+  stateful one also a new `sap-contextid`); without the credential, `401`.
+- On a live session, a stateless request carrying the session's own current `sap-contextid`
+  answered `200`.
+- Through the connection 22.0.1 (`createConnection`, onprem over HTTP, Basic): with the instance's
+  session logged off from outside, the next stateless `GET` rejects `ADT_SESSION_REPLACED` with no
+  `response` on the error; then `isConnected()` is `false`, `sessionCookies()` is `null`, and the
+  following `GET` rejects `ADT_NOT_CONNECTED`.
 
 **Code** at 22.0.1 (`src/connection/AbstractAbapConnection.ts`, `src/connection/HttpTransport.ts`,
 `src/session/SessionLifecycle.ts`):
