@@ -15,6 +15,7 @@ mcp-abap-connection/
 │   ├── INSTALLATION.md             # Setup and installation guide
 │   ├── USAGE.md                    # API documentation and examples
 │   ├── MIGRATION-2.0.md            # Moving to the explicit session lifecycle
+│   ├── MIGRATION-24.0.md           # interfaces-adt-connection 5: IAbapConnection.makeAdtRequest takes no type argument
 │   ├── MIGRATION-23.0.md           # a stateless request keeps its answer when the session was replaced: sessionLost
 │   ├── MIGRATION-22.0.md           # RFC: the session lost after a connection-ending error; rfc fields; the passport
 │   ├── MIGRATION-21.0.md           # the CSRF token fetch asks once: no retry, no delay
@@ -53,6 +54,7 @@ mcp-abap-connection/
 - 🧭 [Scope](./SCOPE.md) - What this package answers for, and only that
 
 ### Upgrading
+- 🚚 [Migrating to 24.0.0](./MIGRATION-24.0.md) - on `@mcp-abap-adt/interfaces-adt-connection` 5: `IAbapConnection` / `AbapConnection`'s `makeAdtRequest` takes no type argument; narrow `data` from `unknown`
 - 🚚 [Migrating to 21.0.0](./MIGRATION-21.0.md) - the CSRF token fetch asks once: no retry, no delay; the retry constants, context fields and parameters are removed
 - 🚚 [Migrating to 20.0.0](./MIGRATION-20.0.md) - an RFC config is an `ISapRfcConfig` stating its address, `client` and `language`: no URL, no defaults, no `SAP_SYSNR`; `getBaseUrl()` may answer `undefined`; HTTP transports take `baseUrl`
 - 🚚 [Migrating to 18.0.0](./MIGRATION-18.0.md) - `rfcParamsFrom` returns `RfcAddress`; RFC through a message server and a logon group
