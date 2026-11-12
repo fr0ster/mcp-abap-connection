@@ -740,6 +740,40 @@ describe('a refusal that cannot take the mark itself', () => {
   }
 });
 
+describe('a refusal whose body does not serialise', () => {
+  function circular(): Record<string, unknown> {
+    const body: Record<string, unknown> = {};
+    body.self = body;
+    return body;
+  }
+  const bodies: { name: string; data: () => unknown }[] = [
+    { name: 'no body', data: () => undefined },
+    { name: 'a circular body', data: circular },
+  ];
+
+  for (const body of bodies) {
+    it(`${body.name}: still the refusal, marked, and the session lost`, async () => {
+      const { conn, transport } = await connected();
+      mock.method(transport, 'send', async () => {
+        throw Object.assign(new Error('Request failed with status code 404'), {
+          response: {
+            status: 404,
+            statusText: 'Not Found',
+            headers: { 'set-cookie': [REPLACING] },
+            data: body.data(),
+          },
+        });
+      });
+
+      const { error } = await settle(get(conn));
+
+      assertMatchObject(error, { response: { status: 404 } });
+      assert.strictEqual(markOf(error), REPLACED);
+      assert.strictEqual(conn.isConnected(), false);
+    });
+  }
+});
+
 describe('a refusal that shows the replacement, on a resend', () => {
   const resends: {
     name: string;

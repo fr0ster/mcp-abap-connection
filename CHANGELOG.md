@@ -37,6 +37,10 @@ A stateless request keeps its answer when the SAP session was replaced
 - **The CSRF retry's refused resend is observed.** Its answer used to be dropped
   for the first attempt's `403` without being read, so a replacement on it went
   unnoticed.
+- **A refusal whose body is absent or does not serialise is read like any
+  other.** Its log preview threw (`JSON.stringify(undefined).slice`, a circular
+  body) before the answer was observed, so the caller got a `TypeError` and a
+  replacement on it went unnoticed; the preview is now empty instead.
 
 ### Dependencies
 

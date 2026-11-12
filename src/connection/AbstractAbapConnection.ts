@@ -84,6 +84,21 @@ const OUTRANK_THE_CREDENTIAL = ['x-csrf-token', 'content-type', 'accept'];
  */
 type SessionObservation = 'kept' | 'lost';
 
+/**
+ * The first 200 characters of a refusal's body, for a log line. The body is
+ * the wire's, from outside the type system: an absent one, or one that will
+ * not serialise (circular, a throwing `toJSON`), is no preview — never a throw
+ * that would stand in for the refusal and skip what the answer means.
+ */
+function dataPreview(data: unknown): string | undefined {
+  if (typeof data === 'string') return data.slice(0, 200);
+  try {
+    return JSON.stringify(data)?.slice(0, 200);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Whether a thrown value is a refusal this connection marked `sessionLost`. */
 function carriesSessionLost(error: unknown): boolean {
   return (
@@ -1708,10 +1723,7 @@ abstract class AbstractAbapConnection
 
     const refusal = refusalOf(error);
     if (refusal) {
-      errorDetails.data =
-        typeof refusal.data === 'string'
-          ? refusal.data.slice(0, 200)
-          : JSON.stringify(refusal.data).slice(0, 200);
+      errorDetails.data = dataPreview(refusal.data);
 
       // Every wire's refusal, not only axios's. A response the connection
       // never observed is a session replacement it never noticed. A stateless
