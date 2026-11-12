@@ -1363,9 +1363,9 @@ abstract class AbstractAbapConnection
     return { outcome: { ok: false, refusal: NO_CREDENTIAL_TO_RENEW } };
   }
 
-  // The defaults are IAbapConnection's (interfaces-adt-connection 2: `unknown`),
-  // which this implements: changing them here alone would type every caller's
-  // response differently from the contract it codes against.
+  // The defaults are IAdtWireResponse's (`unknown`). IAbapConnection
+  // (interfaces-adt-connection 5) takes no type parameter; this generic
+  // implementation is assignable to it, and its callers keep their signature.
   async makeAdtRequest<T = unknown, D = unknown>(
     options: AbapRequestOptions,
   ): Promise<IAdtWireResponse<T, D>> {
