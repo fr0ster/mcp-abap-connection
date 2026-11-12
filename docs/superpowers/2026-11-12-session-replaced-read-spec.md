@@ -307,8 +307,8 @@ request now reads `sessionLost` on the answer or the refusal. CHANGELOG entry.
 - `@mcp-abap-adt/interfaces-adt-connection` 4.2.0 (minor), published first.
 - `@mcp-abap-adt/connection` **23.0.0**: a stateless request that rejected `ADT_SESSION_REPLACED`
   now resolves or rejects SAP's answer; a consumer that learned of the loss from that rejection
-  must read `sessionLost` — a changed result of a published call, so a major (Inference;
-  **Open**: the owner confirms the major).
+  must read `sessionLost` — a changed result of a published call, so a major. Decided: 23.0.0, with
+  `docs/MIGRATION-23.0.md`.
 - The next links (`@mcp-abap-adt/adt-clients`, the server) read `sessionLost`: their own changes,
   listed in the PR, not here.
 
