@@ -122,9 +122,13 @@ describe('a replaced session cookie', () => {
     await stub.close();
   });
 
-  it('is fatal', async () => {
+  // A stateful request — the one a lock is taken and released in — fails
+  // loudly: the session we were speaking to is not the one we are speaking to
+  // now, and anything held in it is gone.
+  it('is fatal to a stateful request', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
+    conn.setSessionType('stateful');
 
     stub.rotateSession = true;
 
@@ -138,42 +142,20 @@ describe('a replaced session cookie', () => {
     assert.strictEqual(conn.isConnected(), false);
   });
 
-  // An earlier version tolerated a replacement "when no lock is held", deciding
-  // from the connection's own lock windows. Those are gone: this layer does not
-  // know a lock exists, what object it covers or what would release it, so the
-  // rule is written from what it CAN know — the session we were speaking to is
-  // not the one we are speaking to now.
-  it('is fatal even with nothing obviously at stake', async () => {
-    const conn = onPrem(configFor(stub.baseUrl), null);
-    await conn.connect();
-
-    stub.rotateSession = true;
-
-    await assert.rejects(get(conn), (e: unknown) => {
-      assertMatchObject(e, {
-        code: 'ADT_SESSION_REPLACED',
-      });
-      return true;
-    });
-    assert.strictEqual(conn.isConnected(), false);
-  });
-
-  // The decision must not rest on the wire header either: another handler can
-  // flip it back to stateless while a lock is genuinely open, and a batch never
-  // sets it at all.
-  it('is fatal regardless of the session mode', async () => {
+  // A stateless request holds no lock and no lock state: its answer is SAP's
+  // and valid, so it is returned — marked, the session already lost
+  // (fr0ster/mcp-abap-adt#354). Nothing is sent again.
+  it('a stateless request keeps its answer, marked, and the session is lost', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
     conn.setSessionType('stateless');
 
     stub.rotateSession = true;
 
-    await assert.rejects(get(conn), (e: unknown) => {
-      assertMatchObject(e, {
-        code: 'ADT_SESSION_REPLACED',
-      });
-      return true;
-    });
+    const response = await get(conn);
+    assert.strictEqual(response.status, 200);
+    assert.strictEqual(response.sessionLost, 'ADT_SESSION_REPLACED');
+    assert.strictEqual(conn.isConnected(), false);
   });
 });
 
@@ -191,7 +173,24 @@ describe('a replacement arriving on a non-200 response', () => {
   // updateCookiesFromResponse() MUTATES the fingerprint, so a call site that
   // discards its classification absorbs the replacement silently and every
   // later check reads `unchanged`. The error path did exactly that.
-  it('is fatal too', async () => {
+  it('is fatal to a stateful request too', async () => {
+    const conn = onPrem(configFor(stub.baseUrl), null);
+    await conn.connect();
+    conn.setSessionType('stateful');
+
+    stub.rotateSession = true;
+    stub.rotateStatus = 404;
+
+    await assert.rejects(get(conn), (e: unknown) => {
+      assertMatchObject(e, {
+        code: 'ADT_SESSION_REPLACED',
+      });
+      return true;
+    });
+    assert.strictEqual(conn.isConnected(), false);
+  });
+
+  it('is seen on a stateless refusal: the refusal itself, marked, the session lost', async () => {
     const conn = onPrem(configFor(stub.baseUrl), null);
     await conn.connect();
 
@@ -200,7 +199,8 @@ describe('a replacement arriving on a non-200 response', () => {
 
     await assert.rejects(get(conn), (e: unknown) => {
       assertMatchObject(e, {
-        code: 'ADT_SESSION_REPLACED',
+        response: { status: 404 },
+        sessionLost: 'ADT_SESSION_REPLACED',
       });
       return true;
     });

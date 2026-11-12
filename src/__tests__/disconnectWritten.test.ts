@@ -500,7 +500,7 @@ describe('disconnect() resolves once the logoff is written', () => {
       assert.strictEqual(server.logoffs(), 0);
     });
 
-    it('a replaced SAP_SESSIONID: SESSION_REPLACED, then the instance is spent', async () => {
+    it('a replaced SAP_SESSIONID: the stateless answer kept, marked, then the instance is spent', async () => {
       server = await standIn({
         routes: { '/sap/bc/adt/work': ['SAP_SESSIONID_STUB_100=S2; Path=/'] },
       });
@@ -508,13 +508,8 @@ describe('disconnect() resolves once the logoff is written', () => {
       await conn.connect();
       const establishments = server.establishments();
 
-      await assert.rejects(
-        conn.makeAdtRequest(work('/sap/bc/adt/work')),
-        (e: unknown) => {
-          assertMatchObject(e, { code: 'ADT_SESSION_REPLACED' });
-          return true;
-        },
-      );
+      const response = await conn.makeAdtRequest(work('/sap/bc/adt/work'));
+      assert.strictEqual(response.sessionLost, 'ADT_SESSION_REPLACED');
       await server.logoffArrived;
       server.answerLogoff();
       await spentAfterLoss(conn);
@@ -537,13 +532,8 @@ describe('disconnect() resolves once the logoff is written', () => {
       const conn = onPrem(configFor(server.baseUrl), null);
       await conn.connect();
 
-      await assert.rejects(
-        conn.makeAdtRequest(work('/sap/bc/adt/work')),
-        (e: unknown) => {
-          assertMatchObject(e, { code: 'ADT_SESSION_REPLACED' });
-          return true;
-        },
-      );
+      const response = await conn.makeAdtRequest(work('/sap/bc/adt/work'));
+      assert.strictEqual(response.sessionLost, 'ADT_SESSION_REPLACED');
       // Sent at the loss, without waiting for disconnect().
       await server.logoffArrived;
       assert.strictEqual(server.logoffs(), 1);
@@ -587,13 +577,8 @@ describe('disconnect() resolves once the logoff is written', () => {
       );
       await conn.connect();
 
-      await assert.rejects(
-        conn.makeAdtRequest(work('/sap/bc/adt/work')),
-        (e: unknown) => {
-          assertMatchObject(e, { code: 'ADT_SESSION_REPLACED' });
-          return true;
-        },
-      );
+      const response = await conn.makeAdtRequest(work('/sap/bc/adt/work'));
+      assert.strictEqual(response.sessionLost, 'ADT_SESSION_REPLACED');
       const logoff = await server.logoffArrived;
       assert.strictEqual(logoff.url, '/sap/public/bc/icf/logoff');
       assert.strictEqual(logoff.headers['x-sap-security-session'], 'use');
