@@ -712,15 +712,18 @@ on whether it is stateful (since 23.0.0):
   CSRF retry, no credential renewal. The session is lost before the answer
   reaches you.
 
-The connection's own exchanges (a CSRF fetch, a logon, `connect()`) have no
+The connection's own exchanges inside a request (a CSRF fetch, a logon) have no
 answer of yours to keep: a replacement seen on one is `ADT_SESSION_REPLACED`.
+`connect()` forgets the identity between its own requests, so what it sets up
+is never read as a replacement.
 A resumed session (`createConnection({ …, session })`) whose answer names another
 `SAP_SESSIONID` rejects `connect()` with SAP's answer, as before.
 
 **The server says the session is gone** — an answer meaning the session it was
 given no longer exists. This is **always** fatal, window or not: the connection
-raises `ADT_SESSION_REPLACED` and stops being usable — stateless or not, since
-such an answer brings no valid answer to keep. Unlike a replacement,
+raises `ADT_SESSION_REPLACED` and stops being usable — stateless or not, unless
+the same answer also changed the `SAP_SESSIONID`: a stateless refusal that does
+both is a replacement first, that refusal, marked. Unlike a replacement,
 nothing here suggests a working session to continue on — the one we had is
 confirmed dead, and re-establishing silently is what let the old connector
 carry on over a session the caller never opened.
@@ -748,7 +751,9 @@ timeout. `disconnect()` waits for that logoff's write, `flushGoodbye()` for
 its answer; a `connect()` that found its session replaced rejects once it is
 written. The old session SAP already ended, and a session reported gone
 (`400 "Session not found"`) brought no new one: nothing is sent for either.
-`ADT_SESSION_REPLACED` reaches the caller as before. Over RFC the
+What reaches the caller is the replacement's answer above: `ADT_SESSION_REPLACED`
+for a stateful request, SAP's answer marked `sessionLost` for a stateless one.
+Over RFC the
 conversation is the session and no answer can replace it.
 
 **Over RFC, an RFC error can end the session** (22.0.0). When an RFC error

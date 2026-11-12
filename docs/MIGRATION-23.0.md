@@ -24,9 +24,12 @@ everything else are unchanged.
 - **Stateful requests keep failing.** A stateful request (`LOCK`, `UNLOCK`, or
   any request the session mode or the `x-sap-adt-sessiontype: stateful` header
   marks stateful) whose answer shows the replacement rejects
-  `ADT_SESSION_REPLACED`, as before. So do the connection's own exchanges (a
-  CSRF fetch, a logon, `connect()`) and an answer saying the session no longer
-  exists.
+  `ADT_SESSION_REPLACED`, as before. So do the connection's own exchanges
+  inside a request (a CSRF fetch, a logon), and an answer saying the session no
+  longer exists when it shows no replacement — a stateless refusal that both
+  changes the `SAP_SESSIONID` and says the session is gone is that refusal,
+  marked. `connect()` and a resumed session (`createConnection({ session })`)
+  behave as in 22.x.
 - **A refused CSRF resend is now observed.** The resend after a refused CSRF
   token used to rethrow the first attempt's `403` without looking at the
   resend's own answer; a replacement on it went unnoticed. Its answer is now

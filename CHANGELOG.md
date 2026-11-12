@@ -21,8 +21,11 @@ A stateless request keeps its answer when the SAP session was replaced
   `sessionLost: 'ADT_SESSION_REPLACED'`. The session is lost before the answer
   reaches the caller (the instance spent, the replacing session logged off), and
   nothing is sent again: no CSRF retry and no credential renewal start from it.
-  A stateful request, the connection's own exchanges and an answer saying the
-  session no longer exists keep rejecting `ADT_SESSION_REPLACED`.
+  A stateful request, the connection's own exchanges inside a request (a CSRF
+  fetch, a logon) and an answer saying the session no longer exists that shows
+  no replacement keep rejecting `ADT_SESSION_REPLACED`; `connect()` and a resumed
+  session behave as in 22.x. A refusal that cannot take the mark (frozen,
+  sealed) is answered by an object on top of it that reads through to it.
 
 ### Added
 
