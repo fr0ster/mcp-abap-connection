@@ -275,8 +275,8 @@ them is refused with `ADT_NOT_CONNECTED`.
 ### GET Request
 
 ```typescript
-// The body is XML: name its type, or the answer's `data` is `unknown`.
-const packages = await connection.makeAdtRequest<string>({
+// The answer's `data` is `unknown`: read the XML body after checking it is text.
+const packages = await connection.makeAdtRequest({
   method: 'GET',
   url: '/sap/bc/adt/repository/nodestructure',
   params: {
@@ -286,6 +286,8 @@ const packages = await connection.makeAdtRequest<string>({
   },
   timeout: 0,
 });
+if (typeof packages.data !== 'string') throw new Error('expected an XML body');
+const xml = packages.data;
 ```
 
 ### POST Request (Create Object)
@@ -707,7 +709,7 @@ on whether it is stateful (since 23.0.0):
   gave it is valid and is returned as it came — a success resolves, a refusal
   rejects as itself — with `sessionLost: 'ADT_SESSION_REPLACED'` on that
   response or on that error (`IAdtWireResponse`, `IAbapConnectionError`,
-  `@mcp-abap-adt/interfaces-adt-connection` ^4.2.0). Only the request whose own
+  `@mcp-abap-adt/interfaces-adt-connection`, since 4.2.0). Only the request whose own
   answer showed the replacement carries it. Nothing is sent again for it: no
   CSRF retry, no credential renewal. The session is lost before the answer
   reaches you.
@@ -994,10 +996,9 @@ import type { AbapRequestOptions } from '@mcp-abap-adt/connection';
 import type { IAdtWireResponse } from '@mcp-abap-adt/interfaces-adt-connection';
 interface AbapConnection {
   connect(): Promise<void>; // REQUIRED before any request
-  // An answer whose type is not named is `unknown` (interfaces-adt-connection 2).
-  makeAdtRequest<T = unknown, D = unknown>(
-    options: AbapRequestOptions,
-  ): Promise<IAdtWireResponse<T, D>>;
+  // The answer's `data` is `unknown`; the caller names no type for it
+  // (interfaces-adt-connection 5).
+  makeAdtRequest(options: AbapRequestOptions): Promise<IAdtWireResponse>;
   getBaseUrl(): Promise<string | undefined>; // undefined over RFC: no HTTP origin
   setSessionType(type: "stateless" | "stateful"): void;
   getSessionId(): string | null; // client-side conversation id

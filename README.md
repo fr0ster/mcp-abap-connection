@@ -924,10 +924,9 @@ import type { IAdtWireResponse } from '@mcp-abap-adt/interfaces-adt-connection';
 // The shared contract (IAbapConnection), what every connection provides:
 interface AbapConnection {
   connect(): Promise<void>; // REQUIRED before any request; rejects on failure
-  // An answer whose type is not named is `unknown` (interfaces-adt-connection 2).
-  makeAdtRequest<T = unknown, D = unknown>(
-    options: AbapRequestOptions,
-  ): Promise<IAdtWireResponse<T, D>>;
+  // The answer's `data` is `unknown`; the caller names no type for it
+  // (interfaces-adt-connection 5).
+  makeAdtRequest(options: AbapRequestOptions): Promise<IAdtWireResponse>;
   getBaseUrl(): Promise<string | undefined>; // undefined over RFC: no HTTP origin
   setSessionType(type: "stateless" | "stateful"): void; // Switch session type
   getSessionId(): string | null; // Client-side conversation id

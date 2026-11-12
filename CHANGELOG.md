@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [23.1.0] - 2026-11-12
+
+### Changed
+
+- **The shared contract is `@mcp-abap-adt/interfaces-adt-connection` `^5.0.0`.**
+  Its `IAbapConnection.makeAdtRequest(options)` takes no type parameter and
+  answers `Promise<IAdtWireResponse>`, the answer's `data` `unknown`. The
+  connectors' own `makeAdtRequest` keeps its generic signature, so no caller of
+  this package changes, and a connector is assignable to version 5's
+  `IAbapConnection`. Code holding a value typed `IAbapConnection` (or the
+  `AbapConnection` alias) that names a type argument —
+  `makeAdtRequest<string>(…)` — no longer compiles: read `data` as `unknown`
+  and check it. README and docs/USAGE.md describe the version 5 contract.
+
 ## [23.0.0] - 2026-11-12
 
 A stateless request keeps its answer when the SAP session was replaced
@@ -3010,7 +3024,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v23.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v23.1.0...HEAD
+[23.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v23.0.0...v23.1.0
 [23.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.1...v23.0.0
 [22.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.0...v22.0.1
 [22.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v21.0.0...v22.0.0
