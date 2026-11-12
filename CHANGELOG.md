@@ -37,7 +37,8 @@ and for code that read the passport from the endpoint's header fields. See
   failed: …`, ending in fixed words when the thrown value cannot be described) and the top-level
   `code` is not set — except when the error ended the stateful conversation: then the message is
   the session-lost one and `code` is `ADT_SESSION_REPLACED` (above). Neither describing the
-  thrown value nor a logger that throws can replace that verdict.
+  thrown value nor a logger that throws — the wire's or the connection's — can replace that
+  verdict or the call's `rfc`.
 - **The passport over RFC.** A request's `SAP-PASSPORT` header (name read without case) is
   hex-decoded and handed to sap-rfc-lite as the call's own passport, for that call only, so a
   program started over RFC is caught by a terminal-mode external debugger listening for the
@@ -54,7 +55,8 @@ and for code that read the passport from the endpoint's header fields. See
 - **An ADT exception type that is not an own key of the status table** (`toString`,
   `constructor`, `__proto__`) reads as `500`; it fell through to `200 OK` before.
 - **No regular expression in the RFC wire:** the exception type and the header names redacted
-  in the wire log are read by plain code, with the same results.
+  in the wire log are read by plain code, with the same results; the exception type in one
+  linear scan.
 
 ## [21.0.0] - 2026-11-11
 
