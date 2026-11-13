@@ -5,6 +5,7 @@ import type {
   IWebSocketMessageHandler,
   IWebSocketTransport,
 } from '@mcp-abap-adt/interfaces-network';
+import { factsOf, factWords } from './failureFacts.js';
 
 /**
  * Minimal WS-like instance contract to avoid hard dependency on a specific WS library.
@@ -52,7 +53,12 @@ export class GenericWebSocketTransport implements IWebSocketTransport {
 
     // The caller's deadline, or none: no default of this package's own.
     const connectTimeoutMs = options?.connectTimeoutMs;
-    const socket = this.factory.create(url, options?.protocols, options);
+    let socket: IWebSocketLike;
+    try {
+      socket = this.factory.create(url, options?.protocols, options);
+    } catch (error) {
+      throw this.normalizeError(error, 'WebSocket could not be created');
+    }
     this.socket = socket;
 
     await new Promise<void>((resolve, reject) => {
@@ -127,7 +133,11 @@ export class GenericWebSocketTransport implements IWebSocketTransport {
       throw new Error('WebSocket is not connected');
     }
 
-    this.socket.send(JSON.stringify(message));
+    try {
+      this.socket.send(JSON.stringify(message));
+    } catch (error) {
+      throw this.normalizeError(error, 'WebSocket send failed');
+    }
   }
 
   onMessage<T = unknown>(handler: IWebSocketMessageHandler<T>): void {
@@ -170,14 +180,17 @@ export class GenericWebSocketTransport implements IWebSocketTransport {
     }
   }
 
-  private normalizeError(error: unknown, fallback: string): Error {
-    if (error instanceof Error) {
-      return error;
-    }
-    if (typeof error === 'string' && error.trim()) {
-      return new Error(error.trim());
-    }
-    return new Error(fallback);
+  /**
+   * What reaches an error handler: `words` and the failure's facts (`code`,
+   * its own or one down its `cause` chain; `status`, `rfc`, `response`) as
+   * fields, never what the socket library or the parser said — a connection
+   * error's text names the host, a parse error's quotes the message.
+   */
+  private normalizeError(error: unknown, words: string): Error {
+    return Object.assign(
+      new Error(`${words}: ${factWords(error)}`),
+      factsOf(error),
+    );
   }
 
   private async emitOpen(): Promise<void> {

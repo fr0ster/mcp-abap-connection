@@ -223,7 +223,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
         assertMatchObject(e, {
           name: 'AuthRefusedError',
           at: 'request',
-          cause: original,
+          cause: { name: 'WireFailure', status: 401 },
         });
         return true;
       },
@@ -268,7 +268,7 @@ describe('AbstractAbapConnection — CSRF retry behavior', () => {
         assertMatchObject(e, {
           name: 'AuthRefusedError',
           at: 'request',
-          cause: original,
+          cause: { name: 'WireFailure', status: 401 },
         });
         return true;
       },

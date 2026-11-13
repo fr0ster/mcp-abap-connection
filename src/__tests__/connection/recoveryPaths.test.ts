@@ -118,7 +118,7 @@ describe('path C — a login-form 401 on a mutation', () => {
       (e: unknown) => {
         assertMatchObject(e, {
           name: 'AuthRefusedError',
-          cause: { response: { status: 401 } },
+          cause: { name: 'WireFailure', status: 401 },
         });
         return true;
       },
@@ -156,7 +156,7 @@ describe('path D — a 401 on a GET', () => {
       (e: unknown) => {
         assertMatchObject(e, {
           name: 'AuthRefusedError',
-          cause: { response: { status: 401 } },
+          cause: { name: 'WireFailure', status: 401 },
         });
         return true;
       },

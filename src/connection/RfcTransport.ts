@@ -55,14 +55,14 @@
 
 import { randomUUID } from 'node:crypto';
 import { authError } from '@mcp-abap-adt/auth-errors';
-import {
-  type IAbapConnectionError,
-  type IRfcErrorInfo,
-  RFC_RCS,
+import type {
+  IAbapConnectionError,
+  IRfcErrorInfo,
 } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { AuthOutcome, ILogonTarget } from '@mcp-abap-adt/interfaces-auth';
 import type { ILogger } from '../logger.js';
 import { WireLogonError, WireSessionLostError } from './authErrors.js';
+import { rfcErrorOf } from './failureFacts.js';
 import type {
   IAdtEstablishContext,
   IAdtSessionContext,
@@ -70,6 +70,7 @@ import type {
   IAdtTransportResponse,
   IOnPremTransport,
 } from './IAdtTransport.js';
+import { isFactoryOwnWords } from './rfcConversation.js';
 import { isStatefulRequest } from './statefulRequest.js';
 
 /**
@@ -254,51 +255,9 @@ function statusFromExceptionXml(body: string): { code: number; text: string } {
     : { code: 500, text: 'Internal Server Error' };
 }
 
-/** An own data property of `source`, read without running a getter. */
-function ownData(source: object, name: string): unknown {
-  const descriptor = Object.getOwnPropertyDescriptor(source, name);
-  return descriptor !== undefined && 'value' in descriptor
-    ? descriptor.value
-    : undefined;
-}
-
-function isInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value);
-}
-
 /**
- * The SDK's error as fields, or `undefined` when `thrown` is not that shape.
- *
- * The one place an SDK error enters, so the one place it is checked: `key` and
- * `codeString` own data properties holding strings, `group` and `code` own
- * data properties holding integers, and `codeString` one of the closed list
- * `RFC_RCS`. No getter runs, and an object whose traps throw reads as no
- * shape. `name` and `message` are not read, and nothing is read out of a
- * message.
- */
-function rfcErrorOf(thrown: unknown): IRfcErrorInfo | undefined {
-  if (typeof thrown !== 'object' || thrown === null) return undefined;
-  try {
-    const key = ownData(thrown, 'key');
-    const group = ownData(thrown, 'group');
-    const code = ownData(thrown, 'code');
-    const codeString = ownData(thrown, 'codeString');
-    if (typeof key !== 'string' || !isInteger(group) || !isInteger(code)) {
-      return undefined;
-    }
-    // Compared with each listed name, so only a string can match: this is
-    // the check of `codeString`, and what is stored is the listed member.
-    const listed = RFC_RCS.find((name) => name === codeString);
-    if (listed === undefined) return undefined;
-    return Object.freeze({ key, group, code, codeString: listed });
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * What a failed call throws: an `Error` with today's words, and the SDK's
- * fields as `rfc` when the SDK named the failure. The top-level `code` is not
+ * What a failed call throws: an `Error` in fixed words, and the SDK's fields
+ * as `rfc` when the SDK named the failure. The top-level `code` is not
  * set: `rfc` does not change what it means.
  */
 function rfcCallError(
@@ -309,23 +268,18 @@ function rfcCallError(
   return rfc === undefined ? error : Object.assign(error, { rfc });
 }
 
-/** Words a value is described by when describing it throws. */
-const UNDESCRIBABLE = 'the failure could not be described';
+/** The words for a failure the SDK did not name with its fields. */
+const UNNAMED = 'the SDK did not name the failure';
 
 /**
- * A thrown value in words, for a message and a log line. It never throws:
- * `instanceof` runs a Proxy's trap, `message` may be a getter, and
- * `JSON.stringify` runs every enumerable getter and `toJSON` — any of which
- * may throw. Then the words are fixed, and nothing the throw said is kept.
+ * A failure in fixed words: the return code the SDK named — a member of the
+ * closed list `RFC_RCS` — else fixed words. Nothing the thrown value says is
+ * read: the SDK's text names the partner it dialled (`host:port`), the time
+ * and the kernel's source module, and none of it may reach a message or a log
+ * line. What the SDK said reaches a caller as `rfc`, its fields.
  */
-function message(e: unknown): string {
-  try {
-    if (e instanceof Error) return String(e.message);
-    if (e && typeof e === 'object') return String(JSON.stringify(e));
-    return String(e);
-  } catch {
-    return UNDESCRIBABLE;
-  }
+function failureWords(thrown: unknown): string {
+  return rfcErrorOf(thrown)?.codeString ?? UNNAMED;
 }
 
 /**
@@ -675,7 +629,7 @@ export class RfcTransport implements IOnPremTransport {
     try {
       await conversation.close();
     } catch (e) {
-      this.logQuietly(() => `RFC close error: ${message(e)}`);
+      this.logQuietly(() => `RFC close error: ${failureWords(e)}`);
       return;
     }
     this.logQuietly(() => 'RFC conversation closed');
@@ -817,7 +771,7 @@ export class RfcTransport implements IOnPremTransport {
             // A context that could not be reset must not serve the next call.
             this.logQuietly(
               () =>
-                `RFC reset failed, dropping the conversation: ${message(e)}`,
+                `RFC reset failed, dropping the conversation: ${failureWords(e)}`,
             );
             this.dropStateless(kept);
             await this.closeQuietly(kept);
@@ -943,11 +897,29 @@ export class RfcTransport implements IOnPremTransport {
    * A new conversation, logged on with `parameters`; a failed open is a
    * refused logon whose cause is the SDK's own error, untouched — a provider
    * reads its `key` and message.
+   *
+   * A factory that throws while building the conversation — the SDK's client
+   * constructor, or a consumer's factory — is not a logon: nothing was sent.
+   * It is said in fixed words with the SDK's fields as `rfc`, never the
+   * thrown value's text — except the shipped factory's own fixed words, which
+   * go as they are.
    */
   private async openedWith(
     parameters: Readonly<Record<string, string>>,
   ): Promise<IRfcConversation> {
-    const conversation = this.connect(parameters);
+    let conversation: IRfcConversation;
+    try {
+      conversation = this.connect(parameters);
+    } catch (e) {
+      // The shipped factory's own words (sap-rfc-lite missing, and what to
+      // install) quote nothing, and say more than these would.
+      if (isFactoryOwnWords(e)) throw e;
+      const rfc = rfcErrorOf(e);
+      throw rfcCallError(
+        `The RFC conversation could not be built: ${rfc?.codeString ?? UNNAMED}`,
+        rfc,
+      );
+    }
     try {
       await conversation.open();
     } catch (e) {
@@ -973,7 +945,7 @@ export class RfcTransport implements IOnPremTransport {
     try {
       await conversation.close();
     } catch (e) {
-      this.logQuietly(() => `RFC close error: ${message(e)}`);
+      this.logQuietly(() => `RFC close error: ${failureWords(e)}`);
     }
   }
 
@@ -1092,7 +1064,8 @@ export class RfcTransport implements IOnPremTransport {
       // An RFC-level failure, not an answer: nothing came back to classify.
       // The verdict comes first — the SDK's fields, read once, and whether the
       // session survived — so nothing that describes the failure afterwards
-      // (formatting the thrown value, a logger) can stand in for it.
+      // (a logger) can stand in for it. The words are the return code's, or
+      // fixed: the SDK's text is never read (`failureWords`).
       const rfc = rfcErrorOf(e);
       // The library released the stateful conversation after the error
       // (`alive` false), and it was not a close() of ours: the session it
@@ -1101,10 +1074,10 @@ export class RfcTransport implements IOnPremTransport {
       const lost =
         carriesSession && !conversation.alive && generation === this.generation;
       if (lost) this.dropSession(conversation);
-      const msg = message(e);
-      const text = `RFC call to SADT_REST_RFC_ENDPOINT failed: ${msg}`;
+      const words = rfc?.codeString ?? UNNAMED;
+      const text = `RFC call to SADT_REST_RFC_ENDPOINT failed: ${words}`;
       try {
-        this.logger?.error(`RFC call failed: ${msg}`);
+        this.logger?.error(`RFC call failed: ${words}`);
       } catch {
         // A broken logger must not replace the call's failure.
       }

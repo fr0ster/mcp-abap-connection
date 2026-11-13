@@ -155,7 +155,7 @@ describe('a 401 that survives the wire', () => {
       (error as AuthRefusedError).refusal,
       (NO as { refusal: unknown }).refusal,
     );
-    assert.strictEqual(statusOf((error as AuthRefusedError).cause), 401);
+    assert.strictEqual(error.cause?.status, 401);
     // SAP's 401 reaches the caller; nothing was resent.
     assert.strictEqual(stub.sentTo(WORK).length, 1);
   });
@@ -176,7 +176,11 @@ describe('a 401 that survives the wire', () => {
     assert.ok(error instanceof AuthRefusedError);
     assert.strictEqual((error as AuthRefusedError).at, 'request');
     assertMatchObject((error as AuthRefusedError).refusal, PROVIDER_FAILED);
-    assert.strictEqual((error as AuthRefusedError).cause, boom);
+    // What the provider threw, said by its facts: a copy, never the value.
+    assertMatchObject(error.cause, {
+      name: 'WireFailure',
+      message: 'The failure: no code was given',
+    });
     assert.strictEqual(rejections().length, 1);
     assert.strictEqual(stub.sentTo(WORK).length, 1);
   });
@@ -194,7 +198,7 @@ describe('a 401 that survives the wire', () => {
     });
     // SAP's repeated 401 reaches the caller: the first attempt and the one
     // resend Ok bought, nothing more.
-    assert.strictEqual(statusOf((error as AuthRefusedError).cause), 401);
+    assert.strictEqual(error.cause?.status, 401);
     assert.strictEqual(rejections().length, 1);
     assert.strictEqual(stub.sentTo(WORK).length, 2);
   });

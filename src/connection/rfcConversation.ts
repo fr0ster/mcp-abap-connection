@@ -80,6 +80,17 @@ export function rfcParamsFrom(config: ISapRfcConfig): RfcAddress {
 }
 
 /**
+ * The errors this module throws in its own fixed words, which `RfcTransport`
+ * passes on as they are: they quote nothing a thrown value said.
+ */
+const OWN_WORDS = new WeakSet<object>();
+
+/** Whether `thrown` is one of this module's own errors, in fixed words. */
+export function isFactoryOwnWords(thrown: unknown): boolean {
+  return typeof thrown === 'object' && thrown !== null && OWN_WORDS.has(thrown);
+}
+
+/**
  * The factory `RfcTransport` asks for: the logon parameters the provider wrote
  * for this open go in, spread over the address the config states; nothing
  * else is added.
@@ -105,12 +116,14 @@ export function rfcConversationFrom(
       // Dynamic, because the SDK is an optional peer: it needs the SAP NW RFC
       // SDK installed on the machine, and most consumers travel over HTTP.
       Client = require('@mcp-abap-adt/sap-rfc-lite').Client;
-    } catch (error) {
-      throw new Error(
+    } catch {
+      // The loader's words are not quoted: they name paths on this machine.
+      const missing = new Error(
         '@mcp-abap-adt/sap-rfc-lite is not available. To take the RFC wire, ' +
-          'install the SAP NW RFC SDK and run: npm install @mcp-abap-adt/sap-rfc-lite. ' +
-          `Details: ${error instanceof Error ? error.message : String(error)}`,
+          'install the SAP NW RFC SDK and run: npm install @mcp-abap-adt/sap-rfc-lite.',
       );
+      OWN_WORDS.add(missing);
+      throw missing;
     }
     return new Client({ ...params, ...logon });
   };

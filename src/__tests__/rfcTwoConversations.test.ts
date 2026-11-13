@@ -100,9 +100,10 @@ describe('RFC: one stateful conversation, one conversation per other call', () =
     });
     await transport.open();
 
-    await assert.rejects(transport.send(request(false)), (e: unknown) =>
-      /boom/.test((e as Error).message),
-    );
+    await assert.rejects(transport.send(request(false)), {
+      message:
+        'RFC call to SADT_REST_RFC_ENDPOINT failed: the SDK did not name the failure',
+    });
     assert.strictEqual(opened[1].close.mock.callCount(), 1);
   });
 

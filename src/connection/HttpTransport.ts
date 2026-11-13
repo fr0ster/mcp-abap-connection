@@ -47,6 +47,7 @@ import type { ILogger } from '../logger.js';
 import { mergeCookieHeaders } from '../utils/cookies.js';
 import { AuthRefusedError, WireLogonError } from './authErrors.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
+import { factWords, failureCopy, httpFailure } from './failureFacts.js';
 import {
   type IAdtEstablishContext,
   type IAdtSessionContext,
@@ -835,7 +836,9 @@ export class HttpTransport implements IAdtTransport {
         // folds anything of it in or reads it as an absent endpoint.
         if (error instanceof AuthRefusedError) throw error;
 
-        last = error instanceof Error ? error : new Error(String(error));
+        // The wire's own failure (`httpFailure`) or the connection's verdict
+        // as it is; anything else said by its facts, never its text.
+        last = error instanceof Error ? error : failureCopy(error);
         const headers = refusalHeaders(error);
         if (headers !== undefined) {
           // A refusal can still carry the cookies that matter — handed up
@@ -1221,16 +1224,16 @@ export class HttpTransport implements IAdtTransport {
       this.logger?.debug('Told the server the session is finished');
     } catch (error) {
       this.logger?.debug(
-        `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+        `Could not tell the server the session is finished: ${factWords(error)}`,
       );
     }
   }
 
   /**
-   * Throws for a status the request does not admit — by doing nothing, because
-   * that is already what axios does, and `AxiosError` already carries
-   * `response`. The contract was written to describe this behaviour rather than
-   * to add it.
+   * Throws for a status the request does not admit — axios rejects, and the
+   * wire hands up `httpFailure`'s copy: SAP's answer as `response` and
+   * `status`, the code, fixed words — never axios's error, which holds the
+   * request's config.
    */
   async send(request: IAdtTransportRequest): Promise<IAdtTransportResponse> {
     const fixed = this.fix(request);
@@ -1412,10 +1415,18 @@ export class HttpTransport implements IAdtTransport {
     };
     // A logoff opens a socket of its own and is never resent: its answer is
     // not read, and its write is what `disconnect()` resolves at.
-    const response =
-      written !== undefined
-        ? await this.client()(config)
-        : await this.sendPooled(config);
+    let response: AxiosResponse;
+    try {
+      response =
+        written !== undefined
+          ? await this.client()(config)
+          : await this.sendPooled(config);
+    } catch (error) {
+      // Never as the client threw it: axios's error holds this request's
+      // config — its credential headers among it — and words naming the host.
+      // SAP's answer and the code go up; nothing else of it does.
+      throw httpFailure(error);
+    }
 
     return {
       status: response.status,

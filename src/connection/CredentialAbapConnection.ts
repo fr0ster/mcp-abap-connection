@@ -21,6 +21,7 @@ import type { SapConfig } from '../config/sapConfig.js';
 import type { ILogger } from '../logger.js';
 import { AbstractAbapConnection } from './AbstractAbapConnection.js';
 import { AuthRefusedError, type GuardedAnswer, guarded } from './authErrors.js';
+import { factWords } from './failureFacts.js';
 import { type IAdtTransport, refusalOf } from './IAdtTransport.js';
 import { requestTargetOn } from './requestTarget.js';
 
@@ -124,7 +125,7 @@ export abstract class CredentialAbapConnection<
       });
     } catch (error) {
       this.logger?.warn(
-        `Could not establish (${this.credential.kind}): ${error instanceof Error ? error.message : String(error)}`,
+        `Could not establish (${this.credential.kind}): ${factWords(error)}`,
       );
       // A rejecting response can still carry the cookies that matter; the wire
       // folds them in as it establishes, so nothing is read out of the error

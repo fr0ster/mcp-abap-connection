@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [25.0.0] - 2026-11-13
+
+No error the connection hands out, and no line it logs, carries a thrown
+value's text or a request's config: on every wire a failure is said by its
+typed facts (`code`, `status`, `rfc`, SAP's answer as `response`) and fixed
+words. A security fix, and breaking for code that read axios's own fields off
+a connection's error or compared `AuthRefusedError.cause` with the original.
+See [docs/MIGRATION-25.0.md](docs/MIGRATION-25.0.md).
+
+### Changed — breaking
+
+- **An HTTP failure is no longer the axios error.** It is an `Error` carrying
+  SAP's answer as `response` (`status`, `statusText`, `headers`, `data`, as
+  SAP gave them), `status` and `code`. It has no `config`, no `request`, no
+  `isAxiosError` and no `cause`: `axios.isAxiosError(error)` and
+  `instanceof AxiosError` are `false`.
+- **`AuthRefusedError.cause` is a `WireFailure` copy**, typed
+  `FailureCopy | undefined` (was `unknown`): `code`, `status`, `rfc`,
+  `response` and the message `The failure: <facts>`. `cause === original` no
+  longer holds; the provider still receives the original as
+  `IAuthRejection.error`.
+
+### Fixed — security
+
+- **An RFC failure carries the SDK's typed fields, never its text.** A failed
+  call's message quoted the NW RFC SDK's free text —
+  `RFC call to SADT_REST_RFC_ENDPOINT failed: {"message":"partner '<host>:<port>' …"}`,
+  with the gateway's address, the time and the kernel's source module — and a
+  consumer handed that message on. It is now fixed words built from `rfc`:
+  `RFC call to SADT_REST_RFC_ENDPOINT failed: <codeString>` (one of `RFC_RCS`),
+  or `… failed: the SDK did not name the failure` when the SDK named none. The
+  `rfc` field (`key`, `group`, `code`, `codeString`) and the top-level `code`
+  are unchanged; the session-lost verdict's words were fixed already.
+- The same for the log lines: a failed call (`RFC call failed: <codeString>`),
+  a failed close (`RFC close error: …`) and a failed reset (`RFC reset failed,
+  dropping the conversation: …`) name the return code only.
+- `WireLogonError`'s message is fixed words — `The logon failed`, with
+  `(status <n>)` when the wire gives one — never its cause's message. Its
+  `cause` is the raw error as before, for the provider to read.
+- The error for a missing `@mcp-abap-adt/sap-rfc-lite` no longer quotes the
+  loader's text (paths on the machine).
+- A conversation factory that throws while building the conversation (the
+  SDK's client constructor, or a consumer's factory) was passed on as it
+  threw. It is now `The RFC conversation could not be built: <codeString>`
+  (or the fixed words), with `rfc` when the SDK named the failure; it is not a
+  logon, so no provider is asked.
+- **An HTTP failure is no longer axios's error.** The wire handed up axios's
+  rejection as it was: its message names the host and port it could not reach
+  (`connect ECONNREFUSED <host>:<port>`), and its `config` holds the request's
+  `Authorization`, `Cookie` and CSRF headers. It is now an `Error` with SAP's
+  answer as `response` (`status`, `statusText`, `headers`, `data`, as SAP gave
+  them), `status`, axios's `code`, and the message
+  `Request failed with status code <n>`; with no answer, `code` and
+  `The request failed: <code>`. No `config`, `request`, `isAxiosError` or
+  `cause`.
+- **`AuthRefusedError.cause` is a copy.** It kept the wire's error (or the
+  provider's throw) as it arrived — an axios error with its config, an RFC
+  SDK error with its text. It is now an `Error` named `WireFailure`, its
+  message `The failure: <facts>`, with `code` (its own, else the first down
+  its `cause` chain), `status`, `rfc` and SAP's answer as `response`. The
+  provider is still handed the wire's error as it arrived
+  (`IAuthRejection.error`) — over HTTP the client's own rejection, over RFC
+  the SDK's error: the SNC provider reads its message for GSS codes, and
+  `readRejection` its `key`.
+- **A `WireLogonError` that leaves `connect()` or `makeAdtRequest()`** carries
+  such a copy as its `cause` (`outwardLogonError`), never the wire's raw error.
+- **The WebSocket transport** hands its error handlers `<words>: <code>` with
+  `code`, never the socket library's or the parser's error; a factory or a
+  `send` that throws rejects the same way.
+- A transport the consumer writes (`IAdtTransport`) hands up what it throws,
+  and a failure that is not the credential's passes through as it raised it:
+  its words are the consumer's.
+- **Log lines** — a failed request (`Network error - cannot connect to SAP
+  system`, the request error line), the CSRF fetch before a mutation and the
+  CSRF retry, a failed establishment, a failed logoff (both lines), a cloud
+  security session that could not be opened — say the failure's facts, or
+  `no code was given`, never its message. An unparsable configuration URL is
+  not quoted.
+
 ## [24.0.0] - 2026-11-12
 
 The shared contract moves to `@mcp-abap-adt/interfaces-adt-connection` 5.
@@ -3028,7 +3107,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v24.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.0...HEAD
+[25.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v24.0.0...v25.0.0
 [24.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v23.0.0...v24.0.0
 [23.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.1...v23.0.0
 [22.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.0...v22.0.1

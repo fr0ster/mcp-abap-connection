@@ -290,9 +290,10 @@ export interface IAdtTransport {
  * The response a refusal carries, whichever client threw it.
  *
  * `IAdtTransport` promises exactly this about a failure and nothing more: the
- * error has a `response`. `HttpTransport` throws an `AxiosError`, which happens
- * to satisfy it; `RfcTransport` throws a plain `Error` with the field, which is
- * what the contract asks for.
+ * error has a `response`. `HttpTransport` throws a plain `Error` with SAP's
+ * answer as the field (`httpFailure`: never axios's error, which holds the
+ * request's config); `RfcTransport` throws a plain `Error` with the field too,
+ * which is what the contract asks for.
  *
  * Read structurally, because `instanceof AxiosError` is a question about which
  * HTTP client is installed — an answer no other wire can give, and the reason

@@ -162,6 +162,7 @@ the packages above. See [Migration to 9.0.0](./docs/MIGRATION-9.0.md).
 
 - 📦 **[Installation Guide](./docs/INSTALLATION.md)** - Setup and installation instructions
 - 📚 **[Usage Guide](./docs/USAGE.md)** - Detailed usage examples and API documentation
+- 🚚 **[Migration to 25.0.0](./docs/MIGRATION-25.0.md)** - security: an error and a log line carry the failure's typed facts (`code`, `status`, `rfc`, SAP's answer as `response`), never a thrown value's text or a request config; the HTTP failure is not the axios error (no `config`, `request`, `isAxiosError`); `AuthRefusedError.cause` is a `WireFailure` copy
 - 🚚 **[Migration to 24.0.0](./docs/MIGRATION-24.0.md)** - on `@mcp-abap-adt/interfaces-adt-connection` ^5.0.0: `IAbapConnection` / `AbapConnection`'s `makeAdtRequest` takes no type argument; drop it and narrow `data` from `unknown`; the connectors are unchanged
 - 🚚 **[Migration to 23.0.0](./docs/MIGRATION-23.0.md)** - a stateless request whose answer shows the SAP session replaced keeps that answer, marked `sessionLost`, and the instance is spent; a stateful request still rejects `ADT_SESSION_REPLACED`; nothing is resent; `@mcp-abap-adt/interfaces-adt-connection` ^4.2.0
 - 🚚 **[Migration to 22.0.0](./docs/MIGRATION-22.0.md)** - over RFC: a connection-ending RFC error on the stateful conversation is `ADT_SESSION_REPLACED` and spends the instance (no silent reconnect); a failed RFC call carries `rfc: { key, group, code, codeString }`; the `SAP-PASSPORT` header becomes the RFC call's passport; `@mcp-abap-adt/sap-rfc-lite` ^0.4.0
@@ -569,12 +570,26 @@ reports the failure, the `Error` the caller receives carries it as
 `rfc: { key, group, code, codeString }` (`IRfcErrorInfo`, typed by
 `IAbapConnectionError` in `@mcp-abap-adt/interfaces-adt-connection`;
 `codeString` is one of `RFC_RCS`). Read the failure from those, never from the
-message: a call's failure says `RFC call to SADT_REST_RFC_ENDPOINT failed: …`
-and sets no top-level `code`; when the error ended the stateful conversation,
-the message is the session-lost one and `code` is `ADT_SESSION_REPLACED`
-(below). `rfc` is carried either way, on every conversation. An error the SDK
-did not name — the closed-connection error, a refused passport — carries no
-`rfc`.
+message: a call's failure says `RFC call to SADT_REST_RFC_ENDPOINT failed:
+<codeString>` (for example `… failed: RFC_COMMUNICATION_FAILURE`) and sets no
+top-level `code`; when the error ended the stateful conversation, the message
+is the session-lost one and `code` is `ADT_SESSION_REPLACED` (below). `rfc` is
+carried either way, on every conversation. A call's error the SDK did not
+name — the closed-connection error, a passport sap-rfc-lite refuses — carries
+no `rfc`, and its message ends `… failed: the SDK did not name the failure`.
+(A `SAP-PASSPORT` header that is not hex is refused before any call, in its
+own words.)
+
+**No text of the SDK's reaches a message or a log line** (25.0.0). The NW RFC
+SDK's own text names the partner it dialled (`host:port`), the time and the
+kernel's source module; the connection never quotes it — not in a call's
+failure, not in its log lines (a failed call, close or reset), not in a
+`WireLogonError`'s message (`The logon failed`), not when the conversation
+cannot be built (`The RFC conversation could not be built: <codeString>`), and
+not when sap-rfc-lite cannot be loaded. What the SDK said reaches you as `rfc`.
+The provider is handed the SDK's error as it arrived (`IAuthRejection.error`),
+for its own reading; the `AuthRefusedError` you get carries a copy of it
+("What a failure carries", below).
 
 ```typescript
 import type { RfcReturnCodeName } from "@mcp-abap-adt/interfaces-adt-connection";
@@ -729,6 +744,40 @@ Earlier versions reported both 401 and 403 as
 error. Code matching on that message must branch on `error.response.status`
 instead — which it can now do, since the status is no longer thrown away.
 See [MIGRATION-4.0.md](./docs/MIGRATION-4.0.md).
+
+**What a failure carries** (25.0.0). An error the connection hands you says the
+failure by its typed facts and fixed words — never a thrown value's text, and
+never a request's config. A thrown value's text names hosts and ports (axios's
+`connect ECONNREFUSED <host>:<port>`, the RFC SDK's partner), and axios's error
+holds the request's config with its `Authorization`, `Cookie` and CSRF headers.
+
+- **An HTTP failure** is an `Error` with SAP's answer as `response` — `status`,
+  `statusText`, `headers`, `data`, as SAP gave them — and `status`, axios's
+  `code`, and the message `Request failed with status code <n>`. With no
+  answer: `code` (`ECONNREFUSED`, `ECONNABORTED`, …) and
+  `The request failed: <code>` — the code its own, else the first down its
+  `cause` chain. It is not axios's error: no `config`, no `request`, no
+  `isAxiosError`, no `cause`.
+- **`AuthRefusedError.cause`** is a copy of the wire's error (or of what the
+  provider threw): an `Error` named `WireFailure`, its message
+  `The failure: <facts>`, its facts as fields — `code` (its own, else one down
+  its `cause` chain), `status`, `rfc`, and SAP's answer as `response`. The
+  provider was handed the wire's error as it arrived — over HTTP the client's
+  own rejection, over RFC the SDK's error.
+- **A `WireLogonError`** that leaves `connect()` carries such a copy as its
+  `cause`.
+- **The WebSocket transport** hands its error handlers `<words>: <code>`, with
+  `code`.
+- **Log lines** say a failure the same way: its facts, or `no code was given`.
+
+A transport you write yourself (`IAdtTransport`) hands up what it throws: a
+failure that is not the credential's passes through the connection as your
+wire raised it, so its words are yours to choose.
+
+Code that read `error.config`, `error.request`, `error.isAxiosError`, or tested
+`axios.isAxiosError(error)` / `instanceof AxiosError` on a connection's error
+reads `error.response`, `error.status` and `error.code` instead. See
+[docs/MIGRATION-25.0.md](./docs/MIGRATION-25.0.md).
 
 ### When the credential is refused
 
