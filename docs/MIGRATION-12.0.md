@@ -102,6 +102,14 @@ through `classifyOutcome`:
 A provider that throws is `provider-threw` too, with the throw as `cause`, as
 in 11.x.
 
+> **Since 24.0.1** `AuthRefusedError.cause` is a copy, not the wire's error or the throw: an
+> `Error` named `WireFailure` whose fields carry the facts — `code`, `status`,
+> SAP's answer as `response`, and the RFC SDK's fields as `rfc`
+> (`cause.rfc.codeString`, e.g. `RFC_COMMUNICATION_FAILURE`); its message is
+> `The failure: <facts>`, never the SDK's text. The provider still receives the
+> original, as `IAuthRejection.error`. See the CHANGELOG, 24.0.1, and the
+> README, "What a failure carries".
+
 ## A logon target of your own
 
 A wire of your own hands the provider an `ILogonTarget`. Its refusals must be
