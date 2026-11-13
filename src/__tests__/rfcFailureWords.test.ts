@@ -35,10 +35,10 @@ import { stubProvider } from './helpers/stubProvider.js';
 
 /** The SDK's words for a broken gateway connection, as the kernel writes them. */
 const SDK_TEXT = [
-  "partner '192.0.2.17:3300' not reached",
+  "partner 'PARTNER-SENTINEL:PORT-SENTINEL' not reached",
   '',
-  'LOCATION    CPIC (TCP/IP) on local host gw.example.invalid with Unicode',
-  'ERROR       partner 192.0.2.17:3300 not reached',
+  'LOCATION    CPIC (TCP/IP) on local host LOCAL-HOST-SENTINEL with Unicode',
+  'ERROR       partner PARTNER-SENTINEL:PORT-SENTINEL not reached',
   'TIME        Thu Nov 13 10:11:12 2026',
   'RELEASE     753',
   'COMPONENT   NI (network interface)',
@@ -48,8 +48,9 @@ const SDK_TEXT = [
 
 /** Every piece of `SDK_TEXT` that must reach nothing. */
 const LEAKS = [
-  '192.0.2.17',
-  'gw.example.invalid',
+  'PARTNER-SENTINEL',
+  'LOCAL-HOST-SENTINEL',
+  'PORT-SENTINEL',
   'partner',
   'not reached',
   'Nov 13',
@@ -250,7 +251,7 @@ describe('the connection hands on no SDK text either', () => {
   const config: ISapRfcConfig = {
     connectionType: 'rfc',
     authType: 'basic',
-    ashost: 'saphost',
+    ashost: 'ASHOST-SENTINEL',
     sysnr: '00',
     client: '100',
     language: 'EN',
@@ -445,7 +446,7 @@ describe('a conversation the factory could not build is said in fixed words', ()
     const config: ISapRfcConfig = {
       connectionType: 'rfc',
       authType: 'basic',
-      ashost: 'saphost',
+      ashost: 'ASHOST-SENTINEL',
       sysnr: '00',
       client: '100',
       language: 'EN',
@@ -481,7 +482,7 @@ describe('a missing SDK reaches the caller of open() in its own words', () => {
     const config: ISapRfcConfig = {
       connectionType: 'rfc',
       authType: 'basic',
-      ashost: 'saphost',
+      ashost: 'ASHOST-SENTINEL',
       sysnr: '00',
       client: '100',
       language: 'EN',
@@ -514,7 +515,7 @@ describe('a missing SDK is said without the loader’s text', () => {
     const config: ISapRfcConfig = {
       connectionType: 'rfc',
       authType: 'basic',
-      ashost: 'saphost',
+      ashost: 'ASHOST-SENTINEL',
       sysnr: '00',
       client: '100',
       language: 'EN',
