@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [24.0.1] - 2026-11-13
 
+No error the connection hands out, and no line it logs, carries a thrown
+value's text or a request's config: on every wire a failure is said by its
+typed facts (`code`, `status`, `rfc`, SAP's answer as `response`) and fixed
+words. Code that read axios's own fields off a connection's error must read
+the facts instead (below; README, "What a failure carries").
+
 ### Fixed — security
 
 - **An RFC failure carries the SDK's typed fields, never its text.** A failed
@@ -33,6 +39,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   threw. It is now `The RFC conversation could not be built: <codeString>`
   (or the fixed words), with `rfc` when the SDK named the failure; it is not a
   logon, so no provider is asked.
+- **An HTTP failure is no longer axios's error.** The wire handed up axios's
+  rejection as it was: its message names the host and port it could not reach
+  (`connect ECONNREFUSED <host>:<port>`), and its `config` holds the request's
+  `Authorization`, `Cookie` and CSRF headers. It is now an `Error` with SAP's
+  answer as `response` (`status`, `statusText`, `headers`, `data`, as SAP gave
+  them), `status`, axios's `code`, and the message
+  `Request failed with status code <n>`; with no answer, `code` and
+  `The request failed: <code>`. No `config`, `request`, `isAxiosError` or
+  `cause`.
+- **`AuthRefusedError.cause` is a copy.** It kept the wire's error (or the
+  provider's throw) as it arrived — an axios error with its config, an RFC
+  SDK error with its text. It is now an `Error` named `WireFailure`, its
+  message `The failure: <facts>`, with `code`, `status` and `rfc` as fields.
+  The provider is still handed the wire's error as it arrived
+  (`IAuthRejection.error`): the SNC provider reads the SDK's message for GSS
+  codes, and `readRejection` its `key`.
+- **A `WireLogonError` that leaves `connect()` or `makeAdtRequest()`** carries
+  such a copy as its `cause` (`outwardLogonError`), never the wire's raw error.
+- **The WebSocket transport** hands its error handlers `<words>: <code>` with
+  `code`, never the socket library's or the parser's error.
+- **Log lines** — a failed request (`Network error - cannot connect to SAP
+  system`, the request error line), the CSRF fetch before a mutation and the
+  CSRF retry, a failed establishment, a failed logoff (both lines), a cloud
+  security session that could not be opened — say the failure's facts, or
+  `no code was given`, never its message. An unparsable configuration URL is
+  not quoted.
+
+### Migration
+
+- `error.config`, `error.request`, `error.isAxiosError`,
+  `axios.isAxiosError(error)` and `instanceof AxiosError` no longer apply to a
+  connection's error: read `error.response` (unchanged: SAP's status, reason,
+  headers and body), `error.status` and `error.code`.
+- `AuthRefusedError.cause.response.status` is `cause.status`; the cause is
+  never the original object (`cause === original` no longer holds).
 
 ## [24.0.0] - 2026-11-12
 

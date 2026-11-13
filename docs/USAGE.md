@@ -1317,7 +1317,7 @@ token the provider renewed is on the very next attempt.
 | answer | what happens |
 |---|---|
 | **403** "CSRF token validation failed", or a **401** to a mutation that holds no CSRF token yet | the wire's own CSRF recovery: a token fetched in the same session (its cookies kept) and one resend. None of this discards the session or opens another |
-| any other **401** — a mutation's with a CSRF token cached included — or a logon the system refused | put to `provider.rejected({ at, status?, error })`. On Ok the request is authorized again and sent **once more**, in the same session; on no, `AuthRefusedError` carrying SAP's 401 as its cause |
+| any other **401** — a mutation's with a CSRF token cached included — or a logon the system refused | put to `provider.rejected({ at, status?, error })`. On Ok the request is authorized again and sent **once more**, in the same session; on no, `AuthRefusedError` whose cause is a copy of SAP's 401 (`status`) |
 | the same refusal after an Ok | the verdict. The provider is not asked again — asking would invite a second renewal — and you get an `AuthRefusedError` saying the credential was refused again after the provider renewed it |
 | **403** | propagates untouched, never put to the provider. The server authenticated the caller and refused the action anyway, so a new credential is the same caller — usually the body names the authorization object |
 | anything else | untouched |
@@ -1362,8 +1362,9 @@ try {
   if (error instanceof AuthRefusedError) {
     // error.refusal is an IAuthProviderError: decide on its kind and facts;
     // .reason / .hint are the words to show (the message is `reason — hint`).
-    // error.at is 'prepare' | 'logon' | 'request'; error.cause is the provider's
-    // throw when it threw, else the wire's error.
+    // error.at is 'prepare' | 'logon' | 'request'; error.cause is a copy
+    // (`WireFailure`: code, status, rfc) of the provider's throw when it threw,
+    // else of the wire's error.
     if (error.refusal.kind === 'credential-refused') {
       // the credential itself was refused
     }
@@ -1373,16 +1374,20 @@ try {
 }
 ```
 
-`refusal` is the provider's, `cause` is the error the wire raised as it arrived,
+`refusal` is the provider's, `cause` says the error the wire raised by its facts,
 so a network failure stays visible even when a provider words it as a credential
-problem. A refusal is an `IAuthProviderError` minted by `@mcp-abap-adt/auth-errors`
+problem: an `Error` named `WireFailure`, its message `The failure: <facts>`, with
+`code`, `status` and `rfc` as fields — never the value itself, whose text may
+name a host and whose fields may hold the request's credential headers
+(24.0.1). The provider was handed the value as it arrived
+(`IAuthRejection.error`). A refusal is an `IAuthProviderError` minted by `@mcp-abap-adt/auth-errors`
 — frozen, with a `kind` and `facts` from closed allowlists; relay it, never copy
 it. Every provider answer is re-checked with `classifyOutcome`: a minted refusal
 passes as the same object, one from another copy of `auth-errors` is rebuilt,
 and anything else — a plain `{ reason }` from a JavaScript provider, a value that
 is no outcome — becomes `connection` / `provider-threw`, "the credential provider
 failed", its text in no message. A provider that throws is the same refusal,
-with the throw as the cause.
+with a copy of the throw as the cause.
 
 The connection's own refusals:
 

@@ -585,9 +585,10 @@ kernel's source module; the connection never quotes it — not in a call's
 failure, not in its log lines (a failed call, close or reset), not in a
 `WireLogonError`'s message (`The logon failed`), not when the conversation
 cannot be built (`The RFC conversation could not be built: <codeString>`), and
-not when sap-rfc-lite cannot be loaded. What the SDK said reaches you as `rfc`. The one exception is
-a refused logon's `cause`, which is the SDK's error as it arrived: the provider
-reads it (`IAuthRejection.error`).
+not when sap-rfc-lite cannot be loaded. What the SDK said reaches you as `rfc`.
+The provider is handed the SDK's error as it arrived (`IAuthRejection.error`),
+for its own reading; the `AuthRefusedError` you get carries a copy of it
+("What a failure carries", below).
 
 ```typescript
 import type { RfcReturnCodeName } from "@mcp-abap-adt/interfaces-adt-connection";
@@ -742,6 +743,33 @@ Earlier versions reported both 401 and 403 as
 error. Code matching on that message must branch on `error.response.status`
 instead — which it can now do, since the status is no longer thrown away.
 See [MIGRATION-4.0.md](./docs/MIGRATION-4.0.md).
+
+**What a failure carries** (24.0.1). An error the connection hands you says the
+failure by its typed facts and fixed words — never a thrown value's text, and
+never a request's config. A thrown value's text names hosts and ports (axios's
+`connect ECONNREFUSED <host>:<port>`, the RFC SDK's partner), and axios's error
+holds the request's config with its `Authorization`, `Cookie` and CSRF headers.
+
+- **An HTTP failure** is an `Error` with SAP's answer as `response` — `status`,
+  `statusText`, `headers`, `data`, as SAP gave them — and `status`, axios's
+  `code`, and the message `Request failed with status code <n>`. With no
+  answer: `code` (`ECONNREFUSED`, `ECONNABORTED`, …) and
+  `The request failed: <code>`. It is not axios's error: no `config`, no
+  `request`, no `isAxiosError`, no `cause`.
+- **`AuthRefusedError.cause`** is a copy of the wire's error (or of what the
+  provider threw): an `Error` named `WireFailure`, its message
+  `The failure: <facts>`, its facts as fields — `code`, `status`, `rfc`. The
+  provider was handed the wire's error as it arrived.
+- **A `WireLogonError`** that leaves `connect()` carries such a copy as its
+  `cause`.
+- **The WebSocket transport** hands its error handlers `<words>: <code>`, with
+  `code`.
+- **Log lines** say a failure the same way: its facts, or `no code was given`.
+
+Code that read `error.config`, `error.request`, `error.isAxiosError`, or tested
+`axios.isAxiosError(error)` / `instanceof AxiosError` on a connection's error
+reads `error.response`, `error.status` and `error.code` instead; code that read
+`AuthRefusedError.cause.response.status` reads `cause.status`.
 
 ### When the credential is refused
 
