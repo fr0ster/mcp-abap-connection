@@ -135,12 +135,12 @@ the provider's words, or the fixed "refused again" reason after its Ok — with 
 SDK's error only in `cause`. A caller that matched the SDK error to tell an
 unreachable system from a refused one reads `cause` now.
 
-> **Since 24.0.1** `AuthRefusedError.cause` is a copy, not the wire's error: an
+> **Since 25.0.0** `AuthRefusedError.cause` is a copy, not the wire's error: an
 > `Error` named `WireFailure` whose fields carry the facts — `code`, `status`,
 > SAP's answer as `response`, and the RFC SDK's fields as `rfc`
 > (`cause.rfc.codeString`, e.g. `RFC_COMMUNICATION_FAILURE`); its message is
 > `The failure: <facts>`, never the SDK's text. The provider still receives the
-> original, as `IAuthRejection.error`. See the CHANGELOG, 24.0.1, and the
+> original, as `IAuthRejection.error`. See [MIGRATION-25.0.md](./MIGRATION-25.0.md) and the
 > README, "What a failure carries".
 
 ## 5. Catch `AuthRefusedError`
@@ -187,7 +187,7 @@ class AuthRefusedError extends Error {
 - A provider that throws is treated as refusing with the reason "the credential
   provider failed" and the throw as `cause`.
 - A `403` is never put to the provider and never becomes an `AuthRefusedError`; it
-  reaches you unchanged, as before. (Since 24.0.1 an HTTP failure is not
+  reaches you unchanged, as before. (Since 25.0.0 an HTTP failure is not
   axios's error but an `Error` carrying SAP's answer as `response`, `status`
   and `code` — no `config`, no `request`.)
 

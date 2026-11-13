@@ -1166,7 +1166,7 @@ carries it; the wire never reads `config.username` or `config.password`.
 - A failed RFC open is thrown as `WireLogonError` with the SDK's own error as
   `cause`, so a provider can read the SDK's `key` and message. Its own message
   is fixed words (`The logon failed`, with the status when the wire has one),
-  never the cause's text (24.0.1).
+  never the cause's text (25.0.0).
 - **A failed RFC call carries `rfc`** (22.0.0): `{ key, group, code,
   codeString }` (`IRfcErrorInfo`, `codeString` one of `RFC_RCS`, both from
   `@mcp-abap-adt/interfaces-adt-connection`), checked once where the wire
@@ -1175,7 +1175,7 @@ carries it; the wire never reads `config.username` or `config.password`.
   every conversation, stateful or not. The message is the call's, in fixed
   words built from `rfc` — `RFC call to SADT_REST_RFC_ENDPOINT failed:
   <codeString>`, or `… failed: the SDK did not name the failure` without `rfc`
-  (24.0.1; before, it quoted the SDK's text, which names the partner's
+  (25.0.0; before, it quoted the SDK's text, which names the partner's
   `host:port`, the time and the kernel's source module). The connection's log
   lines about a failed call, close or reset say the same words. The top-level
   `code` is not set —
@@ -1379,7 +1379,7 @@ so a network failure stays visible even when a provider words it as a credential
 problem: an `Error` named `WireFailure`, its message `The failure: <facts>`, with
 `code`, `status`, `rfc` and SAP's answer (`response`) as fields — never the value itself, whose text may
 name a host and whose fields may hold the request's credential headers
-(24.0.1). The provider was handed the value as it arrived
+(25.0.0). The provider was handed the value as it arrived
 (`IAuthRejection.error`). A refusal is an `IAuthProviderError` minted by `@mcp-abap-adt/auth-errors`
 — frozen, with a `kind` and `facts` from closed allowlists; relay it, never copy
 it. Every provider answer is re-checked with `classifyOutcome`: a minted refusal

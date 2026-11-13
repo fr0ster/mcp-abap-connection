@@ -7,13 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [24.0.1] - 2026-11-13
+## [25.0.0] - 2026-11-13
 
 No error the connection hands out, and no line it logs, carries a thrown
 value's text or a request's config: on every wire a failure is said by its
 typed facts (`code`, `status`, `rfc`, SAP's answer as `response`) and fixed
-words. Code that read axios's own fields off a connection's error must read
-the facts instead (below; README, "What a failure carries").
+words. A security fix, and breaking for code that read axios's own fields off
+a connection's error or compared `AuthRefusedError.cause` with the original.
+See [docs/MIGRATION-25.0.md](docs/MIGRATION-25.0.md).
+
+### Changed — breaking
+
+- **An HTTP failure is no longer the axios error.** It is an `Error` carrying
+  SAP's answer as `response` (`status`, `statusText`, `headers`, `data`, as
+  SAP gave them), `status` and `code`. It has no `config`, no `request`, no
+  `isAxiosError` and no `cause`: `axios.isAxiosError(error)` and
+  `instanceof AxiosError` are `false`.
+- **`AuthRefusedError.cause` is a `WireFailure` copy**, typed
+  `FailureCopy | undefined` (was `unknown`): `code`, `status`, `rfc`,
+  `response` and the message `The failure: <facts>`. `cause === original` no
+  longer holds; the provider still receives the original as
+  `IAuthRejection.error`.
 
 ### Fixed — security
 
@@ -71,16 +85,6 @@ the facts instead (below; README, "What a failure carries").
   security session that could not be opened — say the failure's facts, or
   `no code was given`, never its message. An unparsable configuration URL is
   not quoted.
-
-### Migration
-
-- `error.config`, `error.request`, `error.isAxiosError`,
-  `axios.isAxiosError(error)` and `instanceof AxiosError` no longer apply to a
-  connection's error: read `error.response` (unchanged: SAP's status, reason,
-  headers and body), `error.status` and `error.code`.
-- `AuthRefusedError.cause` is never the original object (`cause === original`
-  no longer holds); its `response` is SAP's answer, without axios's `config`
-  and `request`.
 
 ## [24.0.0] - 2026-11-12
 
@@ -3103,8 +3107,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v24.0.1...HEAD
-[24.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v24.0.0...v24.0.1
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.0...HEAD
+[25.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v24.0.0...v25.0.0
 [24.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v23.0.0...v24.0.0
 [23.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.1...v23.0.0
 [22.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.0...v22.0.1

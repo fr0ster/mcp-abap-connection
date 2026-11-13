@@ -10,7 +10,7 @@ It said that for a **401** and for a **403** alike, and it threw the original `A
 along with the status and the body. Now the server's error reaches the caller unchanged, and only
 a 401 is treated as a credential problem.
 
-> **Since 24.0.1** the error is not the `AxiosError` itself but an `Error` carrying SAP's answer
+> **Since 25.0.0** the error is not the `AxiosError` itself but an `Error` carrying SAP's answer
 > as `response` (status, reason, headers, body), `status` and `code` — no `config`, no `request`.
 > `error.response?.status`, as below, reads it the same way.
 
