@@ -23,11 +23,13 @@ import {
   AuthRefusedError,
   type GuardedAnswer,
   NO_CREDENTIAL_TO_RENEW,
+  outwardLogonError,
   refusedAgain,
   WireLogonError,
   WireSessionLostError,
 } from './authErrors.js';
 import { CSRF_ERROR_MESSAGES } from './csrfConfig.js';
+import { factWords } from './failureFacts.js';
 import {
   type IAdtSessionContext,
   type IAdtTransport,
@@ -312,8 +314,9 @@ abstract class AbstractAbapConnection
       try {
         this.baseUrl = new URL(config.url).origin;
       } catch (error) {
+        // Not quoted: the URL may carry a user and a password.
         throw new Error(
-          `Invalid URL in configuration: ${error instanceof Error ? error.message : error}`,
+          `Invalid URL in configuration: it could not be parsed (${factWords(error)})`,
         );
       }
     }
@@ -467,6 +470,14 @@ abstract class AbstractAbapConnection
     // instance.
     if (this.spent) throw spentError();
     const baselineEpoch = this.lifecycle.teardownEpoch;
+    // A refused logon the connection did not answer with the provider's word
+    // leaves without the wire's raw error (`outwardLogonError`).
+    await this.connectOnce(baselineEpoch).catch((error: unknown) => {
+      throw outwardLogonError(error);
+    });
+  }
+
+  private async connectOnce(baselineEpoch: number): Promise<void> {
     await this.lifecycle.transition('connect', async () => {
       // Again here: a disconnect() queued ahead of this connect — called in
       // the same turn, before it — spends the instance only when its
@@ -769,7 +780,7 @@ abstract class AbstractAbapConnection
     }
     const answered = closing.catch((error: unknown) => {
       this.logger?.debug(
-        `Could not tell the server the session is finished: ${error instanceof Error ? error.message : String(error)}`,
+        `Could not tell the server the session is finished: ${factWords(error)}`,
       );
     });
     // A close that is over is past its write: it sent nothing, it failed to
@@ -1377,6 +1388,8 @@ abstract class AbstractAbapConnection
     const lease = this.lifecycle.admitRequest();
     try {
       return await this.performRequest<T, D>(options, lease);
+    } catch (error) {
+      throw outwardLogonError(error);
     } finally {
       lease.release();
     }
@@ -1719,7 +1732,8 @@ abstract class AbstractAbapConnection
       data?: string;
     } = {
       type: 'REQUEST_ERROR',
-      message: error instanceof Error ? error.message : String(error),
+      // The failure's facts, never its text: a network error's names the host.
+      message: `Request failed: ${factWords(error)}`,
       url: requestUrl,
       method: normalizedMethod,
       status: refusalOf(error)?.status,
@@ -1827,11 +1841,7 @@ abstract class AbstractAbapConnection
         }
         this.logQuietly(() =>
           this.logger?.debug(
-            `CSRF retry failed; rethrowing original error: ${
-              retryError instanceof Error
-                ? retryError.message
-                : String(retryError)
-            }`,
+            `CSRF retry failed; rethrowing original error: ${factWords(retryError)}`,
           ),
         );
         throw error;
@@ -2076,7 +2086,7 @@ abstract class AbstractAbapConnection
         if (error instanceof AuthRefusedError) throw error;
         if (!(error instanceof WireLogonError)) {
           this.logger?.debug(
-            `Could not fetch CSRF token upfront, will retry on error: ${error instanceof Error ? error.message : String(error)}`,
+            `Could not fetch CSRF token upfront, will retry on error: ${factWords(error)}`,
           );
           return;
         }

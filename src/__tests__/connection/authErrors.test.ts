@@ -32,15 +32,26 @@ describe('AuthRefusedError', () => {
     at: 'logon',
   });
 
-  it('carries the refusal, the moment and the cause', () => {
-    const cause = new Error('wire');
+  it('carries the refusal, the moment and the cause by its facts, never the value', () => {
+    const cause = Object.assign(new Error('wire PARTNER-SENTINEL'), {
+      code: 'ECONNREFUSED',
+      config: { headers: { Authorization: 'Basic SECRET-SENTINEL' } },
+    });
     const error = new AuthRefusedError(refused, 'logon', cause);
     assert.ok(error instanceof Error);
     assert.strictEqual(error.name, 'AuthRefusedError');
     assert.strictEqual(error.refusal, refused);
     assert.strictEqual(error.refusal.kind, 'credential-refused');
     assert.strictEqual(error.at, 'logon');
-    assert.strictEqual(error.cause, cause);
+    assert.notStrictEqual(error.cause, cause);
+    assert.deepStrictEqual(
+      { ...error.cause },
+      { name: 'WireFailure', code: 'ECONNREFUSED' },
+    );
+    assert.strictEqual(error.cause?.message, 'The failure: ECONNREFUSED');
+    const shown = inspect(error, { depth: 10, showHidden: true });
+    assert.ok(!shown.includes('SENTINEL'), shown);
+    assert.ok(!JSON.stringify(error).includes('SENTINEL'));
   });
 
   it('words its message as the reason alone when there is no hint', () => {

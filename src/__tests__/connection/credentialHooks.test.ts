@@ -137,7 +137,11 @@ describe('the credential hooks on a connector', () => {
       assert.strictEqual(error.at, at);
       assertMatchObject(error.refusal, PROVIDER_FAILED);
       assert.strictEqual(error.refusal.facts.at, at);
-      assert.strictEqual(error.cause, boom);
+      // What the provider threw, said by its facts: a copy, never the value.
+      assertMatchObject(error.cause, {
+        name: 'WireFailure',
+        message: 'The failure: no code was given',
+      });
     }
     const answer = await conn.credentialRejected({ at: 'request', error: 1 });
     assertMatchObject(answer.outcome, {

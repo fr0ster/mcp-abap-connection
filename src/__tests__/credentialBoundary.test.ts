@@ -109,7 +109,7 @@ describe('a credential the server refuses', () => {
             reason:
               'the credential was refused again after the provider renewed it',
           },
-          cause: { response: { status: 401 } },
+          cause: { name: 'WireFailure', status: 401 },
         });
         return true;
       },

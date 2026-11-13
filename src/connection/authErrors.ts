@@ -9,6 +9,7 @@ import type {
   IRfcErrorInfo,
 } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { AuthOutcome, IAuthRefusal } from '@mcp-abap-adt/interfaces-auth';
+import { type FailureCopy, failureCopy } from './failureFacts.js';
 
 /** When in the connection's life the credential refused. */
 export type AuthRefusalMoment = 'prepare' | 'logon' | 'request';
@@ -21,14 +22,18 @@ export type AuthRefusalMoment = 'prepare' | 'logon' | 'request';
  * (or the connection's own), classified on the way in: a refusal that is not
  * this copy's minted error is rebuilt from its kind and facts, or else is
  * `provider-threw` — decide on its `kind` and `facts`; the message is its
- * `reason — hint`. `cause` keeps the wire's error as it arrived, so a network failure stays visible even when a provider words it as
- * a credential problem — unless the provider threw instead of answering, when
- * it is that throw.
+ * `reason — hint`. `cause` says the wire's error — or, when the provider threw
+ * instead of answering, that throw — by its facts, so a network failure stays
+ * visible even when a provider words it as a credential problem: a copy
+ * (`failureCopy`) in fixed words with its `code`, `status` and `rfc`, never
+ * the value itself — an RFC SDK's text names the partner's host and port, an
+ * axios error holds the request's credential headers. The provider was handed
+ * the wire's error as it arrived (`IAuthRejection.error`).
  */
 export class AuthRefusedError extends Error {
   readonly refusal: IAuthRefusal;
   readonly at: AuthRefusalMoment;
-  override readonly cause?: unknown;
+  override readonly cause: FailureCopy | undefined;
 
   constructor(refusal: IAuthRefusal, at: AuthRefusalMoment, cause?: unknown) {
     const checked = checkedRefusal(refusal, at);
@@ -38,7 +43,7 @@ export class AuthRefusedError extends Error {
     this.name = 'AuthRefusedError';
     this.refusal = checked;
     this.at = at;
-    this.cause = cause;
+    this.cause = failureCopy(cause);
   }
 }
 
@@ -66,7 +71,9 @@ function checkedRefusal(
  * Exported so a consumer's own wire can say the same thing. `cause` is the raw
  * error, the same object, never re-wrapped: the provider reads it
  * (`IAuthRejection.error`). The message is fixed words and the status, never
- * the cause's text — an RFC SDK's names the partner it dialled.
+ * the cause's text — an RFC SDK's names the partner it dialled. It is the
+ * wire's mark to the connection: the connection hands a consumer none with a
+ * raw cause (`outwardLogonError`).
  */
 export class WireLogonError extends Error {
   readonly status?: number;
@@ -82,6 +89,18 @@ export class WireLogonError extends Error {
     this.cause = cause;
     this.status = status;
   }
+}
+
+/**
+ * A `WireLogonError` as it may leave the connection: the same status, its
+ * cause a copy in fixed words with its facts (`failureCopy`), never the wire's
+ * raw error — which the provider was handed, and which may hold an RFC SDK's
+ * text or a request's credential headers. Anything else is returned as it is.
+ */
+export function outwardLogonError(error: unknown): unknown {
+  return error instanceof WireLogonError
+    ? new WireLogonError(failureCopy(error.cause), error.status)
+    : error;
 }
 
 /**

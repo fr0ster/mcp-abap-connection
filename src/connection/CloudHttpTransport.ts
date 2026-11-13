@@ -33,6 +33,7 @@
 
 import { mergeCookieHeaders } from '../utils/cookies.js';
 import { AuthRefusedError } from './authErrors.js';
+import { factWords } from './failureFacts.js';
 import { HttpTransport } from './HttpTransport.js';
 import type { IAdtSessionContext, ICloudTransport } from './IAdtTransport.js';
 
@@ -144,7 +145,7 @@ export class CloudHttpTransport
       // follows says so with the whole picture; an error raised from a
       // preflight would replace that with something less useful.
       this.logger?.debug(
-        `Could not open a security session: ${error instanceof Error ? error.message : String(error)}`,
+        `Could not open a security session: ${factWords(error)}`,
       );
     }
   }

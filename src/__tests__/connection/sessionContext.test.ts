@@ -312,7 +312,8 @@ describe('a 401 while establishing', () => {
       REFUSAL,
     );
     assertMatchObject(instanceOf(error, AuthRefusedError).cause, {
-      response: { status: 401 },
+      name: 'WireFailure',
+      status: 401,
     });
     assert.strictEqual(rejections().length, 1);
     assert.strictEqual(conn.isConnected(), false);
@@ -337,7 +338,11 @@ describe('a 401 while establishing', () => {
       instanceOf(error, AuthRefusedError).refusal,
       PROVIDER_FAILED,
     );
-    assert.strictEqual(instanceOf(error, AuthRefusedError).cause, boom);
+    // What the provider threw, said by its facts: a copy, never the value.
+    assertMatchObject(instanceOf(error, AuthRefusedError).cause, {
+      name: 'WireFailure',
+      message: 'The failure: no code was given',
+    });
     assert.strictEqual(rejections().length, 1);
     assert.strictEqual(conn.isConnected(), false);
   });
