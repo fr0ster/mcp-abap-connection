@@ -1164,15 +1164,21 @@ carries it; the wire never reads `config.username` or `config.password`.
   and a provider that writes no logon parameters (a bearer token) cannot log on
   over RFC: the open fails, the provider is asked, and you get its refusal.
 - A failed RFC open is thrown as `WireLogonError` with the SDK's own error as
-  `cause`, so a provider can read the SDK's `key` and message.
+  `cause`, so a provider can read the SDK's `key` and message. Its own message
+  is fixed words (`The logon failed`, with the status when the wire has one),
+  never the cause's text (24.0.1).
 - **A failed RFC call carries `rfc`** (22.0.0): `{ key, group, code,
   codeString }` (`IRfcErrorInfo`, `codeString` one of `RFC_RCS`, both from
   `@mcp-abap-adt/interfaces-adt-connection`), checked once where the wire
   receives the SDK's error — own data properties only, nothing read out of a
   message. An error the SDK did not name carries no `rfc`. `rfc` is carried on
-  every conversation, stateful or not. The message is the call's
-  (`RFC call to SADT_REST_RFC_ENDPOINT failed: …`, ending in fixed words when
-  the thrown value cannot be described) and the top-level `code` is not set —
+  every conversation, stateful or not. The message is the call's, in fixed
+  words built from `rfc` — `RFC call to SADT_REST_RFC_ENDPOINT failed:
+  <codeString>`, or `… failed: the SDK did not name the failure` without `rfc`
+  (24.0.1; before, it quoted the SDK's text, which names the partner's
+  `host:port`, the time and the kernel's source module). The connection's log
+  lines about a failed call, close or reset say the same words. The top-level
+  `code` is not set —
   except when the error ended the stateful conversation: then the message is
   the session-lost one ("The RFC conversation that carried this connection's
   SAP session has ended; …") and `code` is `ADT_SESSION_REPLACED`, the instance

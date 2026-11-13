@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [24.0.1] - 2026-11-13
+
+### Fixed — security
+
+- **An RFC failure carries the SDK's typed fields, never its text.** A failed
+  call's message quoted the NW RFC SDK's free text —
+  `RFC call to SADT_REST_RFC_ENDPOINT failed: {"message":"partner '<host>:<port>' …"}`,
+  with the gateway's address, the time and the kernel's source module — and a
+  consumer handed that message on. It is now fixed words built from `rfc`:
+  `RFC call to SADT_REST_RFC_ENDPOINT failed: <codeString>` (one of `RFC_RCS`),
+  or `… failed: the SDK did not name the failure` when the SDK named none. The
+  `rfc` field (`key`, `group`, `code`, `codeString`) and the top-level `code`
+  are unchanged; the session-lost verdict's words were fixed already.
+- The same for the log lines: a failed call (`RFC call failed: <codeString>`),
+  a failed close (`RFC close error: …`) and a failed reset (`RFC reset failed,
+  dropping the conversation: …`) name the return code only.
+- `WireLogonError`'s message is fixed words — `The logon failed`, with
+  `(status <n>)` when the wire gives one — never its cause's message. Its
+  `cause` is the raw error as before, for the provider to read.
+- The error for a missing `@mcp-abap-adt/sap-rfc-lite` no longer quotes the
+  loader's text (paths on the machine).
+
 ## [24.0.0] - 2026-11-12
 
 The shared contract moves to `@mcp-abap-adt/interfaces-adt-connection` 5.
@@ -3028,7 +3050,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v24.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v24.0.1...HEAD
+[24.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v24.0.0...v24.0.1
 [24.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v23.0.0...v24.0.0
 [23.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.1...v23.0.0
 [22.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.0...v22.0.1

@@ -569,12 +569,22 @@ reports the failure, the `Error` the caller receives carries it as
 `rfc: { key, group, code, codeString }` (`IRfcErrorInfo`, typed by
 `IAbapConnectionError` in `@mcp-abap-adt/interfaces-adt-connection`;
 `codeString` is one of `RFC_RCS`). Read the failure from those, never from the
-message: a call's failure says `RFC call to SADT_REST_RFC_ENDPOINT failed: …`
-and sets no top-level `code`; when the error ended the stateful conversation,
-the message is the session-lost one and `code` is `ADT_SESSION_REPLACED`
-(below). `rfc` is carried either way, on every conversation. An error the SDK
-did not name — the closed-connection error, a refused passport — carries no
-`rfc`.
+message: a call's failure says `RFC call to SADT_REST_RFC_ENDPOINT failed:
+<codeString>` (for example `… failed: RFC_COMMUNICATION_FAILURE`) and sets no
+top-level `code`; when the error ended the stateful conversation, the message
+is the session-lost one and `code` is `ADT_SESSION_REPLACED` (below). `rfc` is
+carried either way, on every conversation. An error the SDK did not name — the
+closed-connection error, a refused passport — carries no `rfc`, and its
+message ends `… failed: the SDK did not name the failure`.
+
+**No text of the SDK's reaches a message or a log line** (24.0.1). The NW RFC
+SDK's own text names the partner it dialled (`host:port`), the time and the
+kernel's source module; the connection never quotes it — not in a call's
+failure, not in its log lines (a failed call, close or reset), not in a
+`WireLogonError`'s message (`The logon failed`), and not when sap-rfc-lite
+cannot be loaded. What the SDK said reaches you as `rfc`. The one exception is
+a refused logon's `cause`, which is the SDK's error as it arrived: the provider
+reads it (`IAuthRejection.error`).
 
 ```typescript
 import type { RfcReturnCodeName } from "@mcp-abap-adt/interfaces-adt-connection";
