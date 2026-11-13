@@ -64,14 +64,20 @@ function checkedRefusal(
  * do about it is the provider's answer, not the wire's.
  *
  * Exported so a consumer's own wire can say the same thing. `cause` is the raw
- * error, the same object, never re-wrapped.
+ * error, the same object, never re-wrapped: the provider reads it
+ * (`IAuthRejection.error`). The message is fixed words and the status, never
+ * the cause's text — an RFC SDK's names the partner it dialled.
  */
 export class WireLogonError extends Error {
   readonly status?: number;
   override readonly cause: unknown;
 
   constructor(cause: unknown, status?: number) {
-    super(cause instanceof Error ? cause.message : String(cause));
+    super(
+      status === undefined
+        ? 'The logon failed'
+        : `The logon failed (status ${status})`,
+    );
     this.name = 'WireLogonError';
     this.cause = cause;
     this.status = status;

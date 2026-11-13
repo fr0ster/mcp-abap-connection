@@ -104,8 +104,8 @@ describe('the RFC wire, when the stateful conversation dies', () => {
     assert.strictEqual(nth(made, 0).closes, 0);
   });
 
-  it('a thrown value whose formatting throws does not bypass the verdict', async () => {
-    // JSON.stringify runs an enumerable getter; this one throws.
+  it('a thrown value with a getter that throws does not bypass the verdict', async () => {
+    // Serialising the value would run the getter; nothing reads it.
     const hostile: Record<string, unknown> = {
       ...rfcClosedError(),
       get detail(): string {
@@ -122,7 +122,7 @@ describe('the RFC wire, when the stateful conversation dies', () => {
     assert.deepStrictEqual(error.rfc, RFC_CLOSED_FIELDS);
     assert.strictEqual(
       error.message,
-      'RFC call to SADT_REST_RFC_ENDPOINT failed: the failure could not be described',
+      'RFC call to SADT_REST_RFC_ENDPOINT failed: RFC_CLOSED',
     );
     assert.ok(!error.message.includes('getter'));
     assert.strictEqual(transport.sessionEstablished(), false);

@@ -105,11 +105,11 @@ export function rfcConversationFrom(
       // Dynamic, because the SDK is an optional peer: it needs the SAP NW RFC
       // SDK installed on the machine, and most consumers travel over HTTP.
       Client = require('@mcp-abap-adt/sap-rfc-lite').Client;
-    } catch (error) {
+    } catch {
+      // The loader's words are not quoted: they name paths on this machine.
       throw new Error(
         '@mcp-abap-adt/sap-rfc-lite is not available. To take the RFC wire, ' +
-          'install the SAP NW RFC SDK and run: npm install @mcp-abap-adt/sap-rfc-lite. ' +
-          `Details: ${error instanceof Error ? error.message : String(error)}`,
+          'install the SAP NW RFC SDK and run: npm install @mcp-abap-adt/sap-rfc-lite.',
       );
     }
     return new Client({ ...params, ...logon });

@@ -6,7 +6,8 @@
  * The SDK's error comes from outside the type system: it is checked once, where
  * the wire receives it. Only own data properties count, no getter runs, a
  * hostile object reads as no shape, and the return code must be one of the
- * closed list `RFC_RCS`. Everything else goes as before, its text only.
+ * closed list `RFC_RCS`. Everything else goes in fixed words, no rfc and no
+ * text of the thrown value's.
  */
 
 import assert from 'node:assert/strict';
@@ -107,7 +108,7 @@ describe('a failed RFC call carries the SDK error as fields', () => {
         codeString: 'RFC_CLOSED',
       });
       assert.ok(Object.isFrozen(rfcOf(error)));
-      assert.strictEqual(error.message, FAILED + JSON.stringify(rejection));
+      assert.strictEqual(error.message, `${FAILED}RFC_CLOSED`);
     });
   }
 
@@ -164,8 +165,8 @@ describe('a rejection that is not the SDK error shape carries no rfc', () => {
       const { [field]: value, ...rest } = rfcLibError();
       let ran = false;
       const rejection: Record<string, unknown> = { ...rest };
-      // Not enumerable, so the message (which serialises the object) does not
-      // run it either: what is proven is that the check did not.
+      // Not enumerable, so nothing that serialises the object runs it either:
+      // what is proven is that the check did not.
       Object.defineProperty(rejection, field, {
         enumerable: false,
         get: () => {
@@ -198,8 +199,8 @@ describe('a rejection that is not the SDK error shape carries no rfc', () => {
     const hostile = new Proxy(
       {},
       {
-        // The trap the check meets. No `get` trap: the message serialises the
-        // object as before, and what is proven here is the check alone.
+        // The trap the check meets. No `get` trap: what is proven here is the
+        // check alone.
         getOwnPropertyDescriptor: () => {
           throw new Error('trap');
         },
