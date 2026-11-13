@@ -476,6 +476,39 @@ describe('a conversation the factory could not build is said in fixed words', ()
   });
 });
 
+describe('a missing SDK reaches the caller of open() in its own words', () => {
+  it('the install guidance is kept, the loader’s text is not quoted', async () => {
+    const config: ISapRfcConfig = {
+      connectionType: 'rfc',
+      authType: 'basic',
+      ashost: 'saphost',
+      sysnr: '00',
+      client: '100',
+      language: 'EN',
+    };
+    const transport = new RfcTransport(rfcConversationFrom(config), null);
+    let error: Error | undefined;
+    await withModuleAsync(
+      '@mcp-abap-adt/sap-rfc-lite',
+      {
+        get Client(): never {
+          throw new Error(SDK_TEXT);
+        },
+      },
+      async () => {
+        error = await rejection(transport.open());
+      },
+    );
+
+    assert.ok(error);
+    assert.strictEqual(
+      error.message,
+      '@mcp-abap-adt/sap-rfc-lite is not available. To take the RFC wire, install the SAP NW RFC SDK and run: npm install @mcp-abap-adt/sap-rfc-lite.',
+    );
+    assertNoSdkText(error, 'the error');
+  });
+});
+
 describe('a missing SDK is said without the loader’s text', () => {
   it('the require failure’s words are not quoted', () => {
     const config: ISapRfcConfig = {

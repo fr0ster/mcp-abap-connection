@@ -70,6 +70,7 @@ import type {
   IAdtTransportResponse,
   IOnPremTransport,
 } from './IAdtTransport.js';
+import { isFactoryOwnWords } from './rfcConversation.js';
 import { isStatefulRequest } from './statefulRequest.js';
 
 /**
@@ -942,7 +943,8 @@ export class RfcTransport implements IOnPremTransport {
    * A factory that throws while building the conversation — the SDK's client
    * constructor, or a consumer's factory — is not a logon: nothing was sent.
    * It is said in fixed words with the SDK's fields as `rfc`, never the
-   * thrown value's text.
+   * thrown value's text — except the shipped factory's own fixed words, which
+   * go as they are.
    */
   private async openedWith(
     parameters: Readonly<Record<string, string>>,
@@ -951,6 +953,9 @@ export class RfcTransport implements IOnPremTransport {
     try {
       conversation = this.connect(parameters);
     } catch (e) {
+      // The shipped factory's own words (sap-rfc-lite missing, and what to
+      // install) quote nothing, and say more than these would.
+      if (isFactoryOwnWords(e)) throw e;
       const rfc = rfcErrorOf(e);
       throw rfcCallError(
         `The RFC conversation could not be built: ${rfc?.codeString ?? UNNAMED}`,

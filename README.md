@@ -573,9 +573,11 @@ message: a call's failure says `RFC call to SADT_REST_RFC_ENDPOINT failed:
 <codeString>` (for example `… failed: RFC_COMMUNICATION_FAILURE`) and sets no
 top-level `code`; when the error ended the stateful conversation, the message
 is the session-lost one and `code` is `ADT_SESSION_REPLACED` (below). `rfc` is
-carried either way, on every conversation. An error the SDK did not name — the
-closed-connection error, a refused passport — carries no `rfc`, and its
-message ends `… failed: the SDK did not name the failure`.
+carried either way, on every conversation. A call's error the SDK did not
+name — the closed-connection error, a passport sap-rfc-lite refuses — carries
+no `rfc`, and its message ends `… failed: the SDK did not name the failure`.
+(A `SAP-PASSPORT` header that is not hex is refused before any call, in its
+own words.)
 
 **No text of the SDK's reaches a message or a log line** (24.0.1). The NW RFC
 SDK's own text names the partner it dialled (`host:port`), the time and the
