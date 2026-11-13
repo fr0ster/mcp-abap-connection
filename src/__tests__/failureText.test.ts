@@ -812,6 +812,26 @@ describe('the WebSocket transport hands its handlers fixed words and the code', 
     assertClean(error, 'the error');
   });
 
+  it('a connection error whose code is down its cause chain keeps the code as a field', async () => {
+    const { socket, factory } = socketFactory();
+    const transport = new GenericWebSocketTransport(factory);
+    const connecting = rejection(transport.connect('wss://sap.test/ws'));
+    socket.onerror?.(
+      new Error(`socket failed ${HOST}`, { cause: networkFailure() }),
+    );
+    const error = await connecting;
+
+    assert.strictEqual(
+      error.message,
+      'WebSocket connection error: ECONNREFUSED',
+    );
+    assert.strictEqual(
+      Object.getOwnPropertyDescriptor(error, 'code')?.value,
+      'ECONNREFUSED',
+    );
+    assertClean(error, 'the error');
+  });
+
   it('a send that throws', async () => {
     const { socket, factory } = socketFactory();
     socket.send = () => {

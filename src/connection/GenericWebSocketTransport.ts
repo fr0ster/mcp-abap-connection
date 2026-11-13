@@ -5,7 +5,7 @@ import type {
   IWebSocketMessageHandler,
   IWebSocketTransport,
 } from '@mcp-abap-adt/interfaces-network';
-import { codeOf, factWords } from './failureFacts.js';
+import { factsOf, factWords } from './failureFacts.js';
 
 /**
  * Minimal WS-like instance contract to avoid hard dependency on a specific WS library.
@@ -181,15 +181,15 @@ export class GenericWebSocketTransport implements IWebSocketTransport {
   }
 
   /**
-   * What reaches an error handler: `words` and the failure's facts (its code),
-   * never what the socket library or the parser said — a connection error's
-   * text names the host, a parse error's quotes the message.
+   * What reaches an error handler: `words` and the failure's facts (`code`,
+   * its own or one down its `cause` chain; `status`, `rfc`, `response`) as
+   * fields, never what the socket library or the parser said — a connection
+   * error's text names the host, a parse error's quotes the message.
    */
   private normalizeError(error: unknown, words: string): Error {
-    const code = codeOf(error);
     return Object.assign(
       new Error(`${words}: ${factWords(error)}`),
-      code !== undefined ? { code } : {},
+      factsOf(error),
     );
   }
 
