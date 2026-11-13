@@ -1377,7 +1377,7 @@ try {
 `refusal` is the provider's, `cause` says the error the wire raised by its facts,
 so a network failure stays visible even when a provider words it as a credential
 problem: an `Error` named `WireFailure`, its message `The failure: <facts>`, with
-`code`, `status` and `rfc` as fields — never the value itself, whose text may
+`code`, `status`, `rfc` and SAP's answer (`response`) as fields — never the value itself, whose text may
 name a host and whose fields may hold the request's credential headers
 (24.0.1). The provider was handed the value as it arrived
 (`IAuthRejection.error`). A refusal is an `IAuthProviderError` minted by `@mcp-abap-adt/auth-errors`

@@ -754,22 +754,28 @@ holds the request's config with its `Authorization`, `Cookie` and CSRF headers.
   `statusText`, `headers`, `data`, as SAP gave them — and `status`, axios's
   `code`, and the message `Request failed with status code <n>`. With no
   answer: `code` (`ECONNREFUSED`, `ECONNABORTED`, …) and
-  `The request failed: <code>`. It is not axios's error: no `config`, no
-  `request`, no `isAxiosError`, no `cause`.
+  `The request failed: <code>` — the code its own, else the first down its
+  `cause` chain. It is not axios's error: no `config`, no `request`, no
+  `isAxiosError`, no `cause`.
 - **`AuthRefusedError.cause`** is a copy of the wire's error (or of what the
   provider threw): an `Error` named `WireFailure`, its message
-  `The failure: <facts>`, its facts as fields — `code`, `status`, `rfc`. The
-  provider was handed the wire's error as it arrived.
+  `The failure: <facts>`, its facts as fields — `code` (its own, else one down
+  its `cause` chain), `status`, `rfc`, and SAP's answer as `response`. The
+  provider was handed the wire's error as it arrived — over HTTP the client's
+  own rejection, over RFC the SDK's error.
 - **A `WireLogonError`** that leaves `connect()` carries such a copy as its
   `cause`.
 - **The WebSocket transport** hands its error handlers `<words>: <code>`, with
   `code`.
 - **Log lines** say a failure the same way: its facts, or `no code was given`.
 
+A transport you write yourself (`IAdtTransport`) hands up what it throws: a
+failure that is not the credential's passes through the connection as your
+wire raised it, so its words are yours to choose.
+
 Code that read `error.config`, `error.request`, `error.isAxiosError`, or tested
 `axios.isAxiosError(error)` / `instanceof AxiosError` on a connection's error
-reads `error.response`, `error.status` and `error.code` instead; code that read
-`AuthRefusedError.cause.response.status` reads `cause.status`.
+reads `error.response`, `error.status` and `error.code` instead.
 
 ### When the credential is refused
 

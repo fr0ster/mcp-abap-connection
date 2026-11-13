@@ -292,8 +292,59 @@ describe('the HTTP wire hands up the facts of a failure, never axios’s error',
     assert.ok(error instanceof AuthRefusedError);
     assert.strictEqual(error.cause?.name, 'WireFailure');
     assert.strictEqual(error.cause?.status, 401);
+    // SAP's answer reaches the caller as SAP gave it, on the copy too.
+    assert.strictEqual(error.cause?.response?.status, 401);
+    assert.strictEqual(error.cause?.response?.statusText, 'Refused');
+    assert.strictEqual(error.cause?.response?.data, 'login');
     assertClean(error, 'the error');
     for (const line of lines) assertClean(line, 'a log line');
+  });
+
+  it('a 401: the provider is handed the HTTP client’s rejection as it arrived', async () => {
+    let refuse = false;
+    const raw = refusal(401, 'login');
+    const provider = stubProvider();
+    const stub = httpClientStub(async (request) => {
+      if (refuse) throw raw;
+      if (isDiscovery(request)) return ESTABLISHED;
+      return { status: 200 };
+    });
+    const conn = new AdtOnPremConnector(
+      config,
+      provider,
+      onPremHttpTransport(config, null, stub),
+      null,
+    );
+    await conn.connect();
+    refuse = true;
+
+    const error = await rejection(
+      conn.makeAdtRequest({ url: '/sap/bc/adt/x', method: 'GET', timeout: 1 }),
+    );
+
+    assert.strictEqual(provider.rejections[0]?.error, raw);
+    assert.strictEqual(provider.rejections[0]?.status, 401);
+    assertClean(error, 'the error');
+  });
+
+  it('a 401 at logon: the provider is handed the rejection as it arrived', async () => {
+    const raw = refusal(401, 'login');
+    const provider = stubProvider();
+    const stub = httpClientStub(async () => {
+      throw raw;
+    });
+    const conn = new AdtOnPremConnector(
+      config,
+      provider,
+      onPremHttpTransport(config, null, stub),
+      null,
+    );
+
+    const error = await rejection(conn.connect());
+
+    assert.strictEqual(provider.rejections[0]?.at, 'logon');
+    assert.strictEqual(provider.rejections[0]?.error, raw);
+    assertClean(error, 'the error');
   });
 
   it('a network failure while establishing: connect() rejects in fixed words', async () => {
@@ -566,6 +617,39 @@ describe('the connection’s log lines say a raw failure by its facts', () => {
   });
 });
 
+describe('a copy keeps every typed fact', () => {
+  it('an rfc field of the SDK’s shape, and a code down the cause chain', () => {
+    const rfc = {
+      key: 'RFC_CLOSED',
+      group: 4,
+      code: 6,
+      codeString: 'RFC_CLOSED',
+    };
+    const withRfc = new AuthRefusedError(
+      authError['credential-refused']({ credential: 'user-password' }),
+      'request',
+      Object.assign(new Error(`partner ${HOST}`), { rfc }),
+    );
+    assert.deepStrictEqual(withRfc.cause?.rfc, rfc);
+    assertClean(withRfc, 'the error');
+
+    const nested = new AuthRefusedError(
+      authError['credential-refused']({ credential: 'user-password' }),
+      'request',
+      new Error(`fetch failed ${HOST}`, {
+        cause: new Error('x', {
+          cause: Object.assign(new Error(`getaddrinfo ${HOST}`), {
+            code: 'ENOTFOUND',
+          }),
+        }),
+      }),
+    );
+    assert.strictEqual(nested.cause?.code, 'ENOTFOUND');
+    assert.strictEqual(nested.cause?.message, 'The failure: ENOTFOUND');
+    assertClean(nested, 'the error');
+  });
+});
+
 describe('a refused logon leaves the connection without the wire’s raw error', () => {
   it('outwardLogonError: the same mark, its cause a copy', () => {
     const raw = networkFailure();
@@ -711,6 +795,39 @@ describe('the WebSocket transport hands its handlers fixed words and the code', 
     };
     return { socket, factory: { create: () => socket } };
   }
+
+  it('a factory that throws building the socket', async () => {
+    const transport = new GenericWebSocketTransport({
+      create: () => {
+        throw networkFailure();
+      },
+    });
+
+    const error = await rejection(transport.connect('wss://sap.test/ws'));
+
+    assert.strictEqual(
+      error.message,
+      'WebSocket could not be created: ECONNREFUSED',
+    );
+    assertClean(error, 'the error');
+  });
+
+  it('a send that throws', async () => {
+    const { socket, factory } = socketFactory();
+    socket.send = () => {
+      throw networkFailure();
+    };
+    const transport = new GenericWebSocketTransport(factory);
+    const connecting = transport.connect('wss://sap.test/ws');
+    socket.readyState = 1;
+    socket.onopen?.({});
+    await connecting;
+
+    const error = await rejection(transport.send({ kind: 'request' }));
+
+    assert.strictEqual(error.message, 'WebSocket send failed: ECONNREFUSED');
+    assertClean(error, 'the error');
+  });
 
   it('a connection error', async () => {
     const { socket, factory } = socketFactory();

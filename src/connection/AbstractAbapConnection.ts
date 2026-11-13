@@ -29,7 +29,7 @@ import {
   WireSessionLostError,
 } from './authErrors.js';
 import { CSRF_ERROR_MESSAGES } from './csrfConfig.js';
-import { factWords } from './failureFacts.js';
+import { asArrived, factWords } from './failureFacts.js';
 import {
   type IAdtSessionContext,
   type IAdtTransport,
@@ -2038,11 +2038,17 @@ abstract class AbstractAbapConnection
    * and what it may do is not something renewing it changes.
    */
   private credentialRejection(error: unknown): IAuthRejection | null {
+    // The provider reads the wire's error as it arrived (`asArrived`): the
+    // HTTP client's own rejection, not the copy a consumer is handed.
     if (error instanceof WireLogonError) {
-      return { at: 'logon', status: error.status, error: error.cause };
+      return {
+        at: 'logon',
+        status: error.status,
+        error: asArrived(error.cause),
+      };
     }
     if (refusalOf(error)?.status === 401) {
-      return { at: 'request', status: 401, error };
+      return { at: 'request', status: 401, error: asArrived(error) };
     }
     return null;
   }

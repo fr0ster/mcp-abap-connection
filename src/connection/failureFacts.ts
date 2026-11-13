@@ -96,6 +96,45 @@ export function codeOf(thrown: unknown): string | undefined {
   }
 }
 
+/** How deep a `cause` chain is followed for a code. */
+const CAUSE_DEPTH = 4;
+
+/**
+ * The code a thrown value carries: its own (`codeOf`), else the first one down
+ * its `cause` chain (own data properties, at most four deep) — a client that
+ * wraps a socket's failure (`fetch failed`, its cause `ECONNREFUSED`) says it
+ * there.
+ */
+export function failureCode(thrown: unknown): string | undefined {
+  let current: unknown = thrown;
+  for (let depth = 0; depth <= CAUSE_DEPTH; depth += 1) {
+    const code = codeOf(current);
+    if (code !== undefined) return code;
+    if (typeof current !== 'object' || current === null) return undefined;
+    try {
+      current = ownData(current, 'cause');
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The RFC SDK's fields a thrown value carries: its own shape (the SDK's
+ * error), else an `rfc` field of that shape (an error this package raised).
+ */
+function rfcFieldsOf(thrown: unknown): IRfcErrorInfo | undefined {
+  const own = rfcErrorOf(thrown);
+  if (own !== undefined) return own;
+  if (typeof thrown !== 'object' || thrown === null) return undefined;
+  try {
+    return rfcErrorOf(ownData(thrown, 'rfc'));
+  } catch {
+    return undefined;
+  }
+}
+
 /** An HTTP status: an integer from 100 to 599. */
 function isStatus(value: unknown): value is number {
   return isInteger(value) && value >= 100 && value <= 599;
@@ -124,19 +163,23 @@ export interface FailureFacts {
   readonly code?: string;
   readonly status?: number;
   readonly rfc?: IRfcErrorInfo;
+  /** SAP's answer, as SAP gave it: status, reason, headers, body. */
+  readonly response?: IAdtTransportResponse;
 }
 
 /** Every fact `thrown` carries, each checked; none of its text. */
 export function factsOf(thrown: unknown): FailureFacts {
-  const rfc = rfcErrorOf(thrown);
+  const rfc = rfcFieldsOf(thrown);
   // An RFC error's `code` is the SDK's number, said by `rfc`; a code is a
   // string, so it is not read twice.
-  const code = codeOf(thrown);
+  const code = failureCode(thrown);
   const status = statusOf(thrown);
+  const response = answerOf(thrown);
   return {
     ...(code !== undefined ? { code } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(rfc !== undefined ? { rfc } : {}),
+    ...(response !== undefined ? { response } : {}),
   };
 }
 
@@ -162,8 +205,9 @@ export type FailureCopy = Error & IAbapConnectionError & FailureFacts;
 /**
  * A copy of `thrown` a consumer may stringify or inspect: an `Error` named
  * `WireFailure`, its message `The failure: <facts>`, and its facts as fields
- * (`code`, `status`, `rfc`). No message, stack, cause, config or other field
- * of `thrown` is kept. `undefined` stays `undefined`.
+ * (`code`, `status`, `rfc`, SAP's answer as `response`). No message, stack,
+ * cause, config or other field of `thrown` is kept. `undefined` stays
+ * `undefined`.
  */
 export function failureCopy(thrown: unknown): FailureCopy | undefined {
   if (thrown === undefined) return undefined;
@@ -217,15 +261,34 @@ function answerOf(thrown: unknown): IAdtTransportResponse | undefined {
  */
 export function httpFailure(thrown: unknown): HttpFailure {
   const response = answerOf(thrown);
-  const code = codeOf(thrown);
+  const code = failureCode(thrown);
   const error = new Error(
     response !== undefined
       ? `Request failed with status code ${response.status}`
       : `The request failed: ${code ?? 'it got no answer'}`,
   );
-  return Object.assign(
+  const failure = Object.assign(
     error,
     code !== undefined ? { code } : {},
     response !== undefined ? { status: response.status, response } : {},
   );
+  ARRIVED.set(failure, thrown);
+  return failure;
+}
+
+/**
+ * The value each `httpFailure` was made from, for the provider alone: what a
+ * provider reads is the wire's error as it arrived (`IAuthRejection.error`).
+ * Module-private, so nothing outside this package reaches it.
+ */
+const ARRIVED = new WeakMap<object, unknown>();
+
+/**
+ * The wire's error as it arrived: the value an `httpFailure` was made from,
+ * or `value` itself. For `IAuthRejection.error` only — never for a consumer.
+ */
+export function asArrived(value: unknown): unknown {
+  return typeof value === 'object' && value !== null && ARRIVED.has(value)
+    ? ARRIVED.get(value)
+    : value;
 }

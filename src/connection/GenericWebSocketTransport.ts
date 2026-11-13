@@ -53,7 +53,12 @@ export class GenericWebSocketTransport implements IWebSocketTransport {
 
     // The caller's deadline, or none: no default of this package's own.
     const connectTimeoutMs = options?.connectTimeoutMs;
-    const socket = this.factory.create(url, options?.protocols, options);
+    let socket: IWebSocketLike;
+    try {
+      socket = this.factory.create(url, options?.protocols, options);
+    } catch (error) {
+      throw this.normalizeError(error, 'WebSocket could not be created');
+    }
     this.socket = socket;
 
     await new Promise<void>((resolve, reject) => {
@@ -128,7 +133,11 @@ export class GenericWebSocketTransport implements IWebSocketTransport {
       throw new Error('WebSocket is not connected');
     }
 
-    this.socket.send(JSON.stringify(message));
+    try {
+      this.socket.send(JSON.stringify(message));
+    } catch (error) {
+      throw this.normalizeError(error, 'WebSocket send failed');
+    }
   }
 
   onMessage<T = unknown>(handler: IWebSocketMessageHandler<T>): void {

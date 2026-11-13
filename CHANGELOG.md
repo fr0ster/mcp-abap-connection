@@ -51,14 +51,20 @@ the facts instead (below; README, "What a failure carries").
 - **`AuthRefusedError.cause` is a copy.** It kept the wire's error (or the
   provider's throw) as it arrived — an axios error with its config, an RFC
   SDK error with its text. It is now an `Error` named `WireFailure`, its
-  message `The failure: <facts>`, with `code`, `status` and `rfc` as fields.
-  The provider is still handed the wire's error as it arrived
-  (`IAuthRejection.error`): the SNC provider reads the SDK's message for GSS
-  codes, and `readRejection` its `key`.
+  message `The failure: <facts>`, with `code` (its own, else the first down
+  its `cause` chain), `status`, `rfc` and SAP's answer as `response`. The
+  provider is still handed the wire's error as it arrived
+  (`IAuthRejection.error`) — over HTTP the client's own rejection, over RFC
+  the SDK's error: the SNC provider reads its message for GSS codes, and
+  `readRejection` its `key`.
 - **A `WireLogonError` that leaves `connect()` or `makeAdtRequest()`** carries
   such a copy as its `cause` (`outwardLogonError`), never the wire's raw error.
 - **The WebSocket transport** hands its error handlers `<words>: <code>` with
-  `code`, never the socket library's or the parser's error.
+  `code`, never the socket library's or the parser's error; a factory or a
+  `send` that throws rejects the same way.
+- A transport the consumer writes (`IAdtTransport`) hands up what it throws,
+  and a failure that is not the credential's passes through as it raised it:
+  its words are the consumer's.
 - **Log lines** — a failed request (`Network error - cannot connect to SAP
   system`, the request error line), the CSRF fetch before a mutation and the
   CSRF retry, a failed establishment, a failed logoff (both lines), a cloud
@@ -72,8 +78,9 @@ the facts instead (below; README, "What a failure carries").
   `axios.isAxiosError(error)` and `instanceof AxiosError` no longer apply to a
   connection's error: read `error.response` (unchanged: SAP's status, reason,
   headers and body), `error.status` and `error.code`.
-- `AuthRefusedError.cause.response.status` is `cause.status`; the cause is
-  never the original object (`cause === original` no longer holds).
+- `AuthRefusedError.cause` is never the original object (`cause === original`
+  no longer holds); its `response` is SAP's answer, without axios's `config`
+  and `request`.
 
 ## [24.0.0] - 2026-11-12
 
