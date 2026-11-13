@@ -938,11 +938,25 @@ export class RfcTransport implements IOnPremTransport {
    * A new conversation, logged on with `parameters`; a failed open is a
    * refused logon whose cause is the SDK's own error, untouched — a provider
    * reads its `key` and message.
+   *
+   * A factory that throws while building the conversation — the SDK's client
+   * constructor, or a consumer's factory — is not a logon: nothing was sent.
+   * It is said in fixed words with the SDK's fields as `rfc`, never the
+   * thrown value's text.
    */
   private async openedWith(
     parameters: Readonly<Record<string, string>>,
   ): Promise<IRfcConversation> {
-    const conversation = this.connect(parameters);
+    let conversation: IRfcConversation;
+    try {
+      conversation = this.connect(parameters);
+    } catch (e) {
+      const rfc = rfcErrorOf(e);
+      throw rfcCallError(
+        `The RFC conversation could not be built: ${rfc?.codeString ?? UNNAMED}`,
+        rfc,
+      );
+    }
     try {
       await conversation.open();
     } catch (e) {

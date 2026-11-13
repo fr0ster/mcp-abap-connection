@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cause` is the raw error as before, for the provider to read.
 - The error for a missing `@mcp-abap-adt/sap-rfc-lite` no longer quotes the
   loader's text (paths on the machine).
+- A conversation factory that throws while building the conversation (the
+  SDK's client constructor, or a consumer's factory) was passed on as it
+  threw. It is now `The RFC conversation could not be built: <codeString>`
+  (or the fixed words), with `rfc` when the SDK named the failure; it is not a
+  logon, so no provider is asked.
 
 ## [24.0.0] - 2026-11-12
 

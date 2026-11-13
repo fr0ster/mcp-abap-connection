@@ -581,8 +581,9 @@ message ends `… failed: the SDK did not name the failure`.
 SDK's own text names the partner it dialled (`host:port`), the time and the
 kernel's source module; the connection never quotes it — not in a call's
 failure, not in its log lines (a failed call, close or reset), not in a
-`WireLogonError`'s message (`The logon failed`), and not when sap-rfc-lite
-cannot be loaded. What the SDK said reaches you as `rfc`. The one exception is
+`WireLogonError`'s message (`The logon failed`), not when the conversation
+cannot be built (`The RFC conversation could not be built: <codeString>`), and
+not when sap-rfc-lite cannot be loaded. What the SDK said reaches you as `rfc`. The one exception is
 a refused logon's `cause`, which is the SDK's error as it arrived: the provider
 reads it (`IAuthRejection.error`).
 

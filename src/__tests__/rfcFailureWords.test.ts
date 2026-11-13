@@ -29,7 +29,7 @@ import {
 } from '../connection/RfcTransport.js';
 import { rfcConversationFrom } from '../connection/rfcConversation.js';
 import type { ILogger } from '../logger.js';
-import { withModule } from './helpers/moduleCache.js';
+import { withModule, withModuleAsync } from './helpers/moduleCache.js';
 import { dies, fails, standInFactory } from './helpers/rfcStandIn.js';
 import { stubProvider } from './helpers/stubProvider.js';
 
@@ -407,6 +407,73 @@ describe('a refused logon says it in fixed words, its cause the SDK’s own', ()
       }
     });
   }
+});
+
+describe('a conversation the factory could not build is said in fixed words', () => {
+  for (const [what, thrown, words, rfc] of [
+    [
+      'the SDK’s error object',
+      sdkFailure(),
+      'The RFC conversation could not be built: RFC_COMMUNICATION_FAILURE',
+      FIELDS,
+    ],
+    [
+      'a TypeError holding the SDK’s text',
+      new TypeError(SDK_TEXT),
+      'The RFC conversation could not be built: the SDK did not name the failure',
+      undefined,
+    ],
+  ] as const) {
+    it(`the factory’s throw is not quoted (${what})`, async () => {
+      const transport = new RfcTransport(() => {
+        throw thrown;
+      }, null);
+
+      const error = await rejection(transport.open());
+
+      assert.strictEqual(error.message, words);
+      assert.deepStrictEqual(rfcOf(error), rfc);
+      assert.ok(
+        !(error instanceof WireLogonError),
+        'nothing was sent: no logon',
+      );
+      assertNoSdkText(error, 'the error');
+    });
+  }
+
+  it('the SDK’s client constructor, through rfcConversationFrom', async () => {
+    const config: ISapRfcConfig = {
+      connectionType: 'rfc',
+      authType: 'basic',
+      ashost: 'saphost',
+      sysnr: '00',
+      client: '100',
+      language: 'EN',
+    };
+    const factory = rfcConversationFrom(config);
+    const transport = new RfcTransport(factory, null);
+    let error: Error | undefined;
+    await withModuleAsync(
+      '@mcp-abap-adt/sap-rfc-lite',
+      {
+        Client: class {
+          constructor() {
+            throw new Error(SDK_TEXT);
+          }
+        },
+      },
+      async () => {
+        error = await rejection(transport.open());
+      },
+    );
+
+    assert.ok(error);
+    assert.strictEqual(
+      error.message,
+      'The RFC conversation could not be built: the SDK did not name the failure',
+    );
+    assertNoSdkText(error, 'the error');
+  });
 });
 
 describe('a missing SDK is said without the loader’s text', () => {
