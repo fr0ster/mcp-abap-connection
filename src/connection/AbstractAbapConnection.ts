@@ -102,7 +102,7 @@ function dataPreview(data: unknown): string | undefined {
 }
 
 /** Whether a thrown value is a refusal this connection marked `sessionLost`. */
-function carriesSessionLost(error: unknown): boolean {
+export function carriesSessionLost(error: unknown): boolean {
   return (
     typeof error === 'object' &&
     error !== null &&

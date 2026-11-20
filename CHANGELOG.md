@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [25.0.1] - 2026-11-21
+
+### Fixed
+
+- For HTTP connections made by `createConnection`, a stateless syntax check
+  (`POST /sap/bc/adt/checkruns`) that SAP rejects with a CSRF validation error
+  while replacing the session is retried once after logging on to a fresh
+  session. A failed logon is returned to the caller. The temporary session
+  is closed and the original instance remains spent.
+
 ## [25.0.0] - 2026-11-13
 
 No error the connection hands out, and no line it logs, carries a thrown
@@ -3107,7 +3117,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.1...HEAD
+[25.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.0...v25.0.1
 [25.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v24.0.0...v25.0.0
 [24.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v23.0.0...v24.0.0
 [23.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v22.0.1...v23.0.0
