@@ -39,6 +39,7 @@ import { LegacyOnPremHttpTransport } from './LegacyOnPremHttpTransport.js';
 import { OnPremHttpTransport } from './OnPremHttpTransport.js';
 import { type IRfcTransportOptions, RfcTransport } from './RfcTransport.js';
 import { rfcConversationFrom } from './rfcConversation.js';
+import { withCheckRelogon } from './withCheckRelogon.js';
 
 /** What every combination takes; each states the shape of its `config`. */
 interface ConnectionSpecBase<TCredential extends IAuthProvider> {
@@ -164,6 +165,16 @@ function httpAddress(spec: HttpWireOptions): {
 }
 
 export function createConnection<TCredential extends IAuthProvider>(
+  spec: ConnectionSpec<TCredential>,
+): CreatedConnection<TCredential> {
+  const connection = buildConnection(spec);
+  if (spec.transport !== 'http') return connection;
+  return withCheckRelogon(connection, () =>
+    buildConnection({ ...spec, session: undefined }),
+  );
+}
+
+function buildConnection<TCredential extends IAuthProvider>(
   spec: ConnectionSpec<TCredential>,
 ): CreatedConnection<TCredential> {
   const logger = spec.logger ?? null;

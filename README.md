@@ -272,6 +272,11 @@ try {
 // One instance is one SAP session: a new session is a new createConnection().
 ```
 
+For modern HTTP connections, `createConnection` can retry a stateless ADT
+syntax check once on a temporary session when SAP rejects the CSRF token and
+the connection detects session replacement. The caller receives the retry
+result or the new logon's error. See [Session Lifecycle](docs/USAGE.md#session-lifecycle).
+
 `createConnection` returns a **new instance on every call**. Any other
 combination of system and wire (cloud over RFC, say) is refused at
 construction. The transport options are passed through as you give them:
@@ -902,7 +907,9 @@ connection.setSessionType("stateless");
 request rejects `ADT_SESSION_REPLACED`; a stateless one gets SAP's answer as it
 came — a success resolves, a refusal rejects as itself — marked
 `sessionLost: 'ADT_SESSION_REPLACED'` (since 23.0.0). Either way the instance
-is spent and nothing is sent again: create a new connection. See
+is spent. Create a new connection for later calls. The factory can finish a
+[stateless syntax check](./docs/USAGE.md#syntax-check-recovery-on-http) on a
+temporary session after an explicit CSRF refusal. See
 [When the session is lost](./docs/USAGE.md#when-the-session-is-lost).
 
 ### Custom Logger

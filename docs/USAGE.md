@@ -710,9 +710,8 @@ on whether it is stateful (since 23.0.0):
   rejects as itself — with `sessionLost: 'ADT_SESSION_REPLACED'` on that
   response or on that error (`IAdtWireResponse`, `IAbapConnectionError`,
   `@mcp-abap-adt/interfaces-adt-connection`, since 4.2.0). Only the request whose own
-  answer showed the replacement carries it. Nothing is sent again for it: no
-  CSRF retry, no credential renewal. The session is lost before the answer
-  reaches you.
+  answer showed the replacement carries it. The original instance is spent
+  before the answer reaches you.
 
 The connection's own exchanges inside a request (a CSRF fetch, a logon) have no
 answer of yours to keep: a replacement seen on one is `ADT_SESSION_REPLACED`.
@@ -730,11 +729,11 @@ nothing here suggests a working session to continue on — the one we had is
 confirmed dead, and re-establishing silently is what let the old connector
 carry on over a session the caller never opened.
 
-In both cases the connector does **not** retry the request internally. Retrying
-blindly is what produced further orphaned locks in the field. That decision is
-yours. (The one resend the HTTP wire makes is of a request that never reached
-an answer on a dead pooled socket — see "Kept-alive connections, and the one
-resend" under the transports; it never resends a request the server answered.)
+The factory can complete a [stateless syntax check](#syntax-check-recovery-on-http)
+after SAP explicitly rejects its CSRF token and the response confirms session
+replacement. Recovery for other requests is the caller's decision. At the HTTP
+wire level, the pooled-socket resend still applies only when no answer byte
+arrived (see "Kept-alive connections, and the one resend" under the transports).
 
 **A lost session spends the instance** (since 16.0.0), as `disconnect()` does.
 After either of these — a stateless answer marked `sessionLost` included —
@@ -837,6 +836,21 @@ await connection.makeAdtRequest({ method: 'POST', url: '...' , timeout: 0 });
 // Switch back to stateless
 connection.setSessionType('stateless');
 ```
+
+### Syntax check recovery on HTTP
+
+On a modern HTTP connection built by `createConnection`, an ADT syntax check
+(`POST /sap/bc/adt/checkruns` with an XML string body) is retried once during
+the same call if SAP rejects the CSRF token and the response also shows that
+the original session was replaced. The retry logs on with the same destination
+and provider, then sends the check on a temporary session. A failure to log on
+is the call's error. The temporary session is logged off and the original
+connection remains spent. A successful retry still carries
+`sessionLost: ADT_SESSION_REPLACED` so the caller can discard state tied to the
+original session.
+
+This applies to stateless checks outside a critical section. Stateful requests
+and operations under an existing lock retain their session-bound behavior.
 
 ### Starting Over
 
