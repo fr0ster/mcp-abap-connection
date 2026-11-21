@@ -22,6 +22,19 @@ describe('quietLine', () => {
     assert.strictEqual(pathOf('/sap/bc/adt/x'), '/sap/bc/adt/x');
   });
 
+  it('a control character in the path is escaped: no line can be forged', () => {
+    const quiet = quietLine('GET', '/sap/bc/adt/a\nFORGED\rline\u0000?q=1');
+    assert.strictEqual(
+      quiet.line,
+      'GET /sap/bc/adt/a\\x0aFORGED\\x0dline\\x00 → no answer',
+    );
+    assert.strictEqual(
+      quiet.facts.path,
+      '/sap/bc/adt/a\\x0aFORGED\\x0dline\\x00',
+    );
+    assert.ok(!quiet.line.includes('\n') && !quiet.line.includes('\r'));
+  });
+
   it('a URL that does not parse: a fixed placeholder, nothing of it', () => {
     for (const url of [
       'https://user:PCANARY@host.example:99999/x?q',

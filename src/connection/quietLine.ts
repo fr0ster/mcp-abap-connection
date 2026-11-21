@@ -41,7 +41,24 @@ export function pathOf(url: string): string {
   if (query !== -1) end = query;
   const fragment = url.indexOf('#');
   if (fragment !== -1 && fragment < end) end = fragment;
-  return url.slice(0, end);
+  return escapedControls(url.slice(0, end));
+}
+
+/**
+ * The text with every control character (below U+0020, and U+007F) written as
+ * a fixed `\xNN` escape: a path cannot break the quiet line into two, or
+ * forge a second one. Plain string code.
+ */
+function escapedControls(text: string): string {
+  let out = '';
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    out +=
+      code < 0x20 || code === 0x7f
+        ? `\\x${code.toString(16).padStart(2, '0')}`
+        : char;
+  }
+  return out;
 }
 
 /**
