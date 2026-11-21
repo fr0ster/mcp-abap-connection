@@ -23,8 +23,9 @@ A request without them behaves as before. See
   dead pooled socket (#314's named exception, kept for every other request),
   and `createConnection`'s replay of a syntax check on a temporary session.
   The CSRF token fetch before a mutation still happens, and under the flag
-  goes once too (no renewal after a `401`, no pooled resend, no redirect); its
-  failure is the answer and the request is not sent. SAP-endpoint
+  goes once too (no renewal after a `401`, no pooled resend, no redirect, no
+  fallback endpoint, a token only from a `2xx`); its failure is the answer and
+  the request is not sent. SAP-endpoint
   redirects: the request goes with `maxRedirects: 0`, and its status predicate
   admits `2xx` and `3xx`, so a `3xx` resolves as the answer while every other
   status is refused as before.
@@ -42,9 +43,11 @@ A request without them behaves as before. See
   RFC wire's URI, `logWire` headers and bodies, status text, conversation and
   cleanup lines. Exactly one line is written per request, by the connection:
   `METHOD /path → STATUS (N bytes)` or `METHOD /path → no answer`, with the
-  fields `{ method, path, status, bytes }`; the path is an absolute URL's
-  pathname (no user, password or host), or a relative one without its query or
-  fragment. The error thrown keeps SAP's answer for the caller.
+  fields `{ method, path, status, bytes }`, whatever path the request takes —
+  a session loss reaches the caller as the error's `sessionLost`, not a
+  warning. The path is an absolute URL's pathname (no user, password or host),
+  a relative one without its query or fragment, or `<unparsable url>`. The
+  error thrown keeps SAP's answer for the caller.
 - `IAdtSessionContext` carries the request's `noResend` and `noLog` to the
   exchanges made for it (its CSRF fetch), and `IAdtTransport.ingest` takes an
   optional `{ noLog }`.

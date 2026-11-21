@@ -861,7 +861,8 @@ nothing else; a request without them behaves as before. In short:
 - `noResend: true` — sent once: no CSRF recovery, no resend after the
   credential's renewal (the provider is not asked), no resend on a dead pooled
   socket, no syntax-check replay; the CSRF token fetch before a mutation still
-  happens, once (its failure is the answer and the request is not sent); a
+  happens, once — no fallback endpoint, a token only from a `2xx` (its failure
+  is the answer and the request is not sent); a
   `3xx` from SAP's endpoint is the answer, not followed.
 - `noLog: true` — the connection writes exactly one line about the request,
   `METHOD /path → STATUS (N bytes)` (or `→ no answer`), the path without its

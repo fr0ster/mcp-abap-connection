@@ -360,8 +360,10 @@ await connection.makeAdtRequest({
   asked), the resend on a dead pooled socket (the named exception above), and
   `createConnection`'s replay of a syntax check on a temporary session. The CSRF
   token fetch before a mutation still happens, and goes once too: no renewal
-  after a `401`, no pooled-socket resend, no redirect followed. Its failure is
-  the answer, and the request is then not sent. A redirect from SAP's ADT endpoint
+  after a `401`, no pooled-socket resend, no redirect followed, no fallback to
+  `/sap/bc/adt/discovery` after a `404`/`501`, and only a `2xx` yields a token
+  (a refusal carrying one does not). Its failure is the answer, and the request
+  is then not sent. A redirect from SAP's ADT endpoint
   is not followed (`maxRedirects: 0`): a `3xx` resolves as the answer, and every
   other status is refused as before. Use it for a request that may already have
   run when a resend would start: SAP refuses a bad CSRF token before any ADT
@@ -374,9 +376,14 @@ await connection.makeAdtRequest({
   headers and bodies, status text, conversation and cleanup lines. Exactly one
   line is written per request, by the connection: `METHOD /path → STATUS (N
   bytes)` for its answer or refusal — or `METHOD /path → no answer` — with the
-  fields `{ method, path, status, bytes }`. The path is the URL's pathname for
-  an absolute URL (no user, password or host) and the path without its query or
-  fragment for a relative one. The wires write no line of their own about it.
+  fields `{ method, path, status, bytes }` — whatever path the request takes: a
+  CSRF fetch that ends it before it is sent, a recovery, a session the answer
+  shows lost (the loss reaches you as the error's `sessionLost` /
+  `SESSION_REPLACED`, not as a warning, and the logoff it causes writes no
+  line). The path is the URL's pathname for an absolute URL (no user, password
+  or host), the path without its query or fragment for a relative one, and
+  `<unparsable url>` for one that does not parse. The wires write no line of
+  their own about it, the application server an answer names included.
   The one other line that may appear is the wire's fixed-word
   `CSRF token obtained`, when a token is fetched for the request. The error
   thrown keeps SAP's answer (`response`, `status`) for the caller.
