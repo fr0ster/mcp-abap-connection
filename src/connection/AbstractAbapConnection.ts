@@ -1225,9 +1225,12 @@ abstract class AbstractAbapConnection
       generation !== undefined &&
       generation !== this.lifecycle.sessionGeneration
     ) {
-      this.logger?.debug(
-        'Ignoring a response from a previous session: its effects are fenced',
-      );
+      // `noLog`: the request's one line is its quiet one.
+      if (!quiet) {
+        this.logger?.debug(
+          'Ignoring a response from a previous session: its effects are fenced',
+        );
+      }
       return 'kept';
     }
     // The wire folds the response into its own state; what the change MEANS

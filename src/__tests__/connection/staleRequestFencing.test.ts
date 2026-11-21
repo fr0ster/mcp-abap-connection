@@ -167,6 +167,33 @@ describe('a request that settles after its session was replaced', () => {
     return conn;
   }
 
+  it('with noLog, a late successful answer writes the quiet line alone', async () => {
+    const lines: { message: string; meta: unknown }[] = [];
+    let recording = false;
+    const record = (message: string, meta?: unknown) => {
+      if (recording) lines.push({ message, meta });
+    };
+    const logger: ILogger = {
+      info: record,
+      warn: record,
+      error: record,
+      debug: record,
+    };
+    await staleRequest(200, 'late ACANARY', 'GET', {
+      logger,
+      released: () => {
+        recording = true;
+      },
+    });
+    const bytes = Buffer.byteLength('late ACANARY');
+    assert.deepStrictEqual(lines, [
+      {
+        message: `GET /sap/bc/adt/work → 200 (${bytes} bytes)`,
+        meta: { method: 'GET', path: '/sap/bc/adt/work', status: 200, bytes },
+      },
+    ]);
+  });
+
   it('with noLog, the fenced request writes the quiet line alone', async () => {
     const lines: { message: string; meta: unknown }[] = [];
     let recording = false;
