@@ -17,14 +17,20 @@
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { inspect } from 'node:util';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { IAbapRequestOptions } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
-import { refusalOf } from '../connection/IAdtTransport.js';
+import { WireLogonError } from '../connection/authErrors.js';
+import {
+  type IOnPremTransport,
+  refusalOf,
+} from '../connection/IAdtTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import { httpClientStub, type StubResponse } from './helpers/httpClientStub.js';
 import { stubProvider } from './helpers/stubProvider.js';
+import { holdsNoSession } from './helpers/transportStub.js';
 
 const DISCOVERY = '/sap/bc/adt/core/discovery';
 const WORK = '/sap/bc/adt/oo/classes/zcl_x/source/main';
@@ -598,5 +604,49 @@ describe('noResend', () => {
     } finally {
       await connection.disconnect();
     }
+  });
+});
+
+describe('noResend over a transport of the caller’s own', () => {
+  it('a refused logon on the CSRF fetch reaches the caller as a copy: SAP’s answer, nothing of the request', async () => {
+    let establishing = false;
+    const transport: IOnPremTransport = {
+      kind: 'own',
+      system: 'onprem',
+      ...holdsNoSession,
+      sessionEstablished: () => true,
+      sessionFingerprint: () => new Map([['own', 'S1']]),
+      establish: async () => {
+        if (!establishing) return;
+        // What a wire built on another client might hand up: the answer, and
+        // beside it the request's config with its credential and body.
+        const cause = Object.assign(new Error('refused'), {
+          response: { status: 401, data: 'Logon failed', headers: {} },
+          config: {
+            headers: { Authorization: 'Basic SECRETCANARY' },
+            data: 'REQUESTCANARY',
+          },
+          request: { data: 'REQUESTCANARY' },
+        });
+        throw new WireLogonError(cause, 401);
+      },
+      send: async () => ({ status: 200, headers: {}, data: 'ok' }),
+    };
+    const connection = new AdtOnPremConnector(
+      { url: 'http://sap.invalid', authType: 'basic', client: '100' },
+      stubProvider(),
+      transport,
+      null,
+    );
+    await connection.connect();
+    establishing = true;
+    await assert.rejects(connection.makeAdtRequest(write(true)), (e) => {
+      assert.strictEqual(statusOf(e), 401);
+      assert.strictEqual(refusalOf(e)?.data, 'Logon failed');
+      const seen = inspect(e, { depth: null, showHidden: true });
+      assert.ok(!seen.includes('SECRETCANARY'), seen);
+      assert.ok(!seen.includes('REQUESTCANARY'), seen);
+      return true;
+    });
   });
 });
