@@ -2223,7 +2223,14 @@ abstract class AbstractAbapConnection
         // a session it no longer holds.
         if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(error);
         if (error instanceof AuthRefusedError) throw error;
-        if (flags.noResend) throw error;
+        // `noResend`: the fetch's failure is the answer. A refused logon goes
+        // as SAP's refusal it wraps — its status and body on top, as any
+        // refusal's — since no provider is asked to act on the mark.
+        if (flags.noResend) {
+          throw error instanceof WireLogonError && refusalOf(error.cause)
+            ? error.cause
+            : error;
+        }
         if (!(error instanceof WireLogonError)) {
           if (!flags.noLog) {
             this.logger?.debug(

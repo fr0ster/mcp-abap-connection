@@ -244,8 +244,9 @@ describe('noResend', () => {
       transport.adoptCsrfToken(null);
       sap.discovery.push({ status: 401, body: 'Logon failed' });
       await assert.rejects(connection.makeAdtRequest(write(true)), (e) => {
-        // The refused logon, as the wire named it: no provider was asked.
-        assert.strictEqual(instanceOf(e, WireLogonError).status, 401);
+        // SAP's refusal, as the caller gets any refusal: no provider asked.
+        assert.strictEqual(statusOf(e), 401);
+        assert.strictEqual(refusalOf(e)?.data, 'Logon failed');
         return true;
       });
       assert.deepStrictEqual(trace(), [['GET', DISCOVERY, 401]]);
@@ -415,6 +416,59 @@ describe('noResend', () => {
       }
     }
   });
+
+  for (const status of [401, 403] as const) {
+    it(`a ${status} to the CSRF fetch with noLog too: SAP's refusal, no PUT, its status on the quiet line`, async () => {
+      const lines: { message: string; meta: unknown }[] = [];
+      const record = (message: string, meta?: unknown) => {
+        lines.push({ message, meta });
+      };
+      const logger = {
+        info: record,
+        warn: record,
+        error: record,
+        debug: record,
+      };
+      const transport = new OnPremHttpTransport(() => ({}), logger, {
+        client: '100',
+        baseUrl: sap.baseUrl,
+      });
+      const connection = new AdtOnPremConnector(
+        { url: sap.baseUrl, authType: 'basic', client: '100' },
+        stubProvider(),
+        transport,
+        logger,
+      );
+      await connection.connect();
+      sap.arrivals.length = 0;
+      try {
+        transport.adoptCsrfToken(null);
+        sap.discovery.push({ status, body: 'refused BODY' });
+        lines.length = 0;
+        await assert.rejects(
+          connection.makeAdtRequest({
+            ...write(true),
+            noLog: true,
+          }),
+          (e) => {
+            assert.strictEqual(statusOf(e), status);
+            assert.strictEqual(refusalOf(e)?.data, 'refused BODY');
+            return true;
+          },
+        );
+        assert.deepStrictEqual(trace(), [['GET', DISCOVERY, status]]);
+        const bytes = Buffer.byteLength('refused BODY');
+        assert.deepStrictEqual(lines, [
+          {
+            message: `PUT ${WORK} → ${status} (${bytes} bytes)`,
+            meta: { method: 'PUT', path: WORK, status, bytes },
+          },
+        ]);
+      } finally {
+        await connection.disconnect();
+      }
+    });
+  }
 
   it('with noLog too, the resolved refusal of the fetch is the quiet line’s status', async () => {
     const lines: { message: string; meta: unknown }[] = [];
