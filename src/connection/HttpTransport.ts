@@ -1336,6 +1336,8 @@ export class HttpTransport implements IAdtTransport {
     config: AxiosRequestConfig,
     /** The request's `noResend`: sent once, its failure the caller's. */
     once: boolean,
+    /** The request's `noLog`: the wire writes no line about it. */
+    quiet: boolean,
   ): Promise<AxiosResponse> {
     const attempt: PooledAttempt = {};
     try {
@@ -1357,9 +1359,12 @@ export class HttpTransport implements IAdtTransport {
       ) {
         throw error;
       }
-      this.logger?.debug(
-        'HTTP: a pooled connection closed before any answer; the request is sent once more on a new connection',
-      );
+      // `noLog`: the request's one line is the connection's quiet one.
+      if (!quiet) {
+        this.logger?.debug(
+          'HTTP: a pooled connection closed before any answer; the request is sent once more on a new connection',
+        );
+      }
       return this.client()({
         ...config,
         httpAgent: fresh.http,
@@ -1427,7 +1432,11 @@ export class HttpTransport implements IAdtTransport {
       response =
         written !== undefined
           ? await this.client()(config)
-          : await this.sendPooled(config, request.noResend === true);
+          : await this.sendPooled(
+              config,
+              request.noResend === true,
+              request.noLog === true,
+            );
     } catch (error) {
       // Never as the client threw it: axios's error holds this request's
       // config — its credential headers among it — and words naming the host.
