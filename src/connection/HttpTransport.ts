@@ -840,7 +840,12 @@ export class HttpTransport implements IAdtTransport {
         context.observe(response.headers);
         this.ingest(headerFields(response.headers), quietIngest(context));
 
-        const token = csrfTokenIn(response.headers);
+        // `noResend`: a token only from a `2xx`, whatever status the client
+        // chose to resolve.
+        const token =
+          context.noResend && (response.status < 200 || response.status >= 300)
+            ? undefined
+            : csrfTokenIn(response.headers);
         if (token !== undefined) {
           this.token = token;
           this.logger?.debug('CSRF token obtained');

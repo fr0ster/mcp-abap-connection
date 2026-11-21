@@ -25,6 +25,7 @@ import { WireLogonError } from '../connection/authErrors.js';
 import { refusalOf } from '../connection/IAdtTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
 import { instanceOf } from './helpers/assertions.js';
+import { httpClientStub, type StubResponse } from './helpers/httpClientStub.js';
 import { stubProvider } from './helpers/stubProvider.js';
 
 const DISCOVERY = '/sap/bc/adt/core/discovery';
@@ -359,6 +360,51 @@ describe('noResend', () => {
       }
     });
   }
+
+  it('a client that resolves a refusal: under the flag a token comes only from a 2xx', async () => {
+    for (const noResend of [true, false]) {
+      let fetches = 0;
+      const client = httpClientStub(async (request): Promise<StubResponse> => {
+        if (request.url.endsWith(DISCOVERY)) {
+          fetches += 1;
+          // The connect's fetch earns the session; the next is a 405 that
+          // still carries a token, resolved by this client.
+          return fetches === 1
+            ? {
+                status: 200,
+                headers: {
+                  'x-csrf-token': 'T1',
+                  'set-cookie': 'SAP_SESSIONID_STUB_100=S1; Path=/',
+                },
+              }
+            : { status: 405, headers: { 'x-csrf-token': 'T2' } };
+        }
+        return { status: 200, data: 'ok' };
+      });
+      const transport = new OnPremHttpTransport(() => ({}), null, {
+        client: '100',
+        baseUrl: 'http://sap.invalid',
+        httpClient: client,
+      });
+      const connection = new AdtOnPremConnector(
+        { url: 'http://sap.invalid', authType: 'basic', client: '100' },
+        new BasicAuthProvider('u', 'p'),
+        transport,
+        null,
+      );
+      await connection.connect();
+      try {
+        transport.adoptCsrfToken(null);
+        const sent = connection.makeAdtRequest(write(noResend));
+        if (noResend) await assert.rejects(sent);
+        else await sent;
+        const puts = client.sent.filter((r) => r.method === 'PUT');
+        assert.strictEqual(puts.length, noResend ? 0 : 1);
+      } finally {
+        await connection.disconnect();
+      }
+    }
+  });
 
   it('a 401 the provider renews: the answer with the flag, resent once without', async () => {
     const provider = stubProvider();
