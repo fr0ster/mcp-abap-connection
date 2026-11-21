@@ -95,7 +95,11 @@ function written(entries: Entry[]): string {
  * The wire's own token fetch is its own request, not this one, and its line is
  * fixed words: a CSRF recovery writes it whatever the request's flags.
  */
-const OWN_EXCHANGE_LINES = new Set(['CSRF token obtained']);
+const OWN_EXCHANGE_LINES = new Set([
+  'CSRF token obtained',
+  // The cloud wire's, on the logoff a replaced session leads to.
+  'The server published no logoff resource; sending the platform logoff',
+]);
 
 /** Every line is one of the two quiet forms, and holds nothing else. */
 function assertQuiet(
