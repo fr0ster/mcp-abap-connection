@@ -799,3 +799,59 @@ describe('noLog over RFC, a call whose wire closes while it logs on', () => {
     }
   });
 });
+
+describe('noLog over RFC, a wire closed right after a per-call logon', () => {
+  it('the conversation it opened, closed again, writes no line with the flag', async () => {
+    for (const noLog of [true, false]) {
+      const { logger, entries } = recorder();
+      let made = 0;
+      let reads = 0;
+      let armed = false;
+      let transport: RfcTransport | undefined;
+      const factory: RfcConversationFactory = () => {
+        const stateful = made++ === 0;
+        let alive = false;
+        const conversation: IRfcConversation = {
+          get alive() {
+            // The second read once armed is the logon's own check: the wire
+            // is given back right then, after that check has read the
+            // generation.
+            const was = alive;
+            if (stateful && armed && ++reads === 2) {
+              void transport?.close();
+            }
+            return was;
+          },
+          open: async () => {
+            alive = true;
+          },
+          close: async () => {
+            alive = false;
+            if (!stateful) throw { codeString: 'RFC_CLOSE_CANARY' };
+          },
+          resetServerContext: async () => {},
+          call: async () => ({}),
+        };
+        return conversation;
+      };
+      transport = new RfcTransport(factory, logger);
+      await transport.open({
+        authorize: async () => {},
+        logon: async () => {},
+        observe: () => {},
+      });
+      armed = true;
+      await assert.rejects(
+        transport.send({
+          method: 'GET',
+          url: `${PATH}?secret=QCANARY`,
+          ...(noLog ? { noLog: true } : {}),
+        }),
+      );
+      const closeLine = entries.some((e) =>
+        e.message.startsWith('RFC close error'),
+      );
+      assert.strictEqual(closeLine, !noLog, written(entries));
+    }
+  });
+});

@@ -730,7 +730,7 @@ export class RfcTransport implements IOnPremTransport {
         // checked, and a conversation of a closed wire must not become the
         // kept one of the next.
         if (generation !== this.generation) {
-          await this.closeQuietly(opened);
+          await this.closeQuietly(opened, request.noLog === true);
           throw new Error(
             'RFC transport was closed while the call was being opened; nothing was sent.',
           );
