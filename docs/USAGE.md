@@ -861,10 +861,12 @@ nothing else; a request without them behaves as before. In short:
 - `noResend: true` — sent once: no CSRF recovery, no resend after the
   credential's renewal (the provider is not asked), no resend on a dead pooled
   socket, no syntax-check replay; the CSRF token fetch before a mutation still
-  happens; a `3xx` from SAP's endpoint is the answer, not followed.
-- `noLog: true` — the only line about the request is
+  happens, once (its failure is the answer and the request is not sent); a
+  `3xx` from SAP's endpoint is the answer, not followed.
+- `noLog: true` — the connection writes exactly one line about the request,
   `METHOD /path → STATUS (N bytes)` (or `→ no answer`), the path without its
-  query; the thrown error keeps SAP's answer.
+  query, host or user; the wires write none of their own (the fixed-word
+  `CSRF token obtained` aside); the thrown error keeps SAP's answer.
 - `stateless: true` — stateless on HTTP and RFC whatever the session mode, over
   the caller's own `x-sap-adt-sessiontype` header in any letter case; the header
   and the `sap-contextid` cookie are stripped; the session mode stays.

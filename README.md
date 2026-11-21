@@ -359,7 +359,9 @@ await connection.makeAdtRequest({
   CSRF recovery, the resend after the credential's renewal (the provider is not
   asked), the resend on a dead pooled socket (the named exception above), and
   `createConnection`'s replay of a syntax check on a temporary session. The CSRF
-  token fetch before a mutation still happens. A redirect from SAP's ADT endpoint
+  token fetch before a mutation still happens, and goes once too: no renewal
+  after a `401`, no pooled-socket resend, no redirect followed. Its failure is
+  the answer, and the request is then not sent. A redirect from SAP's ADT endpoint
   is not followed (`maxRedirects: 0`): a `3xx` resolves as the answer, and every
   other status is refused as before. Use it for a request that may already have
   run when a resend would start: SAP refuses a bad CSRF token before any ADT
@@ -367,13 +369,17 @@ await connection.makeAdtRequest({
   holds `CSRF token`, which a handler's own `500` may carry after it ran.
 - **`noLog: true`** — no line holds the request's query, headers or body, or the
   answer's headers, status text or body: not the connection's request and
-  refusal lines (no preview), not the HTTP wire's resend line, not the RFC
-  wire's URI, `logWire` headers and bodies, status text or conversation lines.
-  The one line written is `METHOD /path → STATUS (N bytes)` — or
-  `METHOD /path → no answer` — with the fields `{ method, path, status, bytes }`;
-  the path goes without its query. The error thrown keeps SAP's answer
-  (`response`, `status`) for the caller. The wire's own token fetch still writes
-  its fixed-word line.
+  refusal lines (no preview), not the CSRF-fetch and fence lines, not the HTTP
+  wire's resend and application-server lines, not the RFC wire's URI, `logWire`
+  headers and bodies, status text, conversation and cleanup lines. Exactly one
+  line is written per request, by the connection: `METHOD /path → STATUS (N
+  bytes)` for its answer or refusal — or `METHOD /path → no answer` — with the
+  fields `{ method, path, status, bytes }`. The path is the URL's pathname for
+  an absolute URL (no user, password or host) and the path without its query or
+  fragment for a relative one. The wires write no line of their own about it.
+  The one other line that may appear is the wire's fixed-word
+  `CSRF token obtained`, when a token is fetched for the request. The error
+  thrown keeps SAP's answer (`response`, `status`) for the caller.
 - **`stateless: true`** — the request goes stateless on HTTP and RFC whatever
   the session mode (`setSessionType('stateful')` included), and wins over the
   caller's own `x-sap-adt-sessiontype: stateful` header in any letter case: the

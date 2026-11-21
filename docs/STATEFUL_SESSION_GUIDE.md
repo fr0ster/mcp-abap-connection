@@ -169,7 +169,11 @@ Every ADT request issued through `makeAdtRequest` automatically:
 3. Updates stored cookies if SAP returns `set-cookie`.
 4. Retries once when CSRF token is invalid/expired.
 
-This logic is transparent to callers (Builders, handlers, CLI scripts).
+This logic is transparent to callers (Builders, handlers, CLI scripts). A
+request sent with `noResend: true` (25.1.0) skips step 4 and every other
+resend: its token fetch (step 1) goes once, and the first failure — of the
+fetch or of the request — is the caller's answer. See the README's
+[Request options](../README.md#request-options-noresend-nolog-stateless).
 
 A 401 that survives the wire's own CSRF recovery (in the same session) is put to the provider (`rejected`). On Ok the
 request is sent once more, always under the same lease and generation as the attempt it repeats,
