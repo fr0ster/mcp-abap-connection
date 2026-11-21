@@ -31,6 +31,8 @@ export function withCheckRelogon<TConnection extends CreatedConnection>(
     request: AbapRequestOptions,
   ): Promise<IAdtWireResponse<T, D>> => {
     const eligible =
+      // `noResend`: the refusal is the caller's answer, never replayed.
+      !request.noResend &&
       request.method.toUpperCase() === 'POST' &&
       request.url.split('?', 1)[0] === '/sap/bc/adt/checkruns' &&
       typeof request.data === 'string' &&

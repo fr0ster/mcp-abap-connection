@@ -155,3 +155,29 @@ it('does not resend a check after the caller disconnects during relogon', async 
   await Promise.all([call, disconnected]);
   assert.equal(sap.sentTo(CHECK).length, 1);
 });
+
+it('with noResend, a CSRF-refused check is the answer: no relogon, no replay', async () => {
+  const connection = connector();
+  await connection.connect();
+  sap.work(CHECK, [expired]);
+  try {
+    await assert.rejects(
+      connection.makeAdtRequest({
+        url: CHECK,
+        method: 'POST',
+        timeout: 1000,
+        data: '<check/>',
+        params: { reporters: 'abapCheckRun' },
+        noResend: true,
+      }),
+      (error: unknown) => {
+        assert.equal(refusalOf(error)?.status, 403);
+        return true;
+      },
+    );
+    assert.equal(sap.sentTo(DISCOVERY).length, 1);
+    assert.equal(sap.sentTo(CHECK).length, 1);
+  } finally {
+    await connection.disconnect();
+  }
+});
