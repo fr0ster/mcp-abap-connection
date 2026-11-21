@@ -101,6 +101,14 @@ function dataPreview(data: unknown): string | undefined {
   }
 }
 
+/**
+ * What a `noResend` request resolves on: `2xx` as always, and a `3xx` from
+ * SAP's own endpoint, which is returned rather than followed.
+ */
+function admitsRedirects(status: number): boolean {
+  return status >= 200 && status < 400;
+}
+
 /** Whether a thrown value is a refusal this connection marked `sessionLost`. */
 export function carriesSessionLost(error: unknown): boolean {
   return (
@@ -1534,6 +1542,12 @@ abstract class AbstractAbapConnection
       // transports serialise a query differently and both need the pairs.
       params: params as Record<string, unknown> | undefined,
       stateful: this.sessionMode === 'stateful',
+      // `noResend`: the wire sends it once and follows no redirect, and a
+      // `3xx` from SAP's own endpoint is the caller's answer; every other
+      // status keeps today's verdict.
+      ...(options.noResend
+        ? { noResend: true, validateStatus: admitsRedirects }
+        : {}),
     };
 
     if (data !== undefined) {
@@ -1791,7 +1805,12 @@ abstract class AbstractAbapConnection
     // A CSRF complaint (403 "CSRF token validation failed", or a 401 to a
     // mutation that holds no token yet): a token earned in the SAME session —
     // the cookies are kept — and one resend.
-    if (this.shouldRetryCsrf(error, normalizedMethod)) {
+    // `noResend`: the first failure is the caller's answer — an abapGit
+    // handler's own 500 holding `CSRF token` would be resent after it ran.
+    if (
+      !requestConfig.noResend &&
+      this.shouldRetryCsrf(error, normalizedMethod)
+    ) {
       this.logger?.debug(
         'CSRF token validation failed, fetching new token and retrying request',
         {
@@ -1875,6 +1894,9 @@ abstract class AbstractAbapConnection
     if (this.isSessionVerdict(failure)) throw failure;
     // A resend inside the wire's recovery that met a dead session.
     this.throwIfSessionDead(failure, lease);
+    // `noResend`: nothing to renew for, since nothing is resent — the refusal
+    // is the caller's answer, and the provider is not asked.
+    if (requestConfig.noResend) throw failure;
     const rejection = this.credentialRejection(failure);
     // A request from a previous session asks nobody anything: its recovery is
     // fenced, and so is the credential's.
