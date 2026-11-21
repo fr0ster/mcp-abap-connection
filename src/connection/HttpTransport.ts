@@ -216,6 +216,13 @@ function deletesCookie(attributes: string[]): boolean {
 /** The cookie that names a stateful ABAP context. */
 const CONTEXT_COOKIE = 'sap-contextid';
 
+/** How an exchange's answer is folded in: quietly for a `noLog` request's. */
+function quietIngest(context: {
+  noLog?: true | undefined;
+}): { noLog: true } | undefined {
+  return context.noLog ? { noLog: true } : undefined;
+}
+
 /** The platform's logoff, which answers `200` while expiring the session cookie. */
 const ICF_LOGOFF_PATH = '/sap/public/bc/icf/logoff';
 
@@ -804,7 +811,9 @@ export class HttpTransport implements IAdtTransport {
       // which the server says by answering 404 there. Asked after a refused
       // connection or a network error, it would ask a host that is not
       // answering to answer a different path.
-      if (index > 0 && !absentEndpoint(last)) break;
+      // `noResend`: the fetch is one request, the fallback a second — the
+      // first answer, whatever it is, is the request's.
+      if (index > 0 && (context.noResend || !absentEndpoint(last))) break;
       try {
         // Authorized per request: a provider may renew behind the call.
         const auth: Record<string, string> = {};
@@ -829,7 +838,7 @@ export class HttpTransport implements IAdtTransport {
         // connection refuses as a gone session's throws here, and nothing
         // of it reaches the jar.
         context.observe(response.headers);
-        this.ingest(headerFields(response.headers));
+        this.ingest(headerFields(response.headers), quietIngest(context));
 
         const token = csrfTokenIn(response.headers);
         if (token !== undefined) {
@@ -855,7 +864,7 @@ export class HttpTransport implements IAdtTransport {
           // A refusal can still carry the cookies that matter — handed up
           // first, so one the connection refuses is not folded in.
           context.observe(headers);
-          this.ingest(headers);
+          this.ingest(headers, quietIngest(context));
         }
 
         // A refused logon, named as one — after its cookies are in. What to
@@ -867,10 +876,15 @@ export class HttpTransport implements IAdtTransport {
         // …and the token itself. SAP answers 405 to a GET on some endpoints
         // and puts the token in the header anyway, and other refusals carry
         // one too.
-        const onError = csrfTokenIn(headers);
+        //
+        // `noResend`: only a `2xx` fetch yields a token; a refusal is the
+        // request's answer.
+        const onError = context.noResend ? undefined : csrfTokenIn(headers);
         if (onError !== undefined) {
           this.token = onError;
-          this.logger?.debug('CSRF token arrived on a refusal, and is kept');
+          if (!context.noLog) {
+            this.logger?.debug('CSRF token arrived on a refusal, and is kept');
+          }
           return;
         }
       }
@@ -1246,11 +1260,16 @@ export class HttpTransport implements IAdtTransport {
         },
         written,
       );
-      this.logger?.debug('Told the server the session is finished');
+      // `noLog`: a logoff a `noLog` request's answer caused writes no line.
+      if (!context.noLog) {
+        this.logger?.debug('Told the server the session is finished');
+      }
     } catch (error) {
-      this.logger?.debug(
-        `Could not tell the server the session is finished: ${factWords(error)}`,
-      );
+      if (!context.noLog) {
+        this.logger?.debug(
+          `Could not tell the server the session is finished: ${factWords(error)}`,
+        );
+      }
     }
   }
 
