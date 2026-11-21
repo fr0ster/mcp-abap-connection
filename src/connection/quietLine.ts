@@ -15,21 +15,26 @@ export interface QuietFacts {
   bytes?: number;
 }
 
+/** What a quiet line names for a URL that does not parse: nothing of it. */
+export const UNPARSABLE_URL = '<unparsable url>';
+
 /**
- * The path of a request URL. A relative one (`/…`) is cut at its query or
- * fragment; an absolute one gives its pathname alone — never its user,
- * password, host, query or fragment, which the WHATWG parser separates. One
- * with a scheme and no authority (`user:pass@host/x`) names nothing.
+ * The path of a request URL. A path (`/…`, not `//…`) is cut at its query or
+ * fragment; anything else is parsed as an absolute URL and gives its pathname
+ * alone — never its user, password, host, query or fragment, which the WHATWG
+ * parser separates. One with a scheme and no authority (`user:pass@host/x`)
+ * names nothing; one that does not parse (a bad port, `//host/x`) names the
+ * fixed placeholder, never any part of the input.
  */
 export function pathOf(url: string): string {
-  if (!url.startsWith('/')) {
-    let parsed: URL | undefined;
+  if (!url.startsWith('/') || url.startsWith('//')) {
+    let parsed: URL;
     try {
       parsed = new URL(url);
     } catch {
-      parsed = undefined;
+      return UNPARSABLE_URL;
     }
-    if (parsed !== undefined) return parsed.host ? parsed.pathname : '';
+    return parsed.host ? parsed.pathname : '';
   }
   let end = url.length;
   const query = url.indexOf('?');

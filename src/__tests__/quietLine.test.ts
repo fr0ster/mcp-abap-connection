@@ -22,6 +22,18 @@ describe('quietLine', () => {
     assert.strictEqual(pathOf('/sap/bc/adt/x'), '/sap/bc/adt/x');
   });
 
+  it('a URL that does not parse: a fixed placeholder, nothing of it', () => {
+    for (const url of [
+      'https://user:PCANARY@host.example:99999/x?q',
+      '//user:PCANARY@host.example/x',
+      'user PCANARY',
+    ]) {
+      const quiet = quietLine('GET', url);
+      assert.strictEqual(quiet.line, 'GET <unparsable url> → no answer');
+      assert.strictEqual(quiet.facts.path, '<unparsable url>');
+    }
+  });
+
   it('a scheme with no authority names nothing of what follows it', () => {
     assert.strictEqual(pathOf('user:pass@host/x'), '');
   });
