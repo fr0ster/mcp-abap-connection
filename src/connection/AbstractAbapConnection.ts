@@ -36,6 +36,7 @@ import {
   type IAdtTransportRequest,
   refusalOf,
 } from './IAdtTransport.js';
+import { quietLine } from './quietLine.js';
 import { isStatefulRequest } from './statefulRequest.js';
 
 /**
@@ -1548,20 +1549,27 @@ abstract class AbstractAbapConnection
       ...(options.noResend
         ? { noResend: true, validateStatus: admitsRedirects }
         : {}),
+      // `noLog`: every line about this request, here and on the wire, is the
+      // quiet one.
+      ...(options.noLog ? { noLog: true } : {}),
     };
 
     if (data !== undefined) {
       requestConfig.data = data;
     }
 
-    this.logger?.debug(
-      `Executing ${normalizedMethod} request to: ${requestUrl}`,
-      {
-        type: 'REQUEST_INFO',
-        url: requestUrl,
-        method: normalizedMethod,
-      },
-    );
+    // `noLog`: nothing before the answer; the one line is written once there
+    // is a status to put on it (`quietLine`).
+    if (!options.noLog) {
+      this.logger?.debug(
+        `Executing ${normalizedMethod} request to: ${requestUrl}`,
+        {
+          type: 'REQUEST_INFO',
+          url: requestUrl,
+          method: normalizedMethod,
+        },
+      );
+    }
 
     try {
       const response = await this.sendObserved<T, D>(requestConfig, lease);
@@ -1569,14 +1577,19 @@ abstract class AbstractAbapConnection
       // The answer outranks the logger's word on it: a logger that throws
       // must not take a received answer — one marked `sessionLost` above all,
       // whose session is already gone — from the caller.
-      this.logQuietly(() =>
+      this.logQuietly(() => {
+        if (options.noLog) {
+          const quiet = quietLine(normalizedMethod, requestUrl, response);
+          this.logger?.debug(quiet.line, quiet.facts);
+          return;
+        }
         this.logger?.debug(`Request succeeded with status ${response.status}`, {
           type: 'REQUEST_SUCCESS',
           status: response.status,
           url: requestUrl,
           method: normalizedMethod,
-        }),
-      );
+        });
+      });
 
       return response;
     } catch (error) {
@@ -1755,6 +1768,11 @@ abstract class AbstractAbapConnection
     };
 
     const refusal = refusalOf(error);
+    // `noLog`: the failure's lines carry the method, the path without its
+    // query, the integer status and the byte count — no preview, no words.
+    const quiet = requestConfig.noLog
+      ? quietLine(normalizedMethod, requestUrl, refusal ?? undefined)
+      : null;
     if (refusal) {
       errorDetails.data = dataPreview(refusal.data);
 
@@ -1777,24 +1795,28 @@ abstract class AbstractAbapConnection
     const networkError = isNetworkError(error);
 
     if (networkError) {
-      this.logQuietly(() =>
-        this.logger?.error(
-          `Network error - cannot connect to SAP system: ${errorDetails.message}`,
-          errorDetails,
-        ),
-      );
+      this.logQuietly(() => {
+        if (quiet) this.logger?.error(quiet.line, quiet.facts);
+        else
+          this.logger?.error(
+            `Network error - cannot connect to SAP system: ${errorDetails.message}`,
+            errorDetails,
+          );
+      });
       throw error;
     }
 
     // Log 404 as debug (common for existence checks), other errors as error
     if (errorDetails.status === 404) {
-      this.logQuietly(() =>
-        this.logger?.debug(errorDetails.message, errorDetails),
-      );
+      this.logQuietly(() => {
+        if (quiet) this.logger?.debug(quiet.line, quiet.facts);
+        else this.logger?.debug(errorDetails.message, errorDetails);
+      });
     } else {
-      this.logQuietly(() =>
-        this.logger?.error(errorDetails.message, errorDetails),
-      );
+      this.logQuietly(() => {
+        if (quiet) this.logger?.error(quiet.line, quiet.facts);
+        else this.logger?.error(errorDetails.message, errorDetails);
+      });
     }
 
     // No session is discarded and reopened on this instance to retry a
@@ -1811,13 +1833,15 @@ abstract class AbstractAbapConnection
       !requestConfig.noResend &&
       this.shouldRetryCsrf(error, normalizedMethod)
     ) {
-      this.logger?.debug(
-        'CSRF token validation failed, fetching new token and retrying request',
-        {
-          url: requestUrl,
-          method: normalizedMethod,
-        },
-      );
+      if (!quiet) {
+        this.logger?.debug(
+          'CSRF token validation failed, fetching new token and retrying request',
+          {
+            url: requestUrl,
+            method: normalizedMethod,
+          },
+        );
+      }
 
       try {
         this.setCsrfToken(await this.fetchCsrfToken(requestUrl, lease));
@@ -1858,11 +1882,13 @@ abstract class AbstractAbapConnection
         if (this.outranksOriginal(retryError)) {
           throw retryError;
         }
-        this.logQuietly(() =>
-          this.logger?.debug(
-            `CSRF retry failed; rethrowing original error: ${factWords(retryError)}`,
-          ),
-        );
+        if (!quiet) {
+          this.logQuietly(() =>
+            this.logger?.debug(
+              `CSRF retry failed; rethrowing original error: ${factWords(retryError)}`,
+            ),
+          );
+        }
         throw error;
       }
     }
