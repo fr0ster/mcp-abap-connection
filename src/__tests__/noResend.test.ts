@@ -21,10 +21,8 @@ import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { IAbapRequestOptions } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
-import { WireLogonError } from '../connection/authErrors.js';
 import { refusalOf } from '../connection/IAdtTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
-import { instanceOf } from './helpers/assertions.js';
 import { httpClientStub, type StubResponse } from './helpers/httpClientStub.js';
 import { stubProvider } from './helpers/stubProvider.js';
 
