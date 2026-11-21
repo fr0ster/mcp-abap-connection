@@ -799,6 +799,7 @@ abstract class AbstractAbapConnection
       closing = Promise.reject(error);
     }
     const answered = closing.catch((error: unknown) => {
+      if (context.noLog) return;
       this.logger?.debug(
         `Could not tell the server the session is finished: ${factWords(error)}`,
       );
@@ -1139,7 +1140,11 @@ abstract class AbstractAbapConnection
    * Does not await: it is called from inside a request, and the cleanup must not
    * wait for the very request that raised it.
    */
-  protected raiseSessionLost(reason: string): void {
+  protected raiseSessionLost(
+    reason: string,
+    /** Lost by a `noLog` request's answer: the caller is told, nothing logged. */
+    quiet = false,
+  ): void {
     // The instance's one session is gone: it is spent, as after disconnect().
     // Nothing else is decided here — the caller is told, and decides. The
     // verdict first, then the word: a logger that throws cannot undo it.
@@ -1149,7 +1154,9 @@ abstract class AbstractAbapConnection
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
-    this.logQuietly(() => this.logger?.warn(`Session lost: ${reason}`));
+    if (!quiet) {
+      this.logQuietly(() => this.logger?.warn(`Session lost: ${reason}`));
+    }
   }
 
   /**
@@ -1230,6 +1237,7 @@ abstract class AbstractAbapConnection
     return this.applyIdentityPolicy(
       this.lifecycle.observe(this.transport.sessionFingerprint()),
       keepAnswer,
+      quiet,
     );
   }
 
@@ -1252,6 +1260,8 @@ abstract class AbstractAbapConnection
   private applyIdentityPolicy(
     classification: 'unchanged' | 'established' | 'replaced',
     keepAnswer: boolean,
+    /** A `noLog` request's answer: the loss and its logoff write no line. */
+    quiet = false,
   ): SessionObservation {
     if (classification !== 'replaced') return 'kept';
 
@@ -1270,9 +1280,11 @@ abstract class AbstractAbapConnection
     // logoff: the wire took its snapshot synchronously, and any other path
     // that would end the session — a failed `connect()`'s logoff above all —
     // must find nothing left to send, or the same session is logged off twice.
-    this.endSession(this.sessionContext());
+    this.endSession(
+      quiet ? { ...this.sessionContext(), noLog: true } : this.sessionContext(),
+    );
     this.clearSessionState();
-    this.raiseSessionLost('the session cookie changed under us');
+    this.raiseSessionLost('the session cookie changed under us', quiet);
     // A stateless request's answer is SAP's, and valid: it is returned, marked,
     // the session already lost (fr0ster/mcp-abap-adt#354). Nothing is sent
     // again for it. A stateful request — the one a lock is taken and released
@@ -1450,7 +1462,23 @@ abstract class AbstractAbapConnection
     // exchange itself does not stop the request — the CSRF recovery below
     // handles a token that is missing — but a refused credential does.
     if (mutation && !this.transport.csrfToken()) {
-      await this.readyWireUpfront(renewal, lease, flagsOf(options));
+      try {
+        await this.readyWireUpfront(renewal, lease, flagsOf(options));
+      } catch (error) {
+        // `noLog`: a request that ends before it is sent still writes its
+        // one quiet line — the fetch's answer is the request's.
+        if (options.noLog) {
+          this.logQuietly(() => {
+            const quiet = quietLine(
+              normalizedMethod,
+              endpoint,
+              refusalOf(error) ?? undefined,
+            );
+            this.logger?.error(quiet.line, quiet.facts);
+          });
+        }
+        throw error;
+      }
     }
 
     // The request's own headers: everything but the credential's, which is
@@ -1800,6 +1828,16 @@ abstract class AbstractAbapConnection
     const quiet = requestConfig.noLog
       ? quietLine(normalizedMethod, requestUrl, refusal ?? undefined)
       : null;
+    // Written here, once, before anything below can end the request — a
+    // session verdict included, which then reaches the caller as the error
+    // (`sessionLost`, `SESSION_REPLACED`) and never as a line.
+    if (quiet) {
+      this.logQuietly(() => {
+        if (refusal?.status === 404)
+          this.logger?.debug(quiet.line, quiet.facts);
+        else this.logger?.error(quiet.line, quiet.facts);
+      });
+    }
     if (refusal) {
       errorDetails.data = dataPreview(refusal.data);
 
@@ -1816,35 +1854,35 @@ abstract class AbstractAbapConnection
       if (observed === 'lost') throw this.markedLost(error);
     }
 
-    this.throwIfSessionDead(error, lease);
+    this.throwIfSessionDead(error, lease, quiet !== null);
 
     // Check if this is a network error (connection refused, timeout, DNS, etc.)
     // Don't retry for network errors - these indicate infrastructure/VPN issues
     const networkError = isNetworkError(error);
 
     if (networkError) {
-      this.logQuietly(() => {
-        if (quiet) this.logger?.error(quiet.line, quiet.facts);
-        else
+      if (!quiet) {
+        this.logQuietly(() =>
           this.logger?.error(
             `Network error - cannot connect to SAP system: ${errorDetails.message}`,
             errorDetails,
-          );
-      });
+          ),
+        );
+      }
       throw error;
     }
 
     // Log 404 as debug (common for existence checks), other errors as error
-    if (errorDetails.status === 404) {
-      this.logQuietly(() => {
-        if (quiet) this.logger?.debug(quiet.line, quiet.facts);
-        else this.logger?.debug(errorDetails.message, errorDetails);
-      });
+    if (quiet) {
+      // Written above.
+    } else if (errorDetails.status === 404) {
+      this.logQuietly(() =>
+        this.logger?.debug(errorDetails.message, errorDetails),
+      );
     } else {
-      this.logQuietly(() => {
-        if (quiet) this.logger?.error(quiet.line, quiet.facts);
-        else this.logger?.error(errorDetails.message, errorDetails);
-      });
+      this.logQuietly(() =>
+        this.logger?.error(errorDetails.message, errorDetails),
+      );
     }
 
     // No session is discarded and reopened on this instance to retry a
@@ -1905,7 +1943,7 @@ abstract class AbstractAbapConnection
           );
           if (observed === 'lost') throw this.markedLost(retryError);
         }
-        this.throwIfSessionDead(retryError, lease);
+        this.throwIfSessionDead(retryError, lease, quiet !== null);
         // A session verdict outranks the error that started the retry: the
         // caller can retry a 403 itself, but it cannot discover that its lock
         // handle is dead from a 403. So does the credential's failure, which
@@ -1950,7 +1988,7 @@ abstract class AbstractAbapConnection
     // request's refusal marked `sessionLost` above all: no provider is asked.
     if (this.isSessionVerdict(failure)) throw failure;
     // A resend inside the wire's recovery that met a dead session.
-    this.throwIfSessionDead(failure, lease);
+    this.throwIfSessionDead(failure, lease, requestConfig.noLog === true);
     // `noResend`: nothing to renew for, since nothing is resent — the refusal
     // is the caller's answer, and the provider is not asked.
     if (requestConfig.noResend) throw failure;
@@ -1998,7 +2036,7 @@ abstract class AbstractAbapConnection
         );
         if (observed === 'lost') throw this.markedLost(again);
       }
-      this.throwIfSessionDead(again, lease);
+      this.throwIfSessionDead(again, lease, requestConfig.noLog === true);
       const secondRejection = this.credentialRejection(again);
       if (!secondRejection) throw again;
       throw new AuthRefusedError(
@@ -2022,13 +2060,18 @@ abstract class AbstractAbapConnection
   private throwIfSessionDead(
     error: unknown,
     lease: Pick<RequestLease, 'generation'>,
+    /** A `noLog` request's: the loss reaches the caller, no line. */
+    quiet = false,
   ): void {
     if (error instanceof WireSessionLostError) {
-      this.throwWireSessionLost(error, lease);
+      this.throwWireSessionLost(error, lease, quiet);
     }
     if (!this.isDeadSessionResponse(error)) return;
     if (!this.lifecycle.isCurrent(lease)) return;
-    this.raiseSessionLost('the server reports the session no longer exists');
+    this.raiseSessionLost(
+      'the server reports the session no longer exists',
+      quiet,
+    );
     // No internal retry: a blind retry here is what produced further locks
     // in the field. The caller decides.
     throw sessionError(
@@ -2048,9 +2091,10 @@ abstract class AbstractAbapConnection
   private throwWireSessionLost(
     error: WireSessionLostError,
     lease: Pick<RequestLease, 'generation'>,
+    quiet = false,
   ): void {
     if (!this.lifecycle.isCurrent(lease)) return;
-    this.raiseSessionLost('the wire reports the session ended');
+    this.raiseSessionLost('the wire reports the session ended', quiet);
     const verdict = sessionError(
       ADT_SESSION_ERROR.SESSION_REPLACED,
       "The RFC conversation that carried this connection's SAP session has ended; any lock held in it is gone. Create a new connection for a new session.",
