@@ -15,8 +15,22 @@ export interface QuietFacts {
   bytes?: number;
 }
 
-/** The path of a request URL: everything before its query or fragment. */
+/**
+ * The path of a request URL. A relative one (`/…`) is cut at its query or
+ * fragment; an absolute one gives its pathname alone — never its user,
+ * password, host, query or fragment, which the WHATWG parser separates. One
+ * with a scheme and no authority (`user:pass@host/x`) names nothing.
+ */
 export function pathOf(url: string): string {
+  if (!url.startsWith('/')) {
+    let parsed: URL | undefined;
+    try {
+      parsed = new URL(url);
+    } catch {
+      parsed = undefined;
+    }
+    if (parsed !== undefined) return parsed.host ? parsed.pathname : '';
+  }
   let end = url.length;
   const query = url.indexOf('?');
   if (query !== -1) end = query;
