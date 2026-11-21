@@ -382,8 +382,9 @@ await connection.makeAdtRequest({
   `SESSION_REPLACED`, not as a warning, and the logoff it causes writes no
   line). The path is the URL's pathname for an absolute URL (no user, password
   or host), the path without its query or fragment for a relative one, and
-  `<unparsable url>` for one that does not parse; a control character in it is
-  written as `\xNN`, so a path cannot forge a line. A syntax check
+  `<unparsable url>` for one that does not parse; in the path and the method,
+  every code point that can break a line (C0, DEL, C1 with NEL, U+2028,
+  U+2029) is written as `\xNN` or `\uNNNN`, so neither can forge a line. A syntax check
   `createConnection` replays on a temporary session writes nothing of its own:
   its logon, the replay and its logoff go unlogged. The wires write no line of
   their own about it, the application server an answer names included.

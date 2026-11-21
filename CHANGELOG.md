@@ -24,8 +24,9 @@ A request without them behaves as before. See
   and `createConnection`'s replay of a syntax check on a temporary session.
   The CSRF token fetch before a mutation still happens, and under the flag
   goes once too (no renewal after a `401`, no pooled resend, no redirect, no
-  fallback endpoint, a token only from a `2xx`); its failure is the answer and
-  the request is not sent. SAP-endpoint
+  fallback endpoint, a token only from a `2xx`); its failure is the answer —
+  SAP's refusal, its status and body, even when a custom client resolved it —
+  and the request is not sent. SAP-endpoint
   redirects: the request goes with `maxRedirects: 0`, and its status predicate
   admits `2xx` and `3xx`, so a `3xx` resolves as the answer while every other
   status is refused as before.
@@ -47,7 +48,8 @@ A request without them behaves as before. See
   a session loss reaches the caller as the error's `sessionLost`, not a
   warning. The path is an absolute URL's pathname (no user, password or host),
   a relative one without its query or fragment, or `<unparsable url>`, its
-  control characters written as `\xNN`; a replayed syntax check writes no
+  line-breaking code points (C0, DEL, C1, U+2028, U+2029) in it and in the
+  method written as `\xNN` / `\uNNNN`; a replayed syntax check writes no
   line of its own (its temporary session runs without loggers). Two
   fixed-word lines that name nothing of the request are the exceptions:
   `CSRF token obtained` and the cloud wire's `The server published no logoff resource; sending the platform logoff`. The error thrown keeps
