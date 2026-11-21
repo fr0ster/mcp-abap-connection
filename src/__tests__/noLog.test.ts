@@ -98,7 +98,12 @@ function written(entries: Entry[]): string {
 const OWN_EXCHANGE_LINES = new Set(['CSRF token obtained']);
 
 /** Every line is one of the two quiet forms, and holds nothing else. */
-function assertQuiet(entries: Entry[], method: string): void {
+function assertQuiet(
+  entries: Entry[],
+  method: string,
+  /** The answer's size, when it is not one of the two bodies above. */
+  size?: number,
+): void {
   const all = written(entries);
   for (const canary of CANARIES) {
     assert.ok(!all.includes(canary), `a line holds ${canary}:\n${all}`);
@@ -125,7 +130,7 @@ function assertQuiet(entries: Entry[], method: string): void {
       assert.ok(typeof meta === 'object' && meta !== null && 'status' in meta);
       const status = meta.status;
       assert.ok(Number.isInteger(status));
-      const bytes = status === 403 ? CSRF_BYTES : ANSWER_BYTES;
+      const bytes = size ?? (status === 403 ? CSRF_BYTES : ANSWER_BYTES);
       assert.strictEqual(
         entry.message,
         `${method} ${PATH} → ${String(status)} (${bytes} bytes)`,
@@ -152,7 +157,9 @@ function assertCanarySeen(entries: Entry[]): void {
 }
 
 describe('noLog over HTTP', () => {
-  type Plan = { status: number } | 'destroy';
+  type Plan =
+    | { status: number; body?: string; headers?: Record<string, string> }
+    | 'destroy';
   let server: Server;
   let baseUrl: string;
   let plan: Plan = { status: 200 };
@@ -162,6 +169,8 @@ describe('noLog over HTTP', () => {
   let discoveryFails = 0;
   /** Whether the next discovery request has its socket destroyed. */
   let discoveryDies = false;
+  /** Whether the next discovery request is a 405 that carries a token. */
+  let discoveryRefusesWithToken = false;
   /** Each answer names another application server: a new value is logged. */
   let served = 0;
 
@@ -170,6 +179,7 @@ describe('noLog over HTTP', () => {
     first = [];
     discoveryFails = 0;
     discoveryDies = false;
+    discoveryRefusesWithToken = false;
     server = createServer((req, res) => {
       req.resume();
       req.on('end', () => {
@@ -184,7 +194,16 @@ describe('noLog over HTTP', () => {
           if (discoveryFails > 0) {
             discoveryFails -= 1;
             res.writeHead(500, 'SCANARY', { 'sap-adt-saplb': saplb });
-            res.end('fetch ACANARY');
+            res.end(ANSWER_BODY);
+            return;
+          }
+          if (discoveryRefusesWithToken) {
+            discoveryRefusesWithToken = false;
+            res.writeHead(405, 'SCANARY', {
+              'x-csrf-token': 'T1',
+              'sap-adt-saplb': saplb,
+            });
+            res.end(ANSWER_BODY);
             return;
           }
           res.writeHead(200, {
@@ -204,8 +223,9 @@ describe('noLog over HTTP', () => {
           'content-type': 'text/plain',
           'x-answer': 'XCANARY',
           'sap-adt-saplb': saplb,
+          ...(first.length === 0 ? plan.headers : {}),
         });
-        res.end(status === 403 ? CSRF_BODY : ANSWER_BODY);
+        res.end(plan.body ?? (status === 403 ? CSRF_BODY : ANSWER_BODY));
       });
     });
     await new Promise<void>((resolve) =>
@@ -255,6 +275,124 @@ describe('noLog over HTTP', () => {
       await connection.disconnect();
     }
   });
+
+  it('the CSRF fetch, on the transport itself: the application server it names is not logged with the flag', async () => {
+    for (const noLog of [true, false]) {
+      for (const refused of [false, true]) {
+        const { logger, entries } = recorder();
+        const transport = new OnPremHttpTransport(() => ({}), logger, {
+          client: '100',
+          baseUrl,
+        });
+        discoveryFails = refused ? 1 : 0;
+        const establishing = transport.establish({
+          authorize: async () => {},
+          logon: async () => {},
+          // Leaves the folding in to the transport.
+          observe: () => {},
+          ...(noLog ? { noLog: true } : {}),
+        });
+        if (refused) await assert.rejects(establishing);
+        else await establishing;
+        const named = entries.some((e) => e.message.includes('LBCANARY'));
+        assert.strictEqual(named, !noLog, written(entries));
+      }
+    }
+  });
+
+  it('a malformed absolute URL: a fixed placeholder, nothing of the URL', async () => {
+    const { connection, entries } = await connected();
+    try {
+      await assert.rejects(
+        connection.makeAdtRequest({
+          ...request('GET', true),
+          url: 'http://UCANARY:PCANARY@127.0.0.1:99999/x?secret=QCANARY',
+        }),
+      );
+      assert.deepStrictEqual(
+        entries.map((e) => [e.message, e.meta]),
+        [
+          [
+            'GET <unparsable url> → no answer',
+            { method: 'GET', path: '<unparsable url>' },
+          ],
+        ],
+      );
+    } finally {
+      await connection.disconnect();
+    }
+  });
+
+  it('a CSRF fetch that fails, with noResend too: the request’s one quiet line', async () => {
+    const { connection, entries, transport } = await connected();
+    try {
+      transport.adoptCsrfToken(null);
+      discoveryFails = 1;
+      await assert.rejects(
+        connection.makeAdtRequest({ ...request('PUT', true), noResend: true }),
+      );
+      assertQuiet(entries, 'PUT');
+    } finally {
+      await connection.disconnect();
+    }
+  });
+
+  it('a CSRF fetch refused with a token: no line of the wire’s own with the flag', async () => {
+    const { connection, entries, transport } = await connected();
+    try {
+      for (const noLog of [true, false]) {
+        entries.length = 0;
+        transport.adoptCsrfToken(null);
+        discoveryRefusesWithToken = true;
+        await connection.makeAdtRequest(request('PUT', noLog));
+        const kept = entries.some((e) =>
+          e.message.startsWith('CSRF token arrived on a refusal'),
+        );
+        assert.strictEqual(kept, !noLog, written(entries));
+        if (noLog) assertQuiet(entries, 'PUT');
+      }
+    } finally {
+      await connection.disconnect();
+    }
+  });
+
+  for (const [name, answer, size] of [
+    [
+      'an answer that says the session is gone',
+      { status: 400, body: 'Session not found' },
+      Buffer.byteLength('Session not found'),
+    ],
+    [
+      'an answer that replaced the session',
+      {
+        status: 200,
+        headers: { 'set-cookie': 'SAP_SESSIONID_STUB_100=S2; Path=/' },
+      },
+      ANSWER_BYTES,
+    ],
+  ] as const) {
+    it(`${name}: the quiet line alone, no session-loss line, with the flag`, async () => {
+      for (const noLog of [true, false]) {
+        // A connection each: the session is lost either way.
+        const { connection, entries } = await connected();
+        plan = { ...answer };
+        try {
+          await connection
+            .makeAdtRequest(request('GET', noLog))
+            .catch((e: unknown) => e);
+          await connection.flushGoodbye();
+          const lost = entries.some((e) =>
+            e.message.startsWith('Session lost'),
+          );
+          assert.strictEqual(lost, !noLog, written(entries));
+          if (noLog) assertQuiet(entries, 'GET', size);
+        } finally {
+          plan = { status: 200 };
+          await connection.disconnect().catch(() => {});
+        }
+      }
+    });
+  }
 
   it('a CSRF fetch whose pooled socket died: no resend line of the wire with the flag', async () => {
     for (const noLog of [true, false]) {

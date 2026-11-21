@@ -317,6 +317,49 @@ describe('noResend', () => {
     }
   });
 
+  for (const [name, refusal, fallback] of [
+    ['a 404 to the CSRF fetch', { status: 404, body: 'none' }, true],
+    ['a 501 to the CSRF fetch', { status: 501, body: 'none' }, true],
+    [
+      'a 405 to the CSRF fetch that carries a token',
+      { status: 405, body: 'no', headers: { 'x-csrf-token': 'T9' } },
+      false,
+    ],
+  ] as const) {
+    it(`${name}: the answer with the flag, the request not sent`, async () => {
+      const { connection, transport } = await connected();
+      try {
+        transport.adoptCsrfToken(null);
+        sap.discovery.push({ ...refusal });
+        await assert.rejects(connection.makeAdtRequest(write(true)), (e) => {
+          assert.strictEqual(statusOf(e), refusal.status);
+          return true;
+        });
+        assert.deepStrictEqual(trace(), [['GET', DISCOVERY, refusal.status]]);
+
+        sap.arrivals.length = 0;
+        transport.adoptCsrfToken(null);
+        sap.discovery.push({ ...refusal });
+        await connection.makeAdtRequest(write(false));
+        assert.deepStrictEqual(
+          trace(),
+          fallback
+            ? [
+                ['GET', DISCOVERY, refusal.status],
+                ['GET', '/sap/bc/adt/discovery', 200],
+                ['PUT', WORK, 200],
+              ]
+            : [
+                ['GET', DISCOVERY, refusal.status],
+                ['PUT', WORK, 200],
+              ],
+        );
+      } finally {
+        await connection.disconnect();
+      }
+    });
+  }
+
   it('a 401 the provider renews: the answer with the flag, resent once without', async () => {
     const provider = stubProvider();
     const { connection } = await connected(provider);
