@@ -102,6 +102,17 @@ function dataPreview(data: unknown): string | undefined {
   }
 }
 
+/** The flags of a request that reach the exchanges made for it. */
+type RequestFlags = Pick<IAdtTransportRequest, 'noResend' | 'noLog'>;
+
+/** A request's `noResend` and `noLog`, and nothing else of it. */
+function flagsOf(request: RequestFlags): RequestFlags {
+  return {
+    ...(request.noResend ? { noResend: true } : {}),
+    ...(request.noLog ? { noLog: true } : {}),
+  };
+}
+
 /**
  * What a `noResend` request resolves on: `2xx` as always, and a `3xx` from
  * SAP's own endpoint, which is returned rather than followed.
@@ -1191,6 +1202,8 @@ abstract class AbstractAbapConnection
      * connection's own exchanges and for stateful requests.
      */
     keepAnswer = false,
+    /** The answer is a `noLog` request's: the wire logs nothing of it. */
+    quiet = false,
   ): SessionObservation {
     // Fenced by SESSION GENERATION, not by the teardown epoch. Only a
     // caller-initiated teardown moves the epoch — a recovery deliberately does
@@ -1212,7 +1225,8 @@ abstract class AbstractAbapConnection
     }
     // The wire folds the response into its own state; what the change MEANS
     // is decided here, because it is a question about the session's lifetime.
-    this.transport.ingest(headers);
+    if (quiet) this.transport.ingest(headers, { noLog: true });
+    else this.transport.ingest(headers);
     return this.applyIdentityPolicy(
       this.lifecycle.observe(this.transport.sessionFingerprint()),
       keepAnswer,
@@ -1436,7 +1450,7 @@ abstract class AbstractAbapConnection
     // exchange itself does not stop the request — the CSRF recovery below
     // handles a token that is missing — but a refused credential does.
     if (mutation && !this.transport.csrfToken()) {
-      await this.readyWireUpfront(renewal, lease);
+      await this.readyWireUpfront(renewal, lease, flagsOf(options));
     }
 
     // The request's own headers: everything but the credential's, which is
@@ -1641,6 +1655,7 @@ abstract class AbstractAbapConnection
       response.headers as Record<string, unknown>,
       lease.generation,
       !isStatefulRequest(requestConfig),
+      requestConfig.noLog === true,
     );
     const answer = response as unknown as IAdtWireResponse<T, D>;
     // The answer itself says the session is gone: a field, on the one object
@@ -1745,11 +1760,20 @@ abstract class AbstractAbapConnection
     //
     // A stale request gets its error back and nothing else happens.
     if (!this.lifecycle.isCurrent(lease)) {
-      this.logQuietly(() =>
+      this.logQuietly(() => {
+        if (requestConfig.noLog) {
+          const fenced = quietLine(
+            normalizedMethod,
+            requestUrl,
+            refusalOf(error) ?? undefined,
+          );
+          this.logger?.debug(fenced.line, fenced.facts);
+          return;
+        }
         this.logger?.debug(
           'A request from a previous session failed; its recovery is fenced',
-        ),
-      );
+        );
+      });
       throw error;
     }
 
@@ -1787,6 +1811,7 @@ abstract class AbstractAbapConnection
         refusal.headers as Record<string, unknown> | undefined,
         lease.generation,
         !isStatefulRequest(requestConfig),
+        requestConfig.noLog === true,
       );
       if (observed === 'lost') throw this.markedLost(error);
     }
@@ -1847,7 +1872,9 @@ abstract class AbstractAbapConnection
       }
 
       try {
-        this.setCsrfToken(await this.fetchCsrfToken(requestUrl, lease));
+        this.setCsrfToken(
+          await this.fetchCsrfToken(requestUrl, lease, flagsOf(requestConfig)),
+        );
         const refreshedToken = this.getCsrfToken();
         if (refreshedToken) {
           requestHeaders['x-csrf-token'] = refreshedToken;
@@ -1874,6 +1901,7 @@ abstract class AbstractAbapConnection
             retryRefusal.headers as Record<string, unknown> | undefined,
             lease.generation,
             !isStatefulRequest(requestConfig),
+            requestConfig.noLog === true,
           );
           if (observed === 'lost') throw this.markedLost(retryError);
         }
@@ -1940,7 +1968,7 @@ abstract class AbstractAbapConnection
     try {
       if (rejection.at === 'logon') {
         this.transport.adoptCsrfToken(null);
-        await this.ensureWireReady(lease);
+        await this.ensureWireReady(lease, flagsOf(requestConfig));
         const token = this.transport.csrfToken();
         if (token && ['POST', 'PUT', 'DELETE'].includes(requestConfig.method)) {
           requestHeaders['x-csrf-token'] = token;
@@ -1966,6 +1994,7 @@ abstract class AbstractAbapConnection
           refusal.headers as Record<string, unknown> | undefined,
           lease.generation,
           !isStatefulRequest(requestConfig),
+          requestConfig.noLog === true,
         );
         if (observed === 'lost') throw this.markedLost(again);
       }
@@ -2129,10 +2158,16 @@ abstract class AbstractAbapConnection
   private async readyWireUpfront(
     renewal: CredentialRenewal,
     lease: Pick<RequestLease, 'generation'>,
+    /**
+     * The request's flags. `noResend`: the fetch goes once, and its failure —
+     * a refused logon included, the provider not asked — is the request's
+     * answer: the request is not sent. `noLog`: no line of the fetch's own.
+     */
+    flags: RequestFlags = {},
   ): Promise<void> {
     for (;;) {
       try {
-        await this.ensureWireReady(lease);
+        await this.ensureWireReady(lease, flags);
         return;
       } catch (error) {
         // The session the request was admitted to is gone: nothing more of it
@@ -2141,10 +2176,13 @@ abstract class AbstractAbapConnection
         // a session it no longer holds.
         if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(error);
         if (error instanceof AuthRefusedError) throw error;
+        if (flags.noResend) throw error;
         if (!(error instanceof WireLogonError)) {
-          this.logger?.debug(
-            `Could not fetch CSRF token upfront, will retry on error: ${factWords(error)}`,
-          );
+          if (!flags.noLog) {
+            this.logger?.debug(
+              `Could not fetch CSRF token upfront, will retry on error: ${factWords(error)}`,
+            );
+          }
           return;
         }
         const rejection = this.credentialRejection(error) as IAuthRejection;
@@ -2183,6 +2221,8 @@ abstract class AbstractAbapConnection
      * Omitted during connect(), which has no lease.
      */
     fence?: number | Pick<RequestLease, 'generation'>,
+    /** The flags of the request the token is fetched for. */
+    flags: RequestFlags = {},
   ): Promise<string> {
     // Dropped first, because this is only ever reached to REPLACE one: the
     // establishment is idempotent and would hand back the very token the
@@ -2190,8 +2230,8 @@ abstract class AbstractAbapConnection
     this.transport.adoptCsrfToken(null);
     await this.transport.establish({
       ...(typeof fence === 'number'
-        ? this.leasedContext(undefined, fence)
-        : this.leasedContext(fence)),
+        ? this.leasedContext(undefined, fence, flags)
+        : this.leasedContext(fence, undefined, flags)),
     });
 
     const token = this.transport.csrfToken();
@@ -2243,8 +2283,10 @@ abstract class AbstractAbapConnection
   private async ensureWireReady(
     /** The request's lease: fences what is sent and the response effects. */
     lease: Pick<RequestLease, 'generation'>,
+    /** The flags of the request the wire is made ready for. */
+    flags: RequestFlags = {},
   ): Promise<void> {
-    await this.transport.establish(this.leasedContext(lease));
+    await this.transport.establish(this.leasedContext(lease, undefined, flags));
   }
 
   /**
@@ -2266,8 +2308,13 @@ abstract class AbstractAbapConnection
   private leasedContext(
     lease?: Pick<RequestLease, 'generation'>,
     generation: number | undefined = lease?.generation,
+    /** The flags of the request the exchange is made for. */
+    flags: RequestFlags = {},
   ): IAdtSessionContext {
+    const quiet = flags.noLog === true;
     return {
+      ...(flags.noResend ? { noResend: true } : {}),
+      ...(quiet ? { noLog: true } : {}),
       authorize: async (headers) => {
         await this.credentialHeaders(headers);
         if (lease && !this.lifecycle.isCurrent(lease)) {
@@ -2290,7 +2337,12 @@ abstract class AbstractAbapConnection
             'The session this request was admitted to is gone; its answer was not taken',
           );
         }
-        this.observeResponse(headers as Record<string, unknown>, generation);
+        this.observeResponse(
+          headers as Record<string, unknown>,
+          generation,
+          false,
+          quiet,
+        );
       },
     };
   }
