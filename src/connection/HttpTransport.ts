@@ -500,9 +500,12 @@ export class HttpTransport implements IAdtTransport {
    * establishment or a replacement is a question about the session's lifetime,
    * which this has no way to answer and no business answering.
    */
-  ingest(headers?: Record<string, unknown>): void {
+  ingest(
+    headers?: Record<string, unknown>,
+    options?: { noLog?: true | undefined },
+  ): void {
     if (!headers) return;
-    this.rememberAppServer(headers);
+    this.rememberAppServer(headers, options?.noLog === true);
 
     const setCookie = headers['set-cookie'] as string[] | string | undefined;
     // Nothing was set, so nothing is folded in — not even the client, which is
@@ -814,6 +817,10 @@ export class HttpTransport implements IAdtTransport {
             ...context.extraHeaders,
             ...CSRF_CONFIG.REQUIRED_HEADERS,
           },
+          // The flags of the request the token is fetched for: under
+          // `noResend` the fetch, too, goes once and follows no redirect.
+          ...(context.noResend ? { noResend: true } : {}),
+          ...(context.noLog ? { noLog: true } : {}),
         });
 
         // Handed up BEFORE the token is read: the cookies are the session,
@@ -897,14 +904,20 @@ export class HttpTransport implements IAdtTransport {
    * Take the application server's name from a response, if it named one. Only
    * ever from the server's own answer — never guessed.
    */
-  private rememberAppServer(headers: Record<string, unknown>): void {
+  private rememberAppServer(
+    headers: Record<string, unknown>,
+    /** A `noLog` request's answer: the server is kept, its name not logged. */
+    quiet: boolean,
+  ): void {
     const key = Object.keys(headers).find(
       (k) => k.toLowerCase() === 'sap-adt-saplb',
     );
     const value = key ? headers[key] : undefined;
     if (typeof value === 'string' && value && value !== this.appServer) {
       this.appServer = value;
-      this.logger?.debug(`Session is on application server ${value}`);
+      if (!quiet) {
+        this.logger?.debug(`Session is on application server ${value}`);
+      }
     }
   }
 
