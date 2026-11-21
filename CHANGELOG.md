@@ -25,7 +25,8 @@ A request without them behaves as before. See
   The CSRF token fetch before a mutation still happens, and under the flag
   goes once too (no renewal after a `401`, no pooled resend, no redirect, no
   fallback endpoint, a token only from a `2xx`); its failure is the answer —
-  SAP's refusal, its status and body, even when a custom client resolved it —
+  SAP's refusal, its status and body, a `401` and a status a custom client
+  resolved included —
   and the request is not sent. SAP-endpoint
   redirects: the request goes with `maxRedirects: 0`, and its status predicate
   admits `2xx` and `3xx`, so a `3xx` resolves as the answer while every other
