@@ -15,7 +15,12 @@ import { isStatefulRequest } from './statefulRequest.js';
  */
 export function withCheckRelogon<TConnection extends CreatedConnection>(
   connection: TConnection,
-  fresh: () => TConnection,
+  /**
+   * A new connection for the replay. `quiet`: the call is a `noLog` one, so
+   * the connection writes no line — its logon, the replay and its logoff
+   * included; the call's one quiet line is the original request's.
+   */
+  fresh: (quiet: boolean) => TConnection,
 ): TConnection {
   const send = connection.makeAdtRequest.bind(connection);
   const disconnect = connection.disconnect.bind(connection);
@@ -55,7 +60,7 @@ export function withCheckRelogon<TConnection extends CreatedConnection>(
       )
         throw error;
 
-      const replacement = fresh();
+      const replacement = fresh(request.noLog === true);
       let stopped: Promise<void> | undefined;
       const stop = () => (stopped ??= replacement.disconnect());
       pending.add(stop);
