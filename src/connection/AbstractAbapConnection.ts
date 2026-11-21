@@ -29,7 +29,7 @@ import {
   WireSessionLostError,
 } from './authErrors.js';
 import { CSRF_ERROR_MESSAGES } from './csrfConfig.js';
-import { asArrived, factWords } from './failureFacts.js';
+import { asArrived, factWords, failureCopy } from './failureFacts.js';
 import {
   type IAdtSessionContext,
   type IAdtTransport,
@@ -2228,7 +2228,9 @@ abstract class AbstractAbapConnection
         // refusal's — since no provider is asked to act on the mark.
         if (flags.noResend) {
           throw error instanceof WireLogonError && refusalOf(error.cause)
-            ? error.cause
+            ? // A copy, made as every failure that leaves is: SAP's answer and
+              // the facts, nothing of the request a custom wire put beside it.
+              failureCopy(error.cause)
             : error;
         }
         if (!(error instanceof WireLogonError)) {
