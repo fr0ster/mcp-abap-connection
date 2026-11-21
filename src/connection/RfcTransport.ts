@@ -721,7 +721,11 @@ export class RfcTransport implements IOnPremTransport {
             passport,
           );
         }
-        const opened = await this.openOwn(parameters, generation);
+        const opened = await this.openOwn(
+          parameters,
+          generation,
+          request.noLog === true,
+        );
         // Checked again after the await: close() may have run since openOwn()
         // checked, and a conversation of a closed wire must not become the
         // kept one of the next.
@@ -801,7 +805,11 @@ export class RfcTransport implements IOnPremTransport {
     generation: number,
     passport: Buffer | undefined,
   ): Promise<IAdtTransportResponse> {
-    const own = await this.openOwn(parameters, generation);
+    const own = await this.openOwn(
+      parameters,
+      generation,
+      request.noLog === true,
+    );
     try {
       if (!request.noLog) {
         this.logger?.debug('RFC conversation opened for one stateless call');
@@ -853,10 +861,12 @@ export class RfcTransport implements IOnPremTransport {
   private async openOwn(
     parameters: Readonly<Record<string, string>>,
     generation: number,
+    /** For a `noLog` request: a failed close writes no line. */
+    quiet = false,
   ): Promise<IRfcConversation> {
     const own = await this.openedWith(parameters);
     if (generation !== this.generation || !this.conversation?.alive) {
-      await this.closeQuietly(own);
+      await this.closeQuietly(own, quiet);
       throw new Error(
         'RFC transport was closed while the call was being opened; nothing was sent.',
       );

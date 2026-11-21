@@ -746,3 +746,56 @@ describe('noLog over RFC', () => {
     }
   });
 });
+
+describe('noLog over RFC, a call whose wire closes while it logs on', () => {
+  it('the per-call conversation’s failed close writes no line with the flag', async () => {
+    for (const noLog of [true, false]) {
+      const { logger, entries } = recorder();
+      let made = 0;
+      let release: () => void = () => {};
+      const opening = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const factory: RfcConversationFactory = () => {
+        const perCall = made++ > 0;
+        let alive = false;
+        const conversation: IRfcConversation = {
+          get alive() {
+            return alive;
+          },
+          open: async () => {
+            if (perCall) await opening;
+            alive = true;
+          },
+          close: async () => {
+            alive = false;
+            if (perCall) throw { codeString: 'RFC_CLOSE_CANARY' };
+          },
+          call: async () => ({}),
+        };
+        return conversation;
+      };
+      const transport = new RfcTransport(factory, logger);
+      const context = {
+        authorize: async () => {},
+        logon: async () => {},
+        observe: () => {},
+      };
+      await transport.open(context);
+      const sending = transport.send({
+        method: 'GET',
+        url: `${PATH}?secret=QCANARY`,
+        ...(noLog ? { noLog: true } : {}),
+      });
+      // The wire is given back while the call's own conversation logs on.
+      const closing = transport.close();
+      release();
+      await assert.rejects(sending);
+      await closing;
+      const closeLine = entries.some((e) =>
+        e.message.startsWith('RFC close error'),
+      );
+      assert.strictEqual(closeLine, !noLog, written(entries));
+    }
+  });
+});
