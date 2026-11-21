@@ -71,7 +71,11 @@ import type {
   IOnPremTransport,
 } from './IAdtTransport.js';
 import { isFactoryOwnWords } from './rfcConversation.js';
-import { isStatefulRequest } from './statefulRequest.js';
+import {
+  cookieWithoutContext,
+  isSessionTypeHeader,
+  isStatefulRequest,
+} from './statefulRequest.js';
 
 /**
  * The SDK answers with untyped structures: each level is read as a record and
@@ -717,12 +721,16 @@ export class RfcTransport implements IOnPremTransport {
             passport,
           );
         }
-        const opened = await this.openOwn(parameters, generation);
+        const opened = await this.openOwn(
+          parameters,
+          generation,
+          request.noLog === true,
+        );
         // Checked again after the await: close() may have run since openOwn()
         // checked, and a conversation of a closed wire must not become the
         // kept one of the next.
         if (generation !== this.generation) {
-          await this.closeQuietly(opened);
+          await this.closeQuietly(opened, request.noLog === true);
           throw new Error(
             'RFC transport was closed while the call was being opened; nothing was sent.',
           );
@@ -734,16 +742,18 @@ export class RfcTransport implements IOnPremTransport {
           try {
             return await this.carry(request, opened, generation, passport);
           } finally {
-            await this.closeUnlessReleased(opened);
+            await this.closeUnlessReleased(opened, request.noLog === true);
           }
         }
         this.canReset = true;
         this.stateless = opened;
         this.statelessLanguage = this.languageOf(parameters);
         kept = opened;
-        this.logger?.debug(
-          'RFC stateless conversation opened (reset per call)',
-        );
+        if (!request.noLog) {
+          this.logger?.debug(
+            'RFC stateless conversation opened (reset per call)',
+          );
+        }
       } else if (
         otherLanguage(language, this.statelessLanguage) !== undefined
       ) {
@@ -769,12 +779,14 @@ export class RfcTransport implements IOnPremTransport {
             await kept.resetServerContext?.();
           } catch (e) {
             // A context that could not be reset must not serve the next call.
-            this.logQuietly(
-              () =>
-                `RFC reset failed, dropping the conversation: ${failureWords(e)}`,
-            );
+            if (!request.noLog) {
+              this.logQuietly(
+                () =>
+                  `RFC reset failed, dropping the conversation: ${failureWords(e)}`,
+              );
+            }
             this.dropStateless(kept);
-            await this.closeQuietly(kept);
+            await this.closeQuietly(kept, request.noLog === true);
           }
         }
       }
@@ -793,12 +805,18 @@ export class RfcTransport implements IOnPremTransport {
     generation: number,
     passport: Buffer | undefined,
   ): Promise<IAdtTransportResponse> {
-    const own = await this.openOwn(parameters, generation);
+    const own = await this.openOwn(
+      parameters,
+      generation,
+      request.noLog === true,
+    );
     try {
-      this.logger?.debug('RFC conversation opened for one stateless call');
+      if (!request.noLog) {
+        this.logger?.debug('RFC conversation opened for one stateless call');
+      }
       return await this.carry(request, own, generation, passport);
     } finally {
-      await this.closeUnlessReleased(own);
+      await this.closeUnlessReleased(own, request.noLog === true);
     }
   }
 
@@ -828,8 +846,10 @@ export class RfcTransport implements IOnPremTransport {
    */
   private async closeUnlessReleased(
     conversation: IRfcConversation,
+    /** A `noLog` request's conversation: a failed close writes no line. */
+    quiet = false,
   ): Promise<void> {
-    if (conversation.alive) await this.closeQuietly(conversation);
+    if (conversation.alive) await this.closeQuietly(conversation, quiet);
   }
 
   /**
@@ -841,10 +861,12 @@ export class RfcTransport implements IOnPremTransport {
   private async openOwn(
     parameters: Readonly<Record<string, string>>,
     generation: number,
+    /** For a `noLog` request: a failed close writes no line. */
+    quiet = false,
   ): Promise<IRfcConversation> {
     const own = await this.openedWith(parameters);
     if (generation !== this.generation || !this.conversation?.alive) {
-      await this.closeQuietly(own);
+      await this.closeQuietly(own, quiet);
       throw new Error(
         'RFC transport was closed while the call was being opened; nothing was sent.',
       );
@@ -941,11 +963,15 @@ export class RfcTransport implements IOnPremTransport {
     }
   }
 
-  private async closeQuietly(conversation: IRfcConversation): Promise<void> {
+  private async closeQuietly(
+    conversation: IRfcConversation,
+    /** A `noLog` request's conversation: a failed close writes no line. */
+    quiet = false,
+  ): Promise<void> {
     try {
       await conversation.close();
     } catch (e) {
-      this.logQuietly(() => `RFC close error: ${failureWords(e)}`);
+      if (!quiet) this.logQuietly(() => `RFC close error: ${failureWords(e)}`);
     }
   }
 
@@ -973,9 +999,25 @@ export class RfcTransport implements IOnPremTransport {
     }
     // The passport is not a header field over RFC: it goes to the SDK as the
     // call's own (`passport`, read in `send()`).
-    const headerFields = Object.entries(request.headers ?? {})
-      .filter(([NAME]) => !isPassportHeader(NAME))
-      .map(([NAME, VALUE]) => ({ NAME, VALUE: String(VALUE) }));
+    // `stateless`: the caller's own session header does not travel, in any
+    // letter case, and neither does the `sap-contextid` cookie — before
+    // anything else reads the fields.
+    const headerFields: { NAME: string; VALUE: string }[] = [];
+    for (const [NAME, value] of Object.entries(request.headers ?? {})) {
+      if (isPassportHeader(NAME)) continue;
+      const VALUE = String(value);
+      if (!request.stateless) {
+        headerFields.push({ NAME, VALUE });
+        continue;
+      }
+      if (isSessionTypeHeader(NAME)) continue;
+      if (NAME.trim().toLowerCase() === 'cookie') {
+        const kept = cookieWithoutContext(VALUE);
+        if (kept !== undefined) headerFields.push({ NAME, VALUE: kept });
+        continue;
+      }
+      headerFields.push({ NAME, VALUE });
+    }
 
     // ADT refuses a request with no Accept — `400 ExceptionResourceBadRequest:
     // Accept header missing`, measured on E19. Over HTTP axios supplies the
@@ -999,14 +1041,17 @@ export class RfcTransport implements IOnPremTransport {
       });
     }
 
-    this.logger?.debug(`RFC → ${method} ${uri}`);
+    // `noLog`: nothing before the answer, and nothing of the request at all —
+    // its one line is the quiet one below, once there is a status.
+    const noLog = request.noLog === true;
+    if (!noLog) this.logger?.debug(`RFC → ${method} ${uri}`);
     // `RFC → METHOD URI` alone was not enough to debug a body that goes
     // missing or gets mis-serialised on the way to `SADT_REST_RFC_ENDPOINT`
     // (found chasing a `superPackage` that disappeared before it reached
     // SAP) — the actual bytes matter, so the debug channel carries them too
     // when the caller asks for it, redacted and clipped so a captured log is
     // safe to paste into an issue and small enough to want to.
-    if (this.logger && this.options.logWire) {
+    if (this.logger && this.options.logWire && !noLog) {
       this.logger.debug(
         `RFC HEADERS: ${JSON.stringify(redactHeaders(headerFields))}`,
       );
@@ -1077,7 +1122,8 @@ export class RfcTransport implements IOnPremTransport {
       const words = rfc?.codeString ?? UNNAMED;
       const text = `RFC call to SADT_REST_RFC_ENDPOINT failed: ${words}`;
       try {
-        this.logger?.error(`RFC call failed: ${words}`);
+        // `noLog`: the request's one line is the connection's.
+        if (!noLog) this.logger?.error(`RFC call failed: ${words}`);
       } catch {
         // A broken logger must not replace the call's failure.
       }
@@ -1121,19 +1167,26 @@ export class RfcTransport implements IOnPremTransport {
       const detected = statusFromExceptionXml(data);
       status = detected.code;
       statusText = detected.text;
-      this.logger?.debug(
-        `RFC: STATUS_LINE empty, read ${status} out of the exception XML`,
-      );
+      if (!noLog) {
+        this.logger?.debug(
+          `RFC: STATUS_LINE empty, read ${status} out of the exception XML`,
+        );
+      }
     }
     if (!status) {
       status = 200;
       statusText = statusText || 'OK';
     }
 
-    this.logger?.debug(`RFC ← ${status} ${statusText} (${data.length} bytes)`);
+    // `noLog`: the request's one line is the connection's quiet one.
+    if (!noLog) {
+      this.logger?.debug(
+        `RFC ← ${status} ${statusText} (${data.length} bytes)`,
+      );
+    }
     // The line above already carries the size, so an empty body needs no line
     // of its own.
-    if (this.logger && this.options.logWire && data) {
+    if (this.logger && this.options.logWire && data && !noLog) {
       this.logger.debug(`RFC RESPONSE BODY: ${this.clipped(data)}`);
     }
 

@@ -56,7 +56,11 @@ import {
   type IAdtTransportResponse,
   refusalOf,
 } from './IAdtTransport.js';
-import { isStatefulRequest, SESSION_TYPE_HEADER } from './statefulRequest.js';
+import {
+  isSessionTypeHeader,
+  isStatefulRequest,
+  SESSION_TYPE_HEADER,
+} from './statefulRequest.js';
 
 /**
  * The pool every request of the wire goes through: the options of Node's own
@@ -211,6 +215,13 @@ function deletesCookie(attributes: string[]): boolean {
 
 /** The cookie that names a stateful ABAP context. */
 const CONTEXT_COOKIE = 'sap-contextid';
+
+/** How an exchange's answer is folded in: quietly for a `noLog` request's. */
+function quietIngest(context: {
+  noLog?: true | undefined;
+}): { noLog: true } | undefined {
+  return context.noLog ? { noLog: true } : undefined;
+}
 
 /** The platform's logoff, which answers `200` while expiring the session cookie. */
 const ICF_LOGOFF_PATH = '/sap/public/bc/icf/logoff';
@@ -496,9 +507,12 @@ export class HttpTransport implements IAdtTransport {
    * establishment or a replacement is a question about the session's lifetime,
    * which this has no way to answer and no business answering.
    */
-  ingest(headers?: Record<string, unknown>): void {
+  ingest(
+    headers?: Record<string, unknown>,
+    options?: { noLog?: true | undefined },
+  ): void {
     if (!headers) return;
-    this.rememberAppServer(headers);
+    this.rememberAppServer(headers, options?.noLog === true);
 
     const setCookie = headers['set-cookie'] as string[] | string | undefined;
     // Nothing was set, so nothing is folded in — not even the client, which is
@@ -797,7 +811,9 @@ export class HttpTransport implements IAdtTransport {
       // which the server says by answering 404 there. Asked after a refused
       // connection or a network error, it would ask a host that is not
       // answering to answer a different path.
-      if (index > 0 && !absentEndpoint(last)) break;
+      // `noResend`: the fetch is one request, the fallback a second — the
+      // first answer, whatever it is, is the request's.
+      if (index > 0 && (context.noResend || !absentEndpoint(last))) break;
       try {
         // Authorized per request: a provider may renew behind the call.
         const auth: Record<string, string> = {};
@@ -810,6 +826,10 @@ export class HttpTransport implements IAdtTransport {
             ...context.extraHeaders,
             ...CSRF_CONFIG.REQUIRED_HEADERS,
           },
+          // The flags of the request the token is fetched for: under
+          // `noResend` the fetch, too, goes once and follows no redirect.
+          ...(context.noResend ? { noResend: true } : {}),
+          ...(context.noLog ? { noLog: true } : {}),
         });
 
         // Handed up BEFORE the token is read: the cookies are the session,
@@ -817,8 +837,18 @@ export class HttpTransport implements IAdtTransport {
         // tokenless answer still opened. And before the fold: an answer the
         // connection refuses as a gone session's throws here, and nothing
         // of it reaches the jar.
+        //
+        // `noResend`: a status the client resolved outside `2xx` is SAP's
+        // refusal, and goes on as one — its status and body, the shape any
+        // refusal has — to the handling below, which observes it once.
+        if (
+          context.noResend &&
+          (response.status < 200 || response.status >= 300)
+        ) {
+          throw httpFailure({ response });
+        }
         context.observe(response.headers);
-        this.ingest(headerFields(response.headers));
+        this.ingest(headerFields(response.headers), quietIngest(context));
 
         const token = csrfTokenIn(response.headers);
         if (token !== undefined) {
@@ -844,7 +874,7 @@ export class HttpTransport implements IAdtTransport {
           // A refusal can still carry the cookies that matter — handed up
           // first, so one the connection refuses is not folded in.
           context.observe(headers);
-          this.ingest(headers);
+          this.ingest(headers, quietIngest(context));
         }
 
         // A refused logon, named as one — after its cookies are in. What to
@@ -856,10 +886,15 @@ export class HttpTransport implements IAdtTransport {
         // …and the token itself. SAP answers 405 to a GET on some endpoints
         // and puts the token in the header anyway, and other refusals carry
         // one too.
-        const onError = csrfTokenIn(headers);
+        //
+        // `noResend`: only a `2xx` fetch yields a token; a refusal is the
+        // request's answer.
+        const onError = context.noResend ? undefined : csrfTokenIn(headers);
         if (onError !== undefined) {
           this.token = onError;
-          this.logger?.debug('CSRF token arrived on a refusal, and is kept');
+          if (!context.noLog) {
+            this.logger?.debug('CSRF token arrived on a refusal, and is kept');
+          }
           return;
         }
       }
@@ -893,14 +928,20 @@ export class HttpTransport implements IAdtTransport {
    * Take the application server's name from a response, if it named one. Only
    * ever from the server's own answer — never guessed.
    */
-  private rememberAppServer(headers: Record<string, unknown>): void {
+  private rememberAppServer(
+    headers: Record<string, unknown>,
+    /** A `noLog` request's answer: the server is kept, its name not logged. */
+    quiet: boolean,
+  ): void {
     const key = Object.keys(headers).find(
       (k) => k.toLowerCase() === 'sap-adt-saplb',
     );
     const value = key ? headers[key] : undefined;
     if (typeof value === 'string' && value && value !== this.appServer) {
       this.appServer = value;
-      this.logger?.debug(`Session is on application server ${value}`);
+      if (!quiet) {
+        this.logger?.debug(`Session is on application server ${value}`);
+      }
     }
   }
 
@@ -926,6 +967,14 @@ export class HttpTransport implements IAdtTransport {
       ...(stateful ? this.sessionTypeHeaders() : {}),
       ...headers,
     };
+    // `stateless`: the caller's own session header goes, in whatever letter
+    // case it was written; the context cookie is filtered below, as for every
+    // request that is not stateful.
+    if (request.stateless) {
+      for (const name of Object.keys(dressed)) {
+        if (isSessionTypeHeader(name)) delete dressed[name];
+      }
+    }
     // The caller's spelling of the client goes; the wire's goes in last. It is
     // the same value — refuseAnotherClient saw to that — said once.
     for (const name of Object.keys(dressed)) {
@@ -1221,11 +1270,16 @@ export class HttpTransport implements IAdtTransport {
         },
         written,
       );
-      this.logger?.debug('Told the server the session is finished');
+      // `noLog`: a logoff a `noLog` request's answer caused writes no line.
+      if (!context.noLog) {
+        this.logger?.debug('Told the server the session is finished');
+      }
     } catch (error) {
-      this.logger?.debug(
-        `Could not tell the server the session is finished: ${factWords(error)}`,
-      );
+      if (!context.noLog) {
+        this.logger?.debug(
+          `Could not tell the server the session is finished: ${factWords(error)}`,
+        );
+      }
     }
   }
 
@@ -1332,7 +1386,13 @@ export class HttpTransport implements IAdtTransport {
    * The risk, stated: a server that read the request and died before a byte of
    * its answer would run it twice.
    */
-  private async sendPooled(config: AxiosRequestConfig): Promise<AxiosResponse> {
+  private async sendPooled(
+    config: AxiosRequestConfig,
+    /** The request's `noResend`: sent once, its failure the caller's. */
+    once: boolean,
+    /** The request's `noLog`: the wire writes no line about it. */
+    quiet: boolean,
+  ): Promise<AxiosResponse> {
     const attempt: PooledAttempt = {};
     try {
       return await pooledAttempts.run(attempt, () =>
@@ -1346,15 +1406,19 @@ export class HttpTransport implements IAdtTransport {
     } catch (error) {
       const fresh = this.fresh;
       if (
+        once ||
         fresh === null ||
         !resendable(config.data) ||
         !diedOnPooledSocket(error, attempt)
       ) {
         throw error;
       }
-      this.logger?.debug(
-        'HTTP: a pooled connection closed before any answer; the request is sent once more on a new connection',
-      );
+      // `noLog`: the request's one line is the connection's quiet one.
+      if (!quiet) {
+        this.logger?.debug(
+          'HTTP: a pooled connection closed before any answer; the request is sent once more on a new connection',
+        );
+      }
       return this.client()({
         ...config,
         httpAgent: fresh.http,
@@ -1372,6 +1436,8 @@ export class HttpTransport implements IAdtTransport {
   ): Promise<IAdtTransportResponse> {
     const config: AxiosRequestConfig = {
       ...(redirects ?? {}),
+      // `noResend`: following a redirect would send the request again.
+      ...(request.noResend ? { maxRedirects: 0 } : {}),
       // The write is the point `disconnect()` resolves at: the request's
       // `finish`, emitted once its bytes are handed to the socket — not when
       // the server answers, which it may do minutes later or never.
@@ -1420,7 +1486,11 @@ export class HttpTransport implements IAdtTransport {
       response =
         written !== undefined
           ? await this.client()(config)
-          : await this.sendPooled(config);
+          : await this.sendPooled(
+              config,
+              request.noResend === true,
+              request.noLog === true,
+            );
     } catch (error) {
       // Never as the client threw it: axios's error holds this request's
       // config — its credential headers among it — and words naming the host.

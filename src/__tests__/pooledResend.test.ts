@@ -288,6 +288,27 @@ for (const scheme of ['http', 'https'] as const) {
       ]);
     });
 
+    it('with noResend, a request whose pooled socket ended with no answer is not resent', async () => {
+      const transport = wire();
+      stub.plan = onReuse('drop');
+
+      await read(transport);
+      await assert.rejects(
+        transport.send({
+          method: 'POST',
+          url: '/sap/bc/adt/oo/classes/zcl_test?_action=UNLOCK&lockHandle=H',
+          headers: SESSION_HEADERS,
+          noResend: true,
+        }),
+        isReset,
+      );
+
+      assert.deepStrictEqual(trace(stub), [
+        ['GET', 1, 'ok'],
+        ['POST', 2, 'drop'],
+      ]);
+    });
+
     it('does not resend a request that failed on a socket opened for it', async () => {
       const transport = wire();
       stub.plan = () => 'drop';

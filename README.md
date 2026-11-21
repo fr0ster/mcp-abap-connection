@@ -334,7 +334,71 @@ once for a request, never a second time:
   the provider.
 
 Nothing else is sent again: a failed request — the CSRF token fetch included
-(21.0.0) — is its own error.
+(21.0.0) — is its own error. A request with `noResend: true` (25.1.0) gets none
+of these three resends: see the request options below.
+
+### Request options: `noResend`, `noLog`, `stateless`
+
+Since 25.1.0, three optional flags of `IAbapRequestOptions`
+(`@mcp-abap-adt/interfaces-adt-connection` 5.2.0) change one request and
+nothing else. A request without them behaves as before.
+
+```typescript
+await connection.makeAdtRequest({
+  method: "POST",
+  url: "/sap/bc/adt/abapgit/repos",
+  timeout: 0,
+  data: "<repository/>",
+  noResend: true, // the first failure is the answer
+  noLog: true, // nothing of the request or its answer in a log
+  stateless: true, // stateless whatever the session mode
+});
+```
+
+- **`noResend: true`** — the request is sent once. It gates every replay: the
+  CSRF recovery, the resend after the credential's renewal (the provider is not
+  asked), the resend on a dead pooled socket (the named exception above), and
+  `createConnection`'s replay of a syntax check on a temporary session. The CSRF
+  token fetch before a mutation still happens, and goes once too: no renewal
+  after a `401`, no pooled-socket resend, no redirect followed, no fallback to
+  `/sap/bc/adt/discovery` after a `404`/`501`, and only a `2xx` yields a token
+  (a refusal carrying one does not). Its failure is the answer, and the request
+  is then not sent. A redirect from SAP's ADT endpoint
+  is not followed (`maxRedirects: 0`): a `3xx` resolves as the answer, and every
+  other status is refused as before. Use it for a request that may already have
+  run when a resend would start: SAP refuses a bad CSRF token before any ADT
+  resource handler runs, but the recovery also resends on any answer whose text
+  holds `CSRF token`, which a handler's own `500` may carry after it ran.
+- **`noLog: true`** — no line holds the request's query, headers or body, or the
+  answer's headers, status text or body: not the connection's request and
+  refusal lines (no preview), not the CSRF-fetch and fence lines, not the HTTP
+  wire's resend and application-server lines, not the RFC wire's URI, `logWire`
+  headers and bodies, status text, conversation and cleanup lines. Exactly one
+  line is written per request, by the connection: `METHOD /path → STATUS (N
+  bytes)` for its answer or refusal — or `METHOD /path → no answer` — with the
+  fields `{ method, path, status, bytes }` — whatever path the request takes: a
+  CSRF fetch that ends it before it is sent, a recovery, a session the answer
+  shows lost (the loss reaches you as the error's `sessionLost` /
+  `SESSION_REPLACED`, not as a warning, and the logoff it causes writes no
+  line). The path is the URL's pathname for an absolute URL (no user, password
+  or host), the path without its query or fragment for a relative one, and
+  `<unparsable url>` for one that does not parse; in the path and the method,
+  every code point that can break a line (C0, DEL, C1 with NEL, U+2028,
+  U+2029) is written as `\xNN` or `\uNNNN`, so neither can forge a line. A syntax check
+  `createConnection` replays on a temporary session writes nothing of its own:
+  its logon, the replay and its logoff go unlogged. The wires write no line of
+  their own about it, the application server an answer names included.
+  Two fixed-word lines that name nothing of the request are the documented
+  exceptions: the wire's `CSRF token obtained`, when a token is fetched for the
+  request, and the cloud wire's `The server published no logoff resource; sending the platform logoff`, when an answer that replaced the
+  session leads to its logoff. The error
+  thrown keeps SAP's answer (`response`, `status`) for the caller.
+- **`stateless: true`** — the request goes stateless on HTTP and RFC whatever
+  the session mode (`setSessionType('stateful')` included), and wins over the
+  caller's own `x-sap-adt-sessiontype: stateful` header in any letter case: the
+  wire strips that header and the `sap-contextid` cookie from the request (over
+  RFC, the call goes on a conversation other than the stateful one). The session
+  mode is not changed: the next ordinary request follows it.
 
 ### An instance on an existing session
 

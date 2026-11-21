@@ -134,6 +134,8 @@ fact belongs on the transport instead.
   global agent — it closes idle pooled sockets only, no request deadline); `agentOptions`
   `keepAlive: false` turns reuse off. The logoff always goes on its own connection
   (`Connection: close`)
+- A request with `noResend` is never replayed — CSRF recovery, the credential-renewal resend, the
+  dead-pooled-socket resend (#314) and the check relogon replay are all skipped
 - One cross-session retry at the factory boundary on modern HTTP: a
   stateless `POST /sap/bc/adt/checkruns` outside a critical section that SAP
   rejects with an explicit CSRF 403 and marks as session replacement is resent

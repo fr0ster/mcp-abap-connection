@@ -169,8 +169,13 @@ export function createConnection<TCredential extends IAuthProvider>(
 ): CreatedConnection<TCredential> {
   const connection = buildConnection(spec);
   if (spec.transport !== 'http') return connection;
-  return withCheckRelogon(connection, () =>
-    buildConnection({ ...spec, session: undefined }),
+  return withCheckRelogon(connection, (quiet) =>
+    buildConnection({
+      ...spec,
+      session: undefined,
+      // A `noLog` call's replay: nothing of it reaches a log.
+      ...(quiet ? { logger: undefined, wireLogger: undefined } : {}),
+    }),
   );
 }
 

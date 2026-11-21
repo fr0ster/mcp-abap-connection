@@ -4,6 +4,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { ADT_SESSION_ERROR } from '@mcp-abap-adt/interfaces-adt-connection';
 import { createConnection } from '../../connection/createConnection.js';
 import { refusalOf } from '../../connection/IAdtTransport.js';
+import type { ILogger } from '../../logger.js';
 import { type SapStub, startSapStub } from '../helpers/sapStub.js';
 import { stubProvider } from '../helpers/stubProvider.js';
 
@@ -154,4 +155,88 @@ it('does not resend a check after the caller disconnects during relogon', async 
   releaseDiscovery();
   await Promise.all([call, disconnected]);
   assert.equal(sap.sentTo(CHECK).length, 1);
+});
+
+it('with noResend, a CSRF-refused check is the answer: no relogon, no replay', async () => {
+  const connection = connector();
+  await connection.connect();
+  sap.work(CHECK, [expired]);
+  try {
+    await assert.rejects(
+      connection.makeAdtRequest({
+        url: CHECK,
+        method: 'POST',
+        timeout: 1000,
+        data: '<check/>',
+        params: { reporters: 'abapCheckRun' },
+        noResend: true,
+      }),
+      (error: unknown) => {
+        assert.equal(refusalOf(error)?.status, 403);
+        return true;
+      },
+    );
+    assert.equal(sap.sentTo(DISCOVERY).length, 1);
+    assert.equal(sap.sentTo(CHECK).length, 1);
+  } finally {
+    await connection.disconnect();
+  }
+});
+
+it('with noLog, the replay writes nothing of its own: one quiet line for the call', async () => {
+  for (const noLog of [true, false]) {
+    const lines: { message: string; meta: unknown }[] = [];
+    let recording = false;
+    const record = (message: string, meta?: unknown) => {
+      if (recording) lines.push({ message, meta });
+    };
+    const logger: ILogger = {
+      info: record,
+      warn: record,
+      error: record,
+      debug: record,
+    };
+    const connection = createConnection({
+      system: 'onprem',
+      transport: 'http',
+      config: { url: sap.baseUrl, authType: 'basic', client: '100' },
+      credential: stubProvider(),
+      logger,
+      wireLogger: logger,
+    });
+    await connection.connect();
+    sap.work(CHECK, [expired, { status: 200, body: 'checked' }]);
+    // The replacement's logon names an application server.
+    sap.discovery.push({
+      status: 200,
+      headers: { 'sap-adt-saplb': 'LBCANARY' },
+    });
+    recording = true;
+    try {
+      const result = await connection.makeAdtRequest({
+        url: CHECK,
+        method: 'POST',
+        timeout: 1000,
+        data: '<check/>',
+        params: { reporters: 'abapCheckRun' },
+        ...(noLog ? { noLog: true } : {}),
+      });
+      assert.equal(result.status, 200);
+      const all = lines.map((l) => `${l.message} ${JSON.stringify(l.meta)}`);
+      if (noLog) {
+        const own = new Set([
+          'CSRF token obtained',
+          'The server published no logoff resource; sending the platform logoff',
+        ]);
+        const quiet = lines.filter((l) => !own.has(l.message));
+        assert.equal(quiet.length, 1, all.join('\n'));
+        assert.ok(!all.join('\n').includes('LBCANARY'), all.join('\n'));
+      } else {
+        assert.ok(all.join('\n').includes('LBCANARY'), all.join('\n'));
+      }
+    } finally {
+      recording = false;
+      await connection.disconnect();
+    }
+  }
 });

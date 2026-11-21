@@ -57,6 +57,24 @@ export interface IAdtTransportRequest {
    * `HttpTransport.dress`.
    */
   stateful?: boolean;
+  /**
+   * The caller's `stateless: true`: the request goes stateless whatever the
+   * session mode and whatever session header it carries. Wins in
+   * `isStatefulRequest`; the wire strips a conflicting `x-sap-adt-sessiontype`
+   * header, in any letter case, and the `sap-contextid` cookie from it.
+   */
+  stateless?: true | undefined;
+  /**
+   * The caller's `noResend: true`: the wire sends the request once — no resend
+   * on a dead pooled socket — and follows no redirect.
+   */
+  noResend?: true | undefined;
+  /**
+   * The caller's `noLog: true`: a line the wire writes about the request
+   * carries the method, the path without its query, the integer status and
+   * the byte count, and nothing else.
+   */
+  noLog?: true | undefined;
 }
 
 /** What came back, in the terms every transport can produce. */
@@ -102,6 +120,13 @@ export interface IAdtSessionContext {
   logon(target: ILogonTarget): Promise<void>;
   /** Anything the conversation carries — the ADT connection id, today. */
   extraHeaders?: Record<string, string>;
+  /**
+   * The flags of the request this exchange is made for — its CSRF token
+   * fetch, say: `noResend` sends the exchange once and follows no redirect,
+   * `noLog` keeps what it sees out of the wire's lines.
+   */
+  noResend?: true | undefined;
+  noLog?: true | undefined;
   /** Where to hand each answer, so the connection sees what the wire saw. */
   observe: (headers: unknown) => void;
 }
@@ -193,7 +218,11 @@ export interface IAdtTransport {
    * establishment or a replacement is a question about the session's lifetime,
    * and it is answered above.
    */
-  ingest(headers?: Record<string, unknown>): void;
+  ingest(
+    headers?: Record<string, unknown>,
+    /** The answer is a `noLog` request's: nothing of it reaches a line. */
+    options?: { noLog?: true | undefined },
+  ): void;
 
   /** What to put on the `Cookie` header, or `null` for a wire that has none. */
   cookies(): string | null;

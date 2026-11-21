@@ -850,7 +850,30 @@ connection remains spent. A successful retry still carries
 original session.
 
 This applies to stateless checks outside a critical section. Stateful requests
-and operations under an existing lock retain their session-bound behavior.
+and operations under an existing lock retain their session-bound behavior. A
+check sent with `noResend: true` is not retried: the refusal is its answer.
+
+### Request options: `noResend`, `noLog`, `stateless`
+
+Three optional flags of `IAbapRequestOptions` (25.1.0) change one request and
+nothing else; a request without them behaves as before. In short:
+
+- `noResend: true` — sent once: no CSRF recovery, no resend after the
+  credential's renewal (the provider is not asked), no resend on a dead pooled
+  socket, no syntax-check replay; the CSRF token fetch before a mutation still
+  happens, once — no fallback endpoint, a token only from a `2xx` (its failure
+  is the answer and the request is not sent); a
+  `3xx` from SAP's endpoint is the answer, not followed.
+- `noLog: true` — the connection writes exactly one line about the request,
+  `METHOD /path → STATUS (N bytes)` (or `→ no answer`), the path without its
+  query, host or user; the wires write none of their own, two fixed-word lines
+  aside (`CSRF token obtained`, and the cloud wire's
+  `The server published no logoff resource; sending the platform logoff`); the thrown error keeps SAP's answer.
+- `stateless: true` — stateless on HTTP and RFC whatever the session mode, over
+  the caller's own `x-sap-adt-sessiontype` header in any letter case; the header
+  and the `sap-contextid` cookie are stripped; the session mode stays.
+
+The whole contract, and why `noResend` exists: [README — Request options](../README.md#request-options-noresend-nolog-stateless).
 
 ### Starting Over
 
@@ -1172,7 +1195,9 @@ carries it; the wire never reads `config.username` or `config.password`.
     the provider.
 
   Nothing else is sent again: a failed request — the CSRF token fetch included
-  (21.0.0) — is its own error.
+  (21.0.0) — is its own error. A request with `noResend: true` (25.1.0) gets none
+  of these three resends, and follows no redirect: see
+  [Request options](#request-options-noresend-nolog-stateless).
 - RFC takes logon parameters (a password, or SNC settings) on every conversation
   it opens, the session's own and each per-call one. RFC refuses TLS material,
   and a provider that writes no logon parameters (a bearer token) cannot log on

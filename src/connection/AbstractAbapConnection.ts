@@ -29,13 +29,14 @@ import {
   WireSessionLostError,
 } from './authErrors.js';
 import { CSRF_ERROR_MESSAGES } from './csrfConfig.js';
-import { asArrived, factWords } from './failureFacts.js';
+import { asArrived, factWords, failureCopy } from './failureFacts.js';
 import {
   type IAdtSessionContext,
   type IAdtTransport,
   type IAdtTransportRequest,
   refusalOf,
 } from './IAdtTransport.js';
+import { quietLine } from './quietLine.js';
 import { isStatefulRequest } from './statefulRequest.js';
 
 /**
@@ -99,6 +100,25 @@ function dataPreview(data: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** The flags of a request that reach the exchanges made for it. */
+type RequestFlags = Pick<IAdtTransportRequest, 'noResend' | 'noLog'>;
+
+/** A request's `noResend` and `noLog`, and nothing else of it. */
+function flagsOf(request: RequestFlags): RequestFlags {
+  return {
+    ...(request.noResend ? { noResend: true } : {}),
+    ...(request.noLog ? { noLog: true } : {}),
+  };
+}
+
+/**
+ * What a `noResend` request resolves on: `2xx` as always, and a `3xx` from
+ * SAP's own endpoint, which is returned rather than followed.
+ */
+function admitsRedirects(status: number): boolean {
+  return status >= 200 && status < 400;
 }
 
 /** Whether a thrown value is a refusal this connection marked `sessionLost`. */
@@ -779,6 +799,7 @@ abstract class AbstractAbapConnection
       closing = Promise.reject(error);
     }
     const answered = closing.catch((error: unknown) => {
+      if (context.noLog) return;
       this.logger?.debug(
         `Could not tell the server the session is finished: ${factWords(error)}`,
       );
@@ -1119,7 +1140,11 @@ abstract class AbstractAbapConnection
    * Does not await: it is called from inside a request, and the cleanup must not
    * wait for the very request that raised it.
    */
-  protected raiseSessionLost(reason: string): void {
+  protected raiseSessionLost(
+    reason: string,
+    /** Lost by a `noLog` request's answer: the caller is told, nothing logged. */
+    quiet = false,
+  ): void {
     // The instance's one session is gone: it is spent, as after disconnect().
     // Nothing else is decided here — the caller is told, and decides. The
     // verdict first, then the word: a logger that throws cannot undo it.
@@ -1129,7 +1154,9 @@ abstract class AbstractAbapConnection
       this.clearSessionState();
       this.lifecycle.markDisconnected();
     });
-    this.logQuietly(() => this.logger?.warn(`Session lost: ${reason}`));
+    if (!quiet) {
+      this.logQuietly(() => this.logger?.warn(`Session lost: ${reason}`));
+    }
   }
 
   /**
@@ -1182,6 +1209,8 @@ abstract class AbstractAbapConnection
      * connection's own exchanges and for stateful requests.
      */
     keepAnswer = false,
+    /** The answer is a `noLog` request's: the wire logs nothing of it. */
+    quiet = false,
   ): SessionObservation {
     // Fenced by SESSION GENERATION, not by the teardown epoch. Only a
     // caller-initiated teardown moves the epoch — a recovery deliberately does
@@ -1196,17 +1225,22 @@ abstract class AbstractAbapConnection
       generation !== undefined &&
       generation !== this.lifecycle.sessionGeneration
     ) {
-      this.logger?.debug(
-        'Ignoring a response from a previous session: its effects are fenced',
-      );
+      // `noLog`: the request's one line is its quiet one.
+      if (!quiet) {
+        this.logger?.debug(
+          'Ignoring a response from a previous session: its effects are fenced',
+        );
+      }
       return 'kept';
     }
     // The wire folds the response into its own state; what the change MEANS
     // is decided here, because it is a question about the session's lifetime.
-    this.transport.ingest(headers);
+    if (quiet) this.transport.ingest(headers, { noLog: true });
+    else this.transport.ingest(headers);
     return this.applyIdentityPolicy(
       this.lifecycle.observe(this.transport.sessionFingerprint()),
       keepAnswer,
+      quiet,
     );
   }
 
@@ -1229,6 +1263,8 @@ abstract class AbstractAbapConnection
   private applyIdentityPolicy(
     classification: 'unchanged' | 'established' | 'replaced',
     keepAnswer: boolean,
+    /** A `noLog` request's answer: the loss and its logoff write no line. */
+    quiet = false,
   ): SessionObservation {
     if (classification !== 'replaced') return 'kept';
 
@@ -1247,9 +1283,11 @@ abstract class AbstractAbapConnection
     // logoff: the wire took its snapshot synchronously, and any other path
     // that would end the session — a failed `connect()`'s logoff above all —
     // must find nothing left to send, or the same session is logged off twice.
-    this.endSession(this.sessionContext());
+    this.endSession(
+      quiet ? { ...this.sessionContext(), noLog: true } : this.sessionContext(),
+    );
     this.clearSessionState();
-    this.raiseSessionLost('the session cookie changed under us');
+    this.raiseSessionLost('the session cookie changed under us', quiet);
     // A stateless request's answer is SAP's, and valid: it is returned, marked,
     // the session already lost (fr0ster/mcp-abap-adt#354). Nothing is sent
     // again for it. A stateful request — the one a lock is taken and released
@@ -1427,7 +1465,23 @@ abstract class AbstractAbapConnection
     // exchange itself does not stop the request — the CSRF recovery below
     // handles a token that is missing — but a refused credential does.
     if (mutation && !this.transport.csrfToken()) {
-      await this.readyWireUpfront(renewal, lease);
+      try {
+        await this.readyWireUpfront(renewal, lease, flagsOf(options));
+      } catch (error) {
+        // `noLog`: a request that ends before it is sent still writes its
+        // one quiet line — the fetch's answer is the request's.
+        if (options.noLog) {
+          this.logQuietly(() => {
+            const quiet = quietLine(
+              normalizedMethod,
+              endpoint,
+              refusalOf(error) ?? undefined,
+            );
+            this.logger?.error(quiet.line, quiet.facts);
+          });
+        }
+        throw error;
+      }
     }
 
     // The request's own headers: everything but the credential's, which is
@@ -1533,21 +1587,37 @@ abstract class AbstractAbapConnection
       // `unknown` on the caller's options, a record on the seam: the two
       // transports serialise a query differently and both need the pairs.
       params: params as Record<string, unknown> | undefined,
-      stateful: this.sessionMode === 'stateful',
+      // `stateless` wins over the session mode, for this request alone: the
+      // mode itself is not touched, so the next ordinary request follows it.
+      stateful: !options.stateless && this.sessionMode === 'stateful',
+      ...(options.stateless ? { stateless: true } : {}),
+      // `noResend`: the wire sends it once and follows no redirect, and a
+      // `3xx` from SAP's own endpoint is the caller's answer; every other
+      // status keeps today's verdict.
+      ...(options.noResend
+        ? { noResend: true, validateStatus: admitsRedirects }
+        : {}),
+      // `noLog`: every line about this request, here and on the wire, is the
+      // quiet one.
+      ...(options.noLog ? { noLog: true } : {}),
     };
 
     if (data !== undefined) {
       requestConfig.data = data;
     }
 
-    this.logger?.debug(
-      `Executing ${normalizedMethod} request to: ${requestUrl}`,
-      {
-        type: 'REQUEST_INFO',
-        url: requestUrl,
-        method: normalizedMethod,
-      },
-    );
+    // `noLog`: nothing before the answer; the one line is written once there
+    // is a status to put on it (`quietLine`).
+    if (!options.noLog) {
+      this.logger?.debug(
+        `Executing ${normalizedMethod} request to: ${requestUrl}`,
+        {
+          type: 'REQUEST_INFO',
+          url: requestUrl,
+          method: normalizedMethod,
+        },
+      );
+    }
 
     try {
       const response = await this.sendObserved<T, D>(requestConfig, lease);
@@ -1555,14 +1625,19 @@ abstract class AbstractAbapConnection
       // The answer outranks the logger's word on it: a logger that throws
       // must not take a received answer — one marked `sessionLost` above all,
       // whose session is already gone — from the caller.
-      this.logQuietly(() =>
+      this.logQuietly(() => {
+        if (options.noLog) {
+          const quiet = quietLine(normalizedMethod, requestUrl, response);
+          this.logger?.debug(quiet.line, quiet.facts);
+          return;
+        }
         this.logger?.debug(`Request succeeded with status ${response.status}`, {
           type: 'REQUEST_SUCCESS',
           status: response.status,
           url: requestUrl,
           method: normalizedMethod,
-        }),
-      );
+        });
+      });
 
       return response;
     } catch (error) {
@@ -1611,6 +1686,7 @@ abstract class AbstractAbapConnection
       response.headers as Record<string, unknown>,
       lease.generation,
       !isStatefulRequest(requestConfig),
+      requestConfig.noLog === true,
     );
     const answer = response as unknown as IAdtWireResponse<T, D>;
     // The answer itself says the session is gone: a field, on the one object
@@ -1715,11 +1791,20 @@ abstract class AbstractAbapConnection
     //
     // A stale request gets its error back and nothing else happens.
     if (!this.lifecycle.isCurrent(lease)) {
-      this.logQuietly(() =>
+      this.logQuietly(() => {
+        if (requestConfig.noLog) {
+          const fenced = quietLine(
+            normalizedMethod,
+            requestUrl,
+            refusalOf(error) ?? undefined,
+          );
+          this.logger?.debug(fenced.line, fenced.facts);
+          return;
+        }
         this.logger?.debug(
           'A request from a previous session failed; its recovery is fenced',
-        ),
-      );
+        );
+      });
       throw error;
     }
 
@@ -1741,6 +1826,21 @@ abstract class AbstractAbapConnection
     };
 
     const refusal = refusalOf(error);
+    // `noLog`: the failure's lines carry the method, the path without its
+    // query, the integer status and the byte count — no preview, no words.
+    const quiet = requestConfig.noLog
+      ? quietLine(normalizedMethod, requestUrl, refusal ?? undefined)
+      : null;
+    // Written here, once, before anything below can end the request — a
+    // session verdict included, which then reaches the caller as the error
+    // (`sessionLost`, `SESSION_REPLACED`) and never as a line.
+    if (quiet) {
+      this.logQuietly(() => {
+        if (refusal?.status === 404)
+          this.logger?.debug(quiet.line, quiet.facts);
+        else this.logger?.error(quiet.line, quiet.facts);
+      });
+    }
     if (refusal) {
       errorDetails.data = dataPreview(refusal.data);
 
@@ -1752,28 +1852,33 @@ abstract class AbstractAbapConnection
         refusal.headers as Record<string, unknown> | undefined,
         lease.generation,
         !isStatefulRequest(requestConfig),
+        requestConfig.noLog === true,
       );
       if (observed === 'lost') throw this.markedLost(error);
     }
 
-    this.throwIfSessionDead(error, lease);
+    this.throwIfSessionDead(error, lease, quiet !== null);
 
     // Check if this is a network error (connection refused, timeout, DNS, etc.)
     // Don't retry for network errors - these indicate infrastructure/VPN issues
     const networkError = isNetworkError(error);
 
     if (networkError) {
-      this.logQuietly(() =>
-        this.logger?.error(
-          `Network error - cannot connect to SAP system: ${errorDetails.message}`,
-          errorDetails,
-        ),
-      );
+      if (!quiet) {
+        this.logQuietly(() =>
+          this.logger?.error(
+            `Network error - cannot connect to SAP system: ${errorDetails.message}`,
+            errorDetails,
+          ),
+        );
+      }
       throw error;
     }
 
     // Log 404 as debug (common for existence checks), other errors as error
-    if (errorDetails.status === 404) {
+    if (quiet) {
+      // Written above.
+    } else if (errorDetails.status === 404) {
       this.logQuietly(() =>
         this.logger?.debug(errorDetails.message, errorDetails),
       );
@@ -1791,17 +1896,26 @@ abstract class AbstractAbapConnection
     // A CSRF complaint (403 "CSRF token validation failed", or a 401 to a
     // mutation that holds no token yet): a token earned in the SAME session —
     // the cookies are kept — and one resend.
-    if (this.shouldRetryCsrf(error, normalizedMethod)) {
-      this.logger?.debug(
-        'CSRF token validation failed, fetching new token and retrying request',
-        {
-          url: requestUrl,
-          method: normalizedMethod,
-        },
-      );
+    // `noResend`: the first failure is the caller's answer — an abapGit
+    // handler's own 500 holding `CSRF token` would be resent after it ran.
+    if (
+      !requestConfig.noResend &&
+      this.shouldRetryCsrf(error, normalizedMethod)
+    ) {
+      if (!quiet) {
+        this.logger?.debug(
+          'CSRF token validation failed, fetching new token and retrying request',
+          {
+            url: requestUrl,
+            method: normalizedMethod,
+          },
+        );
+      }
 
       try {
-        this.setCsrfToken(await this.fetchCsrfToken(requestUrl, lease));
+        this.setCsrfToken(
+          await this.fetchCsrfToken(requestUrl, lease, flagsOf(requestConfig)),
+        );
         const refreshedToken = this.getCsrfToken();
         if (refreshedToken) {
           requestHeaders['x-csrf-token'] = refreshedToken;
@@ -1828,10 +1942,11 @@ abstract class AbstractAbapConnection
             retryRefusal.headers as Record<string, unknown> | undefined,
             lease.generation,
             !isStatefulRequest(requestConfig),
+            requestConfig.noLog === true,
           );
           if (observed === 'lost') throw this.markedLost(retryError);
         }
-        this.throwIfSessionDead(retryError, lease);
+        this.throwIfSessionDead(retryError, lease, quiet !== null);
         // A session verdict outranks the error that started the retry: the
         // caller can retry a 403 itself, but it cannot discover that its lock
         // handle is dead from a 403. So does the credential's failure, which
@@ -1839,11 +1954,13 @@ abstract class AbstractAbapConnection
         if (this.outranksOriginal(retryError)) {
           throw retryError;
         }
-        this.logQuietly(() =>
-          this.logger?.debug(
-            `CSRF retry failed; rethrowing original error: ${factWords(retryError)}`,
-          ),
-        );
+        if (!quiet) {
+          this.logQuietly(() =>
+            this.logger?.debug(
+              `CSRF retry failed; rethrowing original error: ${factWords(retryError)}`,
+            ),
+          );
+        }
         throw error;
       }
     }
@@ -1874,7 +1991,10 @@ abstract class AbstractAbapConnection
     // request's refusal marked `sessionLost` above all: no provider is asked.
     if (this.isSessionVerdict(failure)) throw failure;
     // A resend inside the wire's recovery that met a dead session.
-    this.throwIfSessionDead(failure, lease);
+    this.throwIfSessionDead(failure, lease, requestConfig.noLog === true);
+    // `noResend`: nothing to renew for, since nothing is resent — the refusal
+    // is the caller's answer, and the provider is not asked.
+    if (requestConfig.noResend) throw failure;
     const rejection = this.credentialRejection(failure);
     // A request from a previous session asks nobody anything: its recovery is
     // fenced, and so is the credential's.
@@ -1889,7 +2009,7 @@ abstract class AbstractAbapConnection
     try {
       if (rejection.at === 'logon') {
         this.transport.adoptCsrfToken(null);
-        await this.ensureWireReady(lease);
+        await this.ensureWireReady(lease, flagsOf(requestConfig));
         const token = this.transport.csrfToken();
         if (token && ['POST', 'PUT', 'DELETE'].includes(requestConfig.method)) {
           requestHeaders['x-csrf-token'] = token;
@@ -1915,10 +2035,11 @@ abstract class AbstractAbapConnection
           refusal.headers as Record<string, unknown> | undefined,
           lease.generation,
           !isStatefulRequest(requestConfig),
+          requestConfig.noLog === true,
         );
         if (observed === 'lost') throw this.markedLost(again);
       }
-      this.throwIfSessionDead(again, lease);
+      this.throwIfSessionDead(again, lease, requestConfig.noLog === true);
       const secondRejection = this.credentialRejection(again);
       if (!secondRejection) throw again;
       throw new AuthRefusedError(
@@ -1942,13 +2063,18 @@ abstract class AbstractAbapConnection
   private throwIfSessionDead(
     error: unknown,
     lease: Pick<RequestLease, 'generation'>,
+    /** A `noLog` request's: the loss reaches the caller, no line. */
+    quiet = false,
   ): void {
     if (error instanceof WireSessionLostError) {
-      this.throwWireSessionLost(error, lease);
+      this.throwWireSessionLost(error, lease, quiet);
     }
     if (!this.isDeadSessionResponse(error)) return;
     if (!this.lifecycle.isCurrent(lease)) return;
-    this.raiseSessionLost('the server reports the session no longer exists');
+    this.raiseSessionLost(
+      'the server reports the session no longer exists',
+      quiet,
+    );
     // No internal retry: a blind retry here is what produced further locks
     // in the field. The caller decides.
     throw sessionError(
@@ -1968,9 +2094,10 @@ abstract class AbstractAbapConnection
   private throwWireSessionLost(
     error: WireSessionLostError,
     lease: Pick<RequestLease, 'generation'>,
+    quiet = false,
   ): void {
     if (!this.lifecycle.isCurrent(lease)) return;
-    this.raiseSessionLost('the wire reports the session ended');
+    this.raiseSessionLost('the wire reports the session ended', quiet);
     const verdict = sessionError(
       ADT_SESSION_ERROR.SESSION_REPLACED,
       "The RFC conversation that carried this connection's SAP session has ended; any lock held in it is gone. Create a new connection for a new session.",
@@ -2078,10 +2205,16 @@ abstract class AbstractAbapConnection
   private async readyWireUpfront(
     renewal: CredentialRenewal,
     lease: Pick<RequestLease, 'generation'>,
+    /**
+     * The request's flags. `noResend`: the fetch goes once, and its failure —
+     * a refused logon included, the provider not asked — is the request's
+     * answer: the request is not sent. `noLog`: no line of the fetch's own.
+     */
+    flags: RequestFlags = {},
   ): Promise<void> {
     for (;;) {
       try {
-        await this.ensureWireReady(lease);
+        await this.ensureWireReady(lease, flags);
         return;
       } catch (error) {
         // The session the request was admitted to is gone: nothing more of it
@@ -2090,10 +2223,22 @@ abstract class AbstractAbapConnection
         // a session it no longer holds.
         if (!this.lifecycle.isCurrent(lease)) throw this.staleVerdict(error);
         if (error instanceof AuthRefusedError) throw error;
+        // `noResend`: the fetch's failure is the answer. A refused logon goes
+        // as SAP's refusal it wraps — its status and body on top, as any
+        // refusal's — since no provider is asked to act on the mark.
+        if (flags.noResend) {
+          throw error instanceof WireLogonError && refusalOf(error.cause)
+            ? // A copy, made as every failure that leaves is: SAP's answer and
+              // the facts, nothing of the request a custom wire put beside it.
+              failureCopy(error.cause)
+            : error;
+        }
         if (!(error instanceof WireLogonError)) {
-          this.logger?.debug(
-            `Could not fetch CSRF token upfront, will retry on error: ${factWords(error)}`,
-          );
+          if (!flags.noLog) {
+            this.logger?.debug(
+              `Could not fetch CSRF token upfront, will retry on error: ${factWords(error)}`,
+            );
+          }
           return;
         }
         const rejection = this.credentialRejection(error) as IAuthRejection;
@@ -2132,6 +2277,8 @@ abstract class AbstractAbapConnection
      * Omitted during connect(), which has no lease.
      */
     fence?: number | Pick<RequestLease, 'generation'>,
+    /** The flags of the request the token is fetched for. */
+    flags: RequestFlags = {},
   ): Promise<string> {
     // Dropped first, because this is only ever reached to REPLACE one: the
     // establishment is idempotent and would hand back the very token the
@@ -2139,8 +2286,8 @@ abstract class AbstractAbapConnection
     this.transport.adoptCsrfToken(null);
     await this.transport.establish({
       ...(typeof fence === 'number'
-        ? this.leasedContext(undefined, fence)
-        : this.leasedContext(fence)),
+        ? this.leasedContext(undefined, fence, flags)
+        : this.leasedContext(fence, undefined, flags)),
     });
 
     const token = this.transport.csrfToken();
@@ -2192,8 +2339,10 @@ abstract class AbstractAbapConnection
   private async ensureWireReady(
     /** The request's lease: fences what is sent and the response effects. */
     lease: Pick<RequestLease, 'generation'>,
+    /** The flags of the request the wire is made ready for. */
+    flags: RequestFlags = {},
   ): Promise<void> {
-    await this.transport.establish(this.leasedContext(lease));
+    await this.transport.establish(this.leasedContext(lease, undefined, flags));
   }
 
   /**
@@ -2215,8 +2364,13 @@ abstract class AbstractAbapConnection
   private leasedContext(
     lease?: Pick<RequestLease, 'generation'>,
     generation: number | undefined = lease?.generation,
+    /** The flags of the request the exchange is made for. */
+    flags: RequestFlags = {},
   ): IAdtSessionContext {
+    const quiet = flags.noLog === true;
     return {
+      ...(flags.noResend ? { noResend: true } : {}),
+      ...(quiet ? { noLog: true } : {}),
       authorize: async (headers) => {
         await this.credentialHeaders(headers);
         if (lease && !this.lifecycle.isCurrent(lease)) {
@@ -2239,7 +2393,12 @@ abstract class AbstractAbapConnection
             'The session this request was admitted to is gone; its answer was not taken',
           );
         }
-        this.observeResponse(headers as Record<string, unknown>, generation);
+        this.observeResponse(
+          headers as Record<string, unknown>,
+          generation,
+          false,
+          quiet,
+        );
       },
     };
   }

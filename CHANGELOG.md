@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [25.1.0] - 2026-11-22
+
+Three per-request options, declared by `IAbapRequestOptions` in
+`@mcp-abap-adt/interfaces-adt-connection` 5.2.0 (the floor is now `^5.2.0`).
+A request without them behaves as before. See
+[README — Request options](README.md#request-options-noresend-nolog-stateless).
+
+### Added
+
+- **`noResend: true`** — the first failure is the caller's answer. Gated: the
+  CSRF recovery (a `403` naming CSRF, any answer whose text holds
+  `CSRF token`, a `401` to a mutation sent without a token), the resend after
+  the credential's renewal (the provider is not asked), the HTTP resend on a
+  dead pooled socket (#314's named exception, kept for every other request),
+  and `createConnection`'s replay of a syntax check on a temporary session.
+  The CSRF token fetch before a mutation still happens, and under the flag
+  goes once too (no renewal after a `401`, no pooled resend, no redirect, no
+  fallback endpoint, a token only from a `2xx`); its failure is the answer —
+  SAP's refusal, its status and body, a `401` and a status a custom client
+  resolved included —
+  and the request is not sent. SAP-endpoint
+  redirects: the request goes with `maxRedirects: 0`, and its status predicate
+  admits `2xx` and `3xx`, so a `3xx` resolves as the answer while every other
+  status is refused as before.
+  Why: SAP refuses a bad CSRF token before any ADT resource handler runs
+  (`CL_ADT_WB_RES_APP`: `handle_csrf( )` before `call_adt_rfc_endpoint`;
+  `CL_REST_HTTP_HANDLER`: `handle_csrf_token` before the root handler; read on
+  on-prem and cloud) — but the recovery also resends on any status whose text
+  holds `CSRF token` and on a `401` to a token-less mutation, which a handler's
+  own answer may carry after it ran. A request that may already have run when
+  a replay would start is sent with `noResend`.
+- **`noLog: true`** — nothing of the request or its answer reaches a log line:
+  the connection's request lines, the refusal preview (at `error`, and the
+  `404` at `debug`), the network-error and CSRF-recovery lines, the HTTP wire's
+  resend and application-server lines, the CSRF-fetch and fence lines, and the
+  RFC wire's URI, `logWire` headers and bodies, status text, conversation and
+  cleanup lines. Exactly one line is written per request, by the connection:
+  `METHOD /path → STATUS (N bytes)` or `METHOD /path → no answer`, with the
+  fields `{ method, path, status, bytes }`, whatever path the request takes —
+  a session loss reaches the caller as the error's `sessionLost`, not a
+  warning. The path is an absolute URL's pathname (no user, password or host),
+  a relative one without its query or fragment, or `<unparsable url>`, its
+  line-breaking code points (C0, DEL, C1, U+2028, U+2029) in it and in the
+  method written as `\xNN` / `\uNNNN`; a replayed syntax check writes no
+  line of its own (its temporary session runs without loggers). Two
+  fixed-word lines that name nothing of the request are the exceptions:
+  `CSRF token obtained` and the cloud wire's `The server published no logoff resource; sending the platform logoff`. The error thrown keeps
+  SAP's answer for the caller.
+- `IAdtSessionContext` carries the request's `noResend` and `noLog` to the
+  exchanges made for it (its CSRF fetch), and `IAdtTransport.ingest` takes an
+  optional `{ noLog }`.
+- **`stateless: true`** — the request goes stateless on HTTP and RFC whatever
+  the session mode, and wins in `isStatefulRequest` over the flag and over a
+  caller's `x-sap-adt-sessiontype: stateful` header in any letter case. The
+  wires strip that header and the `sap-contextid` cookie from the request. The
+  session mode is not changed: the next ordinary request follows it.
+- `IAdtTransportRequest` carries the three flags to the wire (`stateless`,
+  `noResend`, `noLog`, each `true | undefined`).
+
 ## [25.0.1] - 2026-11-21
 
 ### Fixed
@@ -3117,7 +3176,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.1...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.1.0...HEAD
+[25.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.1...v25.1.0
 [25.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.0...v25.0.1
 [25.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v24.0.0...v25.0.0
 [24.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v23.0.0...v24.0.0
