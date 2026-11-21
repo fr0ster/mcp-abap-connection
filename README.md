@@ -384,8 +384,10 @@ await connection.makeAdtRequest({
   or host), the path without its query or fragment for a relative one, and
   `<unparsable url>` for one that does not parse. The wires write no line of
   their own about it, the application server an answer names included.
-  The one other line that may appear is the wire's fixed-word
-  `CSRF token obtained`, when a token is fetched for the request. The error
+  Two fixed-word lines that name nothing of the request are the documented
+  exceptions: the wire's `CSRF token obtained`, when a token is fetched for the
+  request, and the cloud wire's `The server published no logoff resource; sending the platform logoff`, when an answer that replaced the
+  session leads to its logoff. The error
   thrown keeps SAP's answer (`response`, `status`) for the caller.
 - **`stateless: true`** — the request goes stateless on HTTP and RFC whatever
   the session mode (`setSessionType('stateful')` included), and wins over the

@@ -46,8 +46,10 @@ A request without them behaves as before. See
   fields `{ method, path, status, bytes }`, whatever path the request takes —
   a session loss reaches the caller as the error's `sessionLost`, not a
   warning. The path is an absolute URL's pathname (no user, password or host),
-  a relative one without its query or fragment, or `<unparsable url>`. The
-  error thrown keeps SAP's answer for the caller.
+  a relative one without its query or fragment, or `<unparsable url>`. Two
+  fixed-word lines that name nothing of the request are the exceptions:
+  `CSRF token obtained` and the cloud wire's `The server published no logoff resource; sending the platform logoff`. The error thrown keeps
+  SAP's answer for the caller.
 - `IAdtSessionContext` carries the request's `noResend` and `noLog` to the
   exchanges made for it (its CSRF fetch), and `IAdtTransport.ingest` takes an
   optional `{ noLog }`.
