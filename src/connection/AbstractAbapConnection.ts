@@ -1542,7 +1542,10 @@ abstract class AbstractAbapConnection
       // `unknown` on the caller's options, a record on the seam: the two
       // transports serialise a query differently and both need the pairs.
       params: params as Record<string, unknown> | undefined,
-      stateful: this.sessionMode === 'stateful',
+      // `stateless` wins over the session mode, for this request alone: the
+      // mode itself is not touched, so the next ordinary request follows it.
+      stateful: !options.stateless && this.sessionMode === 'stateful',
+      ...(options.stateless ? { stateless: true } : {}),
       // `noResend`: the wire sends it once and follows no redirect, and a
       // `3xx` from SAP's own endpoint is the caller's answer; every other
       // status keeps today's verdict.
