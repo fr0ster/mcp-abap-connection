@@ -70,7 +70,6 @@ import type {
   IAdtTransportResponse,
   IOnPremTransport,
 } from './IAdtTransport.js';
-import { quietLine } from './quietLine.js';
 import { isFactoryOwnWords } from './rfcConversation.js';
 import {
   cookieWithoutContext,
@@ -739,7 +738,7 @@ export class RfcTransport implements IOnPremTransport {
           try {
             return await this.carry(request, opened, generation, passport);
           } finally {
-            await this.closeUnlessReleased(opened);
+            await this.closeUnlessReleased(opened, request.noLog === true);
           }
         }
         this.canReset = true;
@@ -783,7 +782,7 @@ export class RfcTransport implements IOnPremTransport {
               );
             }
             this.dropStateless(kept);
-            await this.closeQuietly(kept);
+            await this.closeQuietly(kept, request.noLog === true);
           }
         }
       }
@@ -809,7 +808,7 @@ export class RfcTransport implements IOnPremTransport {
       }
       return await this.carry(request, own, generation, passport);
     } finally {
-      await this.closeUnlessReleased(own);
+      await this.closeUnlessReleased(own, request.noLog === true);
     }
   }
 
@@ -839,8 +838,10 @@ export class RfcTransport implements IOnPremTransport {
    */
   private async closeUnlessReleased(
     conversation: IRfcConversation,
+    /** A `noLog` request's conversation: a failed close writes no line. */
+    quiet = false,
   ): Promise<void> {
-    if (conversation.alive) await this.closeQuietly(conversation);
+    if (conversation.alive) await this.closeQuietly(conversation, quiet);
   }
 
   /**
@@ -952,11 +953,15 @@ export class RfcTransport implements IOnPremTransport {
     }
   }
 
-  private async closeQuietly(conversation: IRfcConversation): Promise<void> {
+  private async closeQuietly(
+    conversation: IRfcConversation,
+    /** A `noLog` request's conversation: a failed close writes no line. */
+    quiet = false,
+  ): Promise<void> {
     try {
       await conversation.close();
     } catch (e) {
-      this.logQuietly(() => `RFC close error: ${failureWords(e)}`);
+      if (!quiet) this.logQuietly(() => `RFC close error: ${failureWords(e)}`);
     }
   }
 
@@ -1107,12 +1112,8 @@ export class RfcTransport implements IOnPremTransport {
       const words = rfc?.codeString ?? UNNAMED;
       const text = `RFC call to SADT_REST_RFC_ENDPOINT failed: ${words}`;
       try {
-        if (noLog) {
-          const quiet = quietLine(method, uri);
-          this.logger?.error(quiet.line, quiet.facts);
-        } else {
-          this.logger?.error(`RFC call failed: ${words}`);
-        }
+        // `noLog`: the request's one line is the connection's.
+        if (!noLog) this.logger?.error(`RFC call failed: ${words}`);
       } catch {
         // A broken logger must not replace the call's failure.
       }
@@ -1167,10 +1168,8 @@ export class RfcTransport implements IOnPremTransport {
       statusText = statusText || 'OK';
     }
 
-    if (noLog) {
-      const quiet = quietLine(method, uri, { status, data });
-      this.logger?.debug(quiet.line, quiet.facts);
-    } else {
+    // `noLog`: the request's one line is the connection's quiet one.
+    if (!noLog) {
       this.logger?.debug(
         `RFC ← ${status} ${statusText} (${data.length} bytes)`,
       );
