@@ -45,18 +45,30 @@ export function pathOf(url: string): string {
 }
 
 /**
- * The text with every control character (below U+0020, and U+007F) written as
- * a fixed `\xNN` escape: a path cannot break the quiet line into two, or
- * forge a second one. Plain string code.
+ * Whether a code point can end or break a line: C0, DEL, C1 (U+0080–U+009F,
+ * NEL among them), and the line and paragraph separators.
+ */
+function breaksLines(code: number): boolean {
+  return (
+    code < 0x20 ||
+    (code >= 0x7f && code <= 0x9f) ||
+    code === 0x2028 ||
+    code === 0x2029
+  );
+}
+
+/**
+ * The text with every code point that can break a line written as a fixed
+ * escape — `\xNN` up to U+00FF, `\uNNNN` beyond: neither a path nor a method
+ * can split the quiet line into two, or forge a second one. Plain string code.
  */
 function escapedControls(text: string): string {
   let out = '';
   for (const char of text) {
-    const code = char.charCodeAt(0);
-    out +=
-      code < 0x20 || code === 0x7f
-        ? `\\x${code.toString(16).padStart(2, '0')}`
-        : char;
+    const code = char.codePointAt(0) ?? 0;
+    if (!breaksLines(code)) out += char;
+    else if (code <= 0xff) out += `\\x${code.toString(16).padStart(2, '0')}`;
+    else out += `\\u${code.toString(16).padStart(4, '0')}`;
   }
   return out;
 }
@@ -84,11 +96,13 @@ export function byteCount(data: unknown): number {
  * `METHOD /path → no answer` for a request that got none.
  */
 export function quietLine(
-  method: string,
+  rawMethod: string,
   url: string,
   answer?: { status: number; data: unknown },
 ): { line: string; facts: QuietFacts } {
   const path = pathOf(url);
+  // The caller's method, as written: escaped as the path is.
+  const method = escapedControls(rawMethod);
   if (answer === undefined || !Number.isInteger(answer.status)) {
     return { line: `${method} ${path} → no answer`, facts: { method, path } };
   }

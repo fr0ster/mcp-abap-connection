@@ -35,6 +35,27 @@ describe('quietLine', () => {
     assert.ok(!quiet.line.includes('\n') && !quiet.line.includes('\r'));
   });
 
+  it('every code point that can break a line is escaped, in the path and the method', () => {
+    for (const [char, escaped] of [
+      ['\u0085', '\\x85'],
+      ['\u0080', '\\x80'],
+      ['\u009f', '\\x9f'],
+      ['\u007f', '\\x7f'],
+      ['\u2028', '\\u2028'],
+      ['\u2029', '\\u2029'],
+    ] as const) {
+      const quiet = quietLine(`GET${char}X`, `/sap/a${char}b`);
+      assert.strictEqual(
+        quiet.line,
+        `GET${escaped}X /sap/a${escaped}b → no answer`,
+      );
+      assert.strictEqual(quiet.facts.path, `/sap/a${escaped}b`);
+      assert.strictEqual(quiet.facts.method, `GET${escaped}X`);
+    }
+    const newline = quietLine('GET\nFORGED', '/x');
+    assert.strictEqual(newline.line, 'GET\\x0aFORGED /x → no answer');
+  });
+
   it('a URL that does not parse: a fixed placeholder, nothing of it', () => {
     for (const url of [
       'https://user:PCANARY@host.example:99999/x?q',
