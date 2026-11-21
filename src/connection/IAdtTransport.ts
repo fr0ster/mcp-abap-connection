@@ -57,6 +57,24 @@ export interface IAdtTransportRequest {
    * `HttpTransport.dress`.
    */
   stateful?: boolean;
+  /**
+   * The caller's `stateless: true`: the request goes stateless whatever the
+   * session mode and whatever session header it carries. Wins in
+   * `isStatefulRequest`; the wire strips a conflicting `x-sap-adt-sessiontype`
+   * header, in any letter case, and the `sap-contextid` cookie from it.
+   */
+  stateless?: true | undefined;
+  /**
+   * The caller's `noResend: true`: the wire sends the request once — no resend
+   * on a dead pooled socket — and follows no redirect.
+   */
+  noResend?: true | undefined;
+  /**
+   * The caller's `noLog: true`: a line the wire writes about the request
+   * carries the method, the path without its query, the integer status and
+   * the byte count, and nothing else.
+   */
+  noLog?: true | undefined;
 }
 
 /** What came back, in the terms every transport can produce. */
