@@ -70,6 +70,7 @@ import type {
   IAdtTransportResponse,
   IOnPremTransport,
 } from './IAdtTransport.js';
+import { quietLine } from './quietLine.js';
 import { isFactoryOwnWords } from './rfcConversation.js';
 import { isStatefulRequest } from './statefulRequest.js';
 
@@ -741,9 +742,11 @@ export class RfcTransport implements IOnPremTransport {
         this.stateless = opened;
         this.statelessLanguage = this.languageOf(parameters);
         kept = opened;
-        this.logger?.debug(
-          'RFC stateless conversation opened (reset per call)',
-        );
+        if (!request.noLog) {
+          this.logger?.debug(
+            'RFC stateless conversation opened (reset per call)',
+          );
+        }
       } else if (
         otherLanguage(language, this.statelessLanguage) !== undefined
       ) {
@@ -769,10 +772,12 @@ export class RfcTransport implements IOnPremTransport {
             await kept.resetServerContext?.();
           } catch (e) {
             // A context that could not be reset must not serve the next call.
-            this.logQuietly(
-              () =>
-                `RFC reset failed, dropping the conversation: ${failureWords(e)}`,
-            );
+            if (!request.noLog) {
+              this.logQuietly(
+                () =>
+                  `RFC reset failed, dropping the conversation: ${failureWords(e)}`,
+              );
+            }
             this.dropStateless(kept);
             await this.closeQuietly(kept);
           }
@@ -795,7 +800,9 @@ export class RfcTransport implements IOnPremTransport {
   ): Promise<IAdtTransportResponse> {
     const own = await this.openOwn(parameters, generation);
     try {
-      this.logger?.debug('RFC conversation opened for one stateless call');
+      if (!request.noLog) {
+        this.logger?.debug('RFC conversation opened for one stateless call');
+      }
       return await this.carry(request, own, generation, passport);
     } finally {
       await this.closeUnlessReleased(own);
@@ -999,14 +1006,17 @@ export class RfcTransport implements IOnPremTransport {
       });
     }
 
-    this.logger?.debug(`RFC → ${method} ${uri}`);
+    // `noLog`: nothing before the answer, and nothing of the request at all —
+    // its one line is the quiet one below, once there is a status.
+    const noLog = request.noLog === true;
+    if (!noLog) this.logger?.debug(`RFC → ${method} ${uri}`);
     // `RFC → METHOD URI` alone was not enough to debug a body that goes
     // missing or gets mis-serialised on the way to `SADT_REST_RFC_ENDPOINT`
     // (found chasing a `superPackage` that disappeared before it reached
     // SAP) — the actual bytes matter, so the debug channel carries them too
     // when the caller asks for it, redacted and clipped so a captured log is
     // safe to paste into an issue and small enough to want to.
-    if (this.logger && this.options.logWire) {
+    if (this.logger && this.options.logWire && !noLog) {
       this.logger.debug(
         `RFC HEADERS: ${JSON.stringify(redactHeaders(headerFields))}`,
       );
@@ -1077,7 +1087,12 @@ export class RfcTransport implements IOnPremTransport {
       const words = rfc?.codeString ?? UNNAMED;
       const text = `RFC call to SADT_REST_RFC_ENDPOINT failed: ${words}`;
       try {
-        this.logger?.error(`RFC call failed: ${words}`);
+        if (noLog) {
+          const quiet = quietLine(method, uri);
+          this.logger?.error(quiet.line, quiet.facts);
+        } else {
+          this.logger?.error(`RFC call failed: ${words}`);
+        }
       } catch {
         // A broken logger must not replace the call's failure.
       }
@@ -1121,19 +1136,28 @@ export class RfcTransport implements IOnPremTransport {
       const detected = statusFromExceptionXml(data);
       status = detected.code;
       statusText = detected.text;
-      this.logger?.debug(
-        `RFC: STATUS_LINE empty, read ${status} out of the exception XML`,
-      );
+      if (!noLog) {
+        this.logger?.debug(
+          `RFC: STATUS_LINE empty, read ${status} out of the exception XML`,
+        );
+      }
     }
     if (!status) {
       status = 200;
       statusText = statusText || 'OK';
     }
 
-    this.logger?.debug(`RFC ← ${status} ${statusText} (${data.length} bytes)`);
+    if (noLog) {
+      const quiet = quietLine(method, uri, { status, data });
+      this.logger?.debug(quiet.line, quiet.facts);
+    } else {
+      this.logger?.debug(
+        `RFC ← ${status} ${statusText} (${data.length} bytes)`,
+      );
+    }
     // The line above already carries the size, so an empty body needs no line
     // of its own.
-    if (this.logger && this.options.logWire && data) {
+    if (this.logger && this.options.logWire && data && !noLog) {
       this.logger.debug(`RFC RESPONSE BODY: ${this.clipped(data)}`);
     }
 
