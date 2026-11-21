@@ -120,6 +120,13 @@ export interface IAdtSessionContext {
   logon(target: ILogonTarget): Promise<void>;
   /** Anything the conversation carries — the ADT connection id, today. */
   extraHeaders?: Record<string, string>;
+  /**
+   * The flags of the request this exchange is made for — its CSRF token
+   * fetch, say: `noResend` sends the exchange once and follows no redirect,
+   * `noLog` keeps what it sees out of the wire's lines.
+   */
+  noResend?: true | undefined;
+  noLog?: true | undefined;
   /** Where to hand each answer, so the connection sees what the wire saw. */
   observe: (headers: unknown) => void;
 }
@@ -211,7 +218,11 @@ export interface IAdtTransport {
    * establishment or a replacement is a question about the session's lifetime,
    * and it is answered above.
    */
-  ingest(headers?: Record<string, unknown>): void;
+  ingest(
+    headers?: Record<string, unknown>,
+    /** The answer is a `noLog` request's: nothing of it reaches a line. */
+    options?: { noLog?: true | undefined },
+  ): void;
 
   /** What to put on the `Cookie` header, or `null` for a wire that has none. */
   cookies(): string | null;
