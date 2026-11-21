@@ -21,9 +21,10 @@ import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { IAbapRequestOptions } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
-import { AuthRefusedError } from '../connection/authErrors.js';
+import { WireLogonError } from '../connection/authErrors.js';
 import { refusalOf } from '../connection/IAdtTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
+import { instanceOf } from './helpers/assertions.js';
 import { stubProvider } from './helpers/stubProvider.js';
 
 const DISCOVERY = '/sap/bc/adt/core/discovery';
@@ -31,6 +32,7 @@ const WORK = '/sap/bc/adt/oo/classes/zcl_x/source/main';
 const ELSEWHERE = '/sap/bc/adt/elsewhere';
 
 interface Answer {
+  /** `0`: the socket is destroyed, no byte written. */
   status: number;
   body?: string;
   headers?: Record<string, string>;
@@ -79,6 +81,10 @@ async function startSap(): Promise<Sap> {
             : {},
       };
       sap.arrivals.push({ method, path, status: answer.status });
+      if (answer.status === 0) {
+        req.socket.destroy();
+        return;
+      }
       res.writeHead(answer.status, {
         'content-type': 'text/plain',
         ...answer.headers,
@@ -197,7 +203,7 @@ describe('noResend', () => {
     });
   }
 
-  it('a 401 to a mutation sent without a token: the answer with the flag, resent once without', async () => {
+  it('a mutation whose CSRF fetch fails: that answer with the flag; sent without a token, its 401 resent once, without', async () => {
     const { connection, transport } = await connected();
     try {
       for (const noResend of [true, false]) {
@@ -207,15 +213,13 @@ describe('noResend', () => {
         sap.discovery.push({ status: 500 });
         sap.work.push({ status: 401, body: 'Logon failed' });
         if (noResend) {
+          // The failed fetch is the answer: the mutation is not sent.
           await assert.rejects(connection.makeAdtRequest(write(true)), (e) => {
-            assert.strictEqual(statusOf(e), 401);
-            assert.ok(!(e instanceof AuthRefusedError));
+            assert.strictEqual(statusOf(e), 500);
             return true;
           });
-          assert.deepStrictEqual(trace(), [
-            ['GET', DISCOVERY, 500],
-            ['PUT', WORK, 401],
-          ]);
+          assert.deepStrictEqual(trace(), [['GET', DISCOVERY, 500]]);
+          sap.work.length = 0;
         } else {
           const response = await connection.makeAdtRequest(write(false));
           assert.strictEqual(response.status, 200);
@@ -227,6 +231,87 @@ describe('noResend', () => {
           ]);
         }
       }
+    } finally {
+      await connection.disconnect();
+    }
+  });
+
+  it('a 401 to the CSRF fetch: the answer with the flag, renewed and fetched again without', async () => {
+    const provider = stubProvider();
+    const { connection, transport } = await connected(provider);
+    try {
+      transport.adoptCsrfToken(null);
+      sap.discovery.push({ status: 401, body: 'Logon failed' });
+      await assert.rejects(connection.makeAdtRequest(write(true)), (e) => {
+        // The refused logon, as the wire named it: no provider was asked.
+        assert.strictEqual(instanceOf(e, WireLogonError).status, 401);
+        return true;
+      });
+      assert.deepStrictEqual(trace(), [['GET', DISCOVERY, 401]]);
+      assert.strictEqual(provider.rejections.length, 0);
+
+      sap.arrivals.length = 0;
+      transport.adoptCsrfToken(null);
+      sap.discovery.push({ status: 401, body: 'Logon failed' });
+      const response = await connection.makeAdtRequest(write(false));
+      assert.strictEqual(response.status, 200);
+      assert.deepStrictEqual(trace(), [
+        ['GET', DISCOVERY, 401],
+        ['GET', DISCOVERY, 200],
+        ['PUT', WORK, 200],
+      ]);
+      assert.strictEqual(provider.rejections.length, 1);
+    } finally {
+      await connection.disconnect();
+    }
+  });
+
+  it('a dead pooled socket under the CSRF fetch: the answer with the flag, resent without', async () => {
+    for (const noResend of [true, false]) {
+      // A connection each: the fetch must go out on the socket the connect
+      // left idle in the pool.
+      const { connection, transport } = await connected();
+      try {
+        transport.adoptCsrfToken(null);
+        sap.discovery.push({ status: 0 });
+        if (noResend) {
+          await assert.rejects(connection.makeAdtRequest(write(true)));
+          assert.deepStrictEqual(trace(), [['GET', DISCOVERY, 0]]);
+        } else {
+          const response = await connection.makeAdtRequest(write(false));
+          assert.strictEqual(response.status, 200);
+          assert.deepStrictEqual(trace(), [
+            ['GET', DISCOVERY, 0],
+            ['GET', DISCOVERY, 200],
+            ['PUT', WORK, 200],
+          ]);
+        }
+      } finally {
+        await connection.disconnect();
+      }
+    }
+  });
+
+  it('a 307 to the CSRF fetch: the answer with the flag, followed without', async () => {
+    const { connection, transport } = await connected();
+    const redirect = { status: 307, headers: { location: ELSEWHERE } };
+    try {
+      transport.adoptCsrfToken(null);
+      sap.discovery.push(redirect);
+      await assert.rejects(connection.makeAdtRequest(write(true)), (e) => {
+        assert.strictEqual(statusOf(e), 307);
+        return true;
+      });
+      assert.deepStrictEqual(trace(), [['GET', DISCOVERY, 307]]);
+
+      sap.arrivals.length = 0;
+      transport.adoptCsrfToken(null);
+      sap.discovery.push(redirect);
+      await connection.makeAdtRequest(write(false));
+      assert.deepStrictEqual(trace().slice(0, 2), [
+        ['GET', DISCOVERY, 307],
+        ['GET', ELSEWHERE, 200],
+      ]);
     } finally {
       await connection.disconnect();
     }

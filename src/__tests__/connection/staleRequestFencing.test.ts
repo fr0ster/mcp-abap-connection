@@ -17,6 +17,7 @@ import type { IAuthProvider } from '@mcp-abap-adt/interfaces-auth';
 import type { SapHttpConfig } from '../../config/sapConfig.js';
 import type { AdtOnPremConnector } from '../../connection/AdtOnPremConnector.js';
 import type { OnPremHttpTransport } from '../../connection/OnPremHttpTransport.js';
+import type { ILogger } from '../../logger.js';
 import { onPrem } from '../helpers/onPrem.js';
 
 interface Stub {
@@ -131,17 +132,23 @@ describe('a request that settles after its session was replaced', () => {
    * then the request is let go and answers with `status`. Nothing it meets may
    * act on the connection: no teardown raised, no token fetched, no resend.
    */
-  async function staleRequest(status: number, body: string, method = 'GET') {
-    const conn = onPrem(configFor(stub.baseUrl), null);
+  async function staleRequest(
+    status: number,
+    body: string,
+    method = 'GET',
+    quiet?: { logger: ILogger; released: () => void },
+  ) {
+    const conn = onPrem(configFor(stub.baseUrl), quiet?.logger ?? null);
     await conn.connect();
 
     const release = holdWork(conn);
     const inFlight = conn
       .makeAdtRequest({
-        url: '/sap/bc/adt/work',
+        url: quiet ? '/sap/bc/adt/work?secret=QCANARY' : '/sap/bc/adt/work',
         method,
         timeout: 5000,
         ...(method === 'GET' ? {} : { data: 'x' }),
+        ...(quiet ? { noLog: true } : {}),
       })
       .catch((e) => e);
 
@@ -151,10 +158,43 @@ describe('a request that settles after its session was replaced', () => {
 
     stub.workStatus = status;
     stub.workBody = body;
+    quiet?.released();
     release();
     await inFlight;
     return conn;
   }
+
+  it('with noLog, the fenced request writes the quiet line alone', async () => {
+    const lines: { message: string; meta: unknown }[] = [];
+    let recording = false;
+    const record = (message: string, meta?: unknown) => {
+      if (recording) lines.push({ message, meta });
+    };
+    const logger: ILogger = {
+      info: record,
+      warn: record,
+      error: record,
+      debug: record,
+    };
+    await staleRequest(403, 'CSRF token validation failed ACANARY', 'PUT', {
+      logger,
+      released: () => {
+        recording = true;
+      },
+    });
+    const bytes = Buffer.byteLength('CSRF token validation failed ACANARY');
+    assert.deepStrictEqual(lines, [
+      {
+        message: `PUT /sap/bc/adt/work → 403 (${bytes} bytes)`,
+        meta: {
+          method: 'PUT',
+          path: '/sap/bc/adt/work',
+          status: 403,
+          bytes,
+        },
+      },
+    ]);
+  });
 
   // The identity comparison cannot see this one: the cookie is unchanged, so
   // only the state can tell — and the session it would declare lost is one

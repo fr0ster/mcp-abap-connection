@@ -33,6 +33,8 @@ import type { ILogger } from '../logger.js';
 
 const PATH = '/sap/bc/adt/abapgit/repos';
 const CANARIES = [
+  'LBCANARY',
+  'UCANARY',
   'QCANARY',
   'PCANARY',
   'HCANARY',
@@ -102,6 +104,14 @@ function assertQuiet(entries: Entry[], method: string): void {
     assert.ok(!all.includes(canary), `a line holds ${canary}:\n${all}`);
   }
   assert.ok(!all.includes('?'), `a line holds a query:\n${all}`);
+  const own = entries.filter(
+    (e) => OWN_EXCHANGE_LINES.has(e.message) && e.meta === undefined,
+  );
+  assert.strictEqual(
+    entries.length - own.length,
+    1,
+    `one quiet line per request:\n${all}`,
+  );
   for (const entry of entries) {
     if (OWN_EXCHANGE_LINES.has(entry.message) && entry.meta === undefined) {
       continue;
@@ -148,18 +158,39 @@ describe('noLog over HTTP', () => {
   let plan: Plan = { status: 200 };
   /** Statuses answered before `plan`, in order. */
   let first: number[] = [];
+  /** How many discovery requests still answer `500`. */
+  let discoveryFails = 0;
+  /** Whether the next discovery request has its socket destroyed. */
+  let discoveryDies = false;
+  /** Each answer names another application server: a new value is logged. */
+  let served = 0;
 
   beforeEach(async () => {
     plan = { status: 200 };
     first = [];
+    discoveryFails = 0;
+    discoveryDies = false;
     server = createServer((req, res) => {
       req.resume();
       req.on('end', () => {
         const path = (req.url ?? '').split('?')[0] ?? '';
+        const saplb = `LBCANARY-${++served}`;
         if (path.endsWith('/discovery')) {
+          if (discoveryDies) {
+            discoveryDies = false;
+            req.socket.destroy();
+            return;
+          }
+          if (discoveryFails > 0) {
+            discoveryFails -= 1;
+            res.writeHead(500, 'SCANARY', { 'sap-adt-saplb': saplb });
+            res.end('fetch ACANARY');
+            return;
+          }
           res.writeHead(200, {
             'x-csrf-token': 'T1',
             'set-cookie': 'SAP_SESSIONID_STUB_100=S1; Path=/',
+            'sap-adt-saplb': saplb,
           });
           res.end('<service/>');
           return;
@@ -172,6 +203,7 @@ describe('noLog over HTTP', () => {
         res.writeHead(status, 'SCANARY', {
           'content-type': 'text/plain',
           'x-answer': 'XCANARY',
+          'sap-adt-saplb': saplb,
         });
         res.end(status === 403 ? CSRF_BODY : ANSWER_BODY);
       });
@@ -193,17 +225,75 @@ describe('noLog over HTTP', () => {
 
   async function connected() {
     const { logger, entries } = recorder();
+    // The wire logger is the same recorder.
+    const transport = new OnPremHttpTransport(() => ({}), logger, {
+      client: '100',
+      baseUrl,
+    });
     const connection = new AdtOnPremConnector(
       { url: baseUrl, authType: 'basic', client: '100' },
       new BasicAuthProvider('u', 'p'),
-      // The wire logger is the same recorder.
-      new OnPremHttpTransport(() => ({}), logger, { client: '100', baseUrl }),
+      transport,
       logger,
     );
     await connection.connect();
     entries.length = 0;
-    return { connection, entries };
+    return { connection, entries, transport };
   }
+
+  it('the application server an answer names: not logged with the flag', async () => {
+    const { connection, entries } = await connected();
+    try {
+      for (const noLog of [true, false]) {
+        entries.length = 0;
+        await connection.makeAdtRequest(request('GET', noLog));
+        const named = entries.some((e) => e.message.includes('LBCANARY'));
+        assert.strictEqual(named, !noLog, written(entries));
+        if (noLog) assertQuiet(entries, 'GET');
+      }
+    } finally {
+      await connection.disconnect();
+    }
+  });
+
+  it('a CSRF fetch whose pooled socket died: no resend line of the wire with the flag', async () => {
+    for (const noLog of [true, false]) {
+      // A connection each: the fetch must go out on the socket the connect
+      // left idle in the pool.
+      const { connection, entries, transport } = await connected();
+      try {
+        transport.adoptCsrfToken(null);
+        discoveryDies = true;
+        await connection.makeAdtRequest(request('PUT', noLog));
+        const resendLine = entries.some((e) =>
+          e.message.startsWith('HTTP: a pooled'),
+        );
+        assert.strictEqual(resendLine, !noLog, written(entries));
+        if (noLog) assertQuiet(entries, 'PUT');
+      } finally {
+        await connection.disconnect();
+      }
+    }
+  });
+
+  it('a CSRF fetch before the mutation that fails: no line of its own with the flag', async () => {
+    const { connection, entries, transport } = await connected();
+    try {
+      for (const noLog of [true, false]) {
+        entries.length = 0;
+        transport.adoptCsrfToken(null);
+        discoveryFails = 1;
+        await connection.makeAdtRequest(request('PUT', noLog));
+        const fetchLine = entries.some((e) =>
+          e.message.startsWith('Could not fetch CSRF token upfront'),
+        );
+        assert.strictEqual(fetchLine, !noLog, written(entries));
+        if (noLog) assertQuiet(entries, 'PUT');
+      }
+    } finally {
+      await connection.disconnect();
+    }
+  });
 
   for (const [name, method, status] of [
     ['the request lines of an answered request', 'GET', 200],
@@ -322,9 +412,12 @@ describe('noLog over RFC', () => {
 
   function factory(
     next: () => Script,
-    reset: 'resets' | 'cannot' | 'fails',
+    reset: 'resets' | 'cannot' | 'fails' | 'close-fails',
   ): RfcConversationFactory {
+    let made = 0;
     return () => {
+      // The first is the stateful conversation, closed by disconnect().
+      const perCall = made++ > 0;
       let alive = false;
       const conversation: IRfcConversation = {
         get alive() {
@@ -335,8 +428,11 @@ describe('noLog over RFC', () => {
         },
         close: async () => {
           alive = false;
+          if (reset === 'close-fails' && perCall) {
+            throw { codeString: 'RFC_CLOSE_CANARY', message: 'QCANARY' };
+          }
         },
-        ...(reset === 'cannot'
+        ...(reset === 'cannot' || reset === 'close-fails'
           ? {}
           : {
               resetServerContext: async () => {
@@ -378,7 +474,7 @@ describe('noLog over RFC', () => {
 
   async function connected(
     next: () => Script,
-    reset: 'resets' | 'cannot' | 'fails' = 'resets',
+    reset: 'resets' | 'cannot' | 'fails' | 'close-fails' = 'resets',
   ) {
     const { logger, entries } = recorder();
     const connection = new AdtOnPremConnector(
@@ -432,6 +528,7 @@ describe('noLog over RFC', () => {
   for (const [name, reset] of [
     ['a conversation opened for one call (no reset)', 'cannot'],
     ['a reset that fails', 'fails'],
+    ['a per-call conversation whose close fails', 'close-fails'],
   ] as const) {
     it(`${name}: the conversation's lines are not written with the flag`, async () => {
       const { connection, entries } = await connected(
@@ -445,10 +542,11 @@ describe('noLog over RFC', () => {
           if (noLog) assertQuiet(entries, 'GET');
           else
             assert.ok(
-              entries.some(
-                (e) =>
-                  e.message.startsWith('RFC conversation opened for one') ||
-                  e.message.startsWith('RFC reset failed'),
+              entries.some((e) =>
+                reset === 'close-fails'
+                  ? e.message.startsWith('RFC close error')
+                  : e.message.startsWith('RFC conversation opened for one') ||
+                    e.message.startsWith('RFC reset failed'),
               ),
               written(entries),
             );
@@ -458,6 +556,19 @@ describe('noLog over RFC', () => {
       }
     });
   }
+
+  it('an absolute URL with a user and a password: the line names its path alone', async () => {
+    const { connection, entries } = await connected(() => ({ status: 200 }));
+    try {
+      await connection.makeAdtRequest({
+        ...request('GET', true),
+        url: `https://UCANARY:PCANARY@sap.invalid${PATH}?secret=QCANARY#frag`,
+      });
+      assertQuiet(entries, 'GET');
+    } finally {
+      await connection.disconnect();
+    }
+  });
 
   it('a status read out of the exception XML: no line of its own with the flag', async () => {
     const { connection, entries } = await connected(() => ({
