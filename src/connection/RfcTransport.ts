@@ -72,7 +72,11 @@ import type {
 } from './IAdtTransport.js';
 import { quietLine } from './quietLine.js';
 import { isFactoryOwnWords } from './rfcConversation.js';
-import { isStatefulRequest } from './statefulRequest.js';
+import {
+  cookieWithoutContext,
+  isSessionTypeHeader,
+  isStatefulRequest,
+} from './statefulRequest.js';
 
 /**
  * The SDK answers with untyped structures: each level is read as a record and
@@ -980,9 +984,25 @@ export class RfcTransport implements IOnPremTransport {
     }
     // The passport is not a header field over RFC: it goes to the SDK as the
     // call's own (`passport`, read in `send()`).
-    const headerFields = Object.entries(request.headers ?? {})
-      .filter(([NAME]) => !isPassportHeader(NAME))
-      .map(([NAME, VALUE]) => ({ NAME, VALUE: String(VALUE) }));
+    // `stateless`: the caller's own session header does not travel, in any
+    // letter case, and neither does the `sap-contextid` cookie — before
+    // anything else reads the fields.
+    const headerFields: { NAME: string; VALUE: string }[] = [];
+    for (const [NAME, value] of Object.entries(request.headers ?? {})) {
+      if (isPassportHeader(NAME)) continue;
+      const VALUE = String(value);
+      if (!request.stateless) {
+        headerFields.push({ NAME, VALUE });
+        continue;
+      }
+      if (isSessionTypeHeader(NAME)) continue;
+      if (NAME.trim().toLowerCase() === 'cookie') {
+        const kept = cookieWithoutContext(VALUE);
+        if (kept !== undefined) headerFields.push({ NAME, VALUE: kept });
+        continue;
+      }
+      headerFields.push({ NAME, VALUE });
+    }
 
     // ADT refuses a request with no Accept — `400 ExceptionResourceBadRequest:
     // Accept header missing`, measured on E19. Over HTTP axios supplies the

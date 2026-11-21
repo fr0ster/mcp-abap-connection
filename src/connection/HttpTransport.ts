@@ -56,7 +56,11 @@ import {
   type IAdtTransportResponse,
   refusalOf,
 } from './IAdtTransport.js';
-import { isStatefulRequest, SESSION_TYPE_HEADER } from './statefulRequest.js';
+import {
+  isSessionTypeHeader,
+  isStatefulRequest,
+  SESSION_TYPE_HEADER,
+} from './statefulRequest.js';
 
 /**
  * The pool every request of the wire goes through: the options of Node's own
@@ -926,6 +930,14 @@ export class HttpTransport implements IAdtTransport {
       ...(stateful ? this.sessionTypeHeaders() : {}),
       ...headers,
     };
+    // `stateless`: the caller's own session header goes, in whatever letter
+    // case it was written; the context cookie is filtered below, as for every
+    // request that is not stateful.
+    if (request.stateless) {
+      for (const name of Object.keys(dressed)) {
+        if (isSessionTypeHeader(name)) delete dressed[name];
+      }
+    }
     // The caller's spelling of the client goes; the wire's goes in last. It is
     // the same value — refuseAnotherClient saw to that — said once.
     for (const name of Object.keys(dressed)) {
