@@ -837,15 +837,20 @@ export class HttpTransport implements IAdtTransport {
         // tokenless answer still opened. And before the fold: an answer the
         // connection refuses as a gone session's throws here, and nothing
         // of it reaches the jar.
+        //
+        // `noResend`: a status the client resolved outside `2xx` is SAP's
+        // refusal, and goes on as one — its status and body, the shape any
+        // refusal has — to the handling below, which observes it once.
+        if (
+          context.noResend &&
+          (response.status < 200 || response.status >= 300)
+        ) {
+          throw httpFailure({ response });
+        }
         context.observe(response.headers);
         this.ingest(headerFields(response.headers), quietIngest(context));
 
-        // `noResend`: a token only from a `2xx`, whatever status the client
-        // chose to resolve.
-        const token =
-          context.noResend && (response.status < 200 || response.status >= 300)
-            ? undefined
-            : csrfTokenIn(response.headers);
+        const token = csrfTokenIn(response.headers);
         if (token !== undefined) {
           this.token = token;
           this.logger?.debug('CSRF token obtained');

@@ -377,7 +377,11 @@ describe('noResend', () => {
                   'set-cookie': 'SAP_SESSIONID_STUB_100=S1; Path=/',
                 },
               }
-            : { status: 405, headers: { 'x-csrf-token': 'T2' } };
+            : {
+                status: 405,
+                data: 'refused BODY',
+                headers: { 'x-csrf-token': 'T2' },
+              };
         }
         return { status: 200, data: 'ok' };
       });
@@ -396,13 +400,71 @@ describe('noResend', () => {
       try {
         transport.adoptCsrfToken(null);
         const sent = connection.makeAdtRequest(write(noResend));
-        if (noResend) await assert.rejects(sent);
-        else await sent;
+        if (noResend) {
+          // SAP's answer, as an ordinary refusal carries it.
+          await assert.rejects(sent, (e) => {
+            assert.strictEqual(refusalOf(e)?.status, 405);
+            assert.strictEqual(refusalOf(e)?.data, 'refused BODY');
+            return true;
+          });
+        } else await sent;
         const puts = client.sent.filter((r) => r.method === 'PUT');
         assert.strictEqual(puts.length, noResend ? 0 : 1);
       } finally {
         await connection.disconnect();
       }
+    }
+  });
+
+  it('with noLog too, the resolved refusal of the fetch is the quiet line’s status', async () => {
+    const lines: { message: string; meta: unknown }[] = [];
+    const record = (message: string, meta?: unknown) => {
+      lines.push({ message, meta });
+    };
+    const logger = { info: record, warn: record, error: record, debug: record };
+    let fetches = 0;
+    const client = httpClientStub(async (request): Promise<StubResponse> => {
+      if (request.url.endsWith(DISCOVERY)) {
+        fetches += 1;
+        return fetches === 1
+          ? {
+              status: 200,
+              headers: {
+                'x-csrf-token': 'T1',
+                'set-cookie': 'SAP_SESSIONID_STUB_100=S1; Path=/',
+              },
+            }
+          : { status: 405, data: 'refused BODY' };
+      }
+      return { status: 200, data: 'ok' };
+    });
+    const transport = new OnPremHttpTransport(() => ({}), logger, {
+      client: '100',
+      baseUrl: 'http://sap.invalid',
+      httpClient: client,
+    });
+    const connection = new AdtOnPremConnector(
+      { url: 'http://sap.invalid', authType: 'basic', client: '100' },
+      new BasicAuthProvider('u', 'p'),
+      transport,
+      logger,
+    );
+    await connection.connect();
+    try {
+      transport.adoptCsrfToken(null);
+      lines.length = 0;
+      await assert.rejects(
+        connection.makeAdtRequest({ ...write(true), noLog: true }),
+      );
+      const bytes = Buffer.byteLength('refused BODY');
+      assert.deepStrictEqual(lines, [
+        {
+          message: `PUT ${WORK} → 405 (${bytes} bytes)`,
+          meta: { method: 'PUT', path: WORK, status: 405, bytes },
+        },
+      ]);
+    } finally {
+      await connection.disconnect();
     }
   });
 
