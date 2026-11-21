@@ -1332,7 +1332,11 @@ export class HttpTransport implements IAdtTransport {
    * The risk, stated: a server that read the request and died before a byte of
    * its answer would run it twice.
    */
-  private async sendPooled(config: AxiosRequestConfig): Promise<AxiosResponse> {
+  private async sendPooled(
+    config: AxiosRequestConfig,
+    /** The request's `noResend`: sent once, its failure the caller's. */
+    once: boolean,
+  ): Promise<AxiosResponse> {
     const attempt: PooledAttempt = {};
     try {
       return await pooledAttempts.run(attempt, () =>
@@ -1346,6 +1350,7 @@ export class HttpTransport implements IAdtTransport {
     } catch (error) {
       const fresh = this.fresh;
       if (
+        once ||
         fresh === null ||
         !resendable(config.data) ||
         !diedOnPooledSocket(error, attempt)
@@ -1372,6 +1377,8 @@ export class HttpTransport implements IAdtTransport {
   ): Promise<IAdtTransportResponse> {
     const config: AxiosRequestConfig = {
       ...(redirects ?? {}),
+      // `noResend`: following a redirect would send the request again.
+      ...(request.noResend ? { maxRedirects: 0 } : {}),
       // The write is the point `disconnect()` resolves at: the request's
       // `finish`, emitted once its bytes are handed to the socket — not when
       // the server answers, which it may do minutes later or never.
@@ -1420,7 +1427,7 @@ export class HttpTransport implements IAdtTransport {
       response =
         written !== undefined
           ? await this.client()(config)
-          : await this.sendPooled(config);
+          : await this.sendPooled(config, request.noResend === true);
     } catch (error) {
       // Never as the client threw it: axios's error holds this request's
       // config — its credential headers among it — and words naming the host.
