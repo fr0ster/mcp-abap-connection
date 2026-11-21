@@ -382,7 +382,10 @@ await connection.makeAdtRequest({
   `SESSION_REPLACED`, not as a warning, and the logoff it causes writes no
   line). The path is the URL's pathname for an absolute URL (no user, password
   or host), the path without its query or fragment for a relative one, and
-  `<unparsable url>` for one that does not parse. The wires write no line of
+  `<unparsable url>` for one that does not parse; a control character in it is
+  written as `\xNN`, so a path cannot forge a line. A syntax check
+  `createConnection` replays on a temporary session writes nothing of its own:
+  its logon, the replay and its logoff go unlogged. The wires write no line of
   their own about it, the application server an answer names included.
   Two fixed-word lines that name nothing of the request are the documented
   exceptions: the wire's `CSRF token obtained`, when a token is fetched for the

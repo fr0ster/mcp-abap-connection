@@ -46,7 +46,9 @@ A request without them behaves as before. See
   fields `{ method, path, status, bytes }`, whatever path the request takes —
   a session loss reaches the caller as the error's `sessionLost`, not a
   warning. The path is an absolute URL's pathname (no user, password or host),
-  a relative one without its query or fragment, or `<unparsable url>`. Two
+  a relative one without its query or fragment, or `<unparsable url>`, its
+  control characters written as `\xNN`; a replayed syntax check writes no
+  line of its own (its temporary session runs without loggers). Two
   fixed-word lines that name nothing of the request are the exceptions:
   `CSRF token obtained` and the cloud wire's `The server published no logoff resource; sending the platform logoff`. The error thrown keeps
   SAP's answer for the caller.
