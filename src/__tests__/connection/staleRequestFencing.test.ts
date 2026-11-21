@@ -155,6 +155,9 @@ describe('a request that settles after its session was replaced', () => {
     await new Promise((r) => setTimeout(r, 10));
     await conn.disconnect();
     assert.deepStrictEqual(stub.sessions, ['S1']);
+    // The logoff's answer is the session's, not the request's: waited for
+    // before anything is recorded, so its line cannot land among the request's.
+    if (quiet) await conn.flushGoodbye();
 
     stub.workStatus = status;
     stub.workBody = body;
