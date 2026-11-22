@@ -16,11 +16,16 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { Socket } from 'node:net';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { authError } from '@mcp-abap-adt/auth-errors';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import {
   ADT_SESSION_ERROR,
   type IAbapRequestOptions,
 } from '@mcp-abap-adt/interfaces-adt-connection';
+import type {
+  IAuthProvider,
+  IAuthRejection,
+} from '@mcp-abap-adt/interfaces-auth';
 import type { ISapRfcConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import axios from 'axios';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
@@ -204,7 +209,11 @@ function recorder(): { logger: ILogger; lines: Line[] } {
 }
 
 async function connected(
-  options: { logger?: ILogger; fetchAdapter?: boolean } = {},
+  options: {
+    logger?: ILogger;
+    fetchAdapter?: boolean;
+    credential?: IAuthProvider;
+  } = {},
 ) {
   const logger = options.logger ?? null;
   const transport = new OnPremHttpTransport(() => ({}), logger, {
@@ -221,7 +230,7 @@ async function connected(
   });
   const connection = new AdtOnPremConnector(
     { url: sap.baseUrl, authType: 'basic', client: '100' },
-    new BasicAuthProvider('u', 'p'),
+    options.credential ?? new BasicAuthProvider('u', 'p'),
     transport,
     logger,
   );
@@ -582,6 +591,168 @@ describe('rawText changes nothing inside the connection', () => {
       const unflagged = await behaviour(answers, false, options);
       const flagged = await behaviour(answers, true, options);
       assert.deepStrictEqual(flagged, unflagged);
+    });
+  }
+});
+
+/** A value's `response.data`, read without assuming its shape. */
+function responseData(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return undefined;
+  if (!('response' in value)) return undefined;
+  const response = value.response;
+  if (typeof response !== 'object' || response === null) return undefined;
+  return 'data' in response ? response.data : undefined;
+}
+
+function isBytes(value: unknown): boolean {
+  return ArrayBuffer.isView(value) || value instanceof ArrayBuffer;
+}
+
+describe('the credential provider reads what the unflagged path has', () => {
+  const EXPIRED: Answer = {
+    status: 401,
+    body: '{"code":"expired"}',
+    type: 'application/json',
+  };
+  const refusal = authError['system-refused']({
+    verdict: 'rfc-failure',
+    rfcKey: 'RFC_COMMUNICATION_FAILURE',
+    at: 'request',
+  });
+
+  /** Renews only when the rejection's body says `code: "expired"`. */
+  function renewsOnExpired(seen: unknown[]) {
+    return stubProvider({
+      rejected: [
+        (rejection: IAuthRejection) => {
+          const data = responseData(rejection.error);
+          seen.push(data);
+          const expired =
+            typeof data === 'object' &&
+            data !== null &&
+            'code' in data &&
+            data.code === 'expired';
+          return expired ? { ok: true } : { ok: false, refusal };
+        },
+      ],
+    });
+  }
+
+  it('a request refused 401: renewed and sent again, flag or not, no bytes', async () => {
+    const runs: { sends: number; seen: unknown[]; status: number }[] = [];
+    for (const rawText of [false, true]) {
+      const seen: unknown[] = [];
+      const { connection } = await connected({
+        credential: renewsOnExpired(seen),
+      });
+      try {
+        sap.file.push({ ...EXPIRED });
+        const response = await connection.makeAdtRequest(
+          read(rawText ? { rawText: true } : {}),
+        );
+        runs.push({ sends: sent('GET'), seen, status: response.status });
+      } finally {
+        await connection.disconnect();
+      }
+    }
+    for (const run of runs) {
+      assert.deepStrictEqual(run, {
+        sends: 2,
+        seen: [{ code: 'expired' }],
+        status: 200,
+      });
+    }
+  });
+
+  it('a logon refused 401 at the upfront fetch: renewed, flag or not, no bytes', async () => {
+    const runs: { arrivals: string[]; seen: unknown[] }[] = [];
+    for (const rawText of [false, true]) {
+      const seen: unknown[] = [];
+      const { connection, transport } = await connected({
+        credential: renewsOnExpired(seen),
+      });
+      transport.adoptCsrfToken(null);
+      try {
+        sap.discovery.push({ ...EXPIRED });
+        await connection.makeAdtRequest(
+          read(rawText ? { rawText: true } : {}, 'PUT'),
+        );
+        runs.push({ arrivals: [...sap.arrivals], seen });
+      } finally {
+        await connection.disconnect();
+      }
+    }
+    for (const run of runs) {
+      assert.deepStrictEqual(run, {
+        arrivals: [`GET ${DISCOVERY}`, `GET ${DISCOVERY}`, `PUT ${FILE}`],
+        seen: [{ code: 'expired' }],
+      });
+    }
+  });
+
+  it("refused again: AuthRefusedError's cause holds the parsed body, flag or not", async () => {
+    for (const rawText of [false, true]) {
+      const seen: unknown[] = [];
+      const { connection } = await connected({
+        credential: renewsOnExpired(seen),
+      });
+      try {
+        sap.file.push({ ...EXPIRED }, { ...EXPIRED });
+        await assert.rejects(
+          connection.makeAdtRequest(read(rawText ? { rawText: true } : {})),
+          (error) => {
+            assert.ok(error instanceof Error && 'cause' in error);
+            const data = responseData(error.cause);
+            assert.ok(!isBytes(data));
+            assert.deepStrictEqual(data, { code: 'expired' });
+            return true;
+          },
+        );
+        assert.strictEqual(sent('GET'), 2);
+        assert.ok(seen.every((data) => !isBytes(data)));
+      } finally {
+        await connection.disconnect();
+      }
+    }
+  });
+});
+
+describe('a body that is costly to reserialize', () => {
+  // Deep enough that a recursive `JSON.stringify` overflows, with the words a
+  // CSRF recovery looks for inside: the session observation comes first, so
+  // a stateless 500 carrying a replacement cookie is the session's verdict.
+  const depth = 100_000;
+  const body = `${'['.repeat(depth)}"CSRF token"${']'.repeat(depth)}`;
+
+  for (const rawText of [false, true]) {
+    it(`a stateless 500 with a replacement cookie: sessionLost, one send${rawText ? ', the exact text' : ''}`, async () => {
+      const { connection } = await connected();
+      try {
+        sap.file.push({
+          status: 500,
+          body,
+          type: 'application/json',
+          headers: REPLACED,
+        });
+        await assert.rejects(
+          connection.makeAdtRequest(
+            read(rawText ? { rawText: true } : {}, 'PUT'),
+          ),
+          (error) => {
+            assert.ok(error instanceof Error && 'sessionLost' in error);
+            assert.strictEqual(
+              error.sessionLost,
+              ADT_SESSION_ERROR.SESSION_REPLACED,
+            );
+            assert.strictEqual(refusalOf(error)?.status, 500);
+            if (rawText) assert.strictEqual(refusalOf(error)?.data, body);
+            return true;
+          },
+        );
+        assert.strictEqual(sent('PUT'), 1);
+      } finally {
+        await connection.disconnect();
+      }
     });
   }
 });
