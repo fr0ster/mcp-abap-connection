@@ -339,9 +339,10 @@ of these three resends: see the request options below.
 
 ### Request options: `noResend`, `noLog`, `stateless`
 
-Since 25.1.0, three optional flags of `IAbapRequestOptions`
-(`@mcp-abap-adt/interfaces-adt-connection` 5.2.0) change one request and
-nothing else. A request without them behaves as before.
+Since 25.1.0, optional flags of `IAbapRequestOptions` change one request and
+nothing else: `noResend`, `noLog` and `stateless`
+(`@mcp-abap-adt/interfaces-adt-connection` 5.2.0), and since 25.2.0 `rawText`
+(5.3.0). A request without them behaves as before.
 
 ```typescript
 await connection.makeAdtRequest({
@@ -352,6 +353,14 @@ await connection.makeAdtRequest({
   noResend: true, // the first failure is the answer
   noLog: true, // nothing of the request or its answer in a log
   stateless: true, // stateless whatever the session mode
+});
+
+// An abapGit file as the exact text SAP sent:
+const file = await connection.makeAdtRequest({
+  method: "GET",
+  url: "/sap/bc/adt/abapgit/repos/R1/files/package.json",
+  timeout: 0,
+  rawText: true, // the body is a string, not parsed
 });
 ```
 
@@ -399,6 +408,19 @@ await connection.makeAdtRequest({
   wire strips that header and the `sap-contextid` cookie from the request (over
   RFC, the call goes on a conversation other than the stateful one). The session
   mode is not changed: the next ordinary request follows it.
+- **`rawText: true`** (25.2.0) — the answer's body reaches you as the text SAP
+  sent, a string, with no parsing (JSON or otherwise) and no transformation —
+  so a JSON-object file is not an object, and a JSON-string file keeps its
+  quotes and its trailing newline. An error's body (`response.data`) is that
+  text too. Over HTTP the request is read with `responseType: 'text'` and an
+  identity `transformResponse`, on every send it takes: the ordinary one, a
+  `noResend` one, the CSRF recovery's and the dead-pooled-socket resend. Status
+  handling, logging, the other flags and the error's shape are unchanged. One
+  limit: axios decodes the text as UTF-8 and drops a leading byte-order mark
+  (U+FEFF). Over RFC the body is already the UTF-8 decoding of
+  `MESSAGE_BODY`, never parsed, with or without the flag. Without the flag, an
+  HTTP answer is parsed as before: a JSON body arrives as its value, whatever
+  its `Content-Type`.
 
 ### An instance on an existing session
 
