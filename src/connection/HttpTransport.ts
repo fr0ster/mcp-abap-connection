@@ -1478,6 +1478,17 @@ export class HttpTransport implements IAdtTransport {
       ...(request.validateStatus !== undefined
         ? { validateStatus: request.validateStatus }
         : {}),
+      // `rawText`: the body as the exact text SAP sent. axios's default
+      // `transformResponse` parses JSON even under `text/plain` — a JSON
+      // string loses its quotes and its trailing newline — so the body is
+      // read as text and handed on untouched. Every send of this config, the
+      // pooled resend included, takes it; an error's body is the same text.
+      ...(request.rawText
+        ? {
+            responseType: 'text',
+            transformResponse: [(body: unknown) => body],
+          }
+        : {}),
     };
     // A logoff opens a socket of its own and is never resent: its answer is
     // not read, and its write is what `disconnect()` resolves at.
