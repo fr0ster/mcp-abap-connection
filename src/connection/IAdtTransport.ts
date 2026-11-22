@@ -134,6 +134,8 @@ export interface IAdtSessionContext {
    */
   noResend?: true | undefined;
   noLog?: true | undefined;
+  /** The request's `rawText`: the exchange's answer may be its answer. */
+  rawText?: true | undefined;
   /** Where to hand each answer, so the connection sees what the wire saw. */
   observe: (headers: unknown) => void;
 }
