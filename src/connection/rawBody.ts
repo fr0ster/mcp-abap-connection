@@ -2,10 +2,12 @@
  * A `rawText` answer: its body as the exact text SAP sent, decoded here.
  *
  * The HTTP wire reads the body as bytes and decodes them in the charset the
- * answer's `Content-Type` declares — UTF-8 when it declares none, or one
- * `TextDecoder` does not know — with `fatal: true` and the BOM kept. A body
- * that does not decode is not text: no replacement character ever stands in
- * for a byte (`readable: false`, the body absent).
+ * answer's `Content-Type` declares — UTF-8 when it declares none — with
+ * `fatal: true` and the BOM kept. A body that does not decode, or declares a
+ * charset `TextDecoder` does not know, is not text: no replacement character
+ * ever stands in for a byte (`readable: false`, the body absent), and the
+ * wire refuses it with `RawTextUndecodableError` — our own failure, not SAP
+ * refusing, so no recovery or replay acts on it.
  *
  * `rawText` changes how the body is represented and nothing else, so beside
  * the text each answer keeps what the request would have seen without the
@@ -26,6 +28,41 @@ interface RawFacts {
 }
 
 const RAW = new WeakMap<object, RawFacts>();
+
+/** The answer each decode failure was made from, for the wire alone. */
+const UNREAD = new WeakMap<object, IAdtTransportResponse>();
+
+/**
+ * A `rawText` answer whose body is not text in its charset. Ours, not SAP's
+ * refusal: it carries the status and fixed words, and no `response`, so no
+ * recovery or replay — CSRF, credential renewal, session loss, the check
+ * replay — reads it as an answer SAP refused.
+ */
+export class RawTextUndecodableError extends Error {
+  readonly code = 'ADT_RAW_TEXT_UNDECODABLE';
+  readonly status: number;
+
+  constructor(answer: IAdtTransportResponse) {
+    super(
+      `The answer's body is not valid text in its charset (status ${answer.status})`,
+    );
+    this.name = 'RawTextUndecodableError';
+    this.status = answer.status;
+    UNREAD.set(this, answer);
+  }
+}
+
+/**
+ * The answer a decode failure was made from, its body absent — for an
+ * exchange that reads only the headers (the CSRF fetch) — else `undefined`.
+ */
+export function unreadAnswer(
+  error: unknown,
+): IAdtTransportResponse | undefined {
+  return typeof error === 'object' && error !== null
+    ? UNREAD.get(error)
+    : undefined;
+}
 
 /** The body's bytes, from a Buffer, any other view, or an `ArrayBuffer`. */
 function bytesOf(body: unknown): Uint8Array | undefined {
@@ -51,29 +88,76 @@ export function charsetOf(headers: unknown): string | undefined {
     }
   }
   if (type === undefined) return undefined;
-  for (const parameter of type.split(';').slice(1)) {
+  for (const parameter of parametersOf(type)) {
     const at = parameter.indexOf('=');
     if (at < 0) continue;
     if (parameter.slice(0, at).trim().toLowerCase() !== 'charset') continue;
-    let value = parameter.slice(at + 1).trim();
-    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
-      value = value.slice(1, -1);
-    }
-    return value === '' ? undefined : value;
+    return unquoted(parameter.slice(at + 1).trim());
   }
   return undefined;
 }
 
-/** A strict decoder for the declared charset; UTF-8 when none or unknown. */
-function decoderFor(charset: string | undefined): TextDecoder {
-  if (charset !== undefined) {
-    try {
-      return new TextDecoder(charset, { fatal: true, ignoreBOM: true });
-    } catch {
-      // A label `TextDecoder` does not know: UTF-8, as with none declared.
+/**
+ * The parameters of a media type: the text after its first `;`, split on
+ * every `;` outside a quoted string (a `\` inside one escapes the next
+ * character). Plain string code.
+ */
+function parametersOf(type: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let quoted = false;
+  let escaped = false;
+  for (const char of type) {
+    if (escaped) {
+      escaped = false;
+    } else if (quoted && char === '\\') {
+      escaped = true;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === ';' && !quoted) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts.slice(1);
+}
+
+/** A parameter value without its quotes and escapes, when it is quoted. */
+function unquoted(value: string): string {
+  if (!(value.length >= 2 && value.startsWith('"') && value.endsWith('"'))) {
+    return value;
+  }
+  let out = '';
+  let escaped = false;
+  for (const char of value.slice(1, -1)) {
+    if (escaped) {
+      out += char;
+      escaped = false;
+    } else if (char === '\\') {
+      escaped = true;
+    } else {
+      out += char;
     }
   }
-  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+  return out;
+}
+
+/**
+ * A strict decoder for the declared charset, UTF-8 when none is declared —
+ * or `undefined` for a declared one `TextDecoder` does not know.
+ */
+function decoderFor(charset: string | undefined): TextDecoder | undefined {
+  try {
+    return new TextDecoder(charset ?? 'utf-8', {
+      fatal: true,
+      ignoreBOM: true,
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 /** What axios's defaults make of a body: UTF-8, no BOM, JSON when it parses. */
@@ -112,9 +196,11 @@ function factsOf(
       'utf8',
     ),
   );
+  const decoder = decoderFor(charsetOf(headers));
   try {
+    if (decoder === undefined) throw new RangeError('unknown charset');
     return {
-      text: decoderFor(charsetOf(headers)).decode(bytes),
+      text: decoder.decode(bytes),
       facts: { unflagged, bytes: bytes.byteLength, readable: true },
     };
   } catch {
@@ -125,20 +211,10 @@ function factsOf(
   }
 }
 
-/**
- * The answer with its body decoded — or, when `source` is an answer already
- * decoded so, this copy of it with the same facts.
- */
+/** The answer with its body decoded, and its facts kept beside it. */
 export function rawAnswer(
   answer: IAdtTransportResponse,
-  source?: unknown,
 ): IAdtTransportResponse {
-  const known =
-    typeof source === 'object' && source !== null ? RAW.get(source) : undefined;
-  if (known !== undefined) {
-    RAW.set(answer, known);
-    return answer;
-  }
   const { text, facts } = factsOf(answer.data, answer.headers);
   const decoded: IAdtTransportResponse = { ...answer, data: text };
   RAW.set(decoded, facts);

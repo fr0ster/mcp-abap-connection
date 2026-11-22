@@ -20,7 +20,7 @@ import {
   RFC_RCS,
 } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { IAdtTransportResponse } from './IAdtTransport.js';
-import { isRawAnswer, rawAnswer, rawReadable } from './rawBody.js';
+import { carryRaw, isRawAnswer, rawAnswer } from './rawBody.js';
 
 /** An own data property of `source`, read without running a getter. */
 export function ownData(source: object, name: string): unknown {
@@ -238,12 +238,16 @@ function answerOf(thrown: unknown): IAdtTransportResponse | undefined {
     const status = ownData(response, 'status');
     if (!isInteger(status)) return undefined;
     const statusText = ownData(response, 'statusText');
-    return {
+    const copy: IAdtTransportResponse = {
       status,
       ...(typeof statusText === 'string' ? { statusText } : {}),
       headers: ownData(response, 'headers'),
       data: ownData(response, 'data'),
     };
+    // A `rawText` answer's facts — its raw byte count, the body as it would
+    // be without the flag — go with every copy of it.
+    carryRaw(response, copy);
+    return copy;
   } catch {
     return undefined;
   }
@@ -266,21 +270,15 @@ export function httpFailure(
   rawText = false,
 ): HttpFailure {
   const copied = answerOf(thrown);
-  const source =
-    typeof thrown === 'object' && thrown !== null
-      ? ownData(thrown, 'response')
-      : undefined;
   const response =
-    copied !== undefined && (rawText || isRawAnswer(source))
-      ? rawAnswer(copied, source)
+    copied !== undefined && rawText && !isRawAnswer(copied)
+      ? rawAnswer(copied)
       : copied;
   const code = failureCode(thrown);
   const error = new Error(
-    response === undefined
-      ? `The request failed: ${code ?? 'it got no answer'}`
-      : rawReadable(response)
-        ? `Request failed with status code ${response.status}`
-        : `The answer's body is not valid text in its charset (status ${response.status})`,
+    response !== undefined
+      ? `Request failed with status code ${response.status}`
+      : `The request failed: ${code ?? 'it got no answer'}`,
   );
   const failure = Object.assign(
     error,
