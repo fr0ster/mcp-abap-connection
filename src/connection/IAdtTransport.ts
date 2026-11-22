@@ -75,6 +75,13 @@ export interface IAdtTransportRequest {
    * the byte count, and nothing else.
    */
   noLog?: true | undefined;
+  /**
+   * The caller's `rawText: true`: the answer's body — an error's included —
+   * reaches the caller as the exact text SAP sent, with no parsing and no
+   * transformation. Status handling, logging and the error's shape are
+   * unchanged.
+   */
+  rawText?: true | undefined;
 }
 
 /** What came back, in the terms every transport can produce. */
