@@ -27,12 +27,13 @@ behaves as before. See
   without `responseType` or `transformResponse`, and axios's default parses
   JSON even under `text/plain` — a JSON-object file arrived as an object, a
   JSON-string file without its quotes and its trailing newline. Under
-  `rawText` the request is read with `responseType: 'text'` and an identity
-  `transformResponse` on every send it takes (the ordinary one, `noResend`,
-  the CSRF recovery's resend, the dead-pooled-socket resend). Status
-  handling, logging, the flags and the error's shape are unchanged. axios
-  still drops a leading UTF-8 byte-order mark (measured). Without the flag the
-  parsing stays as it was.
+  `rawText` the request is read as bytes (`responseType: 'arraybuffer'`) and
+  the wire's own `transformResponse` decodes them as UTF-8 with
+  `ignoreBOM: true`, so a leading byte-order mark stays (axios's own text
+  decoding drops it, measured). It runs on every send the request takes (the
+  ordinary one, `noResend`, the CSRF recovery's resend, the dead-pooled-socket
+  resend) and on an error's body. Status handling, logging, the flags and the
+  error's shape are unchanged. Without the flag the parsing stays as it was.
 - RFC needed no change: the body is the UTF-8 text of `MESSAGE_BODY`, never
   parsed, with or without the flag (now proven by a test).
 
