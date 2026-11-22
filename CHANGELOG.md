@@ -12,57 +12,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 One per-request option, declared by `IAbapRequestOptions` in
 `@mcp-abap-adt/interfaces-adt-connection` 5.3.0 (the floor is now `^5.3.0`),
 so that an abapGit file reads back as its original text. A request without it
-behaves as before. See
+behaves exactly as on 25.1.0. See
 [README — Request options](README.md#request-options-noresend-nolog-stateless).
 
 ### Added
 
-- **`rawText: true`** — the answer's body reaches the caller as the exact text
-  SAP sent, with no parsing and no transformation; an error's body too.
-  `IAdtTransportRequest` carries it to the wire.
+- **`rawText: true`** — changes only the body the caller receives as the
+  final answer: a success's `data`, or the `response.data` of the error the
+  caller gets, is the exact text SAP sent. Nothing internal changes: the CSRF
+  recovery, the session verdicts (a replacement cookie included), the
+  replays, the log lines and the error's shape read what the unflagged path
+  reads. Over HTTP the body is received as bytes (`responseType:
+  'arraybuffer'`); from them the connection takes exactly what axios's
+  defaults would have made (UTF-8, a leading BOM dropped, JSON parsed when it
+  parses) for everything inside, and decodes the caller's text in the charset
+  the `Content-Type` declares when `TextDecoder` knows it, else UTF-8, the BOM
+  kept, non-fatally — an invalid byte reads as U+FFFD. It applies on every
+  send the request takes (the ordinary one, `noResend`, the CSRF recovery's
+  resend, the dead-pooled-socket resend, `createConnection`'s check replay)
+  and to the refusal of the CSRF fetch made for a `noResend` request
+  (`IAdtSessionContext.rawText`). A `noLog` line counts the bytes that
+  arrived. `IAdtTransportRequest` carries the flag to the wire.
 
 ### Fixed
 
-- Over HTTP a file's text came back changed: the wire built the axios config
-  without `responseType` or `transformResponse`, and axios's default parses
-  JSON even under `text/plain` — a JSON-object file arrived as an object, a
-  JSON-string file without its quotes and its trailing newline. Under
-  `rawText` the request is read as bytes (`responseType: 'arraybuffer'`, an
-  identity `transformResponse`) and decoded by the wire in the first
-  `charset` parameter of the `Content-Type` (split on `;` outside quoted
-  strings, unquoted), or UTF-8 when none is declared, with `fatal: true` and
-  `ignoreBOM: true`: a leading byte-order mark stays (axios's own text
-  decoding drops it, measured), and a `Buffer`, any view or a plain
-  `ArrayBuffer` (the fetch adapter) all become a string. A body that does not
-  decode, or declares a charset `TextDecoder` does not know, rejects with
-  `RawTextUndecodableError` (`code` `ADT_RAW_TEXT_UNDECODABLE`, the status,
-  `The answer's body is not valid text in its charset (status N)`, no
-  `response`): our failure, not SAP's refusal, so no CSRF recovery,
-  credential renewal, session-loss verdict or check replay acts on it, and a
-  successful status is never recovered from. The last request sent is the
-  answer: a resend whose answer does not decode rejects with that decode
-  error, carrying that answer's own status, never the refusal that started
-  it. The error keeps the status, the headers and the raw byte count, nothing
-  of the body. Its headers are observed as an answer's are, so a session a
-  `2xx` replaced in its `Set-Cookie` is noticed as without the flag
-  (stateless: the decode error marked `sessionLost` and the instance spent;
-  stateful: `ADT_SESSION_REPLACED`). It applies on every send the
-  request takes (the ordinary one, `noResend`, the CSRF recovery's resend, the
-  dead-pooled-socket resend), on an error's body, and on the CSRF fetch made
-  for the request (`IAdtSessionContext.rawText`), whose refusal under
-  `noResend` is the answer; a `2xx` fetch gives its token from its headers
-  whatever its body. `noLog`'s line counts the bytes that arrived, a copy of
-  the refusal (`failureCopy`) and a decode failure (its status and raw byte
-  count, on the request's path and the upfront fetch) included; a `noLog`
-  request writes one line, for the last request sent — a CSRF recovery's
-  resend and a fenced request included. On the shipped HTTP client no verdict
-  changes: the session loss read from a `400`'s text, the CSRF recovery and
-  the syntax-check replay read the body as it would be without the flag. An
-  injected `httpClient` with defaults of its own owns how its bodies look and
-  is not covered by that guarantee. A thrown value whose `response` lookup
-  throws is contained as before, flag or not. Status handling, logging, the
-  flags and the error's shape are unchanged. Without the flag the parsing
-  stays as it was.
+- Over HTTP a file's text came back changed: the wire read every body
+  through axios's default `transformResponse`, which parses JSON even under
+  `text/plain` — a JSON-object file arrived as an object, a JSON-string file
+  without its quotes and its trailing newline. SAP's abapGit file resource
+  answers only `text/plain; charset=utf-8`, so the fix is on this side:
+  `rawText`.
 - RFC needed no change: the body is the UTF-8 text of `MESSAGE_BODY`, never
   parsed, with or without the flag (now proven by a test).
 
