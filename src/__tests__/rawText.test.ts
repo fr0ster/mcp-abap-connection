@@ -16,7 +16,10 @@ import type { Socket } from 'node:net';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { inspect } from 'node:util';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
-import type { IAbapRequestOptions } from '@mcp-abap-adt/interfaces-adt-connection';
+import {
+  ADT_SESSION_ERROR,
+  type IAbapRequestOptions,
+} from '@mcp-abap-adt/interfaces-adt-connection';
 import type { ISapRfcConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import axios from 'axios';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
@@ -69,6 +72,8 @@ interface Answer {
   body: string | Buffer;
   type: string;
   headers?: Record<string, string>;
+  /** The answer is written once this settles. */
+  hold?: Promise<void>;
 }
 
 interface Sap {
@@ -128,11 +133,15 @@ async function startSap(): Promise<Sap> {
         body: 'ok',
         type: 'text/plain',
       };
-      res.writeHead(answer.status, {
-        'content-type': answer.type,
-        ...answer.headers,
-      });
-      res.end(answer.body);
+      const write = () => {
+        res.writeHead(answer.status, {
+          'content-type': answer.type,
+          ...answer.headers,
+        });
+        res.end(answer.body);
+      };
+      if (answer.hold === undefined) write();
+      else answer.hold.then(write, write);
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -844,6 +853,204 @@ describe('a decode failure keeps nothing of the body', () => {
         return true;
       },
     );
+  });
+});
+
+describe('rawText and a session SAP replaced on a 2xx', () => {
+  const REPLACED = { 'set-cookie': 'SAP_SESSIONID_STUB_100=S2; Path=/' };
+  const INVALID = Buffer.from([0xff]);
+
+  /** The same answer, read and not: what each run gets, and the session. */
+  async function run(
+    stateful: boolean,
+    rawText: boolean,
+    answers: Answer[],
+    method = 'GET',
+  ) {
+    const connection = await connected();
+    if (stateful) connection.setSessionType('stateful');
+    sap.file.push(...answers);
+    try {
+      const outcome = await connection
+        .makeAdtRequest(read(rawText ? { rawText: true } : {}, method))
+        .then(
+          (response) => ({
+            settled: 'resolved',
+            sessionLost: response.sessionLost,
+          }),
+          (error: unknown) => ({
+            settled: 'rejected',
+            code:
+              error instanceof Error && 'code' in error
+                ? String(error.code)
+                : undefined,
+            sessionLost:
+              error instanceof Error && 'sessionLost' in error
+                ? String(error.sessionLost)
+                : undefined,
+          }),
+        );
+      return { outcome, connected: connection.isConnected() };
+    } finally {
+      await connection.disconnect();
+    }
+  }
+
+  const ok = (headers: Record<string, string>): Answer => ({
+    status: 200,
+    body: 'ok',
+    type: 'text/plain',
+    headers,
+  });
+  const unreadable = (headers: Record<string, string>): Answer => ({
+    status: 200,
+    body: INVALID,
+    type: 'text/plain; charset=utf-8',
+    headers,
+  });
+  const csrf: Answer = {
+    status: 403,
+    body: 'CSRF token validation failed',
+    type: 'text/plain',
+    headers: { 'x-csrf-token': 'Required' },
+  };
+
+  it('stateless: marked SESSION_REPLACED and disconnected, the decode error the answer', async () => {
+    const plain = await run(false, false, [ok(REPLACED)]);
+    const raw = await run(false, true, [unreadable(REPLACED)]);
+    assert.deepStrictEqual(plain, {
+      outcome: {
+        settled: 'resolved',
+        sessionLost: ADT_SESSION_ERROR.SESSION_REPLACED,
+      },
+      connected: false,
+    });
+    assert.deepStrictEqual(raw, {
+      outcome: {
+        settled: 'rejected',
+        code: 'ADT_RAW_TEXT_UNDECODABLE',
+        sessionLost: ADT_SESSION_ERROR.SESSION_REPLACED,
+      },
+      connected: false,
+    });
+  });
+
+  it('stateful: SESSION_REPLACED thrown, flag or not', async () => {
+    const plain = await run(true, false, [ok(REPLACED)]);
+    const raw = await run(true, true, [unreadable(REPLACED)]);
+    assert.deepStrictEqual(raw, plain);
+    assert.strictEqual(plain.connected, false);
+    assert.ok('code' in plain.outcome);
+    assert.strictEqual(plain.outcome.code, ADT_SESSION_ERROR.SESSION_REPLACED);
+  });
+
+  it('the CSRF resend: marked SESSION_REPLACED and disconnected, the decode error the answer', async () => {
+    const plain = await run(false, false, [csrf, ok(REPLACED)], 'PUT');
+    const raw = await run(false, true, [csrf, unreadable(REPLACED)], 'PUT');
+    assert.deepStrictEqual(plain, {
+      outcome: {
+        settled: 'resolved',
+        sessionLost: ADT_SESSION_ERROR.SESSION_REPLACED,
+      },
+      connected: false,
+    });
+    assert.deepStrictEqual(raw, {
+      outcome: {
+        settled: 'rejected',
+        code: 'ADT_RAW_TEXT_UNDECODABLE',
+        sessionLost: ADT_SESSION_ERROR.SESSION_REPLACED,
+      },
+      connected: false,
+    });
+  });
+});
+
+describe("noLog's one line on recovered and fenced decode failures", () => {
+  function recorder(): { logger: ILogger; lines: string[] } {
+    const lines: string[] = [];
+    const at = (message: string): void => {
+      lines.push(message);
+    };
+    return { lines, logger: { info: at, warn: at, error: at, debug: at } };
+  }
+
+  it('PUT 403 → token → PUT 200 undecodable: one line, for the last request', async () => {
+    const { logger, lines } = recorder();
+    const connection = await connected(logger);
+    try {
+      lines.length = 0;
+      sap.file.push(
+        {
+          status: 403,
+          body: 'CSRF token validation failed',
+          type: 'text/plain',
+          headers: { 'x-csrf-token': 'Required' },
+        },
+        {
+          status: 200,
+          body: Buffer.from([0xff, 0xfe]),
+          type: 'text/plain; charset=utf-8',
+        },
+      );
+      await assert.rejects(
+        connection.makeAdtRequest(read({ rawText: true, noLog: true }, 'PUT')),
+        (error) => undecodable(error, 200),
+      );
+      const quiet = lines.filter((line) => line.startsWith('PUT '));
+      assert.deepStrictEqual(quiet, [`PUT ${FILE} → 200 (2 bytes)`]);
+    } finally {
+      await connection.disconnect();
+    }
+  });
+
+  it('a fenced request from a replaced session: its line has the status and bytes', async () => {
+    const { logger, lines } = recorder();
+    const connection = await connected(logger);
+    let release = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      lines.length = 0;
+      sap.file.push(
+        {
+          status: 200,
+          body: Buffer.from([0xff]),
+          type: 'text/plain; charset=utf-8',
+          hold,
+        },
+        {
+          status: 200,
+          body: 'ok',
+          type: 'text/plain',
+          headers: { 'set-cookie': 'SAP_SESSIONID_STUB_100=S2; Path=/' },
+        },
+      );
+      const slow = connection.makeAdtRequest(
+        read({ rawText: true, noLog: true }),
+      );
+      const settled = slow.then(
+        () => assert.fail('resolved'),
+        (error: unknown) => error,
+      );
+      // Wait until the slow request is on the server.
+      while (!sap.arrivals.includes(`GET ${FILE}`)) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      const replaced = await connection.makeAdtRequest(read());
+      assert.strictEqual(
+        replaced.sessionLost,
+        ADT_SESSION_ERROR.SESSION_REPLACED,
+      );
+      lines.length = 0;
+      release();
+      undecodable(await settled, 200);
+      const quiet = lines.filter((line) => line.startsWith('GET '));
+      assert.deepStrictEqual(quiet, [`GET ${FILE} → 200 (1 bytes)`]);
+    } finally {
+      release();
+      await connection.disconnect();
+    }
   });
 });
 
