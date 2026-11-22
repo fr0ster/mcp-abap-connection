@@ -240,3 +240,58 @@ it('with noLog, the replay writes nothing of its own: one quiet line for the cal
     }
   }
 });
+
+it('with rawText, a replayed check answers its exact text', async () => {
+  const connection = connector();
+  await connection.connect();
+  const body = '{"ok":true}\n';
+  sap.work(CHECK, [
+    expired,
+    { status: 200, body, headers: { 'content-type': 'application/json' } },
+  ]);
+  try {
+    const result = await connection.makeAdtRequest({
+      url: CHECK,
+      method: 'POST',
+      timeout: 1000,
+      data: '<check/>',
+      params: { reporters: 'abapCheckRun' },
+      rawText: true,
+    });
+    assert.equal(result.data, body);
+    assert.equal(sap.sentTo(CHECK).length, 2);
+  } finally {
+    await connection.disconnect();
+  }
+});
+
+it('with rawText, a JSON refusal is not replayed — as without it', async () => {
+  const refusal = {
+    ...expired,
+    body: '{"message":"CSRF token validation failed"}',
+    headers: { ...expired.headers, 'content-type': 'application/json' },
+  };
+  const sent: number[] = [];
+  for (const rawText of [false, true]) {
+    const connection = connector();
+    await connection.connect();
+    const before = sap.sentTo(CHECK).length;
+    sap.work(CHECK, [refusal, { status: 200, body: 'checked' }]);
+    try {
+      await connection
+        .makeAdtRequest({
+          url: CHECK,
+          method: 'POST',
+          timeout: 1000,
+          data: '<check/>',
+          params: { reporters: 'abapCheckRun' },
+          ...(rawText ? { rawText: true } : {}),
+        })
+        .catch(() => undefined);
+      sent.push(sap.sentTo(CHECK).length - before);
+    } finally {
+      await connection.disconnect();
+    }
+  }
+  assert.equal(sent[1], sent[0]);
+});
