@@ -30,6 +30,7 @@ import type { ISapRfcConfig } from '@mcp-abap-adt/interfaces-auth-sap';
 import axios from 'axios';
 import { AdtOnPremConnector } from '../connection/AdtOnPremConnector.js';
 import { createConnection } from '../connection/createConnection.js';
+import * as csrfRetry from '../connection/csrfRetry.js';
 import { nodeHttpClient } from '../connection/HttpTransport.js';
 import { refusalOf } from '../connection/IAdtTransport.js';
 import { OnPremHttpTransport } from '../connection/OnPremHttpTransport.js';
@@ -725,8 +726,11 @@ describe('a body that is costly to reserialize', () => {
   const body = `${'['.repeat(depth)}"CSRF token"${']'.repeat(depth)}`;
 
   for (const rawText of [false, true]) {
-    it(`a stateless 500 with a replacement cookie: sessionLost, one send${rawText ? ', the exact text' : ''}`, async () => {
+    it(`a stateless 500 with a replacement cookie: sessionLost, one send${rawText ? ', the exact text' : ''}`, async (t) => {
       const { connection } = await connected();
+      // The cookies are observed first: the CSRF predicate is never asked
+      // about an answer that already lost the session.
+      const predicate = t.mock.method(csrfRetry, 'shouldRetryCsrf');
       try {
         sap.file.push({
           status: 500,
@@ -750,11 +754,24 @@ describe('a body that is costly to reserialize', () => {
           },
         );
         assert.strictEqual(sent('PUT'), 1);
+        assert.strictEqual(predicate.mock.callCount(), 0);
       } finally {
         await connection.disconnect();
       }
     });
   }
+
+  it('the spy sees the predicate when a refusal is asked about', async (t) => {
+    const { connection } = await connected();
+    const predicate = t.mock.method(csrfRetry, 'shouldRetryCsrf');
+    try {
+      sap.file.push({ ...CSRF_REFUSAL });
+      await connection.makeAdtRequest(read({ rawText: true }, 'PUT'));
+      assert.ok(predicate.mock.callCount() > 0);
+    } finally {
+      await connection.disconnect();
+    }
+  });
 });
 
 describe('rawText on the check replay', () => {
