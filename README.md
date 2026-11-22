@@ -412,12 +412,29 @@ const file = await connection.makeAdtRequest({
   sent, a string, with no parsing (JSON or otherwise) and no transformation —
   so a JSON-object file is not an object, and a JSON-string file keeps its
   quotes and its trailing newline, and a leading byte-order mark (U+FEFF)
-  stays. An error's body (`response.data`) is that text too. Over HTTP the
-  request is read as bytes (`responseType: 'arraybuffer'`), and the wire's own
-  `transformResponse` decodes them as UTF-8 with the BOM kept, on every send it
-  takes: the ordinary one, a `noResend` one, the CSRF recovery's and the
-  dead-pooled-socket resend. Status handling, logging, the other flags and the
-  error's shape are unchanged. Over RFC the body is already the UTF-8 decoding of
+  stays. An error's body (`response.data`) is that text too, and so is the
+  refusal of the CSRF fetch made for a `noResend` request, when it is the
+  answer. Over HTTP the request is read as bytes (`responseType:
+  'arraybuffer'`, no `transformResponse` of axios's), on every send it takes:
+  the ordinary one, a `noResend` one, the CSRF recovery's and the
+  dead-pooled-socket resend. The decoding rule:
+  - the charset is the `charset` parameter of the answer's `Content-Type`
+    when `TextDecoder` knows it, and UTF-8 when none is declared or the
+    declared one is unknown;
+  - the bytes are decoded with `fatal: true` and the BOM kept — a `Buffer`,
+    any typed-array view or a plain `ArrayBuffer` (axios's fetch adapter)
+    alike, so you always get a string;
+  - a body that does not decode in that charset is refused: the request
+    rejects with `The answer's body is not valid text in its charset (status
+    N)`, `status` and `response` set, `response.data` absent — never text
+    with replacement characters;
+  - `noLog`'s line counts the bytes that arrived, not the decoded string.
+
+  The flag changes how the body is represented, never a verdict: the session
+  loss read from a `400`'s text, the CSRF recovery and the syntax-check
+  replay read the body as it would be without the flag (a JSON body parsed),
+  so the same answer gets the same verdict either way. Status handling,
+  logging, the other flags and the error's shape are unchanged. Over RFC the body is already the UTF-8 decoding of
   `MESSAGE_BODY`, never parsed, with or without the flag. Without the flag, an
   HTTP answer is parsed as before: a JSON body arrives as its value, whatever
   its `Content-Type`.

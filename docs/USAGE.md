@@ -873,10 +873,15 @@ without them behaves as before. In short:
 - `stateless: true` — stateless on HTTP and RFC whatever the session mode, over
   the caller's own `x-sap-adt-sessiontype` header in any letter case; the header
   and the `sap-contextid` cookie are stripped; the session mode stays.
-- `rawText: true` — the answer's body, an error's included, is the exact text
-  SAP sent, never parsed, a leading BOM kept (HTTP: the bytes decoded as UTF-8
-  by the wire's own `transformResponse` on every send; RFC: already the text of
-  `MESSAGE_BODY`).
+- `rawText: true` — the answer's body, an error's included (and a `noResend`
+  request's CSRF-fetch refusal), is the exact text SAP sent, never parsed, a
+  leading BOM kept. HTTP: the bytes are decoded in the `Content-Type`'s
+  `charset` when `TextDecoder` knows it, else UTF-8, with `fatal: true`; a body
+  that does not decode rejects with `The answer's body is not valid text in its
+  charset (status N)` and no `response.data`; `noLog` counts the bytes that
+  arrived. No verdict changes: session loss, CSRF recovery and the check
+  replay read the body as it would be without the flag. RFC: already the text
+  of `MESSAGE_BODY`.
 
 The whole contract, and why `noResend` exists: [README — Request options](../README.md#request-options-noresend-nolog-stateless).
 
