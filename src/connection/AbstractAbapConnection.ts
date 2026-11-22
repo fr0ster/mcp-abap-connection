@@ -2447,6 +2447,8 @@ abstract class AbstractAbapConnection
     if (!refusal) {
       return false;
     }
+    // Only an answer SAP refused is recovered from, never a successful one.
+    if (refusal.status >= 200 && refusal.status < 300) return false;
 
     // `rawText` changes no verdict: the body as it would be without it.
     const responseData = verdictData(refusal);
