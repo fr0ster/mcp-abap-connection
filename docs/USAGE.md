@@ -874,9 +874,9 @@ without them behaves as before. In short:
   the caller's own `x-sap-adt-sessiontype` header in any letter case; the header
   and the `sap-contextid` cookie are stripped; the session mode stays.
 - `rawText: true` — the answer's body, an error's included, is the exact text
-  SAP sent, never parsed (HTTP: `responseType: 'text'` and an identity
-  `transformResponse` on every send; a leading BOM is dropped by axios; RFC:
-  already the text of `MESSAGE_BODY`).
+  SAP sent, never parsed, a leading BOM kept (HTTP: the bytes decoded as UTF-8
+  by the wire's own `transformResponse` on every send; RFC: already the text of
+  `MESSAGE_BODY`).
 
 The whole contract, and why `noResend` exists: [README — Request options](../README.md#request-options-noresend-nolog-stateless).
 

@@ -411,13 +411,13 @@ const file = await connection.makeAdtRequest({
 - **`rawText: true`** (25.2.0) — the answer's body reaches you as the text SAP
   sent, a string, with no parsing (JSON or otherwise) and no transformation —
   so a JSON-object file is not an object, and a JSON-string file keeps its
-  quotes and its trailing newline. An error's body (`response.data`) is that
-  text too. Over HTTP the request is read with `responseType: 'text'` and an
-  identity `transformResponse`, on every send it takes: the ordinary one, a
-  `noResend` one, the CSRF recovery's and the dead-pooled-socket resend. Status
-  handling, logging, the other flags and the error's shape are unchanged. One
-  limit: axios decodes the text as UTF-8 and drops a leading byte-order mark
-  (U+FEFF). Over RFC the body is already the UTF-8 decoding of
+  quotes and its trailing newline, and a leading byte-order mark (U+FEFF)
+  stays. An error's body (`response.data`) is that text too. Over HTTP the
+  request is read as bytes (`responseType: 'arraybuffer'`), and the wire's own
+  `transformResponse` decodes them as UTF-8 with the BOM kept, on every send it
+  takes: the ordinary one, a `noResend` one, the CSRF recovery's and the
+  dead-pooled-socket resend. Status handling, logging, the other flags and the
+  error's shape are unchanged. Over RFC the body is already the UTF-8 decoding of
   `MESSAGE_BODY`, never parsed, with or without the flag. Without the flag, an
   HTTP answer is parsed as before: a JSON body arrives as its value, whatever
   its `Content-Type`.
