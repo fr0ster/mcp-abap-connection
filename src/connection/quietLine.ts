@@ -7,6 +7,8 @@
  * whichever of them wrote it.
  */
 
+import { rawBytes } from './rawBody.js';
+
 /** What a quiet line carries, as its log fields. */
 export interface QuietFacts {
   method: string;
@@ -106,7 +108,8 @@ export function quietLine(
   if (answer === undefined || !Number.isInteger(answer.status)) {
     return { line: `${method} ${path} → no answer`, facts: { method, path } };
   }
-  const bytes = byteCount(answer.data);
+  // A `rawText` answer counts the bytes that arrived, not its decoded text's.
+  const bytes = rawBytes(answer) ?? byteCount(answer.data);
   return {
     line: `${method} ${path} → ${answer.status} (${bytes} bytes)`,
     facts: { method, path, status: answer.status, bytes },
