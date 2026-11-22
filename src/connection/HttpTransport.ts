@@ -56,6 +56,7 @@ import {
   type IAdtTransportResponse,
   refusalOf,
 } from './IAdtTransport.js';
+import { rawAnswer, rawReadable } from './rawBody.js';
 import {
   isSessionTypeHeader,
   isStatefulRequest,
@@ -215,13 +216,6 @@ function deletesCookie(attributes: string[]): boolean {
 
 /** The cookie that names a stateful ABAP context. */
 const CONTEXT_COOKIE = 'sap-contextid';
-
-/** A `rawText` answer's bytes as UTF-8 text, a leading BOM kept. */
-function exactText(body: unknown): unknown {
-  return body instanceof Uint8Array
-    ? new TextDecoder('utf-8', { ignoreBOM: true }).decode(body)
-    : body;
-}
 
 /** How an exchange's answer is folded in: quietly for a `noLog` request's. */
 function quietIngest(context: {
@@ -837,6 +831,8 @@ export class HttpTransport implements IAdtTransport {
           // `noResend` the fetch, too, goes once and follows no redirect.
           ...(context.noResend ? { noResend: true } : {}),
           ...(context.noLog ? { noLog: true } : {}),
+          // `rawText`: under `noResend` this answer may be the request's.
+          ...(context.rawText ? { rawText: true } : {}),
         });
 
         // Handed up BEFORE the token is read: the cookies are the session,
@@ -1488,14 +1484,14 @@ export class HttpTransport implements IAdtTransport {
       // `rawText`: the body as the exact text SAP sent. axios's default
       // `transformResponse` parses JSON even under `text/plain` — a JSON
       // string loses its quotes and its trailing newline — and its text
-      // decoding drops a leading BOM. So the body is read as bytes and
-      // decoded here, the BOM kept. axios runs `transformResponse` on an
-      // error's answer too, so an error's body is the same text; every send
-      // of this config, the pooled resend included, takes it.
+      // decoding drops a leading BOM and knows no charset. So the body is
+      // read as bytes, handed on untransformed, and decoded below in its
+      // declared charset (`rawAnswer`) — an error's body too. Every send of
+      // this config, the pooled resend included, takes it.
       ...(request.rawText
         ? {
             responseType: 'arraybuffer',
-            transformResponse: [exactText],
+            transformResponse: [(body: unknown) => body],
           }
         : {}),
     };
@@ -1515,14 +1511,20 @@ export class HttpTransport implements IAdtTransport {
       // Never as the client threw it: axios's error holds this request's
       // config — its credential headers among it — and words naming the host.
       // SAP's answer and the code go up; nothing else of it does.
-      throw httpFailure(error);
+      throw httpFailure(error, request.rawText === true);
     }
 
-    return {
+    const answer: IAdtTransportResponse = {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
       data: response.data,
     };
+    if (!request.rawText) return answer;
+    // `rawText`: a body that is not text in its charset is no answer to hand
+    // over — refused in fixed words, with its status.
+    const decoded = rawAnswer(answer);
+    if (!rawReadable(decoded)) throw httpFailure({ response: decoded });
+    return decoded;
   }
 }
