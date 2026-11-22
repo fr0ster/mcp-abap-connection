@@ -29,6 +29,7 @@ import {
   WireSessionLostError,
 } from './authErrors.js';
 import { CSRF_ERROR_MESSAGES } from './csrfConfig.js';
+import * as csrfRetry from './csrfRetry.js';
 import { carryExact, toCallerView } from './exactText.js';
 import { asArrived, factWords, failureCopy } from './failureFacts.js';
 import {
@@ -2452,32 +2453,12 @@ abstract class AbstractAbapConnection
   }
 
   private shouldRetryCsrf(error: unknown, method?: string): boolean {
-    const refusal = refusalOf(error);
-    if (!refusal) {
-      return false;
-    }
-
-    const responseData = refusal.data;
-    const responseText =
-      typeof responseData === 'string'
-        ? responseData
-        : JSON.stringify(responseData || '');
-
-    // Retry on 403 with CSRF message, or if response mentions CSRF token
-    // Also retry on 401 for POST/PUT/DELETE if we don't have CSRF token yet (might need to get cookies first)
-    // Handed in rather than read off `error.config`, which is axios's own
-    // record of the request and does not exist on another wire's refusal. The
-    // caller already normalised the method; asking the error for it was asking
-    // the HTTP client.
-    const normalized = method?.toUpperCase();
-    const isPostPutDelete =
-      normalized && ['POST', 'PUT', 'DELETE'].includes(normalized);
-    const needsCsrfToken = !!isPostPutDelete && !this.transport.csrfToken();
-
-    return (
-      (refusal.status === 403 && responseText.includes('CSRF')) ||
-      responseText.includes('CSRF token') ||
-      (needsCsrfToken && refusal.status === 401)
+    // Asked through its module: the order it is asked in is observable.
+    return csrfRetry.shouldRetryCsrf(
+      error,
+      method,
+      // An empty token is none, as it always was.
+      Boolean(this.transport.csrfToken()),
     );
   }
 }
