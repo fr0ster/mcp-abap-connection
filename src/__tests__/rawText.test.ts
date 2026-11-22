@@ -31,7 +31,7 @@ import {
 const DISCOVERY = '/sap/bc/adt/core/discovery';
 const FILE = '/sap/bc/adt/abapgit/repos/R1/files/package.json';
 
-/** The four files: each must arrive as these exact characters. */
+/** The files: each must arrive as these exact characters. */
 const FILES = [
   {
     name: 'a JSON-object file',
@@ -51,6 +51,11 @@ const FILES = [
   {
     name: 'a non-JSON text',
     body: '<?xml version="1.0"?><abapGit/> ü ✓',
+    type: 'text/plain; charset=utf-8',
+  },
+  {
+    name: 'a file with a leading UTF-8 BOM',
+    body: '\uFEFF"bom"\n',
     type: 'text/plain; charset=utf-8',
   },
 ] as const;
@@ -215,7 +220,7 @@ describe('rawText over HTTP', () => {
 
   it("an error's body is the exact text; status and shape as without the flag", async () => {
     const connection = await connected();
-    const body = '{"error":"no such file"}\n';
+    const body = '\uFEFF{"error":"no such file"}\n';
     try {
       sap.file.push({ status: 404, body, type: 'application/json' });
       const raw = await connection.makeAdtRequest(read({ rawText: true })).then(
@@ -293,16 +298,16 @@ describe('rawText over HTTP', () => {
 
 describe('rawText over a client with defaults of its own', () => {
   // Each half of the fix holds against a client whose axios defaults differ:
-  // a Buffer by default needs `responseType: 'text'`, a parsing transform by
-  // default needs the identity `transformResponse`.
-  it('a JSON-string file arrives byte-exact', async () => {
+  // a text default (axios drops the BOM) needs `responseType: 'arraybuffer'`,
+  // a parsing transform by default needs the wire's own `transformResponse`.
+  it('a JSON-string file with a BOM arrives byte-exact', async () => {
     const transport = new HttpTransport(() => ({}), null, {
       baseUrl: sap.baseUrl,
       httpClient: {
         create: (agents) =>
           axios.create({
             ...agents,
-            responseType: 'arraybuffer',
+            responseType: 'text',
             transformResponse: [
               (body: unknown) =>
                 typeof body === 'string' ? JSON.parse(body) : body,
@@ -311,14 +316,14 @@ describe('rawText over a client with defaults of its own', () => {
         logoffRequest: nodeHttpClient.logoffRequest,
       },
     });
-    const [, string] = FILES;
-    sap.file.push({ status: 200, body: string.body, type: string.type });
+    const body = '\uFEFF"a string"\n';
+    sap.file.push({ status: 200, body, type: 'text/plain' });
     const response = await transport.send({
       method: 'GET',
       url: FILE,
       rawText: true,
     });
-    assert.strictEqual(response.data, string.body);
+    assert.strictEqual(response.data, body);
   });
 });
 
@@ -392,7 +397,7 @@ describe('rawText over RFC', () => {
   }
 
   it("an error's body is the exact text", async () => {
-    const body = '{"error":"no such file"}\n';
+    const body = '\uFEFF{"error":"no such file"}\n';
     const connection = new AdtOnPremConnector(
       config,
       new BasicAuthProvider('USER', 'PASS'),
