@@ -875,13 +875,18 @@ without them behaves as before. In short:
   and the `sap-contextid` cookie are stripped; the session mode stays.
 - `rawText: true` — the answer's body, an error's included (and a `noResend`
   request's CSRF-fetch refusal), is the exact text SAP sent, never parsed, a
-  leading BOM kept. HTTP: the bytes are decoded in the `Content-Type`'s
-  `charset` when `TextDecoder` knows it, else UTF-8, with `fatal: true`; a body
-  that does not decode rejects with `The answer's body is not valid text in its
-  charset (status N)` and no `response.data`; `noLog` counts the bytes that
-  arrived. No verdict changes: session loss, CSRF recovery and the check
-  replay read the body as it would be without the flag. RFC: already the text
-  of `MESSAGE_BODY`.
+  leading BOM kept. HTTP: the bytes are decoded in the first `charset`
+  parameter of the `Content-Type` (split outside quoted strings, unquoted), or
+  UTF-8 when none is declared, with `fatal: true`; a body that does not decode,
+  or a declared charset `TextDecoder` does not know, rejects with
+  `RawTextUndecodableError` (`ADT_RAW_TEXT_UNDECODABLE`, the status, `The
+  answer's body is not valid text in its charset (status N)`, no `response`),
+  which no recovery or replay acts on; a `2xx` CSRF fetch's token is read
+  whatever its body; `noLog` counts the bytes that arrived. On the shipped HTTP
+  client no verdict changes: session loss, CSRF recovery and the check replay
+  read the body as it would be without the flag. An injected `httpClient` with
+  defaults of its own owns how its bodies look, and is not covered. RFC:
+  already the text of `MESSAGE_BODY`.
 
 The whole contract, and why `noResend` exists: [README — Request options](../README.md#request-options-noresend-nolog-stateless).
 

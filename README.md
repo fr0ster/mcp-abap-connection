@@ -418,23 +418,34 @@ const file = await connection.makeAdtRequest({
   'arraybuffer'`, no `transformResponse` of axios's), on every send it takes:
   the ordinary one, a `noResend` one, the CSRF recovery's and the
   dead-pooled-socket resend. The decoding rule:
-  - the charset is the `charset` parameter of the answer's `Content-Type`
-    when `TextDecoder` knows it, and UTF-8 when none is declared or the
-    declared one is unknown;
+  - the charset is the first `charset` parameter of the answer's
+    `Content-Type` (parameters split on `;` outside quoted strings, the value
+    unquoted), and UTF-8 when none is declared;
   - the bytes are decoded with `fatal: true` and the BOM kept — a `Buffer`,
     any typed-array view or a plain `ArrayBuffer` (axios's fetch adapter)
     alike, so you always get a string;
-  - a body that does not decode in that charset is refused: the request
-    rejects with `The answer's body is not valid text in its charset (status
-    N)`, `status` and `response` set, `response.data` absent — never text
-    with replacement characters;
+  - a body that does not decode in that charset, or that declares a charset
+    `TextDecoder` does not know, is our failure, not SAP's refusal: the
+    request rejects with `RawTextUndecodableError` — `code`
+    `ADT_RAW_TEXT_UNDECODABLE`, the `status`, the fixed words `The answer's
+    body is not valid text in its charset (status N)`, no `response` — never
+    text with replacement characters. No recovery or replay acts on it (no
+    CSRF recovery, credential renewal, session-loss verdict or check replay),
+    and a successful status is never recovered from;
+  - a CSRF fetch made for the request reads its token from the headers of a
+    `2xx` whatever its body: an unreadable body there never blocks the
+    request;
   - `noLog`'s line counts the bytes that arrived, not the decoded string.
 
-  The flag changes how the body is represented, never a verdict: the session
-  loss read from a `400`'s text, the CSRF recovery and the syntax-check
-  replay read the body as it would be without the flag (a JSON body parsed),
-  so the same answer gets the same verdict either way. Status handling,
-  logging, the other flags and the error's shape are unchanged. Over RFC the body is already the UTF-8 decoding of
+  The flag changes how the body is represented, not a verdict, on the shipped
+  HTTP client: the session loss read from a `400`'s text, the CSRF recovery
+  and the syntax-check replay read the body as the shipped client would have
+  handed it over without the flag (a JSON body parsed), so the same answer
+  gets the same verdict either way. A consumer that injects its own
+  `httpClient` with defaults of its own (`responseType`, `transformResponse`)
+  owns how its bodies look, and with them what those verdicts read: the
+  guarantee does not cover it. Status handling, logging, the other flags and
+  the error's shape are unchanged. Over RFC the body is already the UTF-8 decoding of
   `MESSAGE_BODY`, never parsed, with or without the flag. Without the flag, an
   HTTP answer is parsed as before: a JSON body arrives as its value, whatever
   its `Content-Type`.
