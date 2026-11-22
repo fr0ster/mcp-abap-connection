@@ -855,8 +855,9 @@ check sent with `noResend: true` is not retried: the refusal is its answer.
 
 ### Request options: `noResend`, `noLog`, `stateless`
 
-Three optional flags of `IAbapRequestOptions` (25.1.0) change one request and
-nothing else; a request without them behaves as before. In short:
+Optional flags of `IAbapRequestOptions` (`noResend`, `noLog`, `stateless`:
+25.1.0; `rawText`: 25.2.0) change one request and nothing else; a request
+without them behaves as before. In short:
 
 - `noResend: true` — sent once: no CSRF recovery, no resend after the
   credential's renewal (the provider is not asked), no resend on a dead pooled
@@ -872,6 +873,16 @@ nothing else; a request without them behaves as before. In short:
 - `stateless: true` — stateless on HTTP and RFC whatever the session mode, over
   the caller's own `x-sap-adt-sessiontype` header in any letter case; the header
   and the `sap-contextid` cookie are stripped; the session mode stays.
+- `rawText: true` — only the body you receive as the final answer changes: a
+  success's `data`, or your error's `response.data`, is the exact text SAP
+  sent. Everything inside the connection — CSRF recovery, session verdicts,
+  replays, the credential provider, logs, the error's shape — reads what it
+  reads without the flag, on the shipped HTTP client; an injected `httpClient`
+  with defaults of its own (`transitional.forcedJSONParsing`, `responseType`)
+  owns how its bodies look. HTTP
+  decodes the declared charset when `TextDecoder` knows it, else UTF-8, the BOM
+  kept, non-fatally: an invalid byte reads as U+FFFD. `noLog` counts the bytes
+  that arrived. RFC: already the text of `MESSAGE_BODY`.
 
 The whole contract, and why `noResend` exists: [README — Request options](../README.md#request-options-noresend-nolog-stateless).
 

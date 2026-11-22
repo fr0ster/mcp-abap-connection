@@ -47,6 +47,7 @@ import type { ILogger } from '../logger.js';
 import { mergeCookieHeaders } from '../utils/cookies.js';
 import { AuthRefusedError, WireLogonError } from './authErrors.js';
 import { CSRF_CONFIG, CSRF_ERROR_MESSAGES } from './csrfConfig.js';
+import { rawTextAnswer } from './exactText.js';
 import { factWords, failureCopy, httpFailure } from './failureFacts.js';
 import {
   type IAdtEstablishContext,
@@ -830,6 +831,8 @@ export class HttpTransport implements IAdtTransport {
           // `noResend` the fetch, too, goes once and follows no redirect.
           ...(context.noResend ? { noResend: true } : {}),
           ...(context.noLog ? { noLog: true } : {}),
+          // `rawText`: under `noResend` this answer may be the request's.
+          ...(context.rawText ? { rawText: true } : {}),
         });
 
         // Handed up BEFORE the token is read: the cookies are the session,
@@ -1478,6 +1481,10 @@ export class HttpTransport implements IAdtTransport {
       ...(request.validateStatus !== undefined
         ? { validateStatus: request.validateStatus }
         : {}),
+      // `rawText`: the body as bytes, which axios's default transform leaves
+      // alone; what the connection reads and what the caller gets are both
+      // made of them (`rawTextAnswer`).
+      ...(request.rawText ? { responseType: 'arraybuffer' } : {}),
     };
     // A logoff opens a socket of its own and is never resent: its answer is
     // not read, and its write is what `disconnect()` resolves at.
@@ -1495,14 +1502,15 @@ export class HttpTransport implements IAdtTransport {
       // Never as the client threw it: axios's error holds this request's
       // config — its credential headers among it — and words naming the host.
       // SAP's answer and the code go up; nothing else of it does.
-      throw httpFailure(error);
+      throw httpFailure(error, request.rawText === true);
     }
 
-    return {
+    const answer: IAdtTransportResponse = {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
       data: response.data,
     };
+    return request.rawText ? rawTextAnswer(answer) : answer;
   }
 }

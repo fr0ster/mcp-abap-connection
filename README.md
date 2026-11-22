@@ -339,9 +339,10 @@ of these three resends: see the request options below.
 
 ### Request options: `noResend`, `noLog`, `stateless`
 
-Since 25.1.0, three optional flags of `IAbapRequestOptions`
-(`@mcp-abap-adt/interfaces-adt-connection` 5.2.0) change one request and
-nothing else. A request without them behaves as before.
+Since 25.1.0, optional flags of `IAbapRequestOptions` change one request and
+nothing else: `noResend`, `noLog` and `stateless`
+(`@mcp-abap-adt/interfaces-adt-connection` 5.2.0), and since 25.2.0 `rawText`
+(5.3.0). A request without them behaves as before.
 
 ```typescript
 await connection.makeAdtRequest({
@@ -352,6 +353,14 @@ await connection.makeAdtRequest({
   noResend: true, // the first failure is the answer
   noLog: true, // nothing of the request or its answer in a log
   stateless: true, // stateless whatever the session mode
+});
+
+// An abapGit file as the exact text SAP sent:
+const file = await connection.makeAdtRequest({
+  method: "GET",
+  url: "/sap/bc/adt/abapgit/repos/R1/files/package.json",
+  timeout: 0,
+  rawText: true, // the body is the text, not parsed
 });
 ```
 
@@ -399,6 +408,29 @@ await connection.makeAdtRequest({
   wire strips that header and the `sap-contextid` cookie from the request (over
   RFC, the call goes on a conversation other than the stateful one). The session
   mode is not changed: the next ordinary request follows it.
+- **`rawText: true`** (25.2.0) — changes only the body you receive as the
+  final answer: a success's `data`, or the `response.data` of the error you
+  get, is the exact text SAP sent, a string — a JSON-object file is not an
+  object, a JSON-string file keeps its quotes and its trailing newline, and a
+  leading byte-order mark stays. Nothing inside the connection changes: the
+  CSRF recovery, the session verdicts (a replacement cookie included), the
+  replays, the credential provider (`IAuthRejection.error`), the log lines
+  and the error's shape all read what the request without the flag reads, so
+  the same answer gets the same handling either way. That guarantee is for
+  the shipped HTTP client: a consumer that injects an `httpClient` configured
+  with defaults of its own — `transitional.forcedJSONParsing`, `responseType`
+  — owns how its bodies look, and with them what those consumers read. Over HTTP the body is received as bytes; the text is decoded in the
+  charset the `Content-Type` declares when `TextDecoder` knows it, else
+  UTF-8, the BOM kept, and **non-fatally: a byte that is not text in that
+  charset reads as U+FFFD** — no error is raised for it. (SAP's abapGit file
+  resource answers `text/plain; charset=utf-8`, already UTF-8 on SAP's side.)
+  It applies on every send the request takes — the ordinary one, `noResend`,
+  the CSRF recovery's resend, the dead-pooled-socket resend,
+  `createConnection`'s check replay — and to the refusal of the CSRF fetch
+  made for a `noResend` request when that is the answer. A `noLog` line counts
+  the bytes that arrived; nothing else of it changes. Over RFC the body is
+  already the UTF-8 text of `MESSAGE_BODY`, never parsed, with or without the
+  flag.
 
 ### An instance on an existing session
 

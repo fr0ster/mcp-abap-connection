@@ -5,6 +5,7 @@ import {
 import type { AbapRequestOptions } from './AbapConnection.js';
 import { carriesSessionLost } from './AbstractAbapConnection.js';
 import type { CreatedConnection } from './createConnection.js';
+import { internalBody } from './exactText.js';
 import { refusalOf } from './IAdtTransport.js';
 import { isStatefulRequest } from './statefulRequest.js';
 
@@ -53,10 +54,13 @@ export function withCheckRelogon<TConnection extends CreatedConnection>(
     } catch (error) {
       if (!eligible || closing || !carriesSessionLost(error)) throw error;
       const refusal = refusalOf(error);
+      // The body as the connection read it: `rawText` changes only the
+      // caller's view, applied at the connection's door below this replay.
+      const body = refusal === null ? undefined : internalBody(refusal);
       if (
         refusal?.status !== 403 ||
-        typeof refusal.data !== 'string' ||
-        !refusal.data.includes('CSRF token validation failed')
+        typeof body !== 'string' ||
+        !body.includes('CSRF token validation failed')
       )
         throw error;
 

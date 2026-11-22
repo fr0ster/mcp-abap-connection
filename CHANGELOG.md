@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [25.2.0] - 2026-11-22
+
+One per-request option, declared by `IAbapRequestOptions` in
+`@mcp-abap-adt/interfaces-adt-connection` 5.3.0 (the floor is now `^5.3.0`),
+so that an abapGit file reads back as its original text. A request without it
+behaves exactly as on 25.1.0. See
+[README — Request options](README.md#request-options-noresend-nolog-stateless).
+
+### Added
+
+- **`rawText: true`** — changes only the body the caller receives as the
+  final answer: a success's `data`, or the `response.data` of the error the
+  caller gets, is the exact text SAP sent. Nothing internal changes: the CSRF
+  recovery, the session verdicts (a replacement cookie included), the
+  replays, the credential provider (`IAuthRejection.error`, and
+  `AuthRefusedError.cause`), the log lines and the error's shape read what
+  the unflagged path reads. That holds for the shipped HTTP client; an
+  injected `httpClient` configured with defaults of its own
+  (`transitional.forcedJSONParsing`, `responseType`) owns how its bodies
+  look. Over HTTP the body is received as bytes (`responseType:
+  'arraybuffer'`); from them the connection takes exactly what axios's
+  defaults would have made (UTF-8, a leading BOM dropped, JSON parsed when it
+  parses) for everything inside, and decodes the caller's text in the charset
+  the `Content-Type` declares when `TextDecoder` knows it, else UTF-8, the BOM
+  kept, non-fatally — an invalid byte reads as U+FFFD. It applies on every
+  send the request takes (the ordinary one, `noResend`, the CSRF recovery's
+  resend, the dead-pooled-socket resend, `createConnection`'s check replay)
+  and to the refusal of the CSRF fetch made for a `noResend` request
+  (`IAdtSessionContext.rawText`). A `noLog` line counts the bytes that
+  arrived. `IAdtTransportRequest` carries the flag to the wire.
+
+### Fixed
+
+- Over HTTP a file's text came back changed: the wire read every body
+  through axios's default `transformResponse`, which parses JSON even under
+  `text/plain` — a JSON-object file arrived as an object, a JSON-string file
+  without its quotes and its trailing newline. SAP's abapGit file resource
+  answers only `text/plain; charset=utf-8`, so the fix is on this side:
+  `rawText`.
+- RFC needed no change: the body is the UTF-8 text of `MESSAGE_BODY`, never
+  parsed, with or without the flag (now proven by a test).
+
 ## [25.1.0] - 2026-11-22
 
 Three per-request options, declared by `IAbapRequestOptions` in
@@ -3176,7 +3218,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.1.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.2.0...HEAD
+[25.2.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.1.0...v25.2.0
 [25.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.1...v25.1.0
 [25.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.0...v25.0.1
 [25.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v24.0.0...v25.0.0

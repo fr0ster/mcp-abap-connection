@@ -29,6 +29,8 @@ import {
   WireSessionLostError,
 } from './authErrors.js';
 import { CSRF_ERROR_MESSAGES } from './csrfConfig.js';
+import * as csrfRetry from './csrfRetry.js';
+import { carryExact, toCallerView } from './exactText.js';
 import { asArrived, factWords, failureCopy } from './failureFacts.js';
 import {
   type IAdtSessionContext,
@@ -103,13 +105,17 @@ function dataPreview(data: unknown): string | undefined {
 }
 
 /** The flags of a request that reach the exchanges made for it. */
-type RequestFlags = Pick<IAdtTransportRequest, 'noResend' | 'noLog'>;
+type RequestFlags = Pick<
+  IAdtTransportRequest,
+  'noResend' | 'noLog' | 'rawText'
+>;
 
-/** A request's `noResend` and `noLog`, and nothing else of it. */
+/** A request's `noResend`, `noLog` and `rawText`, and nothing else of it. */
 function flagsOf(request: RequestFlags): RequestFlags {
   return {
     ...(request.noResend ? { noResend: true } : {}),
     ...(request.noLog ? { noLog: true } : {}),
+    ...(request.rawText ? { rawText: true } : {}),
   };
 }
 
@@ -1425,9 +1431,18 @@ abstract class AbstractAbapConnection
     // shut the door.
     const lease = this.lifecycle.admitRequest();
     try {
-      return await this.performRequest<T, D>(options, lease);
+      const response = await this.performRequest<T, D>(options, lease);
+      // `rawText`: the caller's view, and only the caller's — everything
+      // inside has read the answer by now.
+      if (options.rawText) toCallerView(response);
+      return response;
     } catch (error) {
-      throw outwardLogonError(error);
+      const outward = outwardLogonError(error);
+      if (options.rawText) {
+        const refusal = refusalOf(outward);
+        if (refusal) toCallerView(refusal);
+      }
+      throw outward;
     } finally {
       lease.release();
     }
@@ -1600,6 +1615,9 @@ abstract class AbstractAbapConnection
       // `noLog`: every line about this request, here and on the wire, is the
       // quiet one.
       ...(options.noLog ? { noLog: true } : {}),
+      // `rawText`: only the caller's view changes (`toCallerView`, at the
+      // door); every resend below reuses requestConfig.
+      ...(options.rawText ? { rawText: true } : {}),
     };
 
     if (data !== undefined) {
@@ -1691,9 +1709,13 @@ abstract class AbstractAbapConnection
     const answer = response as unknown as IAdtWireResponse<T, D>;
     // The answer itself says the session is gone: a field, on the one object
     // that answers this request, never a word.
-    return observed === 'lost'
-      ? { ...answer, sessionLost: ADT_SESSION_ERROR.SESSION_REPLACED }
-      : answer;
+    if (observed !== 'lost') return answer;
+    const marked = {
+      ...answer,
+      sessionLost: ADT_SESSION_ERROR.SESSION_REPLACED,
+    };
+    carryExact(answer, marked);
+    return marked;
   }
 
   /**
@@ -2371,6 +2393,7 @@ abstract class AbstractAbapConnection
     return {
       ...(flags.noResend ? { noResend: true } : {}),
       ...(quiet ? { noLog: true } : {}),
+      ...(flags.rawText ? { rawText: true } : {}),
       authorize: async (headers) => {
         await this.credentialHeaders(headers);
         if (lease && !this.lifecycle.isCurrent(lease)) {
@@ -2430,32 +2453,12 @@ abstract class AbstractAbapConnection
   }
 
   private shouldRetryCsrf(error: unknown, method?: string): boolean {
-    const refusal = refusalOf(error);
-    if (!refusal) {
-      return false;
-    }
-
-    const responseData = refusal.data;
-    const responseText =
-      typeof responseData === 'string'
-        ? responseData
-        : JSON.stringify(responseData || '');
-
-    // Retry on 403 with CSRF message, or if response mentions CSRF token
-    // Also retry on 401 for POST/PUT/DELETE if we don't have CSRF token yet (might need to get cookies first)
-    // Handed in rather than read off `error.config`, which is axios's own
-    // record of the request and does not exist on another wire's refusal. The
-    // caller already normalised the method; asking the error for it was asking
-    // the HTTP client.
-    const normalized = method?.toUpperCase();
-    const isPostPutDelete =
-      normalized && ['POST', 'PUT', 'DELETE'].includes(normalized);
-    const needsCsrfToken = !!isPostPutDelete && !this.transport.csrfToken();
-
-    return (
-      (refusal.status === 403 && responseText.includes('CSRF')) ||
-      responseText.includes('CSRF token') ||
-      (needsCsrfToken && refusal.status === 401)
+    // Asked through its module: the order it is asked in is observable.
+    return csrfRetry.shouldRetryCsrf(
+      error,
+      method,
+      // Read only where the predicate always read it.
+      () => this.transport.csrfToken(),
     );
   }
 }
