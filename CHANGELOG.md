@@ -21,8 +21,12 @@ behaves exactly as on 25.1.0. See
   final answer: a success's `data`, or the `response.data` of the error the
   caller gets, is the exact text SAP sent. Nothing internal changes: the CSRF
   recovery, the session verdicts (a replacement cookie included), the
-  replays, the log lines and the error's shape read what the unflagged path
-  reads. Over HTTP the body is received as bytes (`responseType:
+  replays, the credential provider (`IAuthRejection.error`, and
+  `AuthRefusedError.cause`), the log lines and the error's shape read what
+  the unflagged path reads. That holds for the shipped HTTP client; an
+  injected `httpClient` configured with defaults of its own
+  (`transitional.forcedJSONParsing`, `responseType`) owns how its bodies
+  look. Over HTTP the body is received as bytes (`responseType:
   'arraybuffer'`); from them the connection takes exactly what axios's
   defaults would have made (UTF-8, a leading BOM dropped, JSON parsed when it
   parses) for everything inside, and decodes the caller's text in the charset
