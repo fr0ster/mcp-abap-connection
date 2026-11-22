@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { Socket } from 'node:net';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { inspect } from 'node:util';
 import { BasicAuthProvider } from '@mcp-abap-adt/auth-providers';
 import type { IAbapRequestOptions } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { ISapRfcConfig } from '@mcp-abap-adt/interfaces-auth-sap';
@@ -27,6 +28,7 @@ import {
   type RfcConversationFactory,
   RfcTransport,
 } from '../connection/RfcTransport.js';
+import { isRawAnswer, unreadAnswer } from '../connection/rawBody.js';
 import type { ILogger } from '../logger.js';
 
 const DISCOVERY = '/sap/bc/adt/core/discovery';
@@ -706,6 +708,142 @@ describe('the upfront CSRF refusal keeps its raw byte count', () => {
     } finally {
       await connection.disconnect();
     }
+  });
+});
+
+describe('the last request sent is the answer', () => {
+  it('PUT 403 → token → PUT 200 with an unreadable body: the decode error, never the 403', async () => {
+    const connection = await connected();
+    try {
+      sap.file.push(
+        {
+          status: 403,
+          body: 'CSRF token validation failed',
+          type: 'text/plain',
+          headers: { 'x-csrf-token': 'Required' },
+        },
+        {
+          status: 200,
+          body: Buffer.from([0xff]),
+          type: 'text/plain; charset=utf-8',
+        },
+      );
+      await assert.rejects(
+        connection.makeAdtRequest(read({ rawText: true }, 'PUT')),
+        (error) => undecodable(error, 200),
+      );
+      assert.strictEqual(
+        sap.arrivals.filter((a) => a === `PUT ${FILE}`).length,
+        2,
+      );
+    } finally {
+      await connection.disconnect();
+    }
+  });
+});
+
+describe("noLog's line on a decode failure", () => {
+  function recorder(): { logger: ILogger; lines: string[] } {
+    const lines: string[] = [];
+    const at = (message: string): void => {
+      lines.push(message);
+    };
+    return { lines, logger: { info: at, warn: at, error: at, debug: at } };
+  }
+
+  it('the ordinary path logs the status and the raw byte count', async () => {
+    const { logger, lines } = recorder();
+    const connection = await connected(logger);
+    try {
+      lines.length = 0;
+      sap.file.push({
+        status: 200,
+        body: Buffer.from([0xff]),
+        type: 'text/plain; charset=utf-8',
+      });
+      await assert.rejects(
+        connection.makeAdtRequest(read({ rawText: true, noLog: true })),
+        (error) => undecodable(error, 200),
+      );
+      assert.ok(
+        lines.some((line) => line.endsWith('→ 200 (1 bytes)')),
+        lines.join('\n'),
+      );
+    } finally {
+      await connection.disconnect();
+    }
+  });
+
+  it('the upfront path logs the status and the raw byte count', async () => {
+    const { logger, lines } = recorder();
+    const transport = new OnPremHttpTransport(() => ({}), logger, {
+      client: '100',
+      baseUrl: sap.baseUrl,
+    });
+    const connection = new AdtOnPremConnector(
+      { url: sap.baseUrl, authType: 'basic', client: '100' },
+      new BasicAuthProvider('u', 'p'),
+      transport,
+      logger,
+    );
+    await connection.connect();
+    transport.adoptCsrfToken(null);
+    lines.length = 0;
+    try {
+      sap.discovery.push({
+        status: 503,
+        body: Buffer.from([0xff]),
+        type: 'text/plain; charset=utf-8',
+      });
+      await assert.rejects(
+        connection.makeAdtRequest(
+          read({ rawText: true, noResend: true, noLog: true }, 'PUT'),
+        ),
+        (error) => undecodable(error, 503),
+      );
+      assert.ok(
+        lines.some((line) => line.endsWith('→ 503 (1 bytes)')),
+        lines.join('\n'),
+      );
+    } finally {
+      await connection.disconnect();
+    }
+  });
+});
+
+describe('a decode failure keeps nothing of the body', () => {
+  it('only the status and the headers', async () => {
+    const transport = new HttpTransport(() => ({}), null, {
+      baseUrl: sap.baseUrl,
+    });
+    // Valid UTF-8 up to its last byte: a decoder that kept anything would
+    // keep this text.
+    sap.file.push({
+      status: 200,
+      body: Buffer.concat([Buffer.from('BODYCANARY'), Buffer.from([0xff])]),
+      type: 'text/plain; charset=utf-8',
+    });
+    await assert.rejects(
+      transport.send({ method: 'GET', url: FILE, rawText: true }),
+      (error) => {
+        undecodable(error, 200);
+        const unread = unreadAnswer(error);
+        assert.ok(unread !== undefined);
+        assert.deepStrictEqual(Object.keys(unread).sort(), [
+          'headers',
+          'status',
+        ]);
+        assert.strictEqual(isRawAnswer(unread), false);
+        for (const value of [error, unread]) {
+          assert.ok(
+            !inspect(value, { showHidden: true, depth: null }).includes(
+              'BODYCANARY',
+            ),
+          );
+        }
+        return true;
+      },
+    );
   });
 });
 
