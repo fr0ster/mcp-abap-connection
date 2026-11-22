@@ -253,6 +253,24 @@ function answerOf(thrown: unknown): IAdtTransportResponse | undefined {
 }
 
 /**
+ * A `rawText` rejection's own `response.data` set to what the connection
+ * reads — the body the unflagged path has — so nothing inside, the
+ * credential provider included, sees the bytes. A value that will not take
+ * it is left as it is.
+ */
+function arrivedBody(thrown: unknown, data: unknown): void {
+  if (typeof thrown !== 'object' || thrown === null) return;
+  try {
+    const response = ownData(thrown, 'response');
+    if (typeof response === 'object' && response !== null) {
+      Reflect.set(response, 'data', data);
+    }
+  } catch {
+    // A response that will not be read or written: left as it arrived.
+  }
+}
+
+/**
  * What an HTTP client's rejection becomes before it leaves the wire: an
  * `Error` in fixed words with its facts and SAP's answer, and nothing else.
  *
@@ -271,6 +289,9 @@ export function httpFailure(
   const copied = answerOf(thrown);
   const response =
     rawText && copied !== undefined ? rawTextAnswer(copied) : copied;
+  // The provider reads the wire's error as it arrived (`asArrived`): its
+  // body, too, is what the unflagged path has, never the bytes.
+  if (rawText && response !== undefined) arrivedBody(thrown, response.data);
   const code = failureCode(thrown);
   const error = new Error(
     response !== undefined
