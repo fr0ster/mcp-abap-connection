@@ -39,13 +39,17 @@ behaves as before. See
   `The answer's body is not valid text in its charset (status N)`, no
   `response`): our failure, not SAP's refusal, so no CSRF recovery,
   credential renewal, session-loss verdict or check replay acts on it, and a
-  successful status is never recovered from. It applies on every send the
+  successful status is never recovered from. The last request sent is the
+  answer: a resend whose `2xx` does not decode rejects with that decode error
+  (status `200`), never the refusal that started it. The error keeps only the
+  status and headers, nothing of the body. It applies on every send the
   request takes (the ordinary one, `noResend`, the CSRF recovery's resend, the
   dead-pooled-socket resend), on an error's body, and on the CSRF fetch made
   for the request (`IAdtSessionContext.rawText`), whose refusal under
   `noResend` is the answer; a `2xx` fetch gives its token from its headers
   whatever its body. `noLog`'s line counts the bytes that arrived, a copy of
-  the refusal (`failureCopy`) included. On the shipped HTTP client no verdict
+  the refusal (`failureCopy`) and a decode failure (its status and raw byte
+  count, on the request's path and the upfront fetch) included. On the shipped HTTP client no verdict
   changes: the session loss read from a `400`'s text, the CSRF recovery and
   the syntax-check replay read the body as it would be without the flag. An
   injected `httpClient` with defaults of its own owns how its bodies look and
