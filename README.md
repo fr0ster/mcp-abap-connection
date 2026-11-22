@@ -431,11 +431,19 @@ const file = await connection.makeAdtRequest({
     body is not valid text in its charset (status N)`, no `response` — never
     text with replacement characters. No recovery or replay acts on it (no
     CSRF recovery, credential renewal, session-loss verdict or check replay),
-    and a successful status is never recovered from;
+    and a successful status is never recovered from. The last request sent
+    is the answer: a resend (CSRF recovery, credential renewal, pooled
+    socket, check replay) whose answer does not decode rejects with that
+    decode error — for a `2xx` SAP accepted, status `200` — never with the
+    refusal that started the resend. The error keeps nothing of the body;
+    only the status and headers stay with it, for the CSRF fetch's token;
   - a CSRF fetch made for the request reads its token from the headers of a
     `2xx` whatever its body: an unreadable body there never blocks the
     request;
-  - `noLog`'s line counts the bytes that arrived, not the decoded string.
+  - `noLog`'s line counts the bytes that arrived, not the decoded string; a
+    decode failure's line carries its status and raw byte count too
+    (`→ 200 (1 bytes)`), on the request's own path and on the CSRF fetch
+    made for it.
 
   The flag changes how the body is represented, not a verdict, on the shipped
   HTTP client: the session loss read from a `400`'s text, the CSRF recovery

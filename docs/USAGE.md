@@ -881,8 +881,10 @@ without them behaves as before. In short:
   or a declared charset `TextDecoder` does not know, rejects with
   `RawTextUndecodableError` (`ADT_RAW_TEXT_UNDECODABLE`, the status, `The
   answer's body is not valid text in its charset (status N)`, no `response`),
-  which no recovery or replay acts on; a `2xx` CSRF fetch's token is read
-  whatever its body; `noLog` counts the bytes that arrived. On the shipped HTTP
+  which no recovery or replay acts on, and which is the answer when a resend
+  met it (never the refusal before); it keeps only the status and headers; a
+  `2xx` CSRF fetch's token is read whatever its body; `noLog` counts the bytes
+  that arrived, a decode failure's status and bytes included. On the shipped HTTP
   client no verdict changes: session loss, CSRF recovery and the check replay
   read the body as it would be without the flag. An injected `httpClient` with
   defaults of its own owns how its bodies look, and is not covered. RFC:
