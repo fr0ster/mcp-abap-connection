@@ -847,7 +847,7 @@ export class HttpTransport implements IAdtTransport {
             unread.status >= 200 &&
             unread.status < 300
           ) {
-            return unread;
+            return { ...unread, data: undefined };
           }
           throw error;
         });

@@ -29,8 +29,19 @@ interface RawFacts {
 
 const RAW = new WeakMap<object, RawFacts>();
 
-/** The answer each decode failure was made from, for the wire alone. */
-const UNREAD = new WeakMap<object, IAdtTransportResponse>();
+/**
+ * What each decode failure keeps of its answer, beside the error and never on
+ * it: the status and headers (the CSRF fetch reads its token from them) and
+ * the raw byte count (`noLog`'s line) — nothing of the body, the answer
+ * object or its facts.
+ */
+interface Unread {
+  status: number;
+  headers: unknown;
+  bytes: number;
+}
+
+const UNREAD = new WeakMap<object, Unread>();
 
 /**
  * A `rawText` answer whose body is not text in its charset. Ours, not SAP's
@@ -48,20 +59,44 @@ export class RawTextUndecodableError extends Error {
     );
     this.name = 'RawTextUndecodableError';
     this.status = answer.status;
-    UNREAD.set(this, answer);
+    UNREAD.set(this, {
+      status: answer.status,
+      headers: answer.headers,
+      bytes: rawBytes(answer) ?? 0,
+    });
   }
 }
 
-/**
- * The answer a decode failure was made from, its body absent — for an
- * exchange that reads only the headers (the CSRF fetch) — else `undefined`.
- */
-export function unreadAnswer(
-  error: unknown,
-): IAdtTransportResponse | undefined {
+function unreadOf(error: unknown): Unread | undefined {
   return typeof error === 'object' && error !== null
     ? UNREAD.get(error)
     : undefined;
+}
+
+/**
+ * The status and headers of the answer a decode failure was made from — for
+ * an exchange that reads only the headers (the CSRF fetch) — else `undefined`.
+ */
+export function unreadAnswer(
+  error: unknown,
+): { status: number; headers: unknown } | undefined {
+  const unread = unreadOf(error);
+  return unread === undefined
+    ? undefined
+    : { status: unread.status, headers: unread.headers };
+}
+
+/**
+ * A decode failure as `noLog`'s line reads an answer: its status and the raw
+ * byte count — else `undefined`.
+ */
+export function undecodedAnswer(
+  error: unknown,
+): { status: number; data: undefined; bytes: number } | undefined {
+  const unread = unreadOf(error);
+  return unread === undefined
+    ? undefined
+    : { status: unread.status, data: undefined, bytes: unread.bytes };
 }
 
 /** The body's bytes, from a Buffer, any other view, or an `ArrayBuffer`. */
