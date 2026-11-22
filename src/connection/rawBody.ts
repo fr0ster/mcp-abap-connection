@@ -45,9 +45,13 @@ const UNREAD = new WeakMap<object, Unread>();
 
 /**
  * A `rawText` answer whose body is not text in its charset. Ours, not SAP's
- * refusal: it carries the status and fixed words, and no `response`, so no
- * recovery or replay — CSRF, credential renewal, session loss, the check
- * replay — reads it as an answer SAP refused.
+ * refusal: it carries the answer's own status and fixed words, and no
+ * `response`, so no recovery or replay — CSRF, credential renewal, the
+ * session-loss text, the check replay — reads it as an answer SAP refused.
+ * Beside it (`UNREAD`) stay the status, the headers and the raw byte count:
+ * the connection observes the headers as an answer's (a session a `2xx`
+ * replaced), the CSRF fetch reads its token from them, and `noLog`'s line
+ * counts the bytes.
  */
 export class RawTextUndecodableError extends Error {
   readonly code = 'ADT_RAW_TEXT_UNDECODABLE';
