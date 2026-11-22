@@ -41,6 +41,7 @@ import {
   carryRaw,
   RawTextUndecodableError,
   undecodedAnswer,
+  unreadAnswer,
   verdictData,
 } from './rawBody.js';
 import { isStatefulRequest } from './statefulRequest.js';
@@ -106,6 +107,15 @@ function dataPreview(data: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** A `noLog` request's one line, ready to write. */
+type QuietLine = ReturnType<typeof quietLine>;
+
+/** Headers from outside the type system, as a record of what they hold. */
+function headerRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  return Object.fromEntries(Object.entries(value));
 }
 
 /** The flags of a request that reach the exchanges made for it. */
@@ -1722,6 +1732,44 @@ abstract class AbstractAbapConnection
    * fixed `sessionLost` — is answered by an object on top of it: every field of
    * the refusal read through to it, its class kept, the mark its own.
    */
+  /** Writes a `noLog` request's one line: a `404` at debug, else at error. */
+  private writeQuiet(quiet: QuietLine): void {
+    this.logQuietly(() => {
+      if (quiet.facts.status === 404) {
+        this.logger?.debug(quiet.line, quiet.facts);
+      } else this.logger?.error(quiet.line, quiet.facts);
+    });
+  }
+
+  /** The line for what a failure answers: SAP's refusal, or a decode failure. */
+  private quietOf(method: string, url: string, error: unknown): QuietLine {
+    return quietLine(method, url, refusalOf(error) ?? undecodedAnswer(error));
+  }
+
+  /**
+   * A `rawText` decode failure's answer, observed as an answer is without the
+   * flag: its headers say what they say of the session — a replacement a
+   * `2xx` shows in its `Set-Cookie` above all. `true` when a stateless
+   * request's session is lost by it; a stateful one's throws, as always.
+   * `false` for anything that is not a decode failure.
+   */
+  private observedLost(
+    error: unknown,
+    requestConfig: IAdtTransportRequest,
+    lease: Pick<RequestLease, 'generation'>,
+  ): boolean {
+    const unread = unreadAnswer(error);
+    if (unread === undefined) return false;
+    return (
+      this.observeResponse(
+        headerRecord(unread.headers),
+        lease.generation,
+        !isStatefulRequest(requestConfig),
+        requestConfig.noLog === true,
+      ) === 'lost'
+    );
+  }
+
   private markedLost(error: unknown): unknown {
     // A refusal is an object: `refusalOf` found its `response` on it.
     if (typeof error !== 'object' || error === null) return error;
@@ -1814,7 +1862,8 @@ abstract class AbstractAbapConnection
           const fenced = quietLine(
             normalizedMethod,
             requestUrl,
-            refusalOf(error) ?? undefined,
+            // A decode failure is an answer too: its status and bytes.
+            refusalOf(error) ?? undecodedAnswer(error),
           );
           this.logger?.debug(fenced.line, fenced.facts);
           return;
@@ -1854,141 +1903,179 @@ abstract class AbstractAbapConnection
           refusal ?? undecodedAnswer(error),
         )
       : null;
-    // Written here, once, before anything below can end the request — a
-    // session verdict included, which then reaches the caller as the error
-    // (`sessionLost`, `SESSION_REPLACED`) and never as a line.
-    if (quiet) {
-      this.logQuietly(() => {
-        if (refusal?.status === 404)
-          this.logger?.debug(quiet.line, quiet.facts);
-        else this.logger?.error(quiet.line, quiet.facts);
-      });
-    }
-    if (refusal) {
-      errorDetails.data = dataPreview(refusal.data);
-
-      // Every wire's refusal, not only axios's. A response the connection
-      // never observed is a session replacement it never noticed. A stateless
-      // request's refusal that showed one is the caller's answer: no recovery
-      // starts from it — no CSRF retry, no credential renewal.
-      const observed = this.observeResponse(
-        refusal.headers as Record<string, unknown> | undefined,
-        lease.generation,
-        !isStatefulRequest(requestConfig),
-        requestConfig.noLog === true,
-      );
-      if (observed === 'lost') throw this.markedLost(error);
-    }
-
-    this.throwIfSessionDead(error, lease, quiet !== null);
-
-    // Check if this is a network error (connection refused, timeout, DNS, etc.)
-    // Don't retry for network errors - these indicate infrastructure/VPN issues
-    const networkError = isNetworkError(error);
-
-    if (networkError) {
-      if (!quiet) {
-        this.logQuietly(() =>
-          this.logger?.error(
-            `Network error - cannot connect to SAP system: ${errorDetails.message}`,
-            errorDetails,
-          ),
-        );
-      }
-      throw error;
-    }
-
-    // Log 404 as debug (common for existence checks), other errors as error
-    if (quiet) {
-      // Written above.
-    } else if (errorDetails.status === 404) {
-      this.logQuietly(() =>
-        this.logger?.debug(errorDetails.message, errorDetails),
-      );
-    } else {
-      this.logQuietly(() =>
-        this.logger?.error(errorDetails.message, errorDetails),
-      );
-    }
-
-    // No session is discarded and reopened on this instance to retry a
-    // request: one instance is one session. A 401 on a mutation that holds a
-    // CSRF token (a login form) is not cured here; it goes to the provider
-    // like any other 401, and SAP's answer reaches the caller.
-
-    // A CSRF complaint (403 "CSRF token validation failed", or a 401 to a
-    // mutation that holds no token yet): a token earned in the SAME session —
-    // the cookies are kept — and one resend.
-    // `noResend`: the first failure is the caller's answer — an abapGit
-    // handler's own 500 holding `CSRF token` would be resent after it ran.
-    if (
+    // Written once, before anything below can end the request — a session
+    // verdict included, which then reaches the caller as the error
+    // (`sessionLost`, `SESSION_REPLACED`) and never as a line. A CSRF
+    // recovery's resend is the last request sent, and its answer the
+    // caller's: the line then waits for it (`owed`), and is written for what
+    // the caller gets — whatever ends the request first writes it.
+    let owed =
+      quiet !== null &&
       !requestConfig.noResend &&
       this.shouldRetryCsrf(error, normalizedMethod)
-    ) {
-      if (!quiet) {
-        this.logger?.debug(
-          'CSRF token validation failed, fetching new token and retrying request',
-          {
-            url: requestUrl,
-            method: normalizedMethod,
-          },
+        ? quiet
+        : null;
+    if (quiet && owed === null) this.writeQuiet(quiet);
+    const settle = (line: QuietLine | null) => {
+      if (owed === null) return;
+      owed = null;
+      if (line) this.writeQuiet(line);
+    };
+    try {
+      if (refusal) {
+        errorDetails.data = dataPreview(refusal.data);
+
+        // Every wire's refusal, not only axios's. A response the connection
+        // never observed is a session replacement it never noticed. A stateless
+        // request's refusal that showed one is the caller's answer: no recovery
+        // starts from it — no CSRF retry, no credential renewal.
+        const observed = this.observeResponse(
+          refusal.headers as Record<string, unknown> | undefined,
+          lease.generation,
+          !isStatefulRequest(requestConfig),
+          requestConfig.noLog === true,
         );
+        if (observed === 'lost') throw this.markedLost(error);
+      }
+      // A decode failure's answer arrived: its headers say what they say of
+      // the session, as an answer's do without the flag.
+      if (this.observedLost(error, requestConfig, lease)) {
+        throw this.markedLost(error);
       }
 
-      try {
-        this.setCsrfToken(
-          await this.fetchCsrfToken(requestUrl, lease, flagsOf(requestConfig)),
-        );
-        const refreshedToken = this.getCsrfToken();
-        if (refreshedToken) {
-          requestHeaders['x-csrf-token'] = refreshedToken;
-        }
-        const refreshedCookies = this.getCookies();
-        if (refreshedCookies) {
-          requestHeaders.Cookie = refreshedCookies;
-        }
+      this.throwIfSessionDead(error, lease, quiet !== null);
 
-        // Re-authorized: a provider may have renewed since the first attempt.
-        requestConfig.headers = await this.authorizedFrom(requestHeaders);
-        return await this.sendObserved<T, D>(requestConfig, lease);
-      } catch (retryError) {
-        // The session went away while the retry was out: nothing it met —
-        // the provider's refusal included — is about this request's session.
-        if (!this.lifecycle.isCurrent(lease)) {
-          throw this.staleVerdict(retryError);
-        }
-        // The resend's refusal is observed like the first attempt's: a
-        // replacement it shows is its own answer, not the first attempt's 403.
-        const retryRefusal = refusalOf(retryError);
-        if (retryRefusal) {
-          const observed = this.observeResponse(
-            retryRefusal.headers as Record<string, unknown> | undefined,
-            lease.generation,
-            !isStatefulRequest(requestConfig),
-            requestConfig.noLog === true,
-          );
-          if (observed === 'lost') throw this.markedLost(retryError);
-        }
-        this.throwIfSessionDead(retryError, lease, quiet !== null);
-        // A session verdict outranks the error that started the retry: the
-        // caller can retry a 403 itself, but it cannot discover that its lock
-        // handle is dead from a 403. So does the credential's failure, which
-        // the 403 would hide from the provider.
-        if (this.outranksOriginal(retryError)) {
-          throw retryError;
-        }
+      // Check if this is a network error (connection refused, timeout, DNS, etc.)
+      // Don't retry for network errors - these indicate infrastructure/VPN issues
+      const networkError = isNetworkError(error);
+
+      if (networkError) {
         if (!quiet) {
           this.logQuietly(() =>
-            this.logger?.debug(
-              `CSRF retry failed; rethrowing original error: ${factWords(retryError)}`,
+            this.logger?.error(
+              `Network error - cannot connect to SAP system: ${errorDetails.message}`,
+              errorDetails,
             ),
           );
         }
         throw error;
       }
+
+      // Log 404 as debug (common for existence checks), other errors as error
+      if (quiet) {
+        // Written above.
+      } else if (errorDetails.status === 404) {
+        this.logQuietly(() =>
+          this.logger?.debug(errorDetails.message, errorDetails),
+        );
+      } else {
+        this.logQuietly(() =>
+          this.logger?.error(errorDetails.message, errorDetails),
+        );
+      }
+
+      // No session is discarded and reopened on this instance to retry a
+      // request: one instance is one session. A 401 on a mutation that holds a
+      // CSRF token (a login form) is not cured here; it goes to the provider
+      // like any other 401, and SAP's answer reaches the caller.
+    } catch (thrown) {
+      settle(owed);
+      throw thrown;
     }
 
-    throw error;
+    try {
+      // A CSRF complaint (403 "CSRF token validation failed", or a 401 to a
+      // mutation that holds no token yet): a token earned in the SAME session —
+      // the cookies are kept — and one resend.
+      // `noResend`: the first failure is the caller's answer — an abapGit
+      // handler's own 500 holding `CSRF token` would be resent after it ran.
+      if (
+        !requestConfig.noResend &&
+        this.shouldRetryCsrf(error, normalizedMethod)
+      ) {
+        if (!quiet) {
+          this.logger?.debug(
+            'CSRF token validation failed, fetching new token and retrying request',
+            {
+              url: requestUrl,
+              method: normalizedMethod,
+            },
+          );
+        }
+
+        try {
+          this.setCsrfToken(
+            await this.fetchCsrfToken(
+              requestUrl,
+              lease,
+              flagsOf(requestConfig),
+            ),
+          );
+          const refreshedToken = this.getCsrfToken();
+          if (refreshedToken) {
+            requestHeaders['x-csrf-token'] = refreshedToken;
+          }
+          const refreshedCookies = this.getCookies();
+          if (refreshedCookies) {
+            requestHeaders.Cookie = refreshedCookies;
+          }
+
+          // Re-authorized: a provider may have renewed since the first attempt.
+          requestConfig.headers = await this.authorizedFrom(requestHeaders);
+          const resent = await this.sendObserved<T, D>(requestConfig, lease);
+          settle(quietLine(normalizedMethod, requestUrl, resent));
+          return resent;
+        } catch (retryError) {
+          // The session went away while the retry was out: nothing it met —
+          // the provider's refusal included — is about this request's session.
+          if (!this.lifecycle.isCurrent(lease)) {
+            throw this.staleVerdict(retryError);
+          }
+          // The resend's refusal is observed like the first attempt's: a
+          // replacement it shows is its own answer, not the first attempt's 403.
+          const retryRefusal = refusalOf(retryError);
+          if (retryRefusal) {
+            const observed = this.observeResponse(
+              retryRefusal.headers as Record<string, unknown> | undefined,
+              lease.generation,
+              !isStatefulRequest(requestConfig),
+              requestConfig.noLog === true,
+            );
+            if (observed === 'lost') throw this.markedLost(retryError);
+          }
+          if (this.observedLost(retryError, requestConfig, lease)) {
+            settle(this.quietOf(normalizedMethod, requestUrl, retryError));
+            throw this.markedLost(retryError);
+          }
+          this.throwIfSessionDead(retryError, lease, quiet !== null);
+          // A session verdict outranks the error that started the retry: the
+          // caller can retry a 403 itself, but it cannot discover that its lock
+          // handle is dead from a 403. So does the credential's failure, which
+          // the 403 would hide from the provider.
+          if (this.outranksOriginal(retryError)) {
+            settle(
+              retryError instanceof RawTextUndecodableError
+                ? this.quietOf(normalizedMethod, requestUrl, retryError)
+                : quiet,
+            );
+            throw retryError;
+          }
+          if (!quiet) {
+            this.logQuietly(() =>
+              this.logger?.debug(
+                `CSRF retry failed; rethrowing original error: ${factWords(retryError)}`,
+              ),
+            );
+          }
+          throw error;
+        }
+      }
+
+      throw error;
+    } finally {
+      // Whatever else ended the request: the line for the refusal it answers.
+      settle(owed);
+    }
   }
 
   /**
@@ -2061,6 +2148,9 @@ abstract class AbstractAbapConnection
           requestConfig.noLog === true,
         );
         if (observed === 'lost') throw this.markedLost(again);
+      }
+      if (this.observedLost(again, requestConfig, lease)) {
+        throw this.markedLost(again);
       }
       this.throwIfSessionDead(again, lease, requestConfig.noLog === true);
       const secondRejection = this.credentialRejection(again);
