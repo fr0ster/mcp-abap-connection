@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [25.2.0] - 2026-11-22
+
+One per-request option, declared by `IAbapRequestOptions` in
+`@mcp-abap-adt/interfaces-adt-connection` 5.3.0 (the floor is now `^5.3.0`),
+so that an abapGit file reads back as its original text. A request without it
+behaves as before. See
+[README — Request options](README.md#request-options-noresend-nolog-stateless).
+
+### Added
+
+- **`rawText: true`** — the answer's body reaches the caller as the exact text
+  SAP sent, with no parsing and no transformation; an error's body too.
+  `IAdtTransportRequest` carries it to the wire.
+
+### Fixed
+
+- Over HTTP a file's text came back changed: the wire built the axios config
+  without `responseType` or `transformResponse`, and axios's default parses
+  JSON even under `text/plain` — a JSON-object file arrived as an object, a
+  JSON-string file without its quotes and its trailing newline. Under
+  `rawText` the request is read with `responseType: 'text'` and an identity
+  `transformResponse` on every send it takes (the ordinary one, `noResend`,
+  the CSRF recovery's resend, the dead-pooled-socket resend). Status
+  handling, logging, the flags and the error's shape are unchanged. axios
+  still drops a leading UTF-8 byte-order mark (measured). Without the flag the
+  parsing stays as it was.
+- RFC needed no change: the body is the UTF-8 text of `MESSAGE_BODY`, never
+  parsed, with or without the flag (now proven by a test).
+
 ## [25.1.0] - 2026-11-22
 
 Three per-request options, declared by `IAbapRequestOptions` in
@@ -3176,7 +3205,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.1.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.2.0...HEAD
+[25.2.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.1.0...v25.2.0
 [25.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.1...v25.1.0
 [25.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.0...v25.0.1
 [25.0.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v24.0.0...v25.0.0
