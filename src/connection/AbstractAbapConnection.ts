@@ -1600,6 +1600,9 @@ abstract class AbstractAbapConnection
       // `noLog`: every line about this request, here and on the wire, is the
       // quiet one.
       ...(options.noLog ? { noLog: true } : {}),
+      // `rawText`: the answer's body is the exact text SAP sent; every resend
+      // below reuses requestConfig, so it carries the flag too.
+      ...(options.rawText ? { rawText: true } : {}),
     };
 
     if (data !== undefined) {
