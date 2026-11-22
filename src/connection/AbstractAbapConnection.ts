@@ -29,6 +29,7 @@ import {
   WireSessionLostError,
 } from './authErrors.js';
 import { CSRF_ERROR_MESSAGES } from './csrfConfig.js';
+import { carryExact, toCallerView } from './exactText.js';
 import { asArrived, factWords, failureCopy } from './failureFacts.js';
 import {
   type IAdtSessionContext,
@@ -103,13 +104,17 @@ function dataPreview(data: unknown): string | undefined {
 }
 
 /** The flags of a request that reach the exchanges made for it. */
-type RequestFlags = Pick<IAdtTransportRequest, 'noResend' | 'noLog'>;
+type RequestFlags = Pick<
+  IAdtTransportRequest,
+  'noResend' | 'noLog' | 'rawText'
+>;
 
-/** A request's `noResend` and `noLog`, and nothing else of it. */
+/** A request's `noResend`, `noLog` and `rawText`, and nothing else of it. */
 function flagsOf(request: RequestFlags): RequestFlags {
   return {
     ...(request.noResend ? { noResend: true } : {}),
     ...(request.noLog ? { noLog: true } : {}),
+    ...(request.rawText ? { rawText: true } : {}),
   };
 }
 
@@ -1425,9 +1430,18 @@ abstract class AbstractAbapConnection
     // shut the door.
     const lease = this.lifecycle.admitRequest();
     try {
-      return await this.performRequest<T, D>(options, lease);
+      const response = await this.performRequest<T, D>(options, lease);
+      // `rawText`: the caller's view, and only the caller's — everything
+      // inside has read the answer by now.
+      if (options.rawText) toCallerView(response);
+      return response;
     } catch (error) {
-      throw outwardLogonError(error);
+      const outward = outwardLogonError(error);
+      if (options.rawText) {
+        const refusal = refusalOf(outward);
+        if (refusal) toCallerView(refusal);
+      }
+      throw outward;
     } finally {
       lease.release();
     }
@@ -1600,6 +1614,9 @@ abstract class AbstractAbapConnection
       // `noLog`: every line about this request, here and on the wire, is the
       // quiet one.
       ...(options.noLog ? { noLog: true } : {}),
+      // `rawText`: only the caller's view changes (`toCallerView`, at the
+      // door); every resend below reuses requestConfig.
+      ...(options.rawText ? { rawText: true } : {}),
     };
 
     if (data !== undefined) {
@@ -1691,9 +1708,13 @@ abstract class AbstractAbapConnection
     const answer = response as unknown as IAdtWireResponse<T, D>;
     // The answer itself says the session is gone: a field, on the one object
     // that answers this request, never a word.
-    return observed === 'lost'
-      ? { ...answer, sessionLost: ADT_SESSION_ERROR.SESSION_REPLACED }
-      : answer;
+    if (observed !== 'lost') return answer;
+    const marked = {
+      ...answer,
+      sessionLost: ADT_SESSION_ERROR.SESSION_REPLACED,
+    };
+    carryExact(answer, marked);
+    return marked;
   }
 
   /**
@@ -2371,6 +2392,7 @@ abstract class AbstractAbapConnection
     return {
       ...(flags.noResend ? { noResend: true } : {}),
       ...(quiet ? { noLog: true } : {}),
+      ...(flags.rawText ? { rawText: true } : {}),
       authorize: async (headers) => {
         await this.credentialHeaders(headers);
         if (lease && !this.lifecycle.isCurrent(lease)) {
