@@ -75,6 +75,12 @@ export interface IAdtTransportRequest {
    * the byte count, and nothing else.
    */
   noLog?: true | undefined;
+  /**
+   * The caller's `rawText: true`: the body the caller receives as the final
+   * answer is the exact text SAP sent; everything inside the connection reads
+   * what it reads without the flag (`exactText.ts`).
+   */
+  rawText?: true | undefined;
 }
 
 /** What came back, in the terms every transport can produce. */
@@ -127,6 +133,8 @@ export interface IAdtSessionContext {
    */
   noResend?: true | undefined;
   noLog?: true | undefined;
+  /** The request's `rawText`: under `noResend` the exchange's answer may be its answer. */
+  rawText?: true | undefined;
   /** Where to hand each answer, so the connection sees what the wire saw. */
   observe: (headers: unknown) => void;
 }
