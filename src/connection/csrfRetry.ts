@@ -13,8 +13,12 @@ export function shouldRetryCsrf(
   error: unknown,
   /** The request's method, already normalised by the caller. */
   method: string | undefined,
-  /** Whether the wire holds a CSRF token now. */
-  holdsToken: boolean,
+  /**
+   * Whether the wire holds a CSRF token — read lazily, at the point the
+   * predicate always read it: after the refusal is serialised, and only for
+   * a `POST`, `PUT` or `DELETE`.
+   */
+  holdsToken: () => boolean,
 ): boolean {
   const refusal = refusalOf(error);
   if (!refusal) {
@@ -36,7 +40,7 @@ export function shouldRetryCsrf(
   const normalized = method?.toUpperCase();
   const isPostPutDelete =
     normalized && ['POST', 'PUT', 'DELETE'].includes(normalized);
-  const needsCsrfToken = !!isPostPutDelete && !holdsToken;
+  const needsCsrfToken = !!isPostPutDelete && !holdsToken();
 
   return (
     (refusal.status === 403 && responseText.includes('CSRF')) ||

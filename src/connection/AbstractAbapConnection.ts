@@ -2457,8 +2457,8 @@ abstract class AbstractAbapConnection
     return csrfRetry.shouldRetryCsrf(
       error,
       method,
-      // An empty token is none, as it always was.
-      Boolean(this.transport.csrfToken()),
+      // Read only where the predicate always read it; an empty token is none.
+      () => Boolean(this.transport.csrfToken()),
     );
   }
 }
