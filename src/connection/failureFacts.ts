@@ -19,6 +19,7 @@ import {
   type IRfcErrorInfo,
   RFC_RCS,
 } from '@mcp-abap-adt/interfaces-adt-connection';
+import { carryExact, rawTextAnswer } from './exactText.js';
 import type { IAdtTransportResponse } from './IAdtTransport.js';
 
 /** An own data property of `source`, read without running a getter. */
@@ -237,12 +238,15 @@ function answerOf(thrown: unknown): IAdtTransportResponse | undefined {
     const status = ownData(response, 'status');
     if (!isInteger(status)) return undefined;
     const statusText = ownData(response, 'statusText');
-    return {
+    const copy: IAdtTransportResponse = {
       status,
       ...(typeof statusText === 'string' ? { statusText } : {}),
       headers: ownData(response, 'headers'),
       data: ownData(response, 'data'),
     };
+    // A `rawText` answer's exact text goes with every copy of it.
+    carryExact(response, copy);
+    return copy;
   } catch {
     return undefined;
   }
@@ -259,8 +263,14 @@ function answerOf(thrown: unknown): IAdtTransportResponse | undefined {
  * `Request failed with status code <n>`, built from the status), else the
  * code (`ECONNREFUSED`, `ECONNABORTED`, …) and `The request failed: <code>`.
  */
-export function httpFailure(thrown: unknown): HttpFailure {
-  const response = answerOf(thrown);
+export function httpFailure(
+  thrown: unknown,
+  /** The request's `rawText`: SAP's answer as bytes, read as `rawTextAnswer`. */
+  rawText = false,
+): HttpFailure {
+  const copied = answerOf(thrown);
+  const response =
+    rawText && copied !== undefined ? rawTextAnswer(copied) : copied;
   const code = failureCode(thrown);
   const error = new Error(
     response !== undefined
