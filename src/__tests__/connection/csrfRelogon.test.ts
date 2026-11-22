@@ -276,7 +276,7 @@ it('with rawText, a JSON refusal is not replayed — as without it', async () =>
     const connection = connector();
     await connection.connect();
     const before = sap.sentTo(CHECK).length;
-    sap.work(CHECK, [refusal, { status: 200, body: 'checked' }]);
+    sap.work(CHECK, [refusal]);
     try {
       await connection
         .makeAdtRequest({
@@ -293,5 +293,5 @@ it('with rawText, a JSON refusal is not replayed — as without it', async () =>
       await connection.disconnect();
     }
   }
-  assert.equal(sent[1], sent[0]);
+  assert.deepEqual(sent, [1, 1]);
 });
