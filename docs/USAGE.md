@@ -882,11 +882,14 @@ without them behaves as before. In short:
   `RawTextUndecodableError` (`ADT_RAW_TEXT_UNDECODABLE`, the status, `The
   answer's body is not valid text in its charset (status N)`, no `response`),
   which no recovery or replay acts on, and which is the answer when a resend
-  met it (never the refusal before); it keeps only the status and headers; a
-  `2xx` CSRF fetch's token is read whatever its body; `noLog` counts the bytes
-  that arrived, a decode failure's status and bytes included. On the shipped HTTP
-  client no verdict changes: session loss, CSRF recovery and the check replay
-  read the body as it would be without the flag. An injected `httpClient` with
+  met it (never the refusal before), with that answer's own status; it keeps
+  the status, the headers and the raw byte count, nothing of the body; a
+  `2xx` CSRF fetch's token is read whatever its body; `noLog` writes one line,
+  for the last request sent, a decode failure's status and bytes included. On
+  the shipped HTTP client no verdict changes: session loss, CSRF recovery and
+  the check replay read the body as it would be without the flag, and a
+  session a `2xx`'s `Set-Cookie` replaced is noticed from a decode failure's
+  headers as from an answer's. An injected `httpClient` with
   defaults of its own owns how its bodies look, and is not covered. RFC:
   already the text of `MESSAGE_BODY`.
 

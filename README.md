@@ -434,9 +434,13 @@ const file = await connection.makeAdtRequest({
     and a successful status is never recovered from. The last request sent
     is the answer: a resend (CSRF recovery, credential renewal, pooled
     socket, check replay) whose answer does not decode rejects with that
-    decode error — for a `2xx` SAP accepted, status `200` — never with the
-    refusal that started the resend. The error keeps nothing of the body;
-    only the status and headers stay with it, for the CSRF fetch's token;
+    decode error, carrying that answer's own status (a `200` for a mutation
+    SAP accepted), never with the refusal that started the resend. The
+    error keeps nothing of the body: only the status, the headers (for the
+    CSRF fetch's token and the session check) and the raw byte count (for
+    `noLog`'s line) stay with it. A `noLog` request still writes exactly one
+    line, for the last request sent (`→ 200 (N bytes)` when a CSRF resend's
+    answer did not decode), a fenced one included;
   - a CSRF fetch made for the request reads its token from the headers of a
     `2xx` whatever its body: an unreadable body there never blocks the
     request;
@@ -448,8 +452,13 @@ const file = await connection.makeAdtRequest({
   The flag changes how the body is represented, not a verdict, on the shipped
   HTTP client: the session loss read from a `400`'s text, the CSRF recovery
   and the syntax-check replay read the body as the shipped client would have
-  handed it over without the flag (a JSON body parsed), so the same answer
-  gets the same verdict either way. A consumer that injects its own
+  handed it over without the flag (a JSON body parsed), and the session
+  check reads the headers of every answer that arrived — a decode failure's
+  included — so a `SAP_SESSIONID` a `2xx` replaces in its `Set-Cookie` is a
+  session replacement as without the flag (stateless: the decode error
+  marked `sessionLost` `ADT_SESSION_REPLACED` and the instance spent;
+  stateful: `ADT_SESSION_REPLACED` thrown). The same answer gets the same
+  verdict either way. A consumer that injects its own
   `httpClient` with defaults of its own (`responseType`, `transformResponse`)
   owns how its bodies look, and with them what those verdicts read: the
   guarantee does not cover it. Status handling, logging, the other flags and
