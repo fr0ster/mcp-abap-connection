@@ -6,7 +6,6 @@ import type { AbapRequestOptions } from './AbapConnection.js';
 import { carriesSessionLost } from './AbstractAbapConnection.js';
 import type { CreatedConnection } from './createConnection.js';
 import { refusalOf } from './IAdtTransport.js';
-import { verdictData } from './rawBody.js';
 import { isStatefulRequest } from './statefulRequest.js';
 
 /**
@@ -54,12 +53,10 @@ export function withCheckRelogon<TConnection extends CreatedConnection>(
     } catch (error) {
       if (!eligible || closing || !carriesSessionLost(error)) throw error;
       const refusal = refusalOf(error);
-      // `rawText` changes no verdict: the body as it would be without it.
-      const body = refusal === null ? undefined : verdictData(refusal);
       if (
         refusal?.status !== 403 ||
-        typeof body !== 'string' ||
-        !body.includes('CSRF token validation failed')
+        typeof refusal.data !== 'string' ||
+        !refusal.data.includes('CSRF token validation failed')
       )
         throw error;
 

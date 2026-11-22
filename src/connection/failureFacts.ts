@@ -20,7 +20,6 @@ import {
   RFC_RCS,
 } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { IAdtTransportResponse } from './IAdtTransport.js';
-import { carryRaw, isRawAnswer, rawAnswer } from './rawBody.js';
 
 /** An own data property of `source`, read without running a getter. */
 export function ownData(source: object, name: string): unknown {
@@ -238,16 +237,12 @@ function answerOf(thrown: unknown): IAdtTransportResponse | undefined {
     const status = ownData(response, 'status');
     if (!isInteger(status)) return undefined;
     const statusText = ownData(response, 'statusText');
-    const copy: IAdtTransportResponse = {
+    return {
       status,
       ...(typeof statusText === 'string' ? { statusText } : {}),
       headers: ownData(response, 'headers'),
       data: ownData(response, 'data'),
     };
-    // A `rawText` answer's facts — its raw byte count, the body as it would
-    // be without the flag — go with every copy of it.
-    carryRaw(response, copy);
-    return copy;
   } catch {
     return undefined;
   }
@@ -264,16 +259,8 @@ function answerOf(thrown: unknown): IAdtTransportResponse | undefined {
  * `Request failed with status code <n>`, built from the status), else the
  * code (`ECONNREFUSED`, `ECONNABORTED`, …) and `The request failed: <code>`.
  */
-export function httpFailure(
-  thrown: unknown,
-  /** The request's `rawText`: SAP's answer with its body decoded (`rawBody`). */
-  rawText = false,
-): HttpFailure {
-  const copied = answerOf(thrown);
-  const response =
-    copied !== undefined && rawText && !isRawAnswer(copied)
-      ? rawAnswer(copied)
-      : copied;
+export function httpFailure(thrown: unknown): HttpFailure {
+  const response = answerOf(thrown);
   const code = failureCode(thrown);
   const error = new Error(
     response !== undefined

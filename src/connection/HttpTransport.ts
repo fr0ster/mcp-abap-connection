@@ -57,12 +57,6 @@ import {
   refusalOf,
 } from './IAdtTransport.js';
 import {
-  RawTextUndecodableError,
-  rawAnswer,
-  rawReadable,
-  unreadAnswer,
-} from './rawBody.js';
-import {
   isSessionTypeHeader,
   isStatefulRequest,
   SESSION_TYPE_HEADER,
@@ -836,20 +830,6 @@ export class HttpTransport implements IAdtTransport {
           // `noResend` the fetch, too, goes once and follows no redirect.
           ...(context.noResend ? { noResend: true } : {}),
           ...(context.noLog ? { noLog: true } : {}),
-          // `rawText`: under `noResend` this answer may be the request's.
-          ...(context.rawText ? { rawText: true } : {}),
-        }).catch((error: unknown) => {
-          // A `2xx` gives its token in its headers, whatever its body: an
-          // unread body never blocks the request it was fetched for.
-          const unread = unreadAnswer(error);
-          if (
-            unread !== undefined &&
-            unread.status >= 200 &&
-            unread.status < 300
-          ) {
-            return { ...unread, data: undefined };
-          }
-          throw error;
         });
 
         // Handed up BEFORE the token is read: the cookies are the session,
@@ -1498,19 +1478,6 @@ export class HttpTransport implements IAdtTransport {
       ...(request.validateStatus !== undefined
         ? { validateStatus: request.validateStatus }
         : {}),
-      // `rawText`: the body as the exact text SAP sent. axios's default
-      // `transformResponse` parses JSON even under `text/plain` — a JSON
-      // string loses its quotes and its trailing newline — and its text
-      // decoding drops a leading BOM and knows no charset. So the body is
-      // read as bytes, handed on untransformed, and decoded below in its
-      // declared charset (`rawAnswer`) — an error's body too. Every send of
-      // this config, the pooled resend included, takes it.
-      ...(request.rawText
-        ? {
-            responseType: 'arraybuffer',
-            transformResponse: [(body: unknown) => body],
-          }
-        : {}),
     };
     // A logoff opens a socket of its own and is never resent: its answer is
     // not read, and its write is what `disconnect()` resolves at.
@@ -1528,26 +1495,14 @@ export class HttpTransport implements IAdtTransport {
       // Never as the client threw it: axios's error holds this request's
       // config — its credential headers among it — and words naming the host.
       // SAP's answer and the code go up; nothing else of it does.
-      const failure = httpFailure(error, request.rawText === true);
-      // `rawText`: a body that is not text in its charset is our failure,
-      // not SAP's refusal — no recovery or replay acts on it.
-      if (failure.response !== undefined && !rawReadable(failure.response)) {
-        throw new RawTextUndecodableError(failure.response);
-      }
-      throw failure;
+      throw httpFailure(error);
     }
 
-    const answer: IAdtTransportResponse = {
+    return {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
       data: response.data,
     };
-    if (!request.rawText) return answer;
-    // `rawText`: a body that is not text in its charset is no answer to hand
-    // over — our failure in fixed words, with its status, never SAP's refusal.
-    const decoded = rawAnswer(answer);
-    if (!rawReadable(decoded)) throw new RawTextUndecodableError(decoded);
-    return decoded;
   }
 }

@@ -855,9 +855,8 @@ check sent with `noResend: true` is not retried: the refusal is its answer.
 
 ### Request options: `noResend`, `noLog`, `stateless`
 
-Optional flags of `IAbapRequestOptions` (`noResend`, `noLog`, `stateless`:
-25.1.0; `rawText`: 25.2.0) change one request and nothing else; a request
-without them behaves as before. In short:
+Three optional flags of `IAbapRequestOptions` (25.1.0) change one request and
+nothing else; a request without them behaves as before. In short:
 
 - `noResend: true` — sent once: no CSRF recovery, no resend after the
   credential's renewal (the provider is not asked), no resend on a dead pooled
@@ -873,25 +872,6 @@ without them behaves as before. In short:
 - `stateless: true` — stateless on HTTP and RFC whatever the session mode, over
   the caller's own `x-sap-adt-sessiontype` header in any letter case; the header
   and the `sap-contextid` cookie are stripped; the session mode stays.
-- `rawText: true` — the answer's body, an error's included (and a `noResend`
-  request's CSRF-fetch refusal), is the exact text SAP sent, never parsed, a
-  leading BOM kept. HTTP: the bytes are decoded in the first `charset`
-  parameter of the `Content-Type` (split outside quoted strings, unquoted), or
-  UTF-8 when none is declared, with `fatal: true`; a body that does not decode,
-  or a declared charset `TextDecoder` does not know, rejects with
-  `RawTextUndecodableError` (`ADT_RAW_TEXT_UNDECODABLE`, the status, `The
-  answer's body is not valid text in its charset (status N)`, no `response`),
-  which no recovery or replay acts on, and which is the answer when a resend
-  met it (never the refusal before), with that answer's own status; it keeps
-  the status, the headers and the raw byte count, nothing of the body; a
-  `2xx` CSRF fetch's token is read whatever its body; `noLog` writes one line,
-  for the last request sent, a decode failure's status and bytes included. On
-  the shipped HTTP client no verdict changes: session loss, CSRF recovery and
-  the check replay read the body as it would be without the flag, and a
-  session a `2xx`'s `Set-Cookie` replaced is noticed from a decode failure's
-  headers as from an answer's. An injected `httpClient` with
-  defaults of its own owns how its bodies look, and is not covered. RFC:
-  already the text of `MESSAGE_BODY`.
 
 The whole contract, and why `noResend` exists: [README — Request options](../README.md#request-options-noresend-nolog-stateless).
 
