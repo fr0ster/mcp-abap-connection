@@ -46,7 +46,7 @@ describe('the CSRF predicate reads the token where it always did', () => {
     let established = 0;
     const transport: IOnPremTransport = {
       kind: 'stub',
-      system: 'onprem' as const,
+      system: 'onprem',
       ...holdsNoSession,
       // A session is open: the request is a request, not a refused connect.
       sessionEstablished: () => true,
@@ -107,7 +107,7 @@ describe('the CSRF predicate reads the token where it always did', () => {
       'GET',
       () => {
         read += 1;
-        return false;
+        return null;
       },
     );
     assert.strictEqual(decided, false);
@@ -121,7 +121,7 @@ describe('the CSRF predicate reads the token where it always did', () => {
       'POST',
       () => {
         order.push('token read');
-        return false;
+        return null;
       },
     );
     assert.strictEqual(decided, true);
