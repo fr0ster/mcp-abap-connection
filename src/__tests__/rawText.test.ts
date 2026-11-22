@@ -105,7 +105,10 @@ async function startSap(): Promise<Sap> {
       }
       const refused = path === DISCOVERY ? sap.discovery.shift() : undefined;
       if (refused !== undefined) {
-        res.writeHead(refused.status, { 'content-type': refused.type });
+        res.writeHead(refused.status, {
+          'content-type': refused.type,
+          ...refused.headers,
+        });
         res.end(refused.body);
         return;
       }
@@ -516,16 +519,189 @@ describe("rawText decodes in the answer's charset", () => {
       });
       await assert.rejects(
         connection.makeAdtRequest(read({ rawText: true })),
+        (error) => undecodable(error, 200),
+      );
+    } finally {
+      await connection.disconnect();
+    }
+  });
+
+  it('a declared charset TextDecoder does not know is refused in fixed words', async () => {
+    const connection = await connected();
+    try {
+      sap.file.push({
+        status: 200,
+        body: 'plain',
+        type: 'text/plain; charset=x-no-such-charset',
+      });
+      await assert.rejects(
+        connection.makeAdtRequest(read({ rawText: true })),
+        (error) => undecodable(error, 200),
+      );
+    } finally {
+      await connection.disconnect();
+    }
+  });
+
+  it('the first charset parameter outside quoted strings is the one', async () => {
+    const connection = await connected();
+    try {
+      sap.file.push({
+        status: 200,
+        body: Buffer.from([0xc3, 0xa9]),
+        type: 'text/plain; other="x;charset=latin1;y"; charset=UTF-8',
+      });
+      const response = await connection.makeAdtRequest(read({ rawText: true }));
+      assert.strictEqual(response.data, 'é');
+    } finally {
+      await connection.disconnect();
+    }
+  });
+});
+
+/** Our own decode failure: fixed words, the status, no SAP answer on it. */
+function undecodable(error: unknown, status: number): boolean {
+  assert.ok(error instanceof Error);
+  assert.strictEqual(
+    error.message,
+    `The answer's body is not valid text in its charset (status ${status})`,
+  );
+  assert.ok('code' in error && error.code === 'ADT_RAW_TEXT_UNDECODABLE');
+  assert.ok('status' in error && error.status === status);
+  assert.strictEqual(refusalOf(error), null);
+  return true;
+}
+
+describe('a decode failure is ours, never SAP refusing', () => {
+  it('a 200 naming "CSRF token" with an invalid byte: one PUT, the decode error', async () => {
+    const connection = await connected();
+    try {
+      sap.file.push({
+        status: 200,
+        body: Buffer.concat([Buffer.from('CSRF token '), Buffer.from([0xff])]),
+        type: 'text/plain; charset=utf-8',
+      });
+      await assert.rejects(
+        connection.makeAdtRequest(read({ rawText: true }, 'PUT')),
+        (error) => undecodable(error, 200),
+      );
+      assert.strictEqual(
+        sap.arrivals.filter((a) => a === `PUT ${FILE}`).length,
+        1,
+      );
+    } finally {
+      await connection.disconnect();
+    }
+  });
+
+  it('a 2xx CSRF fetch with a token and an unreadable body: the PUT goes once', async () => {
+    const transport = new OnPremHttpTransport(() => ({}), null, {
+      client: '100',
+      baseUrl: sap.baseUrl,
+    });
+    const connection = new AdtOnPremConnector(
+      { url: sap.baseUrl, authType: 'basic', client: '100' },
+      new BasicAuthProvider('u', 'p'),
+      transport,
+      null,
+    );
+    await connection.connect();
+    sap.arrivals.length = 0;
+    transport.adoptCsrfToken(null);
+    try {
+      sap.discovery.push({
+        status: 200,
+        body: Buffer.from([0xff, 0xfe, 0xfd]),
+        type: 'application/xml; charset=utf-8',
+        headers: { 'x-csrf-token': 'T9' },
+      });
+      const response = await connection.makeAdtRequest(
+        read({ rawText: true, noResend: true }, 'PUT'),
+      );
+      assert.strictEqual(response.status, 200);
+      assert.deepStrictEqual(sap.arrivals, [`GET ${DISCOVERY}`, `PUT ${FILE}`]);
+    } finally {
+      await connection.disconnect();
+    }
+  });
+});
+
+describe('without rawText, a hostile rejection stays contained', () => {
+  it('a descriptor trap on the thrown value is not what the caller gets', async () => {
+    const transport = new HttpTransport(() => ({}), null, {
+      baseUrl: sap.baseUrl,
+      httpClient: {
+        create: (agents) => {
+          const instance = axios.create(agents);
+          instance.interceptors.request.use(() => {
+            throw new Proxy(
+              {},
+              {
+                getOwnPropertyDescriptor() {
+                  throw new Error('TRAP');
+                },
+              },
+            );
+          });
+          return instance;
+        },
+        logoffRequest: nodeHttpClient.logoffRequest,
+      },
+    });
+    await assert.rejects(
+      transport.send({ method: 'GET', url: FILE }),
+      (error) => {
+        assert.ok(error instanceof Error);
+        assert.notStrictEqual(error.message, 'TRAP');
+        assert.strictEqual(
+          error.message,
+          'The request failed: it got no answer',
+        );
+        return true;
+      },
+    );
+  });
+});
+
+describe('the upfront CSRF refusal keeps its raw byte count', () => {
+  it('an ISO-8859-1 401 body of two bytes logs 2', async () => {
+    const lines: string[] = [];
+    const at = (message: string): void => {
+      lines.push(message);
+    };
+    const logger: ILogger = { info: at, warn: at, error: at, debug: at };
+    const transport = new OnPremHttpTransport(() => ({}), logger, {
+      client: '100',
+      baseUrl: sap.baseUrl,
+    });
+    const connection = new AdtOnPremConnector(
+      { url: sap.baseUrl, authType: 'basic', client: '100' },
+      new BasicAuthProvider('u', 'p'),
+      transport,
+      logger,
+    );
+    await connection.connect();
+    transport.adoptCsrfToken(null);
+    lines.length = 0;
+    try {
+      sap.discovery.push({
+        status: 401,
+        body: Buffer.from([0xe9, 0x0a]),
+        type: 'text/plain; charset=ISO-8859-1',
+      });
+      await assert.rejects(
+        connection.makeAdtRequest(
+          read({ rawText: true, noResend: true, noLog: true }, 'PUT'),
+        ),
         (error) => {
-          assert.ok(error instanceof Error);
-          assert.strictEqual(
-            error.message,
-            "The answer's body is not valid text in its charset (status 200)",
-          );
-          assert.strictEqual(refusalOf(error)?.status, 200);
-          assert.strictEqual(refusalOf(error)?.data, undefined);
+          assert.strictEqual(refusalOf(error)?.status, 401);
+          assert.strictEqual(refusalOf(error)?.data, 'é\n');
           return true;
         },
+      );
+      assert.ok(
+        lines.some((line) => line.endsWith('→ 401 (2 bytes)')),
+        lines.join('\n'),
       );
     } finally {
       await connection.disconnect();
