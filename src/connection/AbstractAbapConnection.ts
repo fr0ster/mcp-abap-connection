@@ -37,6 +37,7 @@ import {
   refusalOf,
 } from './IAdtTransport.js';
 import { quietLine } from './quietLine.js';
+import { carryRaw, verdictData } from './rawBody.js';
 import { isStatefulRequest } from './statefulRequest.js';
 
 /**
@@ -103,13 +104,17 @@ function dataPreview(data: unknown): string | undefined {
 }
 
 /** The flags of a request that reach the exchanges made for it. */
-type RequestFlags = Pick<IAdtTransportRequest, 'noResend' | 'noLog'>;
+type RequestFlags = Pick<
+  IAdtTransportRequest,
+  'noResend' | 'noLog' | 'rawText'
+>;
 
-/** A request's `noResend` and `noLog`, and nothing else of it. */
+/** A request's `noResend`, `noLog` and `rawText`, and nothing else of it. */
 function flagsOf(request: RequestFlags): RequestFlags {
   return {
     ...(request.noResend ? { noResend: true } : {}),
     ...(request.noLog ? { noLog: true } : {}),
+    ...(request.rawText ? { rawText: true } : {}),
   };
 }
 
@@ -1315,10 +1320,10 @@ abstract class AbstractAbapConnection
     if (!refusal) return false;
     if (refusal.status !== 400) return false;
 
-    const text = [
-      refusal.statusText,
-      typeof refusal.data === 'string' ? refusal.data : '',
-    ]
+    // `rawText` changes no verdict: the body read is the one the request
+    // would have seen without it.
+    const body = verdictData(refusal);
+    const text = [refusal.statusText, typeof body === 'string' ? body : '']
       .join(' ')
       .toLowerCase();
     return DEAD_SESSION_PHRASES.some((phrase) => text.includes(phrase));
@@ -1694,9 +1699,13 @@ abstract class AbstractAbapConnection
     const answer = response as unknown as IAdtWireResponse<T, D>;
     // The answer itself says the session is gone: a field, on the one object
     // that answers this request, never a word.
-    return observed === 'lost'
-      ? { ...answer, sessionLost: ADT_SESSION_ERROR.SESSION_REPLACED }
-      : answer;
+    if (observed !== 'lost') return answer;
+    const marked = {
+      ...answer,
+      sessionLost: ADT_SESSION_ERROR.SESSION_REPLACED,
+    };
+    carryRaw(answer, marked);
+    return marked;
   }
 
   /**
@@ -2374,6 +2383,7 @@ abstract class AbstractAbapConnection
     return {
       ...(flags.noResend ? { noResend: true } : {}),
       ...(quiet ? { noLog: true } : {}),
+      ...(flags.rawText ? { rawText: true } : {}),
       authorize: async (headers) => {
         await this.credentialHeaders(headers);
         if (lease && !this.lifecycle.isCurrent(lease)) {
@@ -2438,7 +2448,8 @@ abstract class AbstractAbapConnection
       return false;
     }
 
-    const responseData = refusal.data;
+    // `rawText` changes no verdict: the body as it would be without it.
+    const responseData = verdictData(refusal);
     const responseText =
       typeof responseData === 'string'
         ? responseData
