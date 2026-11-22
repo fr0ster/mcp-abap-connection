@@ -37,7 +37,12 @@ import {
   refusalOf,
 } from './IAdtTransport.js';
 import { quietLine } from './quietLine.js';
-import { carryRaw, verdictData } from './rawBody.js';
+import {
+  carryRaw,
+  RawTextUndecodableError,
+  undecodedAnswer,
+  verdictData,
+} from './rawBody.js';
 import { isStatefulRequest } from './statefulRequest.js';
 
 /**
@@ -1477,10 +1482,11 @@ abstract class AbstractAbapConnection
         // one quiet line — the fetch's answer is the request's.
         if (options.noLog) {
           this.logQuietly(() => {
+            // A decode failure is an answer too: its status and bytes.
             const quiet = quietLine(
               normalizedMethod,
               endpoint,
-              refusalOf(error) ?? undefined,
+              refusalOf(error) ?? undecodedAnswer(error),
             );
             this.logger?.error(quiet.line, quiet.facts);
           });
@@ -1841,7 +1847,12 @@ abstract class AbstractAbapConnection
     // `noLog`: the failure's lines carry the method, the path without its
     // query, the integer status and the byte count — no preview, no words.
     const quiet = requestConfig.noLog
-      ? quietLine(normalizedMethod, requestUrl, refusal ?? undefined)
+      ? quietLine(
+          normalizedMethod,
+          requestUrl,
+          // A decode failure is an answer too: its status and bytes.
+          refusal ?? undecodedAnswer(error),
+        )
       : null;
     // Written here, once, before anything below can end the request — a
     // session verdict included, which then reaches the caller as the error
@@ -2201,6 +2212,9 @@ abstract class AbstractAbapConnection
   private outranksOriginal(retryError: unknown): boolean {
     return (
       this.isSessionVerdict(retryError) ||
+      // The resend's answer arrived and did not decode: SAP answered the last
+      // request sent, so that is the answer — never the refusal before it.
+      retryError instanceof RawTextUndecodableError ||
       retryError instanceof AuthRefusedError ||
       this.credentialRejection(retryError) !== null
     );
