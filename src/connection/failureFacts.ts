@@ -20,6 +20,7 @@ import {
   RFC_RCS,
 } from '@mcp-abap-adt/interfaces-adt-connection';
 import type { IAdtTransportResponse } from './IAdtTransport.js';
+import { isRawAnswer, rawAnswer, rawReadable } from './rawBody.js';
 
 /** An own data property of `source`, read without running a getter. */
 export function ownData(source: object, name: string): unknown {
@@ -259,13 +260,27 @@ function answerOf(thrown: unknown): IAdtTransportResponse | undefined {
  * `Request failed with status code <n>`, built from the status), else the
  * code (`ECONNREFUSED`, `ECONNABORTED`, …) and `The request failed: <code>`.
  */
-export function httpFailure(thrown: unknown): HttpFailure {
-  const response = answerOf(thrown);
+export function httpFailure(
+  thrown: unknown,
+  /** The request's `rawText`: SAP's answer with its body decoded (`rawBody`). */
+  rawText = false,
+): HttpFailure {
+  const copied = answerOf(thrown);
+  const source =
+    typeof thrown === 'object' && thrown !== null
+      ? ownData(thrown, 'response')
+      : undefined;
+  const response =
+    copied !== undefined && (rawText || isRawAnswer(source))
+      ? rawAnswer(copied, source)
+      : copied;
   const code = failureCode(thrown);
   const error = new Error(
-    response !== undefined
-      ? `Request failed with status code ${response.status}`
-      : `The request failed: ${code ?? 'it got no answer'}`,
+    response === undefined
+      ? `The request failed: ${code ?? 'it got no answer'}`
+      : rawReadable(response)
+        ? `Request failed with status code ${response.status}`
+        : `The answer's body is not valid text in its charset (status ${response.status})`,
   );
   const failure = Object.assign(
     error,
