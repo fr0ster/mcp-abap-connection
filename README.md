@@ -414,9 +414,12 @@ const file = await connection.makeAdtRequest({
   object, a JSON-string file keeps its quotes and its trailing newline, and a
   leading byte-order mark stays. Nothing inside the connection changes: the
   CSRF recovery, the session verdicts (a replacement cookie included), the
-  replays, the log lines and the error's shape all read what the request
-  without the flag reads, so the same answer gets the same handling either
-  way. Over HTTP the body is received as bytes; the text is decoded in the
+  replays, the credential provider (`IAuthRejection.error`), the log lines
+  and the error's shape all read what the request without the flag reads, so
+  the same answer gets the same handling either way. That guarantee is for
+  the shipped HTTP client: a consumer that injects an `httpClient` configured
+  with defaults of its own — `transitional.forcedJSONParsing`, `responseType`
+  — owns how its bodies look, and with them what those consumers read. Over HTTP the body is received as bytes; the text is decoded in the
   charset the `Content-Type` declares when `TextDecoder` knows it, else
   UTF-8, the BOM kept, and **non-fatally: a byte that is not text in that
   charset reads as U+FFFD** — no error is raised for it. (SAP's abapGit file
