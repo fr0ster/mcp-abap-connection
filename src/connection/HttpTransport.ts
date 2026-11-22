@@ -216,6 +216,13 @@ function deletesCookie(attributes: string[]): boolean {
 /** The cookie that names a stateful ABAP context. */
 const CONTEXT_COOKIE = 'sap-contextid';
 
+/** A `rawText` answer's bytes as UTF-8 text, a leading BOM kept. */
+function exactText(body: unknown): unknown {
+  return body instanceof Uint8Array
+    ? new TextDecoder('utf-8', { ignoreBOM: true }).decode(body)
+    : body;
+}
+
 /** How an exchange's answer is folded in: quietly for a `noLog` request's. */
 function quietIngest(context: {
   noLog?: true | undefined;
@@ -1480,13 +1487,15 @@ export class HttpTransport implements IAdtTransport {
         : {}),
       // `rawText`: the body as the exact text SAP sent. axios's default
       // `transformResponse` parses JSON even under `text/plain` — a JSON
-      // string loses its quotes and its trailing newline — so the body is
-      // read as text and handed on untouched. Every send of this config, the
-      // pooled resend included, takes it; an error's body is the same text.
+      // string loses its quotes and its trailing newline — and its text
+      // decoding drops a leading BOM. So the body is read as bytes and
+      // decoded here, the BOM kept. axios runs `transformResponse` on an
+      // error's answer too, so an error's body is the same text; every send
+      // of this config, the pooled resend included, takes it.
       ...(request.rawText
         ? {
-            responseType: 'text',
-            transformResponse: [(body: unknown) => body],
+            responseType: 'arraybuffer',
+            transformResponse: [exactText],
           }
         : {}),
     };
