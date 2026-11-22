@@ -27,6 +27,7 @@ import {
   type RfcConversationFactory,
   RfcTransport,
 } from '../connection/RfcTransport.js';
+import type { ILogger } from '../logger.js';
 
 const DISCOVERY = '/sap/bc/adt/core/discovery';
 const FILE = '/sap/bc/adt/abapgit/repos/R1/files/package.json';
@@ -63,15 +64,17 @@ const FILES = [
 interface Answer {
   /** `0`: the socket is destroyed, no byte written. */
   status: number;
-  body: string;
+  body: string | Buffer;
   type: string;
   headers?: Record<string, string>;
 }
 
 interface Sap {
   baseUrl: string;
-  /** Answers for the next file requests; past the end, the last file. */
+  /** Answers for the next file requests; past the end, `200 ok`. */
   file: Answer[];
+  /** Answers for the next discovery requests; past the end, a token. */
+  discovery: Answer[];
   /** `true`: the first request on a reused socket is dropped unanswered. */
   dropOnReuse: boolean;
   arrivals: string[];
@@ -82,6 +85,7 @@ async function startSap(): Promise<Sap> {
   const sap: Sap = {
     baseUrl: '',
     file: [],
+    discovery: [],
     dropOnReuse: false,
     arrivals: [],
     close: async () => {},
@@ -97,6 +101,12 @@ async function startSap(): Promise<Sap> {
       if (sap.dropOnReuse && count > 1) {
         sap.dropOnReuse = false;
         req.socket.destroy();
+        return;
+      }
+      const refused = path === DISCOVERY ? sap.discovery.shift() : undefined;
+      if (refused !== undefined) {
+        res.writeHead(refused.status, { 'content-type': refused.type });
+        res.end(refused.body);
         return;
       }
       if (path === DISCOVERY) {
@@ -142,8 +152,8 @@ afterEach(async () => {
   await sap.close();
 });
 
-async function connected() {
-  const transport = new OnPremHttpTransport(() => ({}), null, {
+async function connected(logger: ILogger | null = null) {
+  const transport = new OnPremHttpTransport(() => ({}), logger, {
     client: '100',
     baseUrl: sap.baseUrl,
   });
@@ -151,7 +161,7 @@ async function connected() {
     { url: sap.baseUrl, authType: 'basic', client: '100' },
     new BasicAuthProvider('u', 'p'),
     transport,
-    null,
+    logger,
   );
   await connection.connect();
   sap.arrivals.length = 0;
@@ -159,7 +169,7 @@ async function connected() {
 }
 
 function read(
-  flags: Pick<IAbapRequestOptions, 'rawText' | 'noResend'> = {},
+  flags: Pick<IAbapRequestOptions, 'rawText' | 'noResend' | 'noLog'> = {},
   method = 'GET',
 ): IAbapRequestOptions {
   return { url: FILE, method, timeout: 5000, ...flags };
@@ -324,6 +334,202 @@ describe('rawText over a client with defaults of its own', () => {
       rawText: true,
     });
     assert.strictEqual(response.data, body);
+  });
+});
+
+describe('rawText changes no verdict', () => {
+  // The same answers, flagged and not: the connection decides the same.
+  const answers: { name: string; answer: Answer }[] = [
+    {
+      name: 'a 400 JSON body naming "Session not found"',
+      answer: {
+        status: 400,
+        body: '{"detail":"Session not found"}',
+        type: 'application/json',
+      },
+    },
+    {
+      name: 'a 400 plain "Session not found"',
+      answer: { status: 400, body: 'Session not found', type: 'text/plain' },
+    },
+    {
+      name: 'a 403 JSON body naming CSRF only once parsed',
+      answer: {
+        status: 403,
+        body: '{"message":"\\u0043SRF token required"}',
+        type: 'application/json',
+      },
+    },
+  ];
+
+  async function outcome(answer: Answer, rawText: boolean) {
+    const connection = await connected();
+    try {
+      sap.file.push({ ...answer });
+      return await connection
+        .makeAdtRequest(read(rawText ? { rawText: true } : {}))
+        .then(
+          (response) => ({
+            settled: 'resolved',
+            status: response.status,
+            arrivals: [...sap.arrivals],
+          }),
+          (error: unknown) => ({
+            settled: 'rejected',
+            code:
+              error instanceof Error && 'code' in error
+                ? String(error.code)
+                : undefined,
+            status: refusalOf(error)?.status,
+            arrivals: [...sap.arrivals],
+          }),
+        );
+    } finally {
+      await connection.disconnect();
+    }
+  }
+
+  for (const { name, answer } of answers) {
+    it(`${name}: the same verdict with the flag`, async () => {
+      const unflagged = await outcome(answer, false);
+      const flagged = await outcome(answer, true);
+      assert.deepStrictEqual(flagged, unflagged);
+    });
+  }
+
+  it('the JSON refusal keeps its exact text under the flag', async () => {
+    const connection = await connected();
+    const body = '{"detail":"Session not found"}';
+    try {
+      sap.file.push({ status: 400, body, type: 'application/json' });
+      await assert.rejects(
+        connection.makeAdtRequest(read({ rawText: true })),
+        (error) => {
+          assert.strictEqual(refusalOf(error)?.status, 400);
+          assert.strictEqual(refusalOf(error)?.data, body);
+          return true;
+        },
+      );
+    } finally {
+      await connection.disconnect();
+    }
+  });
+});
+
+describe('rawText over the fetch adapter', () => {
+  it('an ArrayBuffer body arrives as its exact text', async () => {
+    const transport = new HttpTransport(() => ({}), null, {
+      baseUrl: sap.baseUrl,
+      httpClient: {
+        create: (agents) => axios.create({ ...agents, adapter: 'fetch' }),
+        logoffRequest: nodeHttpClient.logoffRequest,
+      },
+    });
+    const body = '﻿"a string"\n';
+    sap.file.push({ status: 200, body, type: 'application/json' });
+    const response = await transport.send({
+      method: 'GET',
+      url: FILE,
+      rawText: true,
+    });
+    assert.strictEqual(response.data, body);
+  });
+});
+
+describe('rawText on the CSRF fetch made for the request', () => {
+  it("under noResend, the fetch's refusal is the exact text and nothing is sent", async () => {
+    const transport = new OnPremHttpTransport(() => ({}), null, {
+      client: '100',
+      baseUrl: sap.baseUrl,
+    });
+    const connection = new AdtOnPremConnector(
+      { url: sap.baseUrl, authType: 'basic', client: '100' },
+      new BasicAuthProvider('u', 'p'),
+      transport,
+      null,
+    );
+    await connection.connect();
+    sap.arrivals.length = 0;
+    transport.adoptCsrfToken(null);
+    const body = '{"error":"down"}\n';
+    try {
+      sap.discovery.push({ status: 503, body, type: 'application/json' });
+      await assert.rejects(
+        connection.makeAdtRequest(
+          read({ rawText: true, noResend: true }, 'PUT'),
+        ),
+        (error) => {
+          assert.strictEqual(refusalOf(error)?.status, 503);
+          assert.strictEqual(refusalOf(error)?.data, body);
+          return true;
+        },
+      );
+      assert.deepStrictEqual(sap.arrivals, [`GET ${DISCOVERY}`]);
+    } finally {
+      await connection.disconnect();
+    }
+  });
+});
+
+describe("rawText decodes in the answer's charset", () => {
+  function recorder(): { logger: ILogger; lines: string[] } {
+    const lines: string[] = [];
+    const at = (message: string): void => {
+      lines.push(message);
+    };
+    return {
+      lines,
+      logger: { info: at, warn: at, error: at, debug: at },
+    };
+  }
+
+  it('ISO-8859-1 "é\\n" decodes as such, and noLog counts its 2 bytes', async () => {
+    const { logger, lines } = recorder();
+    const connection = await connected(logger);
+    try {
+      lines.length = 0;
+      sap.file.push({
+        status: 200,
+        body: Buffer.from([0xe9, 0x0a]),
+        type: 'text/plain; charset=ISO-8859-1',
+      });
+      const response = await connection.makeAdtRequest(
+        read({ rawText: true, noLog: true }),
+      );
+      assert.strictEqual(response.data, 'é\n');
+      assert.ok(
+        lines.some((line) => line.endsWith('→ 200 (2 bytes)')),
+        lines.join('\n'),
+      );
+    } finally {
+      await connection.disconnect();
+    }
+  });
+
+  it('a body that is not valid UTF-8 under utf-8 is refused in fixed words', async () => {
+    const connection = await connected();
+    try {
+      sap.file.push({
+        status: 200,
+        body: Buffer.from([0x7b, 0xc3, 0x28, 0x7d]),
+        type: 'application/json; charset=utf-8',
+      });
+      await assert.rejects(
+        connection.makeAdtRequest(read({ rawText: true })),
+        (error) => {
+          assert.ok(error instanceof Error);
+          assert.strictEqual(
+            error.message,
+            "The answer's body is not valid text in its charset (status 200)",
+          );
+          assert.strictEqual(refusalOf(error)?.status, 200);
+          assert.strictEqual(refusalOf(error)?.data, undefined);
+          return true;
+        },
+      );
+    } finally {
+      await connection.disconnect();
+    }
   });
 });
 
