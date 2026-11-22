@@ -100,7 +100,8 @@ export function byteCount(data: unknown): number {
 export function quietLine(
   rawMethod: string,
   url: string,
-  answer?: { status: number; data: unknown },
+  /** `bytes`: the raw byte count, when the answer says it itself. */
+  answer?: { status: number; data: unknown; bytes?: number },
 ): { line: string; facts: QuietFacts } {
   const path = pathOf(url);
   // The caller's method, as written: escaped as the path is.
@@ -108,8 +109,9 @@ export function quietLine(
   if (answer === undefined || !Number.isInteger(answer.status)) {
     return { line: `${method} ${path} → no answer`, facts: { method, path } };
   }
-  // A `rawText` answer counts the bytes that arrived, not its decoded text's.
-  const bytes = rawBytes(answer) ?? byteCount(answer.data);
+  // A `rawText` answer counts the bytes that arrived, not its decoded text's;
+  // a decode failure says them itself.
+  const bytes = answer.bytes ?? rawBytes(answer) ?? byteCount(answer.data);
   return {
     line: `${method} ${path} → ${answer.status} (${bytes} bytes)`,
     facts: { method, path, status: answer.status, bytes },
