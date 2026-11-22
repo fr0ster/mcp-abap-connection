@@ -56,7 +56,12 @@ import {
   type IAdtTransportResponse,
   refusalOf,
 } from './IAdtTransport.js';
-import { rawAnswer, rawReadable } from './rawBody.js';
+import {
+  RawTextUndecodableError,
+  rawAnswer,
+  rawReadable,
+  unreadAnswer,
+} from './rawBody.js';
 import {
   isSessionTypeHeader,
   isStatefulRequest,
@@ -833,6 +838,18 @@ export class HttpTransport implements IAdtTransport {
           ...(context.noLog ? { noLog: true } : {}),
           // `rawText`: under `noResend` this answer may be the request's.
           ...(context.rawText ? { rawText: true } : {}),
+        }).catch((error: unknown) => {
+          // A `2xx` gives its token in its headers, whatever its body: an
+          // unread body never blocks the request it was fetched for.
+          const unread = unreadAnswer(error);
+          if (
+            unread !== undefined &&
+            unread.status >= 200 &&
+            unread.status < 300
+          ) {
+            return unread;
+          }
+          throw error;
         });
 
         // Handed up BEFORE the token is read: the cookies are the session,
@@ -1511,7 +1528,13 @@ export class HttpTransport implements IAdtTransport {
       // Never as the client threw it: axios's error holds this request's
       // config — its credential headers among it — and words naming the host.
       // SAP's answer and the code go up; nothing else of it does.
-      throw httpFailure(error, request.rawText === true);
+      const failure = httpFailure(error, request.rawText === true);
+      // `rawText`: a body that is not text in its charset is our failure,
+      // not SAP's refusal — no recovery or replay acts on it.
+      if (failure.response !== undefined && !rawReadable(failure.response)) {
+        throw new RawTextUndecodableError(failure.response);
+      }
+      throw failure;
     }
 
     const answer: IAdtTransportResponse = {
@@ -1522,9 +1545,9 @@ export class HttpTransport implements IAdtTransport {
     };
     if (!request.rawText) return answer;
     // `rawText`: a body that is not text in its charset is no answer to hand
-    // over — refused in fixed words, with its status.
+    // over — our failure in fixed words, with its status, never SAP's refusal.
     const decoded = rawAnswer(answer);
-    if (!rawReadable(decoded)) throw httpFailure({ response: decoded });
+    if (!rawReadable(decoded)) throw new RawTextUndecodableError(decoded);
     return decoded;
   }
 }
