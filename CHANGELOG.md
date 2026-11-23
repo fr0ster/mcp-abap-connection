@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [25.2.1] - 2026-11-23
+
+### Changed
+
+- **The optional RFC binding's floor is `@mcp-abap-adt/sap-rfc-lite` `^0.4.1`.**
+  0.4.1 fixes two defects in the binding: a client stayed locked for good
+  after a call whose preparation failed (no worker released its hold on the
+  error path), and the per-client lock was released from another thread than
+  the one that took it (undefined behaviour for `std::mutex`). Nothing in this
+  package's code changes.
+
 ## [25.2.0] - 2026-11-22
 
 One per-request option, declared by `IAbapRequestOptions` in
@@ -3218,7 +3229,8 @@ const connection = createAbapConnection(config, logger);
 - JWT token refresh now properly handles connection errors (401/403 during initial connect)
 - Permission errors (403 with "ExceptionResourceNoAccess") no longer trigger JWT refresh loops
 - Proper separation: base class handles HTTP/session, concrete classes handle auth-specific errors
-[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.2.0...HEAD
+[Unreleased]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.2.1...HEAD
+[25.2.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.2.0...v25.2.1
 [25.2.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.1.0...v25.2.0
 [25.1.0]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.1...v25.1.0
 [25.0.1]: https://github.com/fr0ster/mcp-abap-connection/compare/v25.0.0...v25.0.1
