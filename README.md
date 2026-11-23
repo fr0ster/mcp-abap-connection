@@ -606,7 +606,7 @@ package state from causing PAK/058 on later writes or SADT_RESOURCE/007 on a
 read after create. Concurrent calls use a separate conversation. See
 [RFC conversation isolation](./docs/STATEFUL_SESSION_GUIDE.md#rfc-conversation-isolation-932-and-933).
 
-Needs `npm install @mcp-abap-adt/sap-rfc-lite` (0.4.0 or newer: it installs with no install
+Needs `npm install @mcp-abap-adt/sap-rfc-lite` (0.4.1 or newer: it installs with no install
 script and carries prebuilt bindings for linux-x64 glibc, win32-x64 and darwin-arm64; elsewhere,
 build one from its repository) and the SAP NetWeaver RFC library at run time: on Windows, the
 64-bit `sapnwrfc.dll` SAP GUI installs into `System32` is enough; otherwise the SAP NW RFC SDK, its
